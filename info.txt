@@ -25,3 +25,14 @@ User Page
 - Users connect via browser SPICE; can start, stop, and delete their own pods only.
 - Ownership/isolation: enforce authZ so users cannot control others’ pods; apply network policies to block inter-pod traffic.
 - No persistence: stopping or idle-timeout destroys the pod and its ephemeral disk.
+
+Required software (developer/operator workstation)
+- Git, Python 3.11+, and venv/pip for the FastAPI backend.
+- Node.js 18+ and npm for the Vite frontend.
+- kubectl to interact with the target cluster.
+- Optional: docker/podman if you want to build images locally.
+
+Ubuntu/Debian install example:
+- Backend/runtime basics: `sudo apt-get update && sudo apt-get install -y git python3 python3-venv python3-pip kubectl`
+- Node.js 20 + npm (NodeSource): `curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - && sudo apt-get install -y nodejs`
+- Containers (optional): `sudo apt-get install -y docker.io` (or `podman`)
