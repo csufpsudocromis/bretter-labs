@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: golden-images
+  namespace: labs
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 120Gi
+  storageClassName: ""  # set to your RWX-capable StorageClass (e.g., nfs-csi, longhorn-rwx)
+  volumeMode: Filesystem

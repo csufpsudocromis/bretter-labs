@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: golden-images-pv
+spec:
+  capacity:
+    storage: 120Gi
+  accessModes:
+    - ReadWriteMany
+  storageClassName: golden-images-sc
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  hostPath:
+    path: /home/cbeis/golden-images
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - kub1
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: golden-images
+  namespace: labs
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: golden-images-sc
+  resources:
+    requests:
+      storage: 120Gi
+  volumeName: golden-images-pv
+  volumeMode: Filesystem

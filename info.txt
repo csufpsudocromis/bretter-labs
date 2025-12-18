@@ -1,0 +1,27 @@
+Bretter Labs – Admin/User Requirements
+
+Overview
+- Students run Windows VMs inside isolated Kubernetes pods; pods are destroyed when sessions end.
+- Cluster: control plane kub1 (10.68.49.229), worker kube2 (10.68.49.217).
+- Storage: local PVC-backed repo for VM images (.vhd/.qcow).
+- Networking: labs/pods get internet egress; pods cannot reach each other (network policies).
+- Access: local username/password (testing); default admin `admin`/`admin` but must be changed on first login.
+- Console: SPICE/websockify for user access to VMs.
+- No persistence between sessions; VM disks are ephemeral per pod.
+
+Admin Page
+- Auth: force password change on first admin login; support adding/removing users and changing passwords.
+- Images: upload .vhd/.qcow to PVC-backed image repo; validate type/size; compute checksum; allow delete.
+- VM templates: create VM definitions from stored images; set CPU cores and RAM; enforce per-VM limits.
+- Availability: enable/disable/delete VM definitions; enabled templates appear to users.
+- Concurrency: set a max concurrent VM count (global) and per-user limit.
+- Idle timeout: set inactivity timeout; idle pods auto-stop/destroy.
+- Running pods: list all running VM pods; allow stop/destroy; use graceful shutdown with timeout and cleanup.
+- Audit: record admin actions (user changes, image ops, VM enable/disable/delete, pod stop/destroy).
+
+User Page
+- List VMs enabled by admin.
+- Starting a VM spins up a pod from the chosen image with assigned CPU/RAM limits.
+- Users connect via browser SPICE; can start, stop, and delete their own pods only.
+- Ownership/isolation: enforce authZ so users cannot control others’ pods; apply network policies to block inter-pod traffic.
+- No persistence: stopping or idle-timeout destroys the pod and its ephemeral disk.
