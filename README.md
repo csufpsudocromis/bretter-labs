@@ -2,6 +2,8 @@
 
 FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upload images, define templates, enable/disable labs, manage users, and view cluster resources. Users start labs from templates and connect via SPICE in the browser.
 
+![Bretter Labs UI thumbnail](images/thumbnail.png)
+
 ## Prerequisites
 - Python 3.11+ with venv/pip (backend)
 - Node.js 18+ with npm (frontend)
