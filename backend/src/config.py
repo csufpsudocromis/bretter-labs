@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     kube_image_pvc: str = "golden-images"
     kube_runtime_class: str = ""  # set to your RuntimeClass name if needed
     reaper_interval_seconds: int = 60
-    runner_image: str = "ghcr.io/bretter-labs/win-vm-runner:latest"
+    runner_image: str = "ghcr.io/csufpsudocromis/win-vm-runner:latest"
     image_pull_secret: str = ""  # optional: name of imagePullSecret in the namespace
     kube_node_selector_key: str = "kubernetes.io/hostname"
     kube_node_selector_value: str = ""  # set to pin pods to a node (e.g., kub1)

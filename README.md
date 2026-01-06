@@ -24,7 +24,7 @@ FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upl
   - NodePorts: backend `30080` (health `/health`), frontend `30073`.
   - Node selector pins both to `kub1` (images pre-loaded locally).
   - PVCs: `golden-images` for VM images, `backend-data` (hostPath `/home/cbeis/backend-data` on kub1) for SQLite DB.
-- Runner image: `ghcr.io/bretter-labs/win-vm-runner:latest` is imported into containerd on kub1; pods are also pinned to kub1 to use it.
+- Runner image: `ghcr.io/csufpsudocromis/win-vm-runner:latest` is imported into containerd on kub1; pods are also pinned to kub1 to use it.
 - Access: http://10.68.48.105:30073 (UI) → API at http://10.68.48.105:30080.
 
 ### UI highlights
@@ -44,4 +44,4 @@ FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upl
 ## Kubernetes expectations
 - Namespace defaults to `labs`; PVC `golden-images` must exist.
 - KVM passthrough is supported (`/dev/kvm` hostPath, privileged runner) when `BLABS_KUBE_USE_KVM=true`.
-- Runner image set via `BLABS_RUNNER_IMAGE`; current: `ghcr.io/bretter-labs/win-vm-runner:latest` imported locally.
+- Runner image set via `BLABS_RUNNER_IMAGE`; current: `ghcr.io/csufpsudocromis/win-vm-runner:latest` imported locally.
