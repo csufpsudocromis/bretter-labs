@@ -2,14 +2,7 @@
 
 FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upload images, define templates, enable/disable labs, manage users, and view cluster resources. Users start labs from templates and connect via SPICE in the browser.
 
-![Bretter Labs UI thumbnail](images/thumbnail.png)
-
-## Screenshots
-![Templates grid](images/thumbnail1.png)
-![Template details](images/thumbnail2.png)
-![Pod list](images/thumbnail3.png)
-![Resources](images/thumbnail4.png)
-![VM console](images/thumbnail5.png)
+![Bretter Labs UI thumbnail](images/thumbnail1.png)
 
 ## Prerequisites
 - Python 3.11+ with venv/pip (backend)
@@ -52,3 +45,10 @@ FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upl
 - Namespace defaults to `labs`; PVC `golden-images` must exist.
 - KVM passthrough is supported (`/dev/kvm` hostPath, privileged runner) when `BLABS_KUBE_USE_KVM=true`.
 - Runner image set via `BLABS_RUNNER_IMAGE`; current: `ghcr.io/csufpsudocromis/win-vm-runner:latest` imported locally.
+
+## Screenshots
+![Templates grid](images/thumbnail1.png)
+![Template details](images/thumbnail2.png)
+![Pod list](images/thumbnail3.png)
+![Resources](images/thumbnail4.png)
+![VM console](images/thumbnail5.png)
