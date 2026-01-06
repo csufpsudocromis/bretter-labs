@@ -9,39 +9,23 @@ FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upl
 - Node.js 18+ with npm (frontend)
 - kubectl (to talk to the target cluster)
 
-Ubuntu/Debian install example:
-```bash
-sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip kubectl
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-sudo apt-get install -y nodejs
-```
+> Local dev (optional): create a venv, `pip install -r backend/requirements.txt`, and run `uvicorn backend.src.main:app --host 0.0.0.0 --port 8000`; for the UI `npm install && npm run dev -- --host --port 5173`. For production, use the Kubernetes flow below.
 
-## Run the backend
-```bash
-cd /home/cbeis/bretter-labs
-source .venv/bin/activate  # create if needed: python3 -m venv .venv && source .venv/bin/activate
-pip install -r backend/requirements.txt
-# adjust env as needed (examples below)
-BLABS_RUNNER_IMAGE=ttl.sh/bretter-runner-1764617357:24h \
-BLABS_KUBE_NAMESPACE=labs \
-BLABS_KUBE_IMAGE_PVC=lab-images \
-BLABS_KUBE_NODE_EXTERNAL_HOST=10.68.49.229 \
-uvicorn backend.src.main:app --host 0.0.0.0 --port 8000
-```
-- Health: `GET /health`
-- Default admin: `admin` / `admin`
-- Config lives in `backend/src/config.py` and `BLABS_*` env vars (namespace, PVC, runner image, node selector, etc.).
-- SQLite DB: `backend/data/app.db`; images live on the `lab-images` PVC mounted at `/mnt/lab-images` (the backend now writes/deletes directly on that PVC so runner pods can see updates).
-
-## Run the frontend (React/Vite)
-```bash
-cd frontend-vite
-cp .env.example .env  # set VITE_API_BASE if backend is remote
-npm install
-npm run dev -- --host --port 5173
-```
-Open `http://<host>:5173`, log in with your credentials.
+## Run everything in Kubernetes (current setup)
+- Builds live in `backend/Dockerfile` and `frontend-vite/Dockerfile`. On kub1 we build with podman and import into containerd:
+  ```bash
+  sudo podman build -t bretter-labs/backend:local -f backend/Dockerfile .
+  sudo podman build -t bretter-labs/frontend:local -f frontend-vite/Dockerfile .
+  sudo podman save bretter-labs/backend:local -o /tmp/bretter-backend.tar && sudo ctr -n k8s.io images import /tmp/bretter-backend.tar
+  sudo podman save bretter-labs/frontend:local -o /tmp/bretter-frontend.tar && sudo ctr -n k8s.io images import /tmp/bretter-frontend.tar
+  ```
+- Deploy manifests: `kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f deploy/app.yaml`
+  - Backend Deployment uses ServiceAccount `bretter-backend` with RBAC to create pods/svcs/PVCs.
+  - NodePorts: backend `30080` (health `/health`), frontend `30073`.
+  - Node selector pins both to `kub1` (images pre-loaded locally).
+  - PVCs: `golden-images` for VM images, `backend-data` (hostPath `/home/cbeis/backend-data` on kub1) for SQLite DB.
+- Runner image: `ghcr.io/bretter-labs/win-vm-runner:latest` is imported into containerd on kub1; pods are also pinned to kub1 to use it.
+- Access: http://10.68.48.105:30073 (UI) → API at http://10.68.48.105:30080.
 
 ### UI highlights
 - **User**: tiles for templates (name/description/specs), start lab, view running labs with status, connect (opens SPICE embed), delete.
@@ -58,6 +42,6 @@ Open `http://<host>:5173`, log in with your credentials.
 - When a user launches a VM, the image is copied into the pod’s emptyDir so the golden image stays unchanged.
 
 ## Kubernetes expectations
-- Namespace defaults to `labs`; PVC `lab-images` must exist.
+- Namespace defaults to `labs`; PVC `golden-images` must exist.
 - KVM passthrough is supported (`/dev/kvm` hostPath, privileged runner) when `BLABS_KUBE_USE_KVM=true`.
-- Runner image set via `BLABS_RUNNER_IMAGE`; update from temporary `ttl.sh` tag to a stable public image for long-term use.
+- Runner image set via `BLABS_RUNNER_IMAGE`; current: `ghcr.io/bretter-labs/win-vm-runner:latest` imported locally.

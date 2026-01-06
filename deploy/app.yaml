@@ -1,0 +1,175 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bretter-backend
+  namespace: labs
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bretter-backend
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec", "services", "namespaces", "nodes", "persistentvolumeclaims", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bretter-backend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bretter-backend
+subjects:
+  - kind: ServiceAccount
+    name: bretter-backend
+    namespace: labs
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: backend-data-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-data-sc
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  hostPath:
+    path: /home/cbeis/backend-data
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - kub1
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-data
+  namespace: labs
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-data-sc
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-backend
+  namespace: labs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bretter-backend
+  template:
+    metadata:
+      labels:
+        app: bretter-backend
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: kub1
+      serviceAccountName: bretter-backend
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: backend
+          image: localhost/bretter-labs/backend:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: BLABS_KUBE_NAMESPACE
+              value: labs
+            - name: BLABS_KUBE_IMAGE_PVC
+              value: golden-images
+            - name: BLABS_STORAGE_ROOT
+              value: /mnt/lab-images
+            - name: BLABS_DATABASE_PATH
+              value: /data/app.db
+            - name: BLABS_KUBE_NODE_EXTERNAL_HOST
+              value: 10.68.48.105
+            - name: BLABS_KUBE_NODE_SELECTOR_VALUE
+              value: kub1
+            - name: BLABS_RUNNER_IMAGE
+              value: ghcr.io/bretter-labs/win-vm-runner:latest
+            - name: BLABS_IMAGE_PULL_SECRET
+              value: ghcr-creds
+          volumeMounts:
+            - name: images
+              mountPath: /mnt/lab-images
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: images
+          persistentVolumeClaim:
+            claimName: golden-images
+        - name: data
+          persistentVolumeClaim:
+            claimName: backend-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-backend
+  namespace: labs
+spec:
+  type: NodePort
+  selector:
+    app: bretter-backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-frontend
+  namespace: labs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bretter-frontend
+  template:
+    metadata:
+      labels:
+        app: bretter-frontend
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: kub1
+      containers:
+        - name: frontend
+          image: localhost/bretter-labs/frontend:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-frontend
+  namespace: labs
+spec:
+  type: NodePort
+  selector:
+    app: bretter-frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      nodePort: 30073

@@ -20,7 +20,11 @@ _reaper_task: asyncio.Task | None = None
 ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://10.68.48.169:5173",
     "http://10.68.49.229:5173",
+    "http://10.68.48.105:5173",
+    "http://10.68.48.105:30073",
+    "http://10.68.48.169:30073",
 ]
 
 app.add_middleware(

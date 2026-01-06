@@ -2,7 +2,7 @@ Bretter Labs – Admin/User Requirements
 
 Overview
 - Students run Windows VMs inside isolated Kubernetes pods; pods are destroyed when sessions end.
-- Cluster: control plane kub1 (10.68.49.229), worker kube2 (10.68.49.217).
+- Cluster: control plane kub1 (10.68.49.229), worker kube2 (10.68.49.217), worker kub3 (10.68.48.105).
 - Storage: local PVC-backed repo for VM images (.vhd/.qcow).
 - Networking: labs/pods get internet egress; pods cannot reach each other (network policies).
 - Access: local username/password (testing); default admin `admin`/`admin` but must be changed on first login.

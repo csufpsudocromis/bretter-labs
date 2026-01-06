@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     kube_node_selector_value: str = ""  # set to pin pods to a node (e.g., kub1)
     kube_use_kvm: bool = True  # set False if /dev/kvm is unavailable
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
-    kube_node_external_host: str = "10.68.49.229"
+    kube_node_external_host: str = "10.68.48.105"
     image_pull_secret: str = "ghcr-creds"  # optional: name of imagePullSecret in the namespace
 
     model_config = {"env_prefix": "BLABS_"}
