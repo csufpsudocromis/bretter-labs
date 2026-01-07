@@ -13,6 +13,7 @@ const AdminTemplates = () => {
     cpu_cores: 2,
     ram_mb: 4096,
     auto_delete_minutes: 30,
+    idle_timeout_minutes: 30,
     network_mode: 'bridge',
   });
   const [editingId, setEditingId] = useState(null);
@@ -24,6 +25,7 @@ const AdminTemplates = () => {
     cpu_cores: 2,
     ram_mb: 4096,
     auto_delete_minutes: 30,
+    idle_timeout_minutes: 30,
     enabled: false,
     network_mode: 'bridge',
   });
@@ -54,6 +56,7 @@ const AdminTemplates = () => {
         cpu_cores: 2,
         ram_mb: 4096,
         auto_delete_minutes: 30,
+        idle_timeout_minutes: 30,
         network_mode: 'bridge',
       });
       load();
@@ -94,6 +97,7 @@ const AdminTemplates = () => {
       cpu_cores: tmpl.cpu_cores,
       ram_mb: tmpl.ram_mb,
       auto_delete_minutes: tmpl.auto_delete_minutes,
+      idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
       enabled: tmpl.enabled,
       network_mode: tmpl.network_mode || 'bridge',
     });
@@ -176,6 +180,19 @@ const AdminTemplates = () => {
                   </option>
                 ))}
               </select>
+            </label>
+            <label>
+              Idle timeout (minutes)
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={form.idle_timeout_minutes}
+                onChange={(e) =>
+                  setForm({ ...form, idle_timeout_minutes: Math.max(1, parseInt(e.target.value, 10) || 1) })
+                }
+              />
+              <span className="muted small">User inactivity before showing a prompt and auto-stopping the VM.</span>
             </label>
             <label>
               Network mode
@@ -296,6 +313,22 @@ const AdminTemplates = () => {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label>
+                  Idle timeout (minutes)
+                  <input
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={editForm.idle_timeout_minutes}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        idle_timeout_minutes: Math.max(1, parseInt(e.target.value, 10) || editForm.idle_timeout_minutes),
+                      })
+                    }
+                  />
+                  <span className="muted small">User inactivity before showing a prompt and auto-stopping the VM.</span>
                 </label>
                 <label>
                   Network mode

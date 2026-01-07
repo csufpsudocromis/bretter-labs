@@ -16,7 +16,7 @@ from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
 from ..config import settings
-from ..tables import Config, Instance
+from ..tables import Config, Instance, Template
 
 logger = logging.getLogger(__name__)
 
@@ -329,10 +329,19 @@ class KubernetesService:
 
     def reaper_tick(self, session: Session) -> None:
         config_row = session.get(Config, 1) or Config()
-        cutoff = datetime.utcnow() - timedelta(minutes=config_row.idle_timeout_minutes)
-        stale_instances = session.exec(
-            select(Instance).where(Instance.last_active_at < cutoff).where(Instance.status == "running")
-        ).all()
+        templates = {t.id: t for t in session.exec(select(Template)).all()}
+        now = datetime.utcnow()
+        stale_instances: list[Instance] = []
+        for inst in session.exec(select(Instance).where(Instance.status == "running")).all():
+            tmpl = templates.get(inst.template_id)
+            timeout_minutes = (
+                getattr(tmpl, "idle_timeout_minutes", None)
+                or config_row.idle_timeout_minutes
+                or settings.idle_timeout_minutes
+            )
+            cutoff = now - timedelta(minutes=timeout_minutes)
+            if inst.last_active_at < cutoff:
+                stale_instances.append(inst)
         for inst in stale_instances:
             try:
                 self.delete_pod(inst.id, inst.owner)

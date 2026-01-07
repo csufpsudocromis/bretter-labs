@@ -27,14 +27,16 @@ def list_available_templates(user: User = Depends(require_user), session: Sessio
             description=record.description,
             os_type=record.os_type,
             image_id=record.image_id,
-            cpu_cores=record.cpu_cores,
-            ram_mb=record.ram_mb,
-            auto_delete_minutes=record.auto_delete_minutes,
-            enabled=record.enabled,
-            created_at=record.created_at,
-        )
-        for record in templates
-    ]
+        cpu_cores=record.cpu_cores,
+        ram_mb=record.ram_mb,
+        auto_delete_minutes=record.auto_delete_minutes,
+        enabled=record.enabled,
+        idle_timeout_minutes=getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes),
+        network_mode=getattr(record, "network_mode", "bridge"),
+        created_at=record.created_at,
+    )
+    for record in templates
+]
 
 
 @router.get("/pods", response_model=list[VMInstance])
@@ -181,7 +183,7 @@ def start_vm(
         cpu_cores=template.cpu_cores,
         ram_mb=template.ram_mb,
         owner=user.username,
-        network_mode=getattr(template, "network_mode", "default"),
+        network_mode=getattr(template, "network_mode", "bridge"),
     )
     pod_status = kube.create_pod(pod_request)
     # Create a NodePort service for browser-based SPICE (websockify on 6080).

@@ -35,6 +35,7 @@ class Template(SQLModel, table=True):
     cpu_cores: int
     ram_mb: int
     auto_delete_minutes: int = 30
+    idle_timeout_minutes: int = 30
     enabled: bool = False
     network_mode: str = "bridge"
     created_at: datetime = Field(default_factory=datetime.utcnow)

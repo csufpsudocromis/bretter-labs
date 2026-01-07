@@ -110,7 +110,40 @@ def _ensure_config_columns() -> None:
             pass
 
 
+def _ensure_template_columns() -> None:
+    db_path = settings.database_path
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
+        to_add = []
+        if "idle_timeout_minutes" not in cols:
+            to_add.append(
+                f"ALTER TABLE template ADD COLUMN idle_timeout_minutes INTEGER DEFAULT {settings.idle_timeout_minutes}"
+            )
+        for stmt in to_add:
+            try:
+                cur.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
+        if to_add:
+            conn.commit()
+            cur.execute(
+                "UPDATE template SET idle_timeout_minutes = ? WHERE idle_timeout_minutes IS NULL",
+                (settings.idle_timeout_minutes,),
+            )
+            conn.commit()
+    except Exception:
+        logger.exception("Failed to ensure template columns")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 _ensure_config_columns()
+_ensure_template_columns()
 
 
 def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
@@ -683,6 +716,7 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         cpu_cores=payload.cpu_cores,
         ram_mb=payload.ram_mb,
         auto_delete_minutes=payload.auto_delete_minutes,
+        idle_timeout_minutes=payload.idle_timeout_minutes or settings.idle_timeout_minutes,
         enabled=payload.enabled,
         network_mode=payload.network_mode,
         created_at=datetime.utcnow(),
@@ -699,6 +733,7 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         cpu_cores=record.cpu_cores,
         ram_mb=record.ram_mb,
         auto_delete_minutes=record.auto_delete_minutes,
+        idle_timeout_minutes=record.idle_timeout_minutes,
         enabled=record.enabled,
         network_mode=record.network_mode,
         created_at=record.created_at,
@@ -718,6 +753,7 @@ def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
             cpu_cores=record.cpu_cores,
             ram_mb=record.ram_mb,
             auto_delete_minutes=record.auto_delete_minutes,
+            idle_timeout_minutes=record.idle_timeout_minutes,
             enabled=record.enabled,
             network_mode=record.network_mode,
             created_at=record.created_at,
@@ -748,6 +784,8 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         record.ram_mb = payload.ram_mb
     if payload.auto_delete_minutes is not None:
         record.auto_delete_minutes = payload.auto_delete_minutes
+    if payload.idle_timeout_minutes is not None:
+        record.idle_timeout_minutes = payload.idle_timeout_minutes
     if payload.enabled is not None:
         record.enabled = payload.enabled
     if payload.network_mode is not None:
@@ -764,7 +802,9 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         cpu_cores=record.cpu_cores,
         ram_mb=record.ram_mb,
         auto_delete_minutes=record.auto_delete_minutes,
+        idle_timeout_minutes=record.idle_timeout_minutes,
         enabled=record.enabled,
+        network_mode=record.network_mode,
         created_at=record.created_at,
     )
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 
 const UserPanel = () => {
@@ -6,6 +6,14 @@ const UserPanel = () => {
   const [instances, setInstances] = useState([]);
   const [message, setMessage] = useState('');
   const [polling, setPolling] = useState(null);
+  const [showIdlePrompt, setShowIdlePrompt] = useState(false);
+  const [idleCountdown, setIdleCountdown] = useState(null);
+  const idleTimerRef = useRef(null);
+  const countdownRef = useRef(null);
+  const latestInstanceIdsRef = useRef([]);
+
+  const DEFAULT_IDLE_MINUTES = 30;
+  const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
 
   const refresh = async () => {
     try {
@@ -23,6 +31,18 @@ const UserPanel = () => {
     setPolling(handle);
     return () => clearInterval(handle);
   }, []);
+
+  const runningInstances = useMemo(() => instances.filter((i) => i.status === 'running'), [instances]);
+
+  const templateIdleMinutes = (templateId) => {
+    const tmpl = templates.find((t) => t.id === templateId);
+    return tmpl?.idle_timeout_minutes || DEFAULT_IDLE_MINUTES;
+  };
+
+  const activeIdleMinutes = useMemo(() => {
+    if (runningInstances.length === 0) return null;
+    return Math.min(...runningInstances.map((inst) => templateIdleMinutes(inst.template_id)));
+  }, [runningInstances, templates]);
 
   const start = async (templateId) => {
     try {
@@ -54,6 +74,22 @@ const UserPanel = () => {
     }
   };
 
+  const stopInstances = async (instanceIds) => {
+    if (!instanceIds || instanceIds.length === 0) return;
+    try {
+      const results = await Promise.all(instanceIds.map((id) => api.post(`/user/pods/${id}/stop`).catch((err) => err)));
+      const failures = results.filter((r) => r instanceof Error || r?.response?.status >= 400);
+      if (failures.length) {
+        setMessage('Some idle VMs failed to stop; please check the labs list.');
+      } else {
+        setMessage('');
+      }
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to stop idle VM');
+    }
+  };
+
   const connect = (instance) => {
     if (instance?.console_url) {
       window.open(instance.console_url, '_blank', 'noopener,noreferrer');
@@ -67,10 +103,101 @@ const UserPanel = () => {
   const displayStatus = (status) => (status === 'completed' ? 'stopped' : status);
   const isRunning = (status) => status === 'running';
 
+  const clearIdleTimers = () => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+  };
+
+  const startIdleCountdown = (instanceIds) => {
+    latestInstanceIdsRef.current = instanceIds;
+    setShowIdlePrompt(true);
+    setIdleCountdown(PROMPT_COUNTDOWN_SECONDS);
+    countdownRef.current = setInterval(() => {
+      setIdleCountdown((prev) => {
+        const next = (prev || PROMPT_COUNTDOWN_SECONDS) - 1;
+        if (next <= 0) {
+          clearIdleTimers();
+          setShowIdlePrompt(false);
+          stopInstances(instanceIds);
+          return 0;
+        }
+        return next;
+      });
+    }, 1000);
+  };
+
+  const resetIdleTimer = () => {
+    clearIdleTimers();
+    setShowIdlePrompt(false);
+    setIdleCountdown(null);
+    if (!runningInstances.length || !activeIdleMinutes) {
+      return;
+    }
+    const ms = Math.max(1, activeIdleMinutes) * 60 * 1000;
+    const targetInstanceIds = runningInstances.map((inst) => inst.id);
+    idleTimerRef.current = setTimeout(() => startIdleCountdown(targetInstanceIds), ms);
+  };
+
+  useEffect(() => {
+    resetIdleTimer();
+    return () => clearIdleTimers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdleMinutes, runningInstances.length]);
+
+  useEffect(() => {
+    const onActivity = () => resetIdleTimer();
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll', 'visibilitychange'];
+    events.forEach((evt) => window.addEventListener(evt, onActivity));
+    return () => events.forEach((evt) => window.removeEventListener(evt, onActivity));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdleMinutes, runningInstances.length]);
+
+  const continueSession = () => {
+    resetIdleTimer();
+    refresh();
+  };
+
+  const endNow = () => {
+    clearIdleTimers();
+    setShowIdlePrompt(false);
+    stopInstances(latestInstanceIdsRef.current);
+  };
+
+  const formatCountdown = (seconds) => {
+    const mins = Math.floor((seconds || 0) / 60)
+      .toString()
+      .padStart(2, '0');
+    const secs = ((seconds || 0) % 60).toString().padStart(2, '0');
+    return `${mins}:${secs}`;
+  };
+
   return (
     <div>
       <h2>User</h2>
       {message && <div className="info">{message}</div>}
+      {showIdlePrompt && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>Still using this lab?</h3>
+            <p className="muted">
+              We have not seen activity for {activeIdleMinutes || DEFAULT_IDLE_MINUTES} minutes. Your running lab(s) will
+              stop in {formatCountdown(idleCountdown || PROMPT_COUNTDOWN_SECONDS)} unless you continue.
+            </p>
+            <div className="actions">
+              <button className="ghost" onClick={endNow}>
+                Stop now
+              </button>
+              <button onClick={continueSession}>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="grid">
         <div>
           <h3>Available Virtual Labs</h3>
