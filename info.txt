@@ -2,11 +2,12 @@ Bretter Labs – Admin/User Requirements
 
 Overview
 - Students run Windows VMs inside isolated Kubernetes pods; pods are destroyed when sessions end.
-- Cluster: control plane kub1 (10.68.49.229), worker kube2 (10.68.49.217), worker kub3 (10.68.48.105).
+- Cluster: control plane and worker nodes (example names: kub1, kube2, kub3).
 - Storage: local PVC-backed repo for VM images (.vhd/.qcow).
 - Networking: labs/pods get internet egress; pods cannot reach each other (network policies).
 - Access: local username/password (testing); default admin `admin`/`admin` but must be changed on first login.
 - Console: SPICE/websockify for user access to VMs.
+- Deployment: `scripts/setup.sh` installs prerequisites and deploys to Kubernetes (GHCR optional).
 - No persistence between sessions; VM disks are ephemeral per pod.
 
 Admin Page
@@ -30,7 +31,7 @@ Required software (developer/operator workstation)
 - Git, Python 3.11+, and venv/pip for the FastAPI backend.
 - Node.js 18+ and npm for the Vite frontend.
 - kubectl to interact with the target cluster.
-- Optional: docker/podman if you want to build images locally.
+- Optional: docker/podman if you want to build images locally (GHCR creds only needed for image push or private pulls).
 
 Ubuntu/Debian install example:
 - Backend/runtime basics: `sudo apt-get update && sudo apt-get install -y git python3 python3-venv python3-pip kubectl`
