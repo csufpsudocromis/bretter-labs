@@ -32,11 +32,77 @@
         height: auto !important;
         object-fit: contain;
       }
+      .idle-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 999;
+      }
+      .idle-card {
+        background: rgba(15, 23, 42, 0.9);
+        border: 1px solid #334155;
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        max-width: 420px;
+        width: 100%;
+        box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+        font-family: Arial, sans-serif;
+      }
+      .idle-card h3 {
+        margin: 0 0 0.5rem 0;
+        font-size: 1.2rem;
+      }
+      .idle-card p {
+        margin: 0.35rem 0;
+        color: #cbd5e1;
+        line-height: 1.4;
+      }
+      .idle-actions {
+        display: flex;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+      .idle-actions button {
+        flex: 1;
+        padding: 0.6rem 0.75rem;
+        border-radius: 10px;
+        border: 1px solid #475569;
+        background: #0ea5e9;
+        color: #0b1727;
+        cursor: pointer;
+        font-weight: 700;
+      }
+      .idle-actions button.ghost {
+        background: transparent;
+        color: #e2e8f0;
+        border-color: #475569;
+      }
     </style>
   </head>
   <body>
     <div id="spice-screen"></div>
     <div id="message-div"></div>
+    <div id="idle-overlay" class="idle-overlay" style="display: none;">
+      <div class="idle-card">
+        <h3>Still using this lab?</h3>
+        <p id="idle-text">No activity detected.</p>
+        <p id="idle-countdown"></p>
+        <div class="idle-actions">
+          <button class="ghost" id="idle-stop">No, end lab</button>
+          <button id="idle-continue">Yes, continue</button>
+        </div>
+      </div>
+    </div>
+    <div id="ended-overlay" class="idle-overlay" style="display: none;">
+      <div class="idle-card">
+        <h3>Session ended</h3>
+        <p id="ended-text">Session timed out due to inactivity.</p>
+      </div>
+    </div>
     <script type="module">
       import * as SpiceHtml5 from './main.js';
 
@@ -46,6 +112,9 @@
       const secure = params.get('secure') === '1' || window.location.protocol === 'https:';
       const password = params.get('password') || '';
       const title = params.get('title') || '';
+      const instanceId = params.get('instance_id') || '';
+      const idleMinutes = parseInt(params.get('idle_minutes') || '30', 10);
+      const countdownSeconds = parseInt(params.get('countdown_seconds') || '300', 10);
       const scheme = secure ? 'wss://' : 'ws://';
       const uri = scheme + host + ':' + port;
 
@@ -69,10 +138,138 @@
           document.title = title;
         }
         connect();
+        startIdleTimer();
       });
       window.addEventListener('beforeunload', () => {
         if (sc) sc.stop();
       });
+
+      // Inactivity handling inside the console tab.
+      let idleTimer = null;
+      let countdownTimer = null;
+      let countdownEndsAt = null;
+      let idleStartsAt = null;
+      let promptActive = false;
+      const overlay = document.getElementById('idle-overlay');
+      const endedOverlay = document.getElementById('ended-overlay');
+      const countdownEl = document.getElementById('idle-countdown');
+      const textEl = document.getElementById('idle-text');
+      const endedTextEl = document.getElementById('ended-text');
+
+      function sendStop(reason = 'idle-timeout', action = 'delete') {
+        if (window.opener) {
+          window.opener.postMessage({ type: 'idle-stop', instanceId, reason, action }, '*');
+        }
+      }
+
+      function showEnded(reason = 'idle-timeout') {
+        overlay.style.display = 'none';
+        endedOverlay.style.display = 'flex';
+        promptActive = false;
+        if (endedTextEl) {
+          endedTextEl.textContent =
+            reason === 'idle-timeout' ? 'Session timed out due to inactivity.' : 'Session ended.';
+        }
+        sendStop(reason, 'delete');
+      }
+
+      function stopCountdown() {
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+        }
+        overlay.style.display = 'none';
+        promptActive = false;
+        countdownEndsAt = null;
+      }
+
+      function endSession(reason = 'idle-timeout') {
+        stopCountdown();
+        showEnded(reason);
+      }
+
+      function updateCountdown() {
+        if (!promptActive || !countdownEndsAt) {
+          return;
+        }
+        const remainingMs = countdownEndsAt - Date.now();
+        if (remainingMs <= 0) {
+          endSession('idle-timeout');
+          return;
+        }
+        const remainingSeconds = Math.ceil(remainingMs / 1000);
+        const mins = Math.floor(remainingSeconds / 60);
+        const secs = remainingSeconds % 60;
+        countdownEl.textContent = `Stopping in ${mins}:${String(secs).padStart(2, '0')}`;
+      }
+
+      function startCountdown(startedAt) {
+        if (promptActive) {
+          return;
+        }
+        overlay.style.display = 'flex';
+        promptActive = true;
+        textEl.textContent = `No activity detected for ${idleMinutes} minute${idleMinutes === 1 ? '' : 's'}.`;
+        const baseline = startedAt || Date.now();
+        countdownEndsAt = baseline + countdownSeconds * 1000;
+        updateCountdown();
+        if (countdownTimer) {
+          clearInterval(countdownTimer);
+          countdownTimer = null;
+        }
+        if (promptActive && countdownEndsAt) {
+          countdownTimer = setInterval(() => {
+            updateCountdown();
+          }, 1000);
+        }
+      }
+
+      function scheduleIdleTimer() {
+        if (idleTimer) clearTimeout(idleTimer);
+        const delay = Math.max(0, (idleStartsAt || Date.now()) - Date.now());
+        idleTimer = setTimeout(() => startCountdown(idleStartsAt), delay);
+      }
+
+      function recordActivity() {
+        if (promptActive) {
+          return;
+        }
+        idleStartsAt = Date.now() + Math.max(1, idleMinutes) * 60 * 1000;
+        scheduleIdleTimer();
+      }
+
+      function syncIdleState() {
+        if (promptActive) {
+          updateCountdown();
+          return;
+        }
+        if (idleStartsAt && Date.now() >= idleStartsAt) {
+          startCountdown(idleStartsAt);
+          return;
+        }
+        scheduleIdleTimer();
+      }
+
+      function startIdleTimer() {
+        recordActivity();
+        const onActivity = () => recordActivity();
+        ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'].forEach((evt) => {
+          window.addEventListener(evt, onActivity, { passive: true });
+        });
+        document.getElementById('idle-continue').addEventListener('click', () => {
+          stopCountdown();
+          recordActivity();
+        });
+        document.getElementById('idle-stop').addEventListener('click', () => {
+          endSession('user-end');
+        });
+        window.addEventListener('focus', syncIdleState);
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) {
+            syncIdleState();
+          }
+        });
+      }
     </script>
   </body>
 </html>

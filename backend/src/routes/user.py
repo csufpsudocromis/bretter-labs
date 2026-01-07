@@ -193,9 +193,11 @@ def start_vm(
     embed_page = "spice-embed.html" if settings.kube_spice_embed_configmap else "spice_auto.html"
     # Use the slim embed page (if mounted) to auto-connect and hide chrome.
     console_title = quote(template.name, safe="")
+    idle_minutes = template.idle_timeout_minutes or settings.idle_timeout_minutes
     console_url = (
         f"http://{external_host}:{node_port}/{embed_page}"
         f"?host={external_host}&port={node_port}&secure=0&title={console_title}"
+        f"&instance_id={instance_id}&idle_minutes={idle_minutes}"
     )
 
     instance = Instance(
@@ -280,9 +282,11 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     external_host = settings.kube_node_external_host or "127.0.0.1"
     embed_page = "spice-embed.html" if settings.kube_spice_embed_configmap else "spice_auto.html"
     console_title = quote(template.name, safe="")
+    idle_minutes = template.idle_timeout_minutes or settings.idle_timeout_minutes
     console_url = (
         f"http://{external_host}:{node_port}/{embed_page}"
         f"?host={external_host}&port={node_port}&secure=0&title={console_title}"
+        f"&instance_id={record.id}&idle_minutes={idle_minutes}"
     )
 
     record.status = "pending"

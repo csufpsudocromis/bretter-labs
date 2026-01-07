@@ -12,6 +12,7 @@ const UserPanel = () => {
   const countdownRef = useRef(null);
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
+  const idlePromptRef = useRef(false);
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
@@ -91,9 +92,38 @@ const UserPanel = () => {
     }
   };
 
+  const deleteInstances = async (instanceIds, reason, keepMessage = false) => {
+    if (!instanceIds || instanceIds.length === 0) return;
+    try {
+      const results = await Promise.all(instanceIds.map((id) => api.delete(`/user/pods/${id}`).catch((err) => err)));
+      const failures = results.filter((result) => {
+        if (result?.status && result.status < 400) {
+          return false;
+        }
+        const status = result?.response?.status;
+        if (status === 404) {
+          return false;
+        }
+        return true;
+      });
+      if (failures.length) {
+        setMessage('Some idle VMs failed to delete; please check the labs list.');
+      } else if (!keepMessage) {
+        if (reason === 'idle-timeout') {
+          setMessage('Session ended due to inactivity.');
+        } else {
+          setMessage('');
+        }
+      }
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to delete idle VM');
+    }
+  };
+
   const connect = (instance) => {
     if (instance?.console_url) {
-      window.open(instance.console_url, '_blank', 'noopener,noreferrer');
+      window.open(instance.console_url, '_blank');
     } else {
       setMessage('Console URL not available yet');
     }
@@ -117,6 +147,7 @@ const UserPanel = () => {
 
   const startIdleCountdown = (instanceIds) => {
     latestInstanceIdsRef.current = instanceIds;
+    idlePromptRef.current = true;
     setShowIdlePrompt(true);
     setSessionEnded(false);
     setIdleCountdown(PROMPT_COUNTDOWN_SECONDS);
@@ -134,8 +165,12 @@ const UserPanel = () => {
   };
 
   const resetIdleTimer = () => {
+    if (idlePromptRef.current) {
+      return;
+    }
     clearIdleTimers();
     setShowIdlePrompt(false);
+    idlePromptRef.current = false;
     setIdleCountdown(null);
     setSessionEnded(false);
     if (!runningInstances.length || !activeIdleMinutes) {
@@ -148,19 +183,37 @@ const UserPanel = () => {
 
   useEffect(() => {
     resetIdleTimer();
-    return () => clearIdleTimers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIdleMinutes, runningInstances.length]);
 
+  useEffect(() => () => clearIdleTimers(), []);
+
   useEffect(() => {
     const onActivity = () => resetIdleTimer();
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll', 'visibilitychange'];
     events.forEach((evt) => window.addEventListener(evt, onActivity));
     return () => events.forEach((evt) => window.removeEventListener(evt, onActivity));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIdleMinutes, runningInstances.length]);
 
+  useEffect(() => {
+    const handleMessage = (event) => {
+      const payload = event.data || {};
+      if (payload.type === 'idle-stop' && payload.instanceId) {
+        if (payload.action === 'delete') {
+          deleteInstances([payload.instanceId], payload.reason);
+        } else {
+          stopInstances([payload.instanceId]);
+        }
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const continueSession = () => {
+    idlePromptRef.current = false;
     resetIdleTimer();
     refresh();
   };
@@ -168,9 +221,10 @@ const UserPanel = () => {
   const endNow = (auto = false) => {
     clearIdleTimers();
     setShowIdlePrompt(false);
+    idlePromptRef.current = false;
     setSessionEnded(true);
     setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
-    stopInstances(latestInstanceIdsRef.current);
+    deleteInstances(latestInstanceIdsRef.current, auto ? 'idle-timeout' : 'user-end', true);
     setTimeout(() => {
       try {
         window.close();

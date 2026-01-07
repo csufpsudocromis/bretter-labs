@@ -88,7 +88,7 @@ spec:
         - name: ghcr-creds
       containers:
         - name: backend
-          image: ghcr.io/csufpsudocromis/bretter-backend:latest
+          image: ghcr.io/csufpsudocromis/bretter-backend:idle-timeout-fix-20260107
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -151,13 +151,11 @@ spec:
       labels:
         app: bretter-frontend
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: kub1
       imagePullSecrets:
         - name: ghcr-creds
       containers:
         - name: frontend
-          image: ghcr.io/csufpsudocromis/bretter-frontend:latest
+          image: ghcr.io/csufpsudocromis/bretter-frontend:idle-timeout-delete-20260107-4
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
