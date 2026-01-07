@@ -88,7 +88,7 @@ spec:
         - name: ghcr-creds
       containers:
         - name: backend
-          image: localhost/bretter-labs/backend:local
+          image: ghcr.io/csufpsudocromis/bretter-backend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
@@ -153,9 +153,11 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: kub1
+      imagePullSecrets:
+        - name: ghcr-creds
       containers:
         - name: frontend
-          image: localhost/bretter-labs/frontend:local
+          image: ghcr.io/csufpsudocromis/bretter-frontend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80

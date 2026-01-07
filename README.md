@@ -12,18 +12,18 @@ FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upl
 > Local dev (optional): create a venv, `pip install -r backend/requirements.txt`, and run `uvicorn backend.src.main:app --host 0.0.0.0 --port 8000`; for the UI `npm install && npm run dev -- --host --port 5173`. For production, use the Kubernetes flow below.
 
 ## Run everything in Kubernetes (current setup)
-- Builds live in `backend/Dockerfile` and `frontend-vite/Dockerfile`. On kub1 we build with podman and import into containerd:
+- Builds live in `backend/Dockerfile` and `frontend-vite/Dockerfile`. Images are pushed to GHCR and referenced directly by the manifests:
   ```bash
-  sudo podman build -t bretter-labs/backend:local -f backend/Dockerfile .
-  sudo podman build -t bretter-labs/frontend:local -f frontend-vite/Dockerfile .
-  sudo podman save bretter-labs/backend:local -o /tmp/bretter-backend.tar && sudo ctr -n k8s.io images import /tmp/bretter-backend.tar
-  sudo podman save bretter-labs/frontend:local -o /tmp/bretter-frontend.tar && sudo ctr -n k8s.io images import /tmp/bretter-frontend.tar
+  podman build -t ghcr.io/csufpsudocromis/bretter-backend:latest -f backend/Dockerfile .
+  podman push ghcr.io/csufpsudocromis/bretter-backend:latest
+  podman build -t ghcr.io/csufpsudocromis/bretter-frontend:latest -f frontend-vite/Dockerfile .
+  podman push ghcr.io/csufpsudocromis/bretter-frontend:latest
   ```
 - Deploy manifests: `kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f deploy/app.yaml`
   - Backend Deployment uses ServiceAccount `bretter-backend` with RBAC to create pods/svcs/PVCs.
   - NodePorts: backend `30080` (health `/health`), frontend `30073`.
-  - Node selector pins both to `kub1` (images pre-loaded locally).
-- PVCs: `golden-images` for VM images, `backend-data` (hostPath `/home/cbeis/backend-data` on kub1) for SQLite DB.
+  - Node selector pins both to `kub1`.
+  - PVCs: `golden-images` for VM images, `backend-data` (hostPath `/home/cbeis/backend-data` on kub1) for SQLite DB.
 - Runner image: `ghcr.io/csufpsudocromis/win-vm-runner:latest` is imported into containerd on kub1; pods are also pinned to kub1 to use it.
 - Access: http://10.68.48.105:30073 (UI) → API at http://10.68.48.105:30080.
 - Idle handling: users get an inactivity prompt after template-configured idle minutes (default 30); if unanswered, a 5-minute countdown stops their running labs.
