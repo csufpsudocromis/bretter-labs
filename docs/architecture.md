@@ -1,53 +1,37 @@
-# Bretter Labs – Architecture Draft
+# Bretter Labs – Architecture
 
-## Components
-- API service (FastAPI, Python 3.12): admin/user management, image catalog, VM templates, VM lifecycle orchestration against Kubernetes; exposes REST endpoints (see `backend/src`).
-- Persistence: SQLite via SQLModel (`backend/data/app.db`) for users, tokens, images, templates, instances, config.
-- SPICE websocket console: user access to running VMs.
-- Kubernetes cluster: pods run Windows VMs; images pulled from PVC-backed repository; network policies enforce pod isolation with internet egress only. RuntimeClass is set via config.
-- PVC-backed image repository: stores uploaded `.vhd`/`.qcow` images; future migration to object storage optional.
-- Auth: local username/password for testing; default admin `admin`/`admin` is forced to change password on first login; session tokens issued via `/auth/login` and sent as `Authorization: Bearer <token>`.
-- Config row in DB stores `max_concurrent_vms`, `per_user_vm_limit`, and `idle_timeout_minutes`.
-- Reaper loop: background task checks for idle instances older than `idle_timeout_minutes` and deletes their pods/records (interval configurable via `BLABS_REAPER_INTERVAL_SECONDS`).
+## Overview
+Bretter Labs is a FastAPI + React (Vite) platform that provisions per-user lab VMs as Kubernetes pods and exposes them through a browser-based SPICE console.
 
-## Networking
-- Egress to internet allowed for lab pods.
-- Inter-pod traffic blocked via Kubernetes NetworkPolicy.
-- Admin/API endpoints exposed internally; user console served directly via NodePort + websockify.
+## Core components
+- **Frontend (`frontend-vite`)**: React UI for login, admin, and user workflows. Loads site appearance/SSO settings, starts labs, opens console URLs, and drives idle prompts in the main UI.
+- **Backend (`backend/src`)**: FastAPI API for users, templates, images, and VM instances. Uses SQLModel + SQLite for persistence and runs a background reaper to clean up idle labs.
+- **VM runner (`runner`)**: Debian-based container running QEMU + SPICE with websockify and the spice-html5 assets. Each VM pod runs this image.
+- **Kubernetes control plane**: Backend uses the Kubernetes Python client to create pods, per-VM NodePort services, and NetworkPolicies. Helper pods + `kubectl` are used to copy/validate images on the PVC.
+- **Storage**: `golden-images` PVC stores uploaded VM images; per-VM ephemeral disks live on `emptyDir`. Backend state uses a PVC-backed SQLite DB.
 
-## Data/Storage
-- Image uploads land in `backend/data/images` (PVC mount point in production).
-- VM disks are ephemeral; stopping or timing out destroys the pod and its disk.
-- No persistence between sessions.
+## Request flow
+1. Admin uploads an image; backend writes it into the image PVC and stores metadata/checksum in SQLite.
+2. Admin creates a template with CPU/RAM, network mode, auto-delete, and idle timeout.
+3. User starts a template; backend creates a VM pod (init container copies the image to `emptyDir`), then creates a NodePort service to expose SPICE/websockify.
+4. Backend returns a console URL built from `BLABS_KUBE_NODE_EXTERNAL_HOST` and the NodePort; the UI opens it in a new tab.
 
-## Concurrency/Sessions
-- Admin can set global `max_concurrent_vms` and `per_user_vm_limit`.
-- Admin sets `idle_timeout_minutes`; idle pods are stopped/destroyed after inactivity (background worker still TODO).
-- Ownership is enforced so users can only manage their own pods.
+## Idle handling and cleanup
+- User UI polls `/user/pods`, which refreshes `last_active_at` for running labs.
+- Both the main UI and the console tab show idle prompts; timeouts trigger VM deletion via the API.
+- A backend reaper loop runs on startup and deletes instances whose `last_active_at` exceeds the template or global timeout.
+- Stopped/completed instances are auto-deleted after `auto_delete_minutes`.
 
-## Current backend skeleton
-- SQLite-backed models via SQLModel (`backend/src/tables.py`, `backend/src/db.py`).
-- Auth route (`backend/src/routes/auth.py`): issue tokens from username/password.
-- Admin routes (`backend/src/routes/admin.py`, auth required): manage users, upload/list/delete images, create/enable/disable/delete templates, set concurrency/idle settings, list/stop/delete pods.
-- User routes (`backend/src/routes/user.py`, auth required): list enabled templates, start/stop/delete own pods, list own pods.
-- Health check at `/health`.
-- Defaults loaded from `backend/src/config.py`; adjust via environment vars (`BLABS_*`).
-- Frontend: React/Vite UI at `frontend-vite` (replace legacy static HTML) for login/admin/user flows.
-- Kubernetes service (`backend/src/services/kubernetes.py`): uses Python client to create/stop/delete pods, apply egress-only NetworkPolicies, generate console URLs, and idle reaper hook.
+## Networking and isolation
+- Default `bridge` mode applies NetworkPolicies allowing DNS + 80/443 egress and SPICE ingress.
+- `isolated`/`none` block egress; `host`/`unrestricted` skip NetworkPolicy and may use host networking.
 
-## Running locally
-```bash
-cd /home/cbeis/bretter-labs
-source .venv/bin/activate
-uvicorn backend.src.main:app --reload
-```
-API served at `http://127.0.0.1:8000`.
+## Auth and settings
+- Local username/password auth with bcrypt hashing; bearer tokens are issued from `/auth/login`.
+- Default admin is created on first startup and forced to change password.
+- Runtime settings are configured via `BLABS_*` env vars (namespace, runtime class, KVM, node selector, image pull secret, node external host, etc.).
+- Appearance and SSO settings are stored in the config table; SSO is currently config-only (no backend SSO flow yet).
 
-## Next steps
-- Implement real auth (password hashing, sessions/tokens, admin/user roles, first-login password change).
-- Add persistence (database) for users/images/templates/instances; replace in-memory state.
-- Wire Kubernetes client for pod lifecycle, image PVC handling, and network policies.
-- Add idle-timeout worker to reap inactive pods.
-- Integrate SPICE/websockify provisioning and per-pod connection URLs.
-- Add frontend (admin + user consoles) consuming the API.
-- Add CI/linting/tests and containerization for deployment.
+## Deployment notes
+- `scripts/setup.sh` installs prerequisites on Ubuntu/Debian, updates the SPICE embed ConfigMap, and applies `deploy/app.yaml`.
+- The manifest creates NodePort services for backend/frontend and grants the backend RBAC to manage pods/services/network policies.
