@@ -11,6 +11,7 @@ const UserPanel = () => {
   const idleTimerRef = useRef(null);
   const countdownRef = useRef(null);
   const latestInstanceIdsRef = useRef([]);
+  const [sessionEnded, setSessionEnded] = useState(false);
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
@@ -117,14 +118,14 @@ const UserPanel = () => {
   const startIdleCountdown = (instanceIds) => {
     latestInstanceIdsRef.current = instanceIds;
     setShowIdlePrompt(true);
+    setSessionEnded(false);
     setIdleCountdown(PROMPT_COUNTDOWN_SECONDS);
     countdownRef.current = setInterval(() => {
       setIdleCountdown((prev) => {
         const next = (prev || PROMPT_COUNTDOWN_SECONDS) - 1;
         if (next <= 0) {
           clearIdleTimers();
-          setShowIdlePrompt(false);
-          stopInstances(instanceIds);
+          endNow(true);
           return 0;
         }
         return next;
@@ -136,6 +137,7 @@ const UserPanel = () => {
     clearIdleTimers();
     setShowIdlePrompt(false);
     setIdleCountdown(null);
+    setSessionEnded(false);
     if (!runningInstances.length || !activeIdleMinutes) {
       return;
     }
@@ -152,7 +154,7 @@ const UserPanel = () => {
 
   useEffect(() => {
     const onActivity = () => resetIdleTimer();
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll', 'visibilitychange'];
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
     events.forEach((evt) => window.addEventListener(evt, onActivity));
     return () => events.forEach((evt) => window.removeEventListener(evt, onActivity));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -163,10 +165,19 @@ const UserPanel = () => {
     refresh();
   };
 
-  const endNow = () => {
+  const endNow = (auto = false) => {
     clearIdleTimers();
     setShowIdlePrompt(false);
+    setSessionEnded(true);
+    setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
     stopInstances(latestInstanceIdsRef.current);
+    setTimeout(() => {
+      try {
+        window.close();
+      } catch (err) {
+        // ignore if browser blocks close
+      }
+    }, 1500);
   };
 
   const formatCountdown = (seconds) => {
@@ -190,11 +201,19 @@ const UserPanel = () => {
               stop in {formatCountdown(idleCountdown || PROMPT_COUNTDOWN_SECONDS)} unless you continue.
             </p>
             <div className="actions">
-              <button className="ghost" onClick={endNow}>
-                Stop now
+              <button className="ghost" onClick={() => endNow(false)}>
+                No, end lab
               </button>
-              <button onClick={continueSession}>Continue</button>
+              <button onClick={continueSession}>Yes, continue</button>
             </div>
+          </div>
+        </div>
+      )}
+      {sessionEnded && (
+        <div className="modal-backdrop">
+          <div className="modal">
+            <h3>Session ended</h3>
+            <p className="muted">Session ended due to inactivity.</p>
           </div>
         </div>
       )}
