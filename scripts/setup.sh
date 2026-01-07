@@ -7,6 +7,8 @@ BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-backend:latest}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-frontend:latest}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
 APPLY_GOLDEN_PVC="${APPLY_GOLDEN_PVC:-0}"
+PUSH_IMAGES="${PUSH_IMAGES:-0}"
+CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 
 log() {
   echo "==> $*"
@@ -102,7 +104,7 @@ ensure_ghcr_login() {
     echo
   fi
   if [ -z "$ghcr_user" ] || [ -z "$ghcr_token" ]; then
-    fail "GHCR credentials are required."
+    fail "GHCR credentials are required for image push or pull-secret creation."
   fi
 
   echo "$ghcr_token" | podman login ghcr.io --username "$ghcr_user" --password-stdin
@@ -124,21 +126,25 @@ apply_manifests() {
   log "Ensuring namespace $NAMESPACE"
   kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
 
-  log "Updating ghcr-creds secret"
-  if [ -z "${GHCR_USERNAME:-}" ] || [ -z "${GHCR_TOKEN:-}" ]; then
-    log "Using existing podman auth for ghcr-creds"
-    local auth_path
-    auth_path="$(podman info --format '{{.Host.AuthFile}}')"
-    kubectl -n "$NAMESPACE" create secret generic ghcr-creds \
-      --from-file=.dockerconfigjson="$auth_path" \
-      --type=kubernetes.io/dockerconfigjson \
-      --dry-run=client -o yaml | kubectl apply -f -
+  if [ "$CREATE_PULL_SECRET" -eq 1 ]; then
+    log "Updating ghcr-creds secret"
+    if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
+      kubectl -n "$NAMESPACE" create secret docker-registry ghcr-creds \
+        --docker-server=ghcr.io \
+        --docker-username="$GHCR_USERNAME" \
+        --docker-password="$GHCR_TOKEN" \
+        --dry-run=client -o yaml | kubectl apply -f -
+    else
+      log "Using existing podman auth for ghcr-creds"
+      local auth_path
+      auth_path="$(podman info --format '{{.Host.AuthFile}}')"
+      kubectl -n "$NAMESPACE" create secret generic ghcr-creds \
+        --from-file=.dockerconfigjson="$auth_path" \
+        --type=kubernetes.io/dockerconfigjson \
+        --dry-run=client -o yaml | kubectl apply -f -
+    fi
   else
-    kubectl -n "$NAMESPACE" create secret docker-registry ghcr-creds \
-      --docker-server=ghcr.io \
-      --docker-username="$GHCR_USERNAME" \
-      --docker-password="$GHCR_TOKEN" \
-      --dry-run=client -o yaml | kubectl apply -f -
+    log "Skipping image pull secret (set CREATE_PULL_SECRET=1 if images are private)"
   fi
 
   if [ -f "$ROOT_DIR/runner/spice-embed.html" ]; then
@@ -168,12 +174,21 @@ apply_manifests() {
 main() {
   require_apt
   install_base_packages
-  install_node
   install_kubectl
-  install_podman
   ensure_kubeconfig
-  ensure_ghcr_login
-  build_and_push_images
+
+  if [ "$PUSH_IMAGES" -eq 1 ]; then
+    install_node
+    install_podman
+    ensure_ghcr_login
+    build_and_push_images
+    CREATE_PULL_SECRET=1
+  fi
+
+  if [ "$CREATE_PULL_SECRET" -eq 1 ] && ! command -v podman >/dev/null 2>&1; then
+    install_podman
+  fi
+
   apply_manifests
   log "Done."
 }
