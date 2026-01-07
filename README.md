@@ -54,3 +54,4 @@ FastAPI + React app for managing Windows/Linux lab VMs on Kubernetes. Admins upl
 ![Pod list](images/thumbnail3.png)
 ![Resources](images/thumbnail4.png)
 ![VM console](images/thumbnail5.png)
+![Session timeout](images/thumbnail6.png)
