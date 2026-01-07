@@ -62,8 +62,8 @@ Storage and runtime notes:
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` must be available to containerd on the node(s).
 
 ## Usage
-- UI: NodePort `30073` (e.g. `http://10.68.48.105:30073`).
-- API: NodePort `30080` (e.g. `http://10.68.48.105:30080`).
+- UI: NodePort `30073` (e.g. `http://<node-external-host>:30073`).
+- API: NodePort `30080` (e.g. `http://<node-external-host>:30080`).
 - Default admin: `admin` / `admin` (forced change on first login).
 
 Admin workflow:
