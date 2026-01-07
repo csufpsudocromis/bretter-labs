@@ -9,7 +9,7 @@ Bretter Labs is a FastAPI + React (Vite) app for managing Windows/Linux lab VMs 
 - Python 3.11+ with venv/pip (backend)
 - Node.js 18+ with npm (frontend)
 - kubectl (to talk to the target cluster)
-- docker or podman (optional, for building images)
+- docker or podman (optional, for building/pushing images)
 
 ### Local development
 Backend:
@@ -28,7 +28,22 @@ npm run dev -- --host --port 5173
 ```
 
 ### Kubernetes deployment (current setup)
-Build and push images (edit tags as needed):
+Recommended: use the setup script (auto-installs prerequisites on Ubuntu/Debian).
+```bash
+./scripts/setup.sh
+```
+
+Optional flags:
+- `PUSH_IMAGES=1` to build/push images (requires GHCR credentials).
+- `CREATE_PULL_SECRET=1` to create `ghcr-creds` for private image pulls.
+- `BACKEND_IMAGE` / `FRONTEND_IMAGE` to override image tags.
+- `NAMESPACE` to override the namespace (default `labs`).
+- `KUBECONFIG` to point at a specific kubeconfig.
+- `APPLY_GOLDEN_PVC=1` to apply `deploy/golden-pvc.yaml`.
+
+If you use prebuilt public images, you can skip GHCR entirely (leave `PUSH_IMAGES=0` and `CREATE_PULL_SECRET=0`).
+
+Manual build/push (edit tags as needed):
 ```bash
 podman build -t ghcr.io/csufpsudocromis/bretter-backend:latest -f backend/Dockerfile .
 podman push ghcr.io/csufpsudocromis/bretter-backend:latest
