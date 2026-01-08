@@ -13,6 +13,7 @@ const UserPanel = () => {
   const countdownEndsAtRef = useRef(null);
   const idleStartsAtRef = useRef(null);
   const lastActivityAtRef = useRef(null);
+  const consoleWindowsRef = useRef({});
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
@@ -134,7 +135,10 @@ const UserPanel = () => {
 
   const connect = (instance) => {
     if (instance?.console_url) {
-      window.open(instance.console_url, '_blank');
+      const win = window.open(instance.console_url, '_blank');
+      if (win && instance?.id) {
+        consoleWindowsRef.current[instance.id] = win;
+      }
     } else {
       setMessage('Console URL not available yet');
     }
@@ -169,6 +173,21 @@ const UserPanel = () => {
     } catch (err) {
       // ignore storage failures
     }
+  };
+
+  const broadcastActivityToConsoles = (timestamp) => {
+    const windows = consoleWindowsRef.current;
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        return;
+      }
+      try {
+        win.postMessage({ type: 'idle-activity', source: 'user', timestamp }, '*');
+      } catch (err) {
+        // ignore postMessage failures
+      }
+    });
   };
 
   const clearIdleTimers = (resetIdleStart = true) => {
@@ -259,17 +278,36 @@ const UserPanel = () => {
     return fallback;
   };
 
-  const recordActivity = () => {
+  const recordActivity = ({ emit = true, timestamp } = {}) => {
     if (idlePromptRef.current) {
       return;
     }
     if (!activeInstances.length || !activeIdleMinutes) {
       return;
     }
-    const now = Date.now();
+    const now = timestamp || Date.now();
     lastActivityAtRef.current = now;
     writeStoredActivity(now);
     updateIdleStartFromActivity(now);
+    scheduleIdleTimer();
+    if (emit) {
+      broadcastActivityToConsoles(now);
+    }
+  };
+
+  const handleExternalActivity = (timestamp) => {
+    if (!activeInstances.length || !activeIdleMinutes) {
+      return;
+    }
+    const now = timestamp || Date.now();
+    lastActivityAtRef.current = now;
+    writeStoredActivity(now);
+    updateIdleStartFromActivity(now);
+    if (idlePromptRef.current) {
+      clearIdleTimers(false);
+      clearIdlePrompt();
+      setSessionEnded(false);
+    }
     scheduleIdleTimer();
   };
 
@@ -346,6 +384,11 @@ const UserPanel = () => {
   useEffect(() => {
     const handleMessage = (event) => {
       const payload = event.data || {};
+      if (payload.type === 'idle-activity' && payload.source === 'vm') {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        handleExternalActivity(ts);
+        return;
+      }
       if (payload.type === 'idle-stop' && payload.instanceId) {
         if (payload.action === 'delete') {
           deleteInstances([payload.instanceId], payload.reason);

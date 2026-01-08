@@ -230,12 +230,30 @@
         idleTimer = setTimeout(() => startCountdown(idleStartsAt), delay);
       }
 
-      function recordActivity() {
+      let lastActivitySentAt = 0;
+
+      function notifyOpenerActivity(timestamp) {
+        if (!window.opener) {
+          return;
+        }
+        const now = timestamp || Date.now();
+        if (now - lastActivitySentAt < 1000) {
+          return;
+        }
+        lastActivitySentAt = now;
+        window.opener.postMessage({ type: 'idle-activity', source: 'vm', instanceId, timestamp: now }, '*');
+      }
+
+      function recordActivity({ emit = true, timestamp } = {}) {
         if (promptActive) {
           return;
         }
-        idleStartsAt = Date.now() + Math.max(1, idleMinutes) * 60 * 1000;
+        const now = timestamp || Date.now();
+        idleStartsAt = now + Math.max(1, idleMinutes) * 60 * 1000;
         scheduleIdleTimer();
+        if (emit) {
+          notifyOpenerActivity(now);
+        }
       }
 
       function syncIdleState() {
@@ -255,6 +273,16 @@
         const onActivity = () => recordActivity();
         ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'].forEach((evt) => {
           window.addEventListener(evt, onActivity, { passive: true });
+        });
+        window.addEventListener('message', (event) => {
+          const payload = event.data || {};
+          if (payload.type === 'idle-activity' && payload.source === 'user') {
+            if (promptActive) {
+              stopCountdown();
+            }
+            const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+            recordActivity({ emit: false, timestamp: ts });
+          }
         });
         document.getElementById('idle-continue').addEventListener('click', () => {
           stopCountdown();
