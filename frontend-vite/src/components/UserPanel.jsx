@@ -10,12 +10,16 @@ const UserPanel = () => {
   const [idleCountdown, setIdleCountdown] = useState(null);
   const idleTimerRef = useRef(null);
   const countdownRef = useRef(null);
+  const countdownEndsAtRef = useRef(null);
+  const idleStartsAtRef = useRef(null);
+  const lastActivityAtRef = useRef(null);
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
+  const ACTIVITY_STORAGE_KEY = 'blabs:last-activity-at';
 
   const refresh = async () => {
     try {
@@ -34,7 +38,14 @@ const UserPanel = () => {
     return () => clearInterval(handle);
   }, []);
 
-  const runningInstances = useMemo(() => instances.filter((i) => i.status === 'running'), [instances]);
+  const activeInstances = useMemo(
+    () => instances.filter((i) => i.status === 'running' || i.status === 'pending'),
+    [instances],
+  );
+
+  useEffect(() => {
+    latestInstanceIdsRef.current = activeInstances.map((inst) => inst.id);
+  }, [activeInstances]);
 
   const templateIdleMinutes = (templateId) => {
     const tmpl = templates.find((t) => t.id === templateId);
@@ -42,9 +53,9 @@ const UserPanel = () => {
   };
 
   const activeIdleMinutes = useMemo(() => {
-    if (runningInstances.length === 0) return null;
-    return Math.min(...runningInstances.map((inst) => templateIdleMinutes(inst.template_id)));
-  }, [runningInstances, templates]);
+    if (activeInstances.length === 0) return null;
+    return Math.min(...activeInstances.map((inst) => templateIdleMinutes(inst.template_id)));
+  }, [activeInstances, templates]);
 
   const start = async (templateId) => {
     try {
@@ -134,7 +145,33 @@ const UserPanel = () => {
   const displayStatus = (status) => (status === 'completed' ? 'stopped' : status);
   const isRunning = (status) => status === 'running';
 
-  const clearIdleTimers = () => {
+  const readStoredActivity = () => {
+    try {
+      const stored = sessionStorage.getItem(ACTIVITY_STORAGE_KEY);
+      const parsed = stored ? Number(stored) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch (err) {
+      return null;
+    }
+  };
+
+  const writeStoredActivity = (timestamp) => {
+    try {
+      sessionStorage.setItem(ACTIVITY_STORAGE_KEY, String(timestamp));
+    } catch (err) {
+      // ignore storage failures
+    }
+  };
+
+  const clearStoredActivity = () => {
+    try {
+      sessionStorage.removeItem(ACTIVITY_STORAGE_KEY);
+    } catch (err) {
+      // ignore storage failures
+    }
+  };
+
+  const clearIdleTimers = (resetIdleStart = true) => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
       idleTimerRef.current = null;
@@ -143,58 +180,168 @@ const UserPanel = () => {
       clearInterval(countdownRef.current);
       countdownRef.current = null;
     }
+    countdownEndsAtRef.current = null;
+    if (resetIdleStart) {
+      idleStartsAtRef.current = null;
+    }
   };
 
-  const startIdleCountdown = (instanceIds) => {
+  const clearIdlePrompt = () => {
+    setShowIdlePrompt(false);
+    idlePromptRef.current = false;
+    setIdleCountdown(null);
+  };
+
+  const scheduleIdleTimer = () => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    const idleStartsAt = idleStartsAtRef.current;
+    if (!idleStartsAt) {
+      return;
+    }
+    const delay = Math.max(0, idleStartsAt - Date.now());
+    idleTimerRef.current = setTimeout(() => startIdleCountdown(idleStartsAt), delay);
+  };
+
+  const updateCountdown = () => {
+    if (!idlePromptRef.current) {
+      return;
+    }
+    const endsAt = countdownEndsAtRef.current;
+    if (!endsAt) {
+      return;
+    }
+    const remainingSeconds = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+    setIdleCountdown(remainingSeconds);
+    if (remainingSeconds <= 0) {
+      endNow(true);
+    }
+  };
+
+  const startIdleCountdown = (startedAt, instanceIds = latestInstanceIdsRef.current) => {
+    if (!instanceIds || instanceIds.length === 0) {
+      return;
+    }
     latestInstanceIdsRef.current = instanceIds;
     idlePromptRef.current = true;
     setShowIdlePrompt(true);
     setSessionEnded(false);
-    setIdleCountdown(PROMPT_COUNTDOWN_SECONDS);
-    countdownRef.current = setInterval(() => {
-      setIdleCountdown((prev) => {
-        const next = (prev || PROMPT_COUNTDOWN_SECONDS) - 1;
-        if (next <= 0) {
-          clearIdleTimers();
-          endNow(true);
-          return 0;
-        }
-        return next;
-      });
-    }, 1000);
+    const baseline = startedAt || idleStartsAtRef.current || Date.now();
+    countdownEndsAtRef.current = baseline + PROMPT_COUNTDOWN_SECONDS * 1000;
+    const remainingSeconds = Math.max(0, Math.ceil((countdownEndsAtRef.current - Date.now()) / 1000));
+    setIdleCountdown(remainingSeconds);
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+    countdownRef.current = setInterval(updateCountdown, 1000);
+    updateCountdown();
   };
 
-  const resetIdleTimer = () => {
+  const updateIdleStartFromActivity = (activityAt) => {
+    if (!activeIdleMinutes) {
+      return;
+    }
+    idleStartsAtRef.current = activityAt + Math.max(1, activeIdleMinutes) * 60 * 1000;
+  };
+
+  const ensureActivityTimestamp = () => {
+    if (lastActivityAtRef.current) {
+      return lastActivityAtRef.current;
+    }
+    const stored = readStoredActivity();
+    const fallback = stored || Date.now();
+    lastActivityAtRef.current = fallback;
+    if (!stored) {
+      writeStoredActivity(fallback);
+    }
+    return fallback;
+  };
+
+  const recordActivity = () => {
     if (idlePromptRef.current) {
       return;
     }
-    clearIdleTimers();
-    setShowIdlePrompt(false);
-    idlePromptRef.current = false;
-    setIdleCountdown(null);
-    setSessionEnded(false);
-    if (!runningInstances.length || !activeIdleMinutes) {
+    if (!activeInstances.length || !activeIdleMinutes) {
       return;
     }
-    const ms = Math.max(1, activeIdleMinutes) * 60 * 1000;
-    const targetInstanceIds = runningInstances.map((inst) => inst.id);
-    idleTimerRef.current = setTimeout(() => startIdleCountdown(targetInstanceIds), ms);
+    const now = Date.now();
+    lastActivityAtRef.current = now;
+    writeStoredActivity(now);
+    updateIdleStartFromActivity(now);
+    scheduleIdleTimer();
+  };
+
+  const syncIdleState = () => {
+    if (idlePromptRef.current) {
+      updateCountdown();
+      return;
+    }
+    if (!activeInstances.length || !activeIdleMinutes) {
+      clearIdleTimers();
+      clearIdlePrompt();
+      idleStartsAtRef.current = null;
+      lastActivityAtRef.current = null;
+      clearStoredActivity();
+      return;
+    }
+    const activityAt = ensureActivityTimestamp();
+    updateIdleStartFromActivity(activityAt);
+    if (idleStartsAtRef.current && Date.now() >= idleStartsAtRef.current) {
+      startIdleCountdown(idleStartsAtRef.current);
+      return;
+    }
+    scheduleIdleTimer();
   };
 
   useEffect(() => {
-    resetIdleTimer();
+    syncIdleState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, runningInstances.length]);
+  }, [activeIdleMinutes, activeInstances.length]);
 
   useEffect(() => () => clearIdleTimers(), []);
 
   useEffect(() => {
-    const onActivity = () => resetIdleTimer();
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll', 'visibilitychange'];
-    events.forEach((evt) => window.addEventListener(evt, onActivity));
-    return () => events.forEach((evt) => window.removeEventListener(evt, onActivity));
+    const onActivity = () => {
+      if (document.hidden) {
+        return;
+      }
+      if (idlePromptRef.current) {
+        return;
+      }
+      if (!activeInstances.length || !activeIdleMinutes) {
+        return;
+      }
+      const now = Date.now();
+      const lastActivity = lastActivityAtRef.current || readStoredActivity();
+      if (lastActivity) {
+        const idleStart = lastActivity + Math.max(1, activeIdleMinutes) * 60 * 1000;
+        if (now >= idleStart) {
+          idleStartsAtRef.current = idleStart;
+          startIdleCountdown(idleStart);
+          return;
+        }
+      }
+      recordActivity();
+    };
+    const onFocus = () => syncIdleState();
+    const onVisibility = () => {
+      if (!document.hidden) {
+        syncIdleState();
+      }
+    };
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
+    events.forEach((evt) => window.addEventListener(evt, onActivity, { passive: true }));
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      events.forEach((evt) => window.removeEventListener(evt, onActivity));
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, runningInstances.length]);
+  }, [activeIdleMinutes, activeInstances.length]);
 
   useEffect(() => {
     const handleMessage = (event) => {
@@ -213,25 +360,18 @@ const UserPanel = () => {
   }, []);
 
   const continueSession = () => {
-    idlePromptRef.current = false;
-    resetIdleTimer();
+    clearIdlePrompt();
+    setSessionEnded(false);
+    recordActivity();
     refresh();
   };
 
   const endNow = (auto = false) => {
     clearIdleTimers();
-    setShowIdlePrompt(false);
-    idlePromptRef.current = false;
+    clearIdlePrompt();
     setSessionEnded(true);
     setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
     deleteInstances(latestInstanceIdsRef.current, auto ? 'idle-timeout' : 'user-end', true);
-    setTimeout(() => {
-      try {
-        window.close();
-      } catch (err) {
-        // ignore if browser blocks close
-      }
-    }, 1500);
   };
 
   const formatCountdown = (seconds) => {
@@ -268,6 +408,9 @@ const UserPanel = () => {
           <div className="modal">
             <h3>Session ended</h3>
             <p className="muted">Session ended due to inactivity.</p>
+            <div className="actions">
+              <button onClick={() => setSessionEnded(false)}>OK</button>
+            </div>
           </div>
         </div>
       )}
