@@ -119,6 +119,8 @@
       const uri = scheme + host + ':' + port;
 
       let sc;
+      let openerRef = null;
+      let openerOrigin = '*';
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -233,7 +235,8 @@
       let lastActivitySentAt = 0;
 
       function notifyOpenerActivity(timestamp) {
-        if (!window.opener) {
+        const target = openerRef || window.opener;
+        if (!target) {
           return;
         }
         const now = timestamp || Date.now();
@@ -241,7 +244,11 @@
           return;
         }
         lastActivitySentAt = now;
-        window.opener.postMessage({ type: 'idle-activity', source: 'vm', instanceId, timestamp: now }, '*');
+        try {
+          target.postMessage({ type: 'idle-activity', source: 'vm', instanceId, timestamp: now }, openerOrigin);
+        } catch (err) {
+          // ignore postMessage failures
+        }
       }
 
       function recordActivity({ emit = true, timestamp } = {}) {
@@ -277,7 +284,24 @@
         });
         window.addEventListener('message', (event) => {
           const payload = event.data || {};
+          if (payload.type === 'idle-handshake' && payload.source === 'user') {
+            openerRef = event.source;
+            openerOrigin = event.origin || '*';
+            try {
+              if (payload.instanceId === instanceId) {
+                openerRef.postMessage(
+                  { type: 'idle-handshake-ack', source: 'vm', instanceId },
+                  openerOrigin,
+                );
+              }
+            } catch (err) {
+              // ignore postMessage failures
+            }
+            return;
+          }
           if (payload.type === 'idle-activity' && payload.source === 'user') {
+            openerRef = event.source;
+            openerOrigin = event.origin || '*';
             if (promptActive) {
               stopCountdown();
             }

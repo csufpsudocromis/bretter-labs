@@ -14,6 +14,7 @@ const UserPanel = () => {
   const idleStartsAtRef = useRef(null);
   const lastActivityAtRef = useRef(null);
   const consoleWindowsRef = useRef({});
+  const consoleHandshakeRef = useRef({});
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
@@ -138,6 +139,7 @@ const UserPanel = () => {
       const win = window.open(instance.console_url, '_blank');
       if (win && instance?.id) {
         consoleWindowsRef.current[instance.id] = win;
+        startConsoleHandshake(instance.id, win);
       }
     } else {
       setMessage('Console URL not available yet');
@@ -175,11 +177,42 @@ const UserPanel = () => {
     }
   };
 
+  const stopConsoleHandshake = (instanceId) => {
+    const timers = consoleHandshakeRef.current;
+    if (timers[instanceId]) {
+      clearInterval(timers[instanceId]);
+      delete timers[instanceId];
+    }
+  };
+
+  const startConsoleHandshake = (instanceId, win) => {
+    if (!instanceId || !win) {
+      return;
+    }
+    const send = () => {
+      if (!win || win.closed) {
+        delete consoleWindowsRef.current[instanceId];
+        stopConsoleHandshake(instanceId);
+        return;
+      }
+      try {
+        win.postMessage({ type: 'idle-handshake', source: 'user', instanceId }, '*');
+      } catch (err) {
+        // ignore postMessage failures
+      }
+    };
+    send();
+    if (!consoleHandshakeRef.current[instanceId]) {
+      consoleHandshakeRef.current[instanceId] = setInterval(send, 1000);
+    }
+  };
+
   const broadcastActivityToConsoles = (timestamp) => {
     const windows = consoleWindowsRef.current;
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        stopConsoleHandshake(id);
         return;
       }
       try {
@@ -387,6 +420,10 @@ const UserPanel = () => {
       if (payload.type === 'idle-activity' && payload.source === 'vm') {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
         handleExternalActivity(ts);
+        return;
+      }
+      if (payload.type === 'idle-handshake-ack' && payload.source === 'vm' && payload.instanceId) {
+        stopConsoleHandshake(payload.instanceId);
         return;
       }
       if (payload.type === 'idle-stop' && payload.instanceId) {
