@@ -16,12 +16,15 @@ const UserPanel = () => {
   const consoleWindowsRef = useRef({});
   const consoleHandshakeRef = useRef({});
   const idleSuspendedRef = useRef(false);
+  const idleSuspendReasonRef = useRef(null);
+  const vmPresenceAtRef = useRef(null);
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
+  const VM_PRESENCE_GRACE_MS = 10000;
   const ACTIVITY_STORAGE_KEY = 'blabs:last-activity-at';
 
   const refresh = async () => {
@@ -218,6 +221,20 @@ const UserPanel = () => {
     }
   };
 
+  const hasOpenConsoles = () => {
+    const windows = consoleWindowsRef.current;
+    let open = false;
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        stopConsoleHandshake(id);
+        return;
+      }
+      open = true;
+    });
+    return open;
+  };
+
   const broadcastActivityToConsoles = (timestamp) => {
     const windows = consoleWindowsRef.current;
     Object.entries(windows).forEach(([id, win]) => {
@@ -365,16 +382,22 @@ const UserPanel = () => {
     }
   };
 
+  const noteVmPresence = (timestamp) => {
+    vmPresenceAtRef.current = timestamp || Date.now();
+  };
+
   const handleExternalActivity = (timestamp) => {
     if (!activeInstances.length || !activeIdleMinutes) {
       return;
     }
     const now = timestamp || Date.now();
-    suspendIdle(now);
+    noteVmPresence(now);
+    suspendIdle(now, 'vm');
   };
 
-  const suspendIdle = (timestamp) => {
+  const suspendIdle = (timestamp, reason = 'vm') => {
     idleSuspendedRef.current = true;
+    idleSuspendReasonRef.current = reason;
     clearIdleTimers();
     clearIdlePrompt();
     setSessionEnded(false);
@@ -387,6 +410,7 @@ const UserPanel = () => {
 
   const resumeIdle = (timestamp) => {
     idleSuspendedRef.current = false;
+    idleSuspendReasonRef.current = null;
     if (!activeInstances.length || !activeIdleMinutes) {
       return;
     }
@@ -412,6 +436,9 @@ const UserPanel = () => {
       clearIdlePrompt();
       idleStartsAtRef.current = null;
       lastActivityAtRef.current = null;
+      vmPresenceAtRef.current = null;
+      idleSuspendedRef.current = false;
+      idleSuspendReasonRef.current = null;
       clearStoredActivity();
       return;
     }
@@ -432,6 +459,27 @@ const UserPanel = () => {
   useEffect(() => () => clearIdleTimers(), []);
 
   useEffect(() => {
+    const interval = setInterval(() => {
+      if (idleSuspendReasonRef.current !== 'vm') {
+        return;
+      }
+      const lastPresence = vmPresenceAtRef.current;
+      if (!lastPresence) {
+        return;
+      }
+      if (Date.now() - lastPresence <= VM_PRESENCE_GRACE_MS) {
+        return;
+      }
+      if (!document.hasFocus() && hasOpenConsoles()) {
+        return;
+      }
+      resumeIdle(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdleMinutes, activeInstances.length]);
+
+  useEffect(() => {
     const onActivity = () => {
       if (document.hidden) {
         return;
@@ -442,6 +490,7 @@ const UserPanel = () => {
       const now = Date.now();
       if (idleSuspendedRef.current) {
         idleSuspendedRef.current = false;
+        idleSuspendReasonRef.current = null;
         recordActivity({ emit: true, timestamp: now });
         return;
       }
@@ -458,12 +507,18 @@ const UserPanel = () => {
     };
     const onFocus = () => {
       idleSuspendedRef.current = false;
+      idleSuspendReasonRef.current = null;
       broadcastFocusToConsoles(true);
       recordActivity({ emit: true });
       syncIdleState();
     };
     const onBlur = () => {
       broadcastFocusToConsoles(false);
+      if (hasOpenConsoles()) {
+        const now = Date.now();
+        noteVmPresence(now);
+        suspendIdle(now, 'vm');
+      }
     };
     const onVisibility = () => {
       if (!document.hidden) {
@@ -489,11 +544,13 @@ const UserPanel = () => {
       const payload = event.data || {};
       if (payload.type === 'idle-focus' && payload.source === 'vm') {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
-        suspendIdle(ts);
+        noteVmPresence(ts);
+        suspendIdle(ts, 'vm');
         return;
       }
       if (payload.type === 'idle-blur' && payload.source === 'vm') {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        vmPresenceAtRef.current = null;
         resumeIdle(ts);
         return;
       }
@@ -523,6 +580,7 @@ const UserPanel = () => {
     clearIdlePrompt();
     setSessionEnded(false);
     idleSuspendedRef.current = false;
+    idleSuspendReasonRef.current = null;
     recordActivity();
     refresh();
   };

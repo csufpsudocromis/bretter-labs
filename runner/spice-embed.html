@@ -122,6 +122,8 @@
       let openerRef = null;
       let openerOrigin = '*';
       let idleSuspended = false;
+      let presenceTimer = null;
+      const PRESENCE_INTERVAL_MS = 2000;
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -144,6 +146,8 @@
         startIdleTimer();
       });
       window.addEventListener('beforeunload', () => {
+        stopPresenceHeartbeat();
+        notifyOpenerFocus(false);
         if (sc) sc.stop();
       });
 
@@ -271,6 +275,23 @@
         }
       }
 
+      function startPresenceHeartbeat() {
+        if (presenceTimer) {
+          return;
+        }
+        presenceTimer = setInterval(() => {
+          notifyOpenerFocus(!document.hidden);
+        }, PRESENCE_INTERVAL_MS);
+      }
+
+      function stopPresenceHeartbeat() {
+        if (!presenceTimer) {
+          return;
+        }
+        clearInterval(presenceTimer);
+        presenceTimer = null;
+      }
+
       function recordActivity({ emit = true, timestamp } = {}) {
         if (idleSuspended) {
           return;
@@ -373,6 +394,7 @@
         document.getElementById('idle-stop').addEventListener('click', () => {
           endSession('user-end');
         });
+        startPresenceHeartbeat();
       }
     </script>
   </body>
