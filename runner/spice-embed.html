@@ -128,6 +128,10 @@
       let apiBase = '';
       let lastHeartbeatAt = 0;
       const HEARTBEAT_INTERVAL_MS = 30000;
+      let openerWatchTimer = null;
+      const OPENER_WATCH_INTERVAL_MS = 2000;
+      const AUTH_STORAGE_TOKEN_KEY = 'blabs_vm_token';
+      const AUTH_STORAGE_API_KEY = 'blabs_vm_api_base';
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -146,11 +150,13 @@
         if (title) {
           document.title = title;
         }
+        loadStoredAuth();
         connect();
         startIdleTimer();
       });
       window.addEventListener('beforeunload', () => {
         stopPresenceHeartbeat();
+        stopOpenerWatchdog();
         notifyOpenerFocus(false);
         if (sc) sc.stop();
       });
@@ -166,6 +172,21 @@
       const countdownEl = document.getElementById('idle-countdown');
       const textEl = document.getElementById('idle-text');
       const endedTextEl = document.getElementById('ended-text');
+
+      function loadStoredAuth() {
+        try {
+          const storedToken = sessionStorage.getItem(AUTH_STORAGE_TOKEN_KEY);
+          if (storedToken) {
+            authToken = storedToken;
+          }
+          const storedApi = sessionStorage.getItem(AUTH_STORAGE_API_KEY);
+          if (storedApi) {
+            apiBase = storedApi;
+          }
+        } catch (err) {
+          // ignore storage failures
+        }
+      }
 
       function apiBaseUrl() {
         const base = apiBase || `${window.location.protocol}//${window.location.hostname}:30080`;
@@ -289,6 +310,13 @@
         if (!target) {
           return;
         }
+        try {
+          if (target.closed) {
+            return;
+          }
+        } catch (err) {
+          return;
+        }
         const now = timestamp || Date.now();
         if (now - lastActivitySentAt < 1000) {
           return;
@@ -304,6 +332,13 @@
       function notifyOpenerFocus(focused) {
         const target = openerRef || window.opener;
         if (!target) {
+          return;
+        }
+        try {
+          if (target.closed) {
+            return;
+          }
+        } catch (err) {
           return;
         }
         const now = Date.now();
@@ -334,14 +369,54 @@
         presenceTimer = null;
       }
 
+      function startOpenerWatchdog() {
+        if (openerWatchTimer) {
+          return;
+        }
+        openerWatchTimer = setInterval(() => {
+          let openerClosed = false;
+          try {
+            if (openerRef && openerRef.closed) {
+              openerRef = null;
+              openerClosed = true;
+            }
+          } catch (err) {
+            openerRef = null;
+            openerClosed = true;
+          }
+          try {
+            if (window.opener && window.opener.closed) {
+              openerClosed = true;
+            }
+          } catch (err) {
+            openerClosed = true;
+          }
+          if (openerClosed && idleSuspended) {
+            idleSuspended = false;
+            recordActivity({ heartbeat: true });
+          }
+        }, OPENER_WATCH_INTERVAL_MS);
+      }
+
+      function stopOpenerWatchdog() {
+        if (!openerWatchTimer) {
+          return;
+        }
+        clearInterval(openerWatchTimer);
+        openerWatchTimer = null;
+      }
+
       function recordActivity({ emit = true, timestamp, heartbeat = false } = {}) {
+        const now = timestamp || Date.now();
         if (idleSuspended) {
+          if (heartbeat) {
+            sendHeartbeat(now);
+          }
           return;
         }
         if (promptActive) {
           return;
         }
-        const now = timestamp || Date.now();
         idleStartsAt = now + Math.max(1, idleMinutes) * 60 * 1000;
         scheduleIdleTimer();
         if (emit) {
@@ -438,9 +513,19 @@
             }
             if (payload.token) {
               authToken = payload.token;
+              try {
+                sessionStorage.setItem(AUTH_STORAGE_TOKEN_KEY, authToken);
+              } catch (err) {
+                // ignore storage failures
+              }
             }
             if (payload.apiBase) {
               apiBase = payload.apiBase;
+              try {
+                sessionStorage.setItem(AUTH_STORAGE_API_KEY, apiBase);
+              } catch (err) {
+                // ignore storage failures
+              }
             }
             sendHeartbeat(Date.now());
           }
@@ -453,6 +538,7 @@
           endSession('user-end');
         });
         startPresenceHeartbeat();
+        startOpenerWatchdog();
       }
     </script>
   </body>
