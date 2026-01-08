@@ -8,3 +8,4 @@ __pycache__/
 backend/data/app.db
 frontend-vite/node_modules/
 frontend-vite/dist/
+bretter-labs.wiki/
