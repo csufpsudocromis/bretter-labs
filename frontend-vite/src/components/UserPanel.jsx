@@ -15,6 +15,7 @@ const UserPanel = () => {
   const lastActivityAtRef = useRef(null);
   const consoleWindowsRef = useRef({});
   const consoleHandshakeRef = useRef({});
+  const idleSuspendedRef = useRef(false);
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
@@ -140,6 +141,16 @@ const UserPanel = () => {
       if (win && instance?.id) {
         consoleWindowsRef.current[instance.id] = win;
         startConsoleHandshake(instance.id, win);
+        if (document.hasFocus()) {
+          try {
+            win.postMessage(
+              { type: 'idle-focus', source: 'user', instanceId: instance.id, timestamp: Date.now() },
+              '*',
+            );
+          } catch (err) {
+            // ignore postMessage failures
+          }
+        }
       }
     } else {
       setMessage('Console URL not available yet');
@@ -223,6 +234,26 @@ const UserPanel = () => {
     });
   };
 
+  const broadcastFocusToConsoles = (focused) => {
+    const windows = consoleWindowsRef.current;
+    const timestamp = Date.now();
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        stopConsoleHandshake(id);
+        return;
+      }
+      try {
+        win.postMessage(
+          { type: focused ? 'idle-focus' : 'idle-blur', source: 'user', instanceId: id, timestamp },
+          '*',
+        );
+      } catch (err) {
+        // ignore postMessage failures
+      }
+    });
+  };
+
   const clearIdleTimers = (resetIdleStart = true) => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
@@ -248,6 +279,9 @@ const UserPanel = () => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
       idleTimerRef.current = null;
+    }
+    if (idleSuspendedRef.current) {
+      return;
     }
     const idleStartsAt = idleStartsAtRef.current;
     if (!idleStartsAt) {
@@ -312,6 +346,9 @@ const UserPanel = () => {
   };
 
   const recordActivity = ({ emit = true, timestamp } = {}) => {
+    if (idleSuspendedRef.current) {
+      return;
+    }
     if (idlePromptRef.current) {
       return;
     }
@@ -333,18 +370,39 @@ const UserPanel = () => {
       return;
     }
     const now = timestamp || Date.now();
+    suspendIdle(now);
+  };
+
+  const suspendIdle = (timestamp) => {
+    idleSuspendedRef.current = true;
+    clearIdleTimers();
+    clearIdlePrompt();
+    setSessionEnded(false);
+    if (timestamp) {
+      lastActivityAtRef.current = timestamp;
+      writeStoredActivity(timestamp);
+      updateIdleStartFromActivity(timestamp);
+    }
+  };
+
+  const resumeIdle = (timestamp) => {
+    idleSuspendedRef.current = false;
+    if (!activeInstances.length || !activeIdleMinutes) {
+      return;
+    }
+    const now = timestamp || Date.now();
     lastActivityAtRef.current = now;
     writeStoredActivity(now);
     updateIdleStartFromActivity(now);
-    if (idlePromptRef.current) {
-      clearIdleTimers(false);
-      clearIdlePrompt();
-      setSessionEnded(false);
-    }
     scheduleIdleTimer();
   };
 
   const syncIdleState = () => {
+    if (idleSuspendedRef.current) {
+      clearIdleTimers(false);
+      clearIdlePrompt();
+      return;
+    }
     if (idlePromptRef.current) {
       updateCountdown();
       return;
@@ -378,13 +436,15 @@ const UserPanel = () => {
       if (document.hidden) {
         return;
       }
-      if (idlePromptRef.current) {
-        return;
-      }
       if (!activeInstances.length || !activeIdleMinutes) {
         return;
       }
       const now = Date.now();
+      if (idleSuspendedRef.current) {
+        idleSuspendedRef.current = false;
+        recordActivity({ emit: true, timestamp: now });
+        return;
+      }
       const lastActivity = lastActivityAtRef.current || readStoredActivity();
       if (lastActivity) {
         const idleStart = lastActivity + Math.max(1, activeIdleMinutes) * 60 * 1000;
@@ -396,7 +456,15 @@ const UserPanel = () => {
       }
       recordActivity();
     };
-    const onFocus = () => syncIdleState();
+    const onFocus = () => {
+      idleSuspendedRef.current = false;
+      broadcastFocusToConsoles(true);
+      recordActivity({ emit: true });
+      syncIdleState();
+    };
+    const onBlur = () => {
+      broadcastFocusToConsoles(false);
+    };
     const onVisibility = () => {
       if (!document.hidden) {
         syncIdleState();
@@ -405,10 +473,12 @@ const UserPanel = () => {
     const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
     events.forEach((evt) => window.addEventListener(evt, onActivity, { passive: true }));
     window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       events.forEach((evt) => window.removeEventListener(evt, onActivity));
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
       document.removeEventListener('visibilitychange', onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -417,6 +487,16 @@ const UserPanel = () => {
   useEffect(() => {
     const handleMessage = (event) => {
       const payload = event.data || {};
+      if (payload.type === 'idle-focus' && payload.source === 'vm') {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        suspendIdle(ts);
+        return;
+      }
+      if (payload.type === 'idle-blur' && payload.source === 'vm') {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        resumeIdle(ts);
+        return;
+      }
       if (payload.type === 'idle-activity' && payload.source === 'vm') {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
         handleExternalActivity(ts);
@@ -442,6 +522,7 @@ const UserPanel = () => {
   const continueSession = () => {
     clearIdlePrompt();
     setSessionEnded(false);
+    idleSuspendedRef.current = false;
     recordActivity();
     refresh();
   };

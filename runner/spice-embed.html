@@ -121,6 +121,7 @@
       let sc;
       let openerRef = null;
       let openerOrigin = '*';
+      let idleSuspended = false;
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -228,6 +229,9 @@
 
       function scheduleIdleTimer() {
         if (idleTimer) clearTimeout(idleTimer);
+        if (idleSuspended) {
+          return;
+        }
         const delay = Math.max(0, (idleStartsAt || Date.now()) - Date.now());
         idleTimer = setTimeout(() => startCountdown(idleStartsAt), delay);
       }
@@ -251,7 +255,26 @@
         }
       }
 
+      function notifyOpenerFocus(focused) {
+        const target = openerRef || window.opener;
+        if (!target) {
+          return;
+        }
+        const now = Date.now();
+        try {
+          target.postMessage(
+            { type: focused ? 'idle-focus' : 'idle-blur', source: 'vm', instanceId, timestamp: now },
+            openerOrigin,
+          );
+        } catch (err) {
+          // ignore postMessage failures
+        }
+      }
+
       function recordActivity({ emit = true, timestamp } = {}) {
+        if (idleSuspended) {
+          return;
+        }
         if (promptActive) {
           return;
         }
@@ -264,6 +287,9 @@
       }
 
       function syncIdleState() {
+        if (idleSuspended) {
+          return;
+        }
         if (promptActive) {
           updateCountdown();
           return;
@@ -282,6 +308,21 @@
         activityEvents.forEach((evt) => {
           document.addEventListener(evt, onActivity, { passive: true, capture: true });
         });
+        window.addEventListener('focus', () => {
+          notifyOpenerFocus(true);
+          idleSuspended = false;
+          recordActivity();
+        });
+        window.addEventListener('blur', () => {
+          notifyOpenerFocus(false);
+        });
+        document.addEventListener('visibilitychange', () => {
+          notifyOpenerFocus(!document.hidden);
+          if (!document.hidden) {
+            idleSuspended = false;
+            recordActivity();
+          }
+        });
         window.addEventListener('message', (event) => {
           const payload = event.data || {};
           if (payload.type === 'idle-handshake' && payload.source === 'user') {
@@ -297,6 +338,22 @@
             } catch (err) {
               // ignore postMessage failures
             }
+            notifyOpenerFocus(!document.hidden);
+            return;
+          }
+          if (payload.type === 'idle-focus' && payload.source === 'user') {
+            idleSuspended = true;
+            if (idleTimer) {
+              clearTimeout(idleTimer);
+              idleTimer = null;
+            }
+            stopCountdown();
+            return;
+          }
+          if (payload.type === 'idle-blur' && payload.source === 'user') {
+            idleSuspended = false;
+            const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+            recordActivity({ emit: false, timestamp: ts });
             return;
           }
           if (payload.type === 'idle-activity' && payload.source === 'user') {
@@ -315,12 +372,6 @@
         });
         document.getElementById('idle-stop').addEventListener('click', () => {
           endSession('user-end');
-        });
-        window.addEventListener('focus', syncIdleState);
-        document.addEventListener('visibilitychange', () => {
-          if (!document.hidden) {
-            syncIdleState();
-          }
         });
       }
     </script>
