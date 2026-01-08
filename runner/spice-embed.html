@@ -271,8 +271,9 @@
       function startIdleTimer() {
         recordActivity();
         const onActivity = () => recordActivity();
-        ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'].forEach((evt) => {
-          window.addEventListener(evt, onActivity, { passive: true });
+        const activityEvents = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'touchmove', 'wheel', 'scroll'];
+        activityEvents.forEach((evt) => {
+          document.addEventListener(evt, onActivity, { passive: true, capture: true });
         });
         window.addEventListener('message', (event) => {
           const payload = event.data || {};
