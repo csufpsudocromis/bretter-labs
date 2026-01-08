@@ -10,12 +10,22 @@ const UserPanel = () => {
   const [idleCountdown, setIdleCountdown] = useState(null);
   const idleTimerRef = useRef(null);
   const countdownRef = useRef(null);
+  const countdownEndsAtRef = useRef(null);
+  const idleStartsAtRef = useRef(null);
+  const lastActivityAtRef = useRef(null);
+  const consoleWindowsRef = useRef({});
+  const consoleHandshakeRef = useRef({});
+  const idleSuspendedRef = useRef(false);
+  const idleSuspendReasonRef = useRef(null);
+  const vmPresenceAtRef = useRef(null);
   const latestInstanceIdsRef = useRef([]);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
+  const VM_PRESENCE_GRACE_MS = 10000;
+  const ACTIVITY_STORAGE_KEY = 'blabs:last-activity-at';
 
   const refresh = async () => {
     try {
@@ -34,7 +44,14 @@ const UserPanel = () => {
     return () => clearInterval(handle);
   }, []);
 
-  const runningInstances = useMemo(() => instances.filter((i) => i.status === 'running'), [instances]);
+  const activeInstances = useMemo(
+    () => instances.filter((i) => i.status === 'running' || i.status === 'pending'),
+    [instances],
+  );
+
+  useEffect(() => {
+    latestInstanceIdsRef.current = activeInstances.map((inst) => inst.id);
+  }, [activeInstances]);
 
   const templateIdleMinutes = (templateId) => {
     const tmpl = templates.find((t) => t.id === templateId);
@@ -42,9 +59,9 @@ const UserPanel = () => {
   };
 
   const activeIdleMinutes = useMemo(() => {
-    if (runningInstances.length === 0) return null;
-    return Math.min(...runningInstances.map((inst) => templateIdleMinutes(inst.template_id)));
-  }, [runningInstances, templates]);
+    if (activeInstances.length === 0) return null;
+    return Math.min(...activeInstances.map((inst) => templateIdleMinutes(inst.template_id)));
+  }, [activeInstances, templates]);
 
   const start = async (templateId) => {
     try {
@@ -123,7 +140,21 @@ const UserPanel = () => {
 
   const connect = (instance) => {
     if (instance?.console_url) {
-      window.open(instance.console_url, '_blank');
+      const win = window.open(instance.console_url, '_blank');
+      if (win && instance?.id) {
+        consoleWindowsRef.current[instance.id] = win;
+        startConsoleHandshake(instance.id, win);
+        if (document.hasFocus()) {
+          try {
+            win.postMessage(
+              { type: 'idle-focus', source: 'user', instanceId: instance.id, timestamp: Date.now() },
+              '*',
+            );
+          } catch (err) {
+            // ignore postMessage failures
+          }
+        }
+      }
     } else {
       setMessage('Console URL not available yet');
     }
@@ -134,7 +165,127 @@ const UserPanel = () => {
   const displayStatus = (status) => (status === 'completed' ? 'stopped' : status);
   const isRunning = (status) => status === 'running';
 
-  const clearIdleTimers = () => {
+  const readStoredActivity = () => {
+    try {
+      const stored = sessionStorage.getItem(ACTIVITY_STORAGE_KEY);
+      const parsed = stored ? Number(stored) : NaN;
+      return Number.isFinite(parsed) ? parsed : null;
+    } catch (err) {
+      return null;
+    }
+  };
+
+  const writeStoredActivity = (timestamp) => {
+    try {
+      sessionStorage.setItem(ACTIVITY_STORAGE_KEY, String(timestamp));
+    } catch (err) {
+      // ignore storage failures
+    }
+  };
+
+  const clearStoredActivity = () => {
+    try {
+      sessionStorage.removeItem(ACTIVITY_STORAGE_KEY);
+    } catch (err) {
+      // ignore storage failures
+    }
+  };
+
+  const stopConsoleHandshake = (instanceId) => {
+    const timers = consoleHandshakeRef.current;
+    if (timers[instanceId]) {
+      clearInterval(timers[instanceId]);
+      delete timers[instanceId];
+    }
+  };
+
+  const sendAuthToConsole = (instanceId, win) => {
+    const token = localStorage.getItem('blabs_token');
+    if (!token || !instanceId || !win || win.closed) {
+      return;
+    }
+    const apiBase = api?.defaults?.baseURL || '';
+    try {
+      win.postMessage({ type: 'idle-auth', source: 'user', instanceId, token, apiBase }, '*');
+    } catch (err) {
+      // ignore postMessage failures
+    }
+  };
+
+  const startConsoleHandshake = (instanceId, win) => {
+    if (!instanceId || !win) {
+      return;
+    }
+    const send = () => {
+      if (!win || win.closed) {
+        delete consoleWindowsRef.current[instanceId];
+        stopConsoleHandshake(instanceId);
+        return;
+      }
+      try {
+        win.postMessage({ type: 'idle-handshake', source: 'user', instanceId }, '*');
+      } catch (err) {
+        // ignore postMessage failures
+      }
+      sendAuthToConsole(instanceId, win);
+    };
+    send();
+    if (!consoleHandshakeRef.current[instanceId]) {
+      consoleHandshakeRef.current[instanceId] = setInterval(send, 1000);
+    }
+  };
+
+  const hasOpenConsoles = () => {
+    const windows = consoleWindowsRef.current;
+    let open = false;
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        stopConsoleHandshake(id);
+        return;
+      }
+      open = true;
+    });
+    return open;
+  };
+
+  const broadcastActivityToConsoles = (timestamp) => {
+    const windows = consoleWindowsRef.current;
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        stopConsoleHandshake(id);
+        return;
+      }
+      try {
+        win.postMessage({ type: 'idle-activity', source: 'user', timestamp }, '*');
+      } catch (err) {
+        // ignore postMessage failures
+      }
+    });
+  };
+
+  const broadcastFocusToConsoles = (focused) => {
+    const windows = consoleWindowsRef.current;
+    const timestamp = Date.now();
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        stopConsoleHandshake(id);
+        return;
+      }
+      try {
+        win.postMessage(
+          { type: focused ? 'idle-focus' : 'idle-blur', source: 'user', instanceId: id, timestamp },
+          '*',
+        );
+      } catch (err) {
+        // ignore postMessage failures
+      }
+    });
+  };
+
+  const clearIdleTimers = (resetIdleStart = true) => {
     if (idleTimerRef.current) {
       clearTimeout(idleTimerRef.current);
       idleTimerRef.current = null;
@@ -143,62 +294,293 @@ const UserPanel = () => {
       clearInterval(countdownRef.current);
       countdownRef.current = null;
     }
+    countdownEndsAtRef.current = null;
+    if (resetIdleStart) {
+      idleStartsAtRef.current = null;
+    }
   };
 
-  const startIdleCountdown = (instanceIds) => {
+  const clearIdlePrompt = () => {
+    setShowIdlePrompt(false);
+    idlePromptRef.current = false;
+    setIdleCountdown(null);
+  };
+
+  const scheduleIdleTimer = () => {
+    if (idleTimerRef.current) {
+      clearTimeout(idleTimerRef.current);
+      idleTimerRef.current = null;
+    }
+    if (idleSuspendedRef.current) {
+      return;
+    }
+    const idleStartsAt = idleStartsAtRef.current;
+    if (!idleStartsAt) {
+      return;
+    }
+    const delay = Math.max(0, idleStartsAt - Date.now());
+    idleTimerRef.current = setTimeout(() => startIdleCountdown(idleStartsAt), delay);
+  };
+
+  const updateCountdown = () => {
+    if (!idlePromptRef.current) {
+      return;
+    }
+    const endsAt = countdownEndsAtRef.current;
+    if (!endsAt) {
+      return;
+    }
+    const remainingSeconds = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+    setIdleCountdown(remainingSeconds);
+    if (remainingSeconds <= 0) {
+      endNow(true);
+    }
+  };
+
+  const startIdleCountdown = (startedAt, instanceIds = latestInstanceIdsRef.current) => {
+    if (!instanceIds || instanceIds.length === 0) {
+      return;
+    }
     latestInstanceIdsRef.current = instanceIds;
     idlePromptRef.current = true;
     setShowIdlePrompt(true);
     setSessionEnded(false);
-    setIdleCountdown(PROMPT_COUNTDOWN_SECONDS);
-    countdownRef.current = setInterval(() => {
-      setIdleCountdown((prev) => {
-        const next = (prev || PROMPT_COUNTDOWN_SECONDS) - 1;
-        if (next <= 0) {
-          clearIdleTimers();
-          endNow(true);
-          return 0;
-        }
-        return next;
-      });
-    }, 1000);
+    const baseline = startedAt || idleStartsAtRef.current || Date.now();
+    countdownEndsAtRef.current = baseline + PROMPT_COUNTDOWN_SECONDS * 1000;
+    const remainingSeconds = Math.max(0, Math.ceil((countdownEndsAtRef.current - Date.now()) / 1000));
+    setIdleCountdown(remainingSeconds);
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+    }
+    countdownRef.current = setInterval(updateCountdown, 1000);
+    updateCountdown();
   };
 
-  const resetIdleTimer = () => {
+  const updateIdleStartFromActivity = (activityAt) => {
+    if (!activeIdleMinutes) {
+      return;
+    }
+    idleStartsAtRef.current = activityAt + Math.max(1, activeIdleMinutes) * 60 * 1000;
+  };
+
+  const ensureActivityTimestamp = () => {
+    if (lastActivityAtRef.current) {
+      return lastActivityAtRef.current;
+    }
+    const stored = readStoredActivity();
+    const fallback = stored || Date.now();
+    lastActivityAtRef.current = fallback;
+    if (!stored) {
+      writeStoredActivity(fallback);
+    }
+    return fallback;
+  };
+
+  const recordActivity = ({ emit = true, timestamp } = {}) => {
+    if (idleSuspendedRef.current) {
+      return;
+    }
     if (idlePromptRef.current) {
       return;
     }
-    clearIdleTimers();
-    setShowIdlePrompt(false);
-    idlePromptRef.current = false;
-    setIdleCountdown(null);
-    setSessionEnded(false);
-    if (!runningInstances.length || !activeIdleMinutes) {
+    if (!activeInstances.length || !activeIdleMinutes) {
       return;
     }
-    const ms = Math.max(1, activeIdleMinutes) * 60 * 1000;
-    const targetInstanceIds = runningInstances.map((inst) => inst.id);
-    idleTimerRef.current = setTimeout(() => startIdleCountdown(targetInstanceIds), ms);
+    const now = timestamp || Date.now();
+    lastActivityAtRef.current = now;
+    writeStoredActivity(now);
+    updateIdleStartFromActivity(now);
+    scheduleIdleTimer();
+    if (emit) {
+      broadcastActivityToConsoles(now);
+    }
+  };
+
+  const noteVmPresence = (timestamp) => {
+    vmPresenceAtRef.current = timestamp || Date.now();
+  };
+
+  const handleExternalActivity = (timestamp) => {
+    if (!activeInstances.length || !activeIdleMinutes) {
+      return;
+    }
+    const now = timestamp || Date.now();
+    noteVmPresence(now);
+    suspendIdle(now, 'vm');
+  };
+
+  const suspendIdle = (timestamp, reason = 'vm') => {
+    idleSuspendedRef.current = true;
+    idleSuspendReasonRef.current = reason;
+    clearIdleTimers();
+    clearIdlePrompt();
+    setSessionEnded(false);
+    if (timestamp) {
+      lastActivityAtRef.current = timestamp;
+      writeStoredActivity(timestamp);
+      updateIdleStartFromActivity(timestamp);
+    }
+  };
+
+  const resumeIdle = (timestamp) => {
+    idleSuspendedRef.current = false;
+    idleSuspendReasonRef.current = null;
+    if (!activeInstances.length || !activeIdleMinutes) {
+      return;
+    }
+    const now = timestamp || Date.now();
+    lastActivityAtRef.current = now;
+    writeStoredActivity(now);
+    updateIdleStartFromActivity(now);
+    scheduleIdleTimer();
+  };
+
+  const syncIdleState = () => {
+    if (idleSuspendedRef.current) {
+      clearIdleTimers(false);
+      clearIdlePrompt();
+      return;
+    }
+    if (idlePromptRef.current) {
+      updateCountdown();
+      return;
+    }
+    if (!activeInstances.length || !activeIdleMinutes) {
+      clearIdleTimers();
+      clearIdlePrompt();
+      idleStartsAtRef.current = null;
+      lastActivityAtRef.current = null;
+      vmPresenceAtRef.current = null;
+      idleSuspendedRef.current = false;
+      idleSuspendReasonRef.current = null;
+      clearStoredActivity();
+      return;
+    }
+    const activityAt = ensureActivityTimestamp();
+    updateIdleStartFromActivity(activityAt);
+    if (idleStartsAtRef.current && Date.now() >= idleStartsAtRef.current) {
+      startIdleCountdown(idleStartsAtRef.current);
+      return;
+    }
+    scheduleIdleTimer();
   };
 
   useEffect(() => {
-    resetIdleTimer();
+    syncIdleState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, runningInstances.length]);
+  }, [activeIdleMinutes, activeInstances.length]);
 
   useEffect(() => () => clearIdleTimers(), []);
 
   useEffect(() => {
-    const onActivity = () => resetIdleTimer();
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll', 'visibilitychange'];
-    events.forEach((evt) => window.addEventListener(evt, onActivity));
-    return () => events.forEach((evt) => window.removeEventListener(evt, onActivity));
+    const interval = setInterval(() => {
+      if (idleSuspendReasonRef.current !== 'vm') {
+        return;
+      }
+      const lastPresence = vmPresenceAtRef.current;
+      if (!lastPresence) {
+        return;
+      }
+      if (Date.now() - lastPresence <= VM_PRESENCE_GRACE_MS) {
+        return;
+      }
+      if (!document.hasFocus() && hasOpenConsoles()) {
+        return;
+      }
+      resumeIdle(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, runningInstances.length]);
+  }, [activeIdleMinutes, activeInstances.length]);
+
+  useEffect(() => {
+    const onActivity = () => {
+      if (document.hidden) {
+        return;
+      }
+      if (!activeInstances.length || !activeIdleMinutes) {
+        return;
+      }
+      const now = Date.now();
+      if (idleSuspendedRef.current) {
+        idleSuspendedRef.current = false;
+        idleSuspendReasonRef.current = null;
+        recordActivity({ emit: true, timestamp: now });
+        return;
+      }
+      const lastActivity = lastActivityAtRef.current || readStoredActivity();
+      if (lastActivity) {
+        const idleStart = lastActivity + Math.max(1, activeIdleMinutes) * 60 * 1000;
+        if (now >= idleStart) {
+          idleStartsAtRef.current = idleStart;
+          startIdleCountdown(idleStart);
+          return;
+        }
+      }
+      recordActivity();
+    };
+    const onFocus = () => {
+      idleSuspendedRef.current = false;
+      idleSuspendReasonRef.current = null;
+      broadcastFocusToConsoles(true);
+      recordActivity({ emit: true });
+      syncIdleState();
+    };
+    const onBlur = () => {
+      broadcastFocusToConsoles(false);
+      if (hasOpenConsoles()) {
+        const now = Date.now();
+        noteVmPresence(now);
+        suspendIdle(now, 'vm');
+      }
+    };
+    const onVisibility = () => {
+      if (!document.hidden) {
+        syncIdleState();
+      }
+    };
+    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
+    events.forEach((evt) => window.addEventListener(evt, onActivity, { passive: true }));
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      events.forEach((evt) => window.removeEventListener(evt, onActivity));
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIdleMinutes, activeInstances.length]);
 
   useEffect(() => {
     const handleMessage = (event) => {
       const payload = event.data || {};
+      if (payload.type === 'idle-focus' && payload.source === 'vm') {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        noteVmPresence(ts);
+        suspendIdle(ts, 'vm');
+        return;
+      }
+      if (payload.type === 'idle-blur' && payload.source === 'vm') {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        vmPresenceAtRef.current = null;
+        resumeIdle(ts);
+        return;
+      }
+      if (payload.type === 'idle-activity' && payload.source === 'vm') {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        handleExternalActivity(ts);
+        return;
+      }
+      if (payload.type === 'idle-handshake-ack' && payload.source === 'vm' && payload.instanceId) {
+        stopConsoleHandshake(payload.instanceId);
+        const win = consoleWindowsRef.current[payload.instanceId];
+        if (win) {
+          sendAuthToConsole(payload.instanceId, win);
+        }
+        return;
+      }
       if (payload.type === 'idle-stop' && payload.instanceId) {
         if (payload.action === 'delete') {
           deleteInstances([payload.instanceId], payload.reason);
@@ -213,25 +595,20 @@ const UserPanel = () => {
   }, []);
 
   const continueSession = () => {
-    idlePromptRef.current = false;
-    resetIdleTimer();
+    clearIdlePrompt();
+    setSessionEnded(false);
+    idleSuspendedRef.current = false;
+    idleSuspendReasonRef.current = null;
+    recordActivity();
     refresh();
   };
 
   const endNow = (auto = false) => {
     clearIdleTimers();
-    setShowIdlePrompt(false);
-    idlePromptRef.current = false;
+    clearIdlePrompt();
     setSessionEnded(true);
     setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
     deleteInstances(latestInstanceIdsRef.current, auto ? 'idle-timeout' : 'user-end', true);
-    setTimeout(() => {
-      try {
-        window.close();
-      } catch (err) {
-        // ignore if browser blocks close
-      }
-    }, 1500);
   };
 
   const formatCountdown = (seconds) => {
@@ -268,6 +645,9 @@ const UserPanel = () => {
           <div className="modal">
             <h3>Session ended</h3>
             <p className="muted">Session ended due to inactivity.</p>
+            <div className="actions">
+              <button onClick={() => setSessionEnded(false)}>OK</button>
+            </div>
           </div>
         </div>
       )}

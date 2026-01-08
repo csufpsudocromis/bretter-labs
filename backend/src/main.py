@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,10 +27,13 @@ ALLOWED_ORIGINS = [
     "http://10.68.48.105:30073",
     "http://10.68.48.169:30073",
 ]
+origin_host = settings.kube_node_external_host or "127.0.0.1"
+origin_regex = rf"^http://{re.escape(origin_host)}:\d+$"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

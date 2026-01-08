@@ -119,6 +119,15 @@
       const uri = scheme + host + ':' + port;
 
       let sc;
+      let openerRef = null;
+      let openerOrigin = '*';
+      let idleSuspended = false;
+      let presenceTimer = null;
+      const PRESENCE_INTERVAL_MS = 2000;
+      let authToken = '';
+      let apiBase = '';
+      let lastHeartbeatAt = 0;
+      const HEARTBEAT_INTERVAL_MS = 30000;
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -141,6 +150,8 @@
         startIdleTimer();
       });
       window.addEventListener('beforeunload', () => {
+        stopPresenceHeartbeat();
+        notifyOpenerFocus(false);
         if (sc) sc.stop();
       });
 
@@ -156,7 +167,45 @@
       const textEl = document.getElementById('idle-text');
       const endedTextEl = document.getElementById('ended-text');
 
+      function apiBaseUrl() {
+        const base = apiBase || `${window.location.protocol}//${window.location.hostname}:30080`;
+        return base.replace(/\/$/, '');
+      }
+
+      function sendHeartbeat(timestamp) {
+        if (!instanceId || !authToken) {
+          return;
+        }
+        const now = timestamp || Date.now();
+        if (now - lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) {
+          return;
+        }
+        lastHeartbeatAt = now;
+        const base = apiBaseUrl();
+        const url = `${base}/user/pods/${instanceId}/activity`;
+        fetch(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+          keepalive: true,
+        }).catch(() => {});
+      }
+
+      function requestStop(action = 'delete') {
+        if (!instanceId || !authToken) {
+          return;
+        }
+        const base = apiBaseUrl();
+        const url =
+          action === 'delete' ? `${base}/user/pods/${instanceId}` : `${base}/user/pods/${instanceId}/stop`;
+        fetch(url, {
+          method: action === 'delete' ? 'DELETE' : 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+          keepalive: true,
+        }).catch(() => {});
+      }
+
       function sendStop(reason = 'idle-timeout', action = 'delete') {
+        requestStop(action);
         if (window.opener) {
           window.opener.postMessage({ type: 'idle-stop', instanceId, reason, action }, '*');
         }
@@ -226,19 +275,87 @@
 
       function scheduleIdleTimer() {
         if (idleTimer) clearTimeout(idleTimer);
+        if (idleSuspended) {
+          return;
+        }
         const delay = Math.max(0, (idleStartsAt || Date.now()) - Date.now());
         idleTimer = setTimeout(() => startCountdown(idleStartsAt), delay);
       }
 
-      function recordActivity() {
+      let lastActivitySentAt = 0;
+
+      function notifyOpenerActivity(timestamp) {
+        const target = openerRef || window.opener;
+        if (!target) {
+          return;
+        }
+        const now = timestamp || Date.now();
+        if (now - lastActivitySentAt < 1000) {
+          return;
+        }
+        lastActivitySentAt = now;
+        try {
+          target.postMessage({ type: 'idle-activity', source: 'vm', instanceId, timestamp: now }, openerOrigin);
+        } catch (err) {
+          // ignore postMessage failures
+        }
+      }
+
+      function notifyOpenerFocus(focused) {
+        const target = openerRef || window.opener;
+        if (!target) {
+          return;
+        }
+        const now = Date.now();
+        try {
+          target.postMessage(
+            { type: focused ? 'idle-focus' : 'idle-blur', source: 'vm', instanceId, timestamp: now },
+            openerOrigin,
+          );
+        } catch (err) {
+          // ignore postMessage failures
+        }
+      }
+
+      function startPresenceHeartbeat() {
+        if (presenceTimer) {
+          return;
+        }
+        presenceTimer = setInterval(() => {
+          notifyOpenerFocus(!document.hidden);
+        }, PRESENCE_INTERVAL_MS);
+      }
+
+      function stopPresenceHeartbeat() {
+        if (!presenceTimer) {
+          return;
+        }
+        clearInterval(presenceTimer);
+        presenceTimer = null;
+      }
+
+      function recordActivity({ emit = true, timestamp, heartbeat = false } = {}) {
+        if (idleSuspended) {
+          return;
+        }
         if (promptActive) {
           return;
         }
-        idleStartsAt = Date.now() + Math.max(1, idleMinutes) * 60 * 1000;
+        const now = timestamp || Date.now();
+        idleStartsAt = now + Math.max(1, idleMinutes) * 60 * 1000;
         scheduleIdleTimer();
+        if (emit) {
+          notifyOpenerActivity(now);
+        }
+        if (heartbeat) {
+          sendHeartbeat(now);
+        }
       }
 
       function syncIdleState() {
+        if (idleSuspended) {
+          return;
+        }
         if (promptActive) {
           updateCountdown();
           return;
@@ -251,24 +368,91 @@
       }
 
       function startIdleTimer() {
-        recordActivity();
-        const onActivity = () => recordActivity();
-        ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'].forEach((evt) => {
-          window.addEventListener(evt, onActivity, { passive: true });
+        recordActivity({ heartbeat: true });
+        const onActivity = () => recordActivity({ heartbeat: true });
+        const activityEvents = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'touchmove', 'wheel', 'scroll'];
+        activityEvents.forEach((evt) => {
+          document.addEventListener(evt, onActivity, { passive: true, capture: true });
+        });
+        window.addEventListener('focus', () => {
+          notifyOpenerFocus(true);
+          idleSuspended = false;
+          recordActivity({ heartbeat: true });
+        });
+        window.addEventListener('blur', () => {
+          notifyOpenerFocus(false);
+        });
+        document.addEventListener('visibilitychange', () => {
+          notifyOpenerFocus(!document.hidden);
+          if (!document.hidden) {
+            idleSuspended = false;
+            recordActivity({ heartbeat: true });
+          }
+        });
+        window.addEventListener('message', (event) => {
+          const payload = event.data || {};
+          if (payload.type === 'idle-handshake' && payload.source === 'user') {
+            openerRef = event.source;
+            openerOrigin = event.origin || '*';
+            try {
+              if (payload.instanceId === instanceId) {
+                openerRef.postMessage(
+                  { type: 'idle-handshake-ack', source: 'vm', instanceId },
+                  openerOrigin,
+                );
+              }
+            } catch (err) {
+              // ignore postMessage failures
+            }
+            notifyOpenerFocus(!document.hidden);
+            return;
+          }
+          if (payload.type === 'idle-focus' && payload.source === 'user') {
+            idleSuspended = true;
+            if (idleTimer) {
+              clearTimeout(idleTimer);
+              idleTimer = null;
+            }
+            stopCountdown();
+            return;
+          }
+          if (payload.type === 'idle-blur' && payload.source === 'user') {
+            idleSuspended = false;
+            const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+            recordActivity({ emit: false, timestamp: ts, heartbeat: false });
+            return;
+          }
+          if (payload.type === 'idle-activity' && payload.source === 'user') {
+            openerRef = event.source;
+            openerOrigin = event.origin || '*';
+            if (promptActive) {
+              stopCountdown();
+            }
+            const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+            recordActivity({ emit: false, timestamp: ts, heartbeat: false });
+            return;
+          }
+          if (payload.type === 'idle-auth' && payload.source === 'user') {
+            if (payload.instanceId && payload.instanceId !== instanceId) {
+              return;
+            }
+            if (payload.token) {
+              authToken = payload.token;
+            }
+            if (payload.apiBase) {
+              apiBase = payload.apiBase;
+            }
+            sendHeartbeat(Date.now());
+          }
         });
         document.getElementById('idle-continue').addEventListener('click', () => {
           stopCountdown();
-          recordActivity();
+          recordActivity({ heartbeat: true });
         });
         document.getElementById('idle-stop').addEventListener('click', () => {
           endSession('user-end');
         });
-        window.addEventListener('focus', syncIdleState);
-        document.addEventListener('visibilitychange', () => {
-          if (!document.hidden) {
-            syncIdleState();
-          }
-        });
+        startPresenceHeartbeat();
       }
     </script>
   </body>
