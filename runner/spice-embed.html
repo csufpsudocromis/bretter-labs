@@ -130,6 +130,8 @@
       const HEARTBEAT_INTERVAL_MS = 30000;
       let openerWatchTimer = null;
       const OPENER_WATCH_INTERVAL_MS = 2000;
+      let backendHeartbeatTimer = null;
+      const BACKEND_HEARTBEAT_TICK_MS = 10000;
       const AUTH_STORAGE_TOKEN_KEY = 'blabs_vm_token';
       const AUTH_STORAGE_API_KEY = 'blabs_vm_api_base';
       function connect() {
@@ -157,6 +159,7 @@
       window.addEventListener('beforeunload', () => {
         stopPresenceHeartbeat();
         stopOpenerWatchdog();
+        stopBackendHeartbeat();
         notifyOpenerFocus(false);
         if (sc) sc.stop();
       });
@@ -211,6 +214,23 @@
         }).catch(() => {});
       }
 
+      function startBackendHeartbeat() {
+        if (backendHeartbeatTimer) {
+          return;
+        }
+        backendHeartbeatTimer = setInterval(() => {
+          sendHeartbeat(Date.now());
+        }, BACKEND_HEARTBEAT_TICK_MS);
+      }
+
+      function stopBackendHeartbeat() {
+        if (!backendHeartbeatTimer) {
+          return;
+        }
+        clearInterval(backendHeartbeatTimer);
+        backendHeartbeatTimer = null;
+      }
+
       function requestStop(action = 'delete') {
         if (!instanceId || !authToken) {
           return;
@@ -236,6 +256,7 @@
         overlay.style.display = 'none';
         endedOverlay.style.display = 'flex';
         promptActive = false;
+        stopBackendHeartbeat();
         if (endedTextEl) {
           endedTextEl.textContent =
             reason === 'idle-timeout' ? 'Session timed out due to inactivity.' : 'Session ended.';
@@ -527,6 +548,7 @@
                 // ignore storage failures
               }
             }
+            startBackendHeartbeat();
             sendHeartbeat(Date.now());
           }
         });
@@ -539,6 +561,7 @@
         });
         startPresenceHeartbeat();
         startOpenerWatchdog();
+        startBackendHeartbeat();
       }
     </script>
   </body>
