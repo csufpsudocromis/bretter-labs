@@ -124,6 +124,10 @@
       let idleSuspended = false;
       let presenceTimer = null;
       const PRESENCE_INTERVAL_MS = 2000;
+      let authToken = '';
+      let apiBase = '';
+      let lastHeartbeatAt = 0;
+      const HEARTBEAT_INTERVAL_MS = 30000;
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -163,7 +167,45 @@
       const textEl = document.getElementById('idle-text');
       const endedTextEl = document.getElementById('ended-text');
 
+      function apiBaseUrl() {
+        const base = apiBase || `${window.location.protocol}//${window.location.hostname}:30080`;
+        return base.replace(/\/$/, '');
+      }
+
+      function sendHeartbeat(timestamp) {
+        if (!instanceId || !authToken) {
+          return;
+        }
+        const now = timestamp || Date.now();
+        if (now - lastHeartbeatAt < HEARTBEAT_INTERVAL_MS) {
+          return;
+        }
+        lastHeartbeatAt = now;
+        const base = apiBaseUrl();
+        const url = `${base}/user/pods/${instanceId}/activity`;
+        fetch(url, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+          keepalive: true,
+        }).catch(() => {});
+      }
+
+      function requestStop(action = 'delete') {
+        if (!instanceId || !authToken) {
+          return;
+        }
+        const base = apiBaseUrl();
+        const url =
+          action === 'delete' ? `${base}/user/pods/${instanceId}` : `${base}/user/pods/${instanceId}/stop`;
+        fetch(url, {
+          method: action === 'delete' ? 'DELETE' : 'POST',
+          headers: { Authorization: `Bearer ${authToken}` },
+          keepalive: true,
+        }).catch(() => {});
+      }
+
       function sendStop(reason = 'idle-timeout', action = 'delete') {
+        requestStop(action);
         if (window.opener) {
           window.opener.postMessage({ type: 'idle-stop', instanceId, reason, action }, '*');
         }
@@ -292,7 +334,7 @@
         presenceTimer = null;
       }
 
-      function recordActivity({ emit = true, timestamp } = {}) {
+      function recordActivity({ emit = true, timestamp, heartbeat = false } = {}) {
         if (idleSuspended) {
           return;
         }
@@ -304,6 +346,9 @@
         scheduleIdleTimer();
         if (emit) {
           notifyOpenerActivity(now);
+        }
+        if (heartbeat) {
+          sendHeartbeat(now);
         }
       }
 
@@ -323,8 +368,8 @@
       }
 
       function startIdleTimer() {
-        recordActivity();
-        const onActivity = () => recordActivity();
+        recordActivity({ heartbeat: true });
+        const onActivity = () => recordActivity({ heartbeat: true });
         const activityEvents = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'touchmove', 'wheel', 'scroll'];
         activityEvents.forEach((evt) => {
           document.addEventListener(evt, onActivity, { passive: true, capture: true });
@@ -332,7 +377,7 @@
         window.addEventListener('focus', () => {
           notifyOpenerFocus(true);
           idleSuspended = false;
-          recordActivity();
+          recordActivity({ heartbeat: true });
         });
         window.addEventListener('blur', () => {
           notifyOpenerFocus(false);
@@ -341,7 +386,7 @@
           notifyOpenerFocus(!document.hidden);
           if (!document.hidden) {
             idleSuspended = false;
-            recordActivity();
+            recordActivity({ heartbeat: true });
           }
         });
         window.addEventListener('message', (event) => {
@@ -374,7 +419,7 @@
           if (payload.type === 'idle-blur' && payload.source === 'user') {
             idleSuspended = false;
             const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
-            recordActivity({ emit: false, timestamp: ts });
+            recordActivity({ emit: false, timestamp: ts, heartbeat: false });
             return;
           }
           if (payload.type === 'idle-activity' && payload.source === 'user') {
@@ -384,12 +429,25 @@
               stopCountdown();
             }
             const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
-            recordActivity({ emit: false, timestamp: ts });
+            recordActivity({ emit: false, timestamp: ts, heartbeat: false });
+            return;
+          }
+          if (payload.type === 'idle-auth' && payload.source === 'user') {
+            if (payload.instanceId && payload.instanceId !== instanceId) {
+              return;
+            }
+            if (payload.token) {
+              authToken = payload.token;
+            }
+            if (payload.apiBase) {
+              apiBase = payload.apiBase;
+            }
+            sendHeartbeat(Date.now());
           }
         });
         document.getElementById('idle-continue').addEventListener('click', () => {
           stopCountdown();
-          recordActivity();
+          recordActivity({ heartbeat: true });
         });
         document.getElementById('idle-stop').addEventListener('click', () => {
           endSession('user-end');

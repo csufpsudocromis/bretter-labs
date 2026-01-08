@@ -106,6 +106,18 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
     return items
 
 
+@router.post("/pods/{instance_id}/activity", status_code=status.HTTP_204_NO_CONTENT)
+def record_vm_activity(
+    instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+) -> None:
+    record = session.get(Instance, instance_id)
+    if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    record.last_active_at = datetime.utcnow()
+    session.add(record)
+    session.commit()
+
+
 @router.get("/settings/site", response_model=SiteSettings)
 def site_settings(session: Session = Depends(get_session)) -> SiteSettings:
     cfg = session.get(Config, 1) or Config(id=1)

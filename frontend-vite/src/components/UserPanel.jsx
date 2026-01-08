@@ -199,6 +199,19 @@ const UserPanel = () => {
     }
   };
 
+  const sendAuthToConsole = (instanceId, win) => {
+    const token = localStorage.getItem('blabs_token');
+    if (!token || !instanceId || !win || win.closed) {
+      return;
+    }
+    const apiBase = api?.defaults?.baseURL || '';
+    try {
+      win.postMessage({ type: 'idle-auth', source: 'user', instanceId, token, apiBase }, '*');
+    } catch (err) {
+      // ignore postMessage failures
+    }
+  };
+
   const startConsoleHandshake = (instanceId, win) => {
     if (!instanceId || !win) {
       return;
@@ -214,6 +227,7 @@ const UserPanel = () => {
       } catch (err) {
         // ignore postMessage failures
       }
+      sendAuthToConsole(instanceId, win);
     };
     send();
     if (!consoleHandshakeRef.current[instanceId]) {
@@ -561,6 +575,10 @@ const UserPanel = () => {
       }
       if (payload.type === 'idle-handshake-ack' && payload.source === 'vm' && payload.instanceId) {
         stopConsoleHandshake(payload.instanceId);
+        const win = consoleWindowsRef.current[payload.instanceId];
+        if (win) {
+          sendAuthToConsole(payload.instanceId, win);
+        }
         return;
       }
       if (payload.type === 'idle-stop' && payload.instanceId) {
