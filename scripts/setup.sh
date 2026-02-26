@@ -84,11 +84,11 @@ validate_longhorn_tuning_config() {
   if ! is_uint "$LONGHORN_DEFAULT_REPLICA_COUNT" || [ "$LONGHORN_DEFAULT_REPLICA_COUNT" -lt 1 ]; then
     fail "LONGHORN_DEFAULT_REPLICA_COUNT must be an integer >= 1."
   fi
-  if ! is_uint "$LONGHORN_RESERVED_PERCENT" || [ "$LONGHORN_RESERVED_PERCENT" -gt 99 ]; then
-    fail "LONGHORN_RESERVED_PERCENT must be an integer between 0 and 99."
+  if ! is_uint "$LONGHORN_RESERVED_PERCENT" || [ "$LONGHORN_RESERVED_PERCENT" -gt 100 ]; then
+    fail "LONGHORN_RESERVED_PERCENT must be an integer between 0 and 100."
   fi
-  if ! is_uint "$LONGHORN_MIN_AVAILABLE_PERCENT" || [ "$LONGHORN_MIN_AVAILABLE_PERCENT" -gt 99 ]; then
-    fail "LONGHORN_MIN_AVAILABLE_PERCENT must be an integer between 0 and 99."
+  if ! is_uint "$LONGHORN_MIN_AVAILABLE_PERCENT" || [ "$LONGHORN_MIN_AVAILABLE_PERCENT" -gt 100 ]; then
+    fail "LONGHORN_MIN_AVAILABLE_PERCENT must be an integer between 0 and 100."
   fi
   if ! is_uint "$LONGHORN_OVERPROVISION_PERCENT" || [ "$LONGHORN_OVERPROVISION_PERCENT" -lt 1 ]; then
     fail "LONGHORN_OVERPROVISION_PERCENT must be an integer >= 1."
