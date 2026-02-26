@@ -101,7 +101,7 @@ class KubernetesService:
             ),
             spec=client.V1PersistentVolumeClaimSpec(
                 access_modes=["ReadWriteOnce"],
-                storage_class_name=(source.spec.storage_class_name or settings.kube_vm_storage_class or None),
+                storage_class_name=(settings.kube_vm_storage_class or source.spec.storage_class_name or None),
                 resources=client.V1ResourceRequirements(requests={"storage": source_request}),
                 data_source=client.V1TypedLocalObjectReference(
                     api_group="",
