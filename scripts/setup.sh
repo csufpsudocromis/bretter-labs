@@ -16,6 +16,7 @@ CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
 RUNNER_NODE_SELECTOR_VALUE="${RUNNER_NODE_SELECTOR_VALUE:-}"
+VM_STORAGE_CLASS="${VM_STORAGE_CLASS:-}"
 PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
 TLS_ENABLED="${TLS_ENABLED:-1}"
 TLS_SECRET_NAME="${TLS_SECRET_NAME:-bretter-tls}"
@@ -190,11 +191,12 @@ render_manifest_template() {
 
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local runner_node_selector_value
-  local backend_data_hostpath golden_images_hostpath
+  local vm_storage_class backend_data_hostpath golden_images_hostpath
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
   runner_node_selector_value="$(escape_sed_replacement "$RUNNER_NODE_SELECTOR_VALUE")"
+  vm_storage_class="$(escape_sed_replacement "$VM_STORAGE_CLASS")"
   backend_image="$(escape_sed_replacement "$BACKEND_IMAGE")"
   frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
@@ -208,6 +210,7 @@ render_manifest_template() {
     -e "s/__CONTROL_NODE__/${control_node}/g" \
     -e "s/__NODE_EXTERNAL_HOST__/${node_external_host}/g" \
     -e "s/__RUNNER_NODE_SELECTOR_VALUE__/${runner_node_selector_value}/g" \
+    -e "s/__VM_STORAGE_CLASS__/${vm_storage_class}/g" \
     -e "s/__BACKEND_IMAGE__/${backend_image}/g" \
     -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
@@ -533,6 +536,7 @@ main() {
   log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
+  log "Using VM storage class: $VM_STORAGE_CLASS"
 
   if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
     install_node

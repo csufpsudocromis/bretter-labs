@@ -5,6 +5,8 @@ Creates/stops/deletes VM pods, applies egress-only NetworkPolicies, and generate
 """
 
 import logging
+import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -26,6 +28,7 @@ class PodRequest:
     instance_id: str
     template_id: str
     image_path: str
+    image_source_pvc: Optional[str]
     os_type: str
     cpu_cores: int
     ram_mb: int
@@ -64,6 +67,62 @@ class KubernetesService:
     def _pod_name(self, req: PodRequest) -> str:
         return f"vm-{req.owner}-{req.instance_id[:8]}"
 
+    def _instance_disk_pvc_name(self, instance_id: str, owner: str) -> str:
+        safe_owner = re.sub(r"[^a-z0-9-]+", "-", owner.lower()).strip("-")
+        if not safe_owner:
+            safe_owner = "user"
+        return f"vm-disk-{safe_owner[:20]}-{instance_id[:8]}"
+
+    def _ensure_instance_disk_pvc(self, req: PodRequest) -> Optional[str]:
+        if not req.image_source_pvc:
+            return None
+
+        core = self._client()
+        pvc_name = self._instance_disk_pvc_name(req.instance_id, req.owner)
+        try:
+            existing = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+            if (existing.status.phase or "").lower() == "bound":
+                return pvc_name
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+        source = core.read_namespaced_persistent_volume_claim(name=req.image_source_pvc, namespace=settings.kube_namespace)
+        source_request = None
+        if source.spec and source.spec.resources and source.spec.resources.requests:
+            source_request = source.spec.resources.requests.get("storage")
+        if not source_request:
+            raise RuntimeError(f"source PVC {req.image_source_pvc} has no storage request")
+
+        body = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(
+                name=pvc_name,
+                labels={"owner": req.owner, "instance": req.instance_id, "app.kubernetes.io/part-of": "bretter-labs"},
+            ),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                storage_class_name=(source.spec.storage_class_name or settings.kube_vm_storage_class or None),
+                resources=client.V1ResourceRequirements(requests={"storage": source_request}),
+                data_source=client.V1TypedLocalObjectReference(
+                    api_group="",
+                    kind="PersistentVolumeClaim",
+                    name=req.image_source_pvc,
+                ),
+            ),
+        )
+        core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
+
+        deadline = time.time() + 600
+        while time.time() < deadline:
+            current = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+            phase = (current.status.phase or "").lower()
+            if phase == "bound":
+                return pvc_name
+            if phase == "lost":
+                raise RuntimeError(f"instance PVC {pvc_name} entered Lost phase")
+            time.sleep(2)
+        raise RuntimeError(f"timed out waiting for instance PVC {pvc_name} to bind")
+
     def create_service_for_pod(self, pod_name: str, service_name: str) -> int:
         core = self._client()
         body = client.V1Service(
@@ -93,6 +152,7 @@ class KubernetesService:
         core = self._client()
         pod_name = self._pod_name(req)
         self.ensure_namespace(settings.kube_namespace)
+        instance_disk_pvc = self._ensure_instance_disk_pvc(req)
         # Give QEMU some headroom above the guest RAM to avoid cgroup OOM kills from host overhead.
         mem_limit_mb = req.ram_mb + 2048
         tls_secret_name = (settings.kube_tls_secret or "").strip()
@@ -104,17 +164,23 @@ class KubernetesService:
             limits={"cpu": str(req.cpu_cores), "memory": f"{mem_limit_mb}Mi"},
             requests={"cpu": str(req.cpu_cores), "memory": f"{req.ram_mb}Mi"},
         )
-        volume_mounts = [
-            client.V1VolumeMount(name="images", mount_path="/images", read_only=True),
-            client.V1VolumeMount(name="data", mount_path="/data", read_only=False),
-        ]
-        volumes = [
-            client.V1Volume(
-                name="images",
-                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=settings.kube_image_pvc),
-            ),
-            client.V1Volume(name="data", empty_dir=client.V1EmptyDirVolumeSource()),
-        ]
+        volume_mounts = [client.V1VolumeMount(name="data", mount_path="/data", read_only=False)]
+        if instance_disk_pvc:
+            volumes = [
+                client.V1Volume(
+                    name="data",
+                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=instance_disk_pvc),
+                )
+            ]
+        else:
+            volume_mounts.insert(0, client.V1VolumeMount(name="images", mount_path="/images", read_only=True))
+            volumes = [
+                client.V1Volume(
+                    name="images",
+                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=settings.kube_image_pvc),
+                ),
+                client.V1Volume(name="data", empty_dir=client.V1EmptyDirVolumeSource()),
+            ]
         if tls_secret_name:
             volumes.append(
                 client.V1Volume(
@@ -219,17 +285,18 @@ class KubernetesService:
         }
         if settings.image_pull_secret:
             spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
-        init_cmd = f"cp /images/{req.image_path} {dest_disk} && sync"
-        init_container = client.V1Container(
-            name="prepare-disk",
-            image="busybox:1.36",
-            command=["/bin/sh", "-c", init_cmd],
-            volume_mounts=[
-                client.V1VolumeMount(name="images", mount_path="/images", read_only=True),
-                client.V1VolumeMount(name="data", mount_path="/data", read_only=False),
-            ],
-        )
-        spec_kwargs["init_containers"] = [init_container]
+        if not instance_disk_pvc:
+            init_cmd = f"cp /images/{req.image_path} {dest_disk} && sync"
+            init_container = client.V1Container(
+                name="prepare-disk",
+                image="busybox:1.36",
+                command=["/bin/sh", "-c", init_cmd],
+                volume_mounts=[
+                    client.V1VolumeMount(name="images", mount_path="/images", read_only=True),
+                    client.V1VolumeMount(name="data", mount_path="/data", read_only=False),
+                ],
+            )
+            spec_kwargs["init_containers"] = [init_container]
         if settings.kube_runtime_class:
             spec_kwargs["runtime_class_name"] = settings.kube_runtime_class
         if settings.image_pull_secret:
@@ -280,14 +347,23 @@ class KubernetesService:
     def delete_pod(self, instance_id: str, owner: str) -> None:
         core = self._client()
         pod_name = self._find_pod_name(instance_id, owner)
+        pvc_name = self._instance_disk_pvc_name(instance_id, owner)
         try:
             core.delete_namespaced_pod(
                 name=pod_name, namespace=settings.kube_namespace, grace_period_seconds=0, propagation_policy="Foreground"
             )
         except ApiException as exc:
             if exc.status == 404:
+                pass
+            else:
+                logger.error("Failed to delete pod %s: %s", pod_name, exc)
+                raise
+        try:
+            core.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status == 404:
                 return
-            logger.error("Failed to delete pod %s: %s", pod_name, exc)
+            logger.error("Failed to delete instance PVC %s: %s", pvc_name, exc)
             raise
 
     def get_status(self, instance_id: str, owner: str) -> PodStatus:

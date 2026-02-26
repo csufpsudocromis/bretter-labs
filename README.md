@@ -44,6 +44,7 @@ Optional flags:
 - `KUBECONFIG` to point at a specific kubeconfig.
 - `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
 - `RUNNER_NODE_SELECTOR_VALUE` to pin VM runner pods to one node; leave empty (default) to allow scheduling on any eligible node.
+- `VM_STORAGE_CLASS` to enable clone-based per-VM disks from source image PVCs (for example, `longhorn`).
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
@@ -81,6 +82,7 @@ Storage and runtime notes:
 - Backend DB uses `backend-data` hostPath on the selected control node.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
+- With `VM_STORAGE_CLASS` set, uploaded/imported images also get a source PVC and VM launches use per-instance cloned PVC disks (no large init-container file copy).
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).

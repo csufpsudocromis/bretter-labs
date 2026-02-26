@@ -97,6 +97,7 @@ class RuntimeSettingsRead(BaseModel):
     kube_namespace: str
     kube_image_pvc: str
     kube_runtime_class: str
+    kube_vm_storage_class: str
     runner_image: str
     image_pull_secret: str
     kube_node_selector_key: str

@@ -170,9 +170,10 @@ def start_vm(
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
-    disk_path = Path(settings.storage_root) / Path(image.filename).name
-    if not disk_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"image file not found on storage: {disk_path}")
+    if not image.source_pvc:
+        disk_path = Path(settings.storage_root) / Path(image.filename).name
+        if not disk_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"image file not found on storage: {disk_path}")
 
     config = session.get(Config, 1) or Config()
     total_running = session.exec(select(Instance).where(Instance.status == "running")).all()
@@ -196,6 +197,7 @@ def start_vm(
         instance_id=instance_id,
         template_id=template.id,
         image_path=Path(image.filename).name,
+        image_source_pvc=image.source_pvc,
         os_type=template.os_type,
         cpu_cores=template.cpu_cores,
         ram_mb=template.ram_mb,
@@ -275,9 +277,10 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
-    disk_path = Path(settings.storage_root) / Path(image.filename).name
-    if not disk_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"image file not found on storage: {disk_path}")
+    if not image.source_pvc:
+        disk_path = Path(settings.storage_root) / Path(image.filename).name
+        if not disk_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"image file not found on storage: {disk_path}")
 
     # Ensure any old pod with the same name is removed before re-create.
     try:
@@ -290,10 +293,12 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
         instance_id=record.id,
         template_id=template.id,
         image_path=Path(image.filename).name,
+        image_source_pvc=image.source_pvc,
         os_type=template.os_type,
         cpu_cores=template.cpu_cores,
         ram_mb=template.ram_mb,
         owner=user.username,
+        network_mode=getattr(template, "network_mode", "bridge"),
     )
     kube.create_pod(pod_request)
     service_name = f"svc-{instance_id[:8]}"

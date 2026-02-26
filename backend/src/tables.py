@@ -21,6 +21,7 @@ class Image(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     filename: str
+    source_pvc: Optional[str] = None
     checksum: str
     size_bytes: int
     created_at: datetime = Field(default_factory=datetime.utcnow)

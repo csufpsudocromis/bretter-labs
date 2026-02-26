@@ -103,6 +103,8 @@ spec:
               value: __NAMESPACE__
             - name: BLABS_KUBE_IMAGE_PVC
               value: golden-images
+            - name: BLABS_KUBE_VM_STORAGE_CLASS
+              value: "__VM_STORAGE_CLASS__"
             - name: BLABS_STORAGE_ROOT
               value: /mnt/lab-images
             - name: BLABS_DATABASE_PATH

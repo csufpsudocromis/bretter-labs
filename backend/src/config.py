@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     image_pull_secret: str = "ghcr-creds"  # optional: name of imagePullSecret in the namespace
     kube_node_selector_key: str = "kubernetes.io/hostname"
     kube_node_selector_value: str = ""  # set to pin pods to a node (e.g., kub1)
+    kube_vm_storage_class: str = ""  # set to enable per-VM cloned PVC disks (e.g., longhorn)
     kube_use_kvm: bool = True  # set False if /dev/kvm is unavailable
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
     kube_node_external_host: str = "10.68.48.105"

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 import subprocess
 import time
@@ -11,6 +12,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
 from sqlmodel import Session, select
+from kubernetes import client
+from kubernetes.client import ApiException
 from kubernetes.utils import parse_quantity
 
 from ..auth import hash_password, require_admin, revoke_tokens
@@ -50,10 +53,10 @@ POD_READY_WAIT_SECONDS = 120
 POD_READY_SLEEP = 2
 
 
-def _helper_overrides(worker_image: str) -> str:
+def _helper_overrides(worker_image: str, claim_name: str) -> str:
     spec: dict = {
         "spec": {
-            "volumes": [{"name": "images", "persistentVolumeClaim": {"claimName": settings.kube_image_pvc}}],
+            "volumes": [{"name": "images", "persistentVolumeClaim": {"claimName": claim_name}}],
             "containers": [
                 {
                     "name": "worker",
@@ -164,8 +167,27 @@ def _ensure_template_columns() -> None:
             pass
 
 
+def _ensure_image_columns() -> None:
+    db_path = settings.database_path
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(image)")}
+        if "source_pvc" not in cols:
+            cur.execute("ALTER TABLE image ADD COLUMN source_pvc TEXT")
+            conn.commit()
+    except Exception:
+        logger.exception("Failed to ensure image columns")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 _ensure_config_columns()
 _ensure_template_columns()
+_ensure_image_columns()
 
 
 def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
@@ -181,10 +203,17 @@ def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproc
     return result
 
 
-def _with_pvc_helper(command: list[str], *, image: str | None = None, capture_output: bool = True) -> subprocess.CompletedProcess:
+def _with_pvc_helper(
+    command: list[str],
+    *,
+    image: str | None = None,
+    capture_output: bool = True,
+    claim_name: str | None = None,
+) -> subprocess.CompletedProcess:
     helper = f"image-sync-{uuid4().hex[:8]}"
     helper_image = image or PVC_HELPER_IMAGE
-    pod_spec = _helper_overrides(helper_image)
+    claim = claim_name or settings.kube_image_pvc
+    pod_spec = _helper_overrides(helper_image, claim)
     try:
         _run(
             [
@@ -236,7 +265,7 @@ def _with_pvc_helper(command: list[str], *, image: str | None = None, capture_ou
         _run(["kubectl", "delete", "pod", helper, "-n", settings.kube_namespace, "--ignore-not-found=true"], check=False)
 
 
-def _copy_file_to_pvc(source_path: Path, filename: str) -> None:
+def _copy_file_to_pvc(source_path: Path, filename: str, *, claim_name: str | None = None) -> None:
     """
     Copy the uploaded file into the PVC by spinning a short-lived helper pod and streaming via kubectl exec.
     Retries on broken pipes by resuming from the last written offset.
@@ -244,7 +273,8 @@ def _copy_file_to_pvc(source_path: Path, filename: str) -> None:
     if not source_path.exists():
         raise FileNotFoundError(f"source file not found: {source_path}")
     helper = f"image-sync-{uuid4().hex[:8]}"
-    pod_spec = _helper_overrides(PVC_HELPER_IMAGE)
+    claim = claim_name or settings.kube_image_pvc
+    pod_spec = _helper_overrides(PVC_HELPER_IMAGE, claim)
     try:
         _run(
             [
@@ -367,6 +397,54 @@ def _copy_file_to_pvc(source_path: Path, filename: str) -> None:
         _run(["kubectl", "delete", "pod", helper, "-n", settings.kube_namespace, "--ignore-not-found=true"], check=False)
 
 
+def _source_pvc_name(image_id: str) -> str:
+    return f"img-src-{image_id[:8].lower()}"
+
+
+def _wait_for_pvc_bound(core: client.CoreV1Api, claim_name: str, timeout_seconds: int = 300) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        pvc = core.read_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
+        phase = (pvc.status.phase or "").lower()
+        if phase == "bound":
+            return
+        if phase == "lost":
+            raise RuntimeError(f"PVC {claim_name} entered Lost phase")
+        time.sleep(2)
+    raise RuntimeError(f"timed out waiting for PVC {claim_name} to bind")
+
+
+def _ensure_image_source_pvc(image_id: str, image_path: Path, size_bytes: int) -> str:
+    if not settings.kube_vm_storage_class:
+        raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for clone-based disks")
+
+    claim_name = _source_pvc_name(image_id)
+    core = kube._client()
+    try:
+        core.read_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        requested_gi = max(1, math.ceil(size_bytes / (1024 ** 3)))
+        body = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(
+                name=claim_name,
+                labels={"app.kubernetes.io/part-of": "bretter-labs", "image-id": image_id},
+            ),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                storage_class_name=settings.kube_vm_storage_class,
+                resources=client.V1ResourceRequirements(requests={"storage": f"{requested_gi}Gi"}),
+            ),
+        )
+        core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
+        _wait_for_pvc_bound(core, claim_name)
+
+    if not _exists_on_pvc(image_path.name, claim_name=claim_name):
+        _copy_file_to_pvc(image_path, image_path.name, claim_name=claim_name)
+    return claim_name
+
+
 def _validate_file_on_pvc(filename: str) -> None:
     """
     Validate the image on the PVC using qemu-img check. Raises if invalid.
@@ -382,9 +460,13 @@ def _validate_file_on_pvc(filename: str) -> None:
         raise RuntimeError(f"qemu-img check failed: {msg or 'invalid image'}")
 
 
-def _exists_on_pvc(filename: str) -> bool:
+def _exists_on_pvc(filename: str, *, claim_name: str | None = None) -> bool:
     try:
-        _with_pvc_helper(["/bin/sh", "-c", f"test -f /images/{filename}"], capture_output=False)
+        _with_pvc_helper(
+            ["/bin/sh", "-c", f"test -f /images/{filename}"],
+            capture_output=False,
+            claim_name=claim_name,
+        )
         return True
     except Exception:
         return False
@@ -517,6 +599,8 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     sha256 = hashlib.sha256()
     size_bytes = 0
     filename = Path(file.filename).name
+    image_id = str(uuid4())
+    source_pvc = None
     allow_skip_validation = suffix in {".vhd", ".vhdx"}
 
     try:
@@ -550,6 +634,8 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
             except Exception as exc:
                 logger.error("Failed to convert qcow to raw: %s", exc, exc_info=True)
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to convert qcow to raw") from exc
+        if settings.kube_vm_storage_class:
+            source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
     except HTTPException:
         raise
     except Exception as exc:
@@ -560,9 +646,10 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
 
     record = Image(
-        id=str(uuid4()),
+        id=image_id,
         name=filename,
         filename=filename,
+        source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
         created_at=datetime.utcnow(),
@@ -589,6 +676,8 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="image already registered")
     if dest_path.suffix.lower() not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
+    image_id = str(uuid4())
+    source_pvc = None
 
     sha256 = hashlib.sha256()
     size_bytes = 0
@@ -602,11 +691,17 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
             _validate_file_on_pvc(dest_path.name)
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"validation failed: {exc}") from exc
+    if settings.kube_vm_storage_class:
+        try:
+            source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc provision failed: {exc}") from exc
 
     record = Image(
-        id=str(uuid4()),
+        id=image_id,
         name=payload.name or dest_path.name,
         filename=dest_path.name,
+        source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
         created_at=datetime.utcnow(),
@@ -634,6 +729,7 @@ def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
             id=str(uuid4()),
             name=fname,
             filename=fname,
+            source_pvc=None,
             checksum="",
             size_bytes=info.get("size", 0),
             created_at=datetime.utcnow(),
@@ -665,6 +761,18 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
             dest_path.unlink()
         except OSError as exc:  # pragma: no cover
             raise HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="failed to delete image") from exc
+    if record.source_pvc:
+        try:
+            kube._client().delete_namespaced_persistent_volume_claim(
+                name=record.source_pvc,
+                namespace=settings.kube_namespace,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"failed to delete source pvc: {exc.reason}",
+                ) from exc
     session.delete(record)
     session.commit()
 
@@ -690,6 +798,15 @@ def rename_image(image_id: str, payload: ImageRename, session: Session = Depends
             src_path.replace(dst_path)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"rename failed: {exc}") from exc
+    if record.source_pvc and record.filename != new_filename:
+        try:
+            _with_pvc_helper(
+                ["/bin/sh", "-c", f"if [ -f /images/{record.filename} ]; then mv /images/{record.filename} /images/{new_filename}; fi"],
+                capture_output=False,
+                claim_name=record.source_pvc,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc rename failed: {exc}") from exc
 
     record.name = new_name
     record.filename = new_filename
@@ -710,9 +827,10 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
     image = session.get(Image, payload.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
-    src_path = IMAGE_DIR / image.filename
-    if not src_path.exists():
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image file missing on storage")
+    if not image.source_pvc:
+        src_path = IMAGE_DIR / image.filename
+        if not src_path.exists():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image file missing on storage")
     record = Template(
         id=str(uuid4()),
         name=payload.name,
@@ -906,6 +1024,7 @@ def get_runtime_settings() -> RuntimeSettingsRead:
         kube_namespace=settings.kube_namespace,
         kube_image_pvc=settings.kube_image_pvc,
         kube_runtime_class=settings.kube_runtime_class,
+        kube_vm_storage_class=settings.kube_vm_storage_class,
         runner_image=settings.runner_image,
         image_pull_secret=settings.image_pull_secret,
         kube_node_selector_key=settings.kube_node_selector_key,
@@ -1018,6 +1137,7 @@ def get_runtime_settings() -> RuntimeSettingsRead:
         kube_namespace=settings.kube_namespace,
         kube_image_pvc=settings.kube_image_pvc,
         kube_runtime_class=settings.kube_runtime_class,
+        kube_vm_storage_class=settings.kube_vm_storage_class,
         runner_image=settings.runner_image,
         image_pull_secret=settings.image_pull_secret,
         kube_node_selector_key=settings.kube_node_selector_key,
