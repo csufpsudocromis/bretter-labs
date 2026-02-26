@@ -34,8 +34,8 @@ Recommended: use the setup script (auto-installs prerequisites on Ubuntu/Debian)
 ```
 
 Optional flags:
-- `LOAD_LOCAL_IMAGES=1` (default) to build images locally and import them into local containerd.
-- `PRELOAD_RUNNER_ON_ALL_NODES=1` (default) to preload the VM runner image onto every non-control node via `kubectl debug`.
+- `LOAD_LOCAL_IMAGES=1` (default) to build backend/frontend/runner images locally and import them into local containerd.
+- `PRELOAD_RUNNER_ON_ALL_NODES=1` (default) to preload the VM runner image onto every non-control node via `kubectl debug` (set `0` to disable).
 - `PUSH_IMAGES=1` to build/push images (requires GHCR credentials).
 - `CREATE_PULL_SECRET=1` to create/update `ghcr-creds` for private image pulls.
 - `BACKEND_IMAGE` / `FRONTEND_IMAGE` to override image tags.
@@ -65,6 +65,8 @@ podman build -t ghcr.io/csufpsudocromis/bretter-backend:latest -f backend/Docker
 podman push ghcr.io/csufpsudocromis/bretter-backend:latest
 podman build -t ghcr.io/csufpsudocromis/bretter-frontend:latest -f frontend-vite/Dockerfile .
 podman push ghcr.io/csufpsudocromis/bretter-frontend:latest
+podman build -t ghcr.io/csufpsudocromis/win-vm-runner:latest -f runner/Dockerfile runner
+podman push ghcr.io/csufpsudocromis/win-vm-runner:latest
 ```
 
 After build/push, deploy with setup script so placeholders are rendered:
@@ -78,6 +80,7 @@ Storage and runtime notes:
 - Multi-node runner scheduling requires shared storage for `golden-images` (RWX). A single-node hostPath PV keeps VM pods effectively tied to that node.
 - Backend DB uses `backend-data` hostPath on the selected control node.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
+- If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).
