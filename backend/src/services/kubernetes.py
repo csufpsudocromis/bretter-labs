@@ -95,6 +95,7 @@ class KubernetesService:
         self.ensure_namespace(settings.kube_namespace)
         # Give QEMU some headroom above the guest RAM to avoid cgroup OOM kills from host overhead.
         mem_limit_mb = req.ram_mb + 2048
+        tls_secret_name = (settings.kube_tls_secret or "").strip()
         metadata = client.V1ObjectMeta(
             name=pod_name,
             labels={"app": pod_name, "owner": req.owner, "instance": req.instance_id},
@@ -114,6 +115,14 @@ class KubernetesService:
             ),
             client.V1Volume(name="data", empty_dir=client.V1EmptyDirVolumeSource()),
         ]
+        if tls_secret_name:
+            volumes.append(
+                client.V1Volume(
+                    name="tls-cert",
+                    secret=client.V1SecretVolumeSource(secret_name=tls_secret_name, optional=True),
+                )
+            )
+            volume_mounts.append(client.V1VolumeMount(name="tls-cert", mount_path="/tls", read_only=True))
         if settings.kube_spice_embed_configmap:
             volumes.append(
                 client.V1Volume(
@@ -161,6 +170,13 @@ class KubernetesService:
             # Linux images are UEFI; enable EFI for both OS types.
             client.V1EnvVar(name="EFI_ENABLED", value="true"),
         ]
+        if tls_secret_name:
+            env_vars.extend(
+                [
+                    client.V1EnvVar(name="TLS_CERT_FILE", value="/tls/tls.crt"),
+                    client.V1EnvVar(name="TLS_KEY_FILE", value="/tls/tls.key"),
+                ]
+            )
         if disk_format:
             env_vars.append(client.V1EnvVar(name="DISK_FORMAT", value=disk_format))
         container = client.V1Container(

@@ -11,6 +11,7 @@ COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY backend /app/backend
+RUN chmod +x /app/backend/entrypoint.sh
 
 # Default envs can be overridden at runtime
 ENV BLABS_KUBE_NAMESPACE=labs \
@@ -20,4 +21,4 @@ ENV BLABS_KUBE_NAMESPACE=labs \
 
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/app/backend/entrypoint.sh"]

@@ -14,8 +14,9 @@ RUN npm run build
 FROM docker.io/library/nginx:1.27-alpine AS runtime
 WORKDIR /usr/share/nginx/html
 COPY --from=build /app/dist/ ./
-
-# SPA fallback so client-side routing works
-RUN printf 'server {\n  listen 80;\n  server_name _;\n  root /usr/share/nginx/html;\n  location / {\n    try_files $uri /index.html;\n  }\n}\n' > /etc/nginx/conf.d/default.conf
+COPY frontend-vite/nginx-entrypoint.sh /usr/local/bin/nginx-entrypoint.sh
+RUN chmod +x /usr/local/bin/nginx-entrypoint.sh
 
 EXPOSE 80
+EXPOSE 443
+CMD ["/usr/local/bin/nginx-entrypoint.sh"]

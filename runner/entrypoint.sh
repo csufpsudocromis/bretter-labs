@@ -80,7 +80,11 @@ fi
 
 # Start websockify to wrap SPICE port into websocket for browser SPICE client.
 SPICE_PORT=${SPICE_PORT:-5930}
-websockify --web="$WEBROOT" "$WS_PORT" "localhost:$SPICE_PORT" --daemon
+WEBSOCKIFY_ARGS=(--web="$WEBROOT")
+if [[ -n "${TLS_CERT_FILE:-}" && -n "${TLS_KEY_FILE:-}" && -f "${TLS_CERT_FILE}" && -f "${TLS_KEY_FILE}" ]]; then
+  WEBSOCKIFY_ARGS+=(--cert="$TLS_CERT_FILE" --key="$TLS_KEY_FILE")
+fi
+websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$SPICE_PORT" --daemon
 
 QEMU_ARGS=(
   -m "${RAM_MB:-4096}"

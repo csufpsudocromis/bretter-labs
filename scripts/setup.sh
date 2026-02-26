@@ -15,6 +15,10 @@ CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
 PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
+TLS_ENABLED="${TLS_ENABLED:-1}"
+TLS_SECRET_NAME="${TLS_SECRET_NAME:-bretter-tls}"
+TLS_CERT_FILE="${TLS_CERT_FILE:-}"
+TLS_KEY_FILE="${TLS_KEY_FILE:-}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 
@@ -36,6 +40,15 @@ validate_public_scheme() {
     https|http) ;;
     *) fail "PUBLIC_SCHEME must be either https or http." ;;
   esac
+}
+
+validate_tls_config() {
+  if [ -z "$TLS_SECRET_NAME" ]; then
+    fail "TLS_SECRET_NAME cannot be empty."
+  fi
+  if [ "$TLS_ENABLED" -ne 1 ] && [ "$PUBLIC_SCHEME" = "https" ]; then
+    log "WARNING: PUBLIC_SCHEME=https with TLS_ENABLED=0. Ensure secret $TLS_SECRET_NAME already exists."
+  fi
 }
 
 sudo_cmd() {
@@ -64,7 +77,7 @@ trap cleanup EXIT
 install_base_packages() {
   log "Installing base packages..."
   sudo_cmd apt-get update -y
-  sudo_cmd apt-get install -y ca-certificates curl gnupg lsb-release git python3 python3-venv python3-pip
+  sudo_cmd apt-get install -y ca-certificates curl gnupg lsb-release git python3 python3-venv python3-pip openssl
 }
 
 install_node() {
@@ -166,7 +179,7 @@ render_manifest_template() {
   local input="$1"
   local output="$2"
 
-  local ns control_node node_external_host backend_image frontend_image runner_image public_scheme
+  local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local backend_data_hostpath golden_images_hostpath
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
@@ -175,6 +188,7 @@ render_manifest_template() {
   frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
   public_scheme="$(escape_sed_replacement "$PUBLIC_SCHEME")"
+  tls_secret_name="$(escape_sed_replacement "$TLS_SECRET_NAME")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
 
@@ -186,6 +200,7 @@ render_manifest_template() {
     -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
     -e "s/__PUBLIC_SCHEME__/${public_scheme}/g" \
+    -e "s/__TLS_SECRET_NAME__/${tls_secret_name}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     "$input" >"$output"
@@ -280,6 +295,50 @@ ensure_golden_images_claim() {
   fail "golden-images PVC is missing. Set APPLY_GOLDEN_HOSTPATH=1 or APPLY_GOLDEN_PVC=1, or create the claim manually."
 }
 
+ensure_tls_secret() {
+  if [ "$TLS_ENABLED" -ne 1 ]; then
+    return
+  fi
+
+  if kubectl -n "$NAMESPACE" get secret "$TLS_SECRET_NAME" >/dev/null 2>&1; then
+    log "Using existing TLS secret $TLS_SECRET_NAME"
+    return
+  fi
+
+  if [ -n "$TLS_CERT_FILE" ] && [ -n "$TLS_KEY_FILE" ]; then
+    log "Creating TLS secret $TLS_SECRET_NAME from provided files"
+    kubectl -n "$NAMESPACE" create secret tls "$TLS_SECRET_NAME" \
+      --cert="$TLS_CERT_FILE" \
+      --key="$TLS_KEY_FILE" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    return
+  fi
+
+  log "Generating self-signed TLS cert for $NODE_EXTERNAL_HOST"
+  local cert_tmp key_tmp sans
+  cert_tmp="$(mktemp /tmp/bretter-tls-cert.XXXXXX.crt)"
+  key_tmp="$(mktemp /tmp/bretter-tls-key.XXXXXX.key)"
+  if [[ "$NODE_EXTERNAL_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    sans="IP:${NODE_EXTERNAL_HOST},IP:127.0.0.1,DNS:localhost"
+  else
+    sans="DNS:${NODE_EXTERNAL_HOST},DNS:localhost,IP:127.0.0.1"
+  fi
+
+  openssl req -x509 -nodes -newkey rsa:2048 \
+    -keyout "$key_tmp" \
+    -out "$cert_tmp" \
+    -days 825 \
+    -subj "/CN=${NODE_EXTERNAL_HOST}" \
+    -addext "subjectAltName=${sans}" >/dev/null 2>&1
+
+  kubectl -n "$NAMESPACE" create secret tls "$TLS_SECRET_NAME" \
+    --cert="$cert_tmp" \
+    --key="$key_tmp" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  rm -f "$cert_tmp" "$key_tmp"
+}
+
 reconcile_backend_data_pv() {
   if ! kubectl get pv backend-data-pv >/dev/null 2>&1; then
     return
@@ -348,6 +407,7 @@ apply_manifests() {
   log "Ensuring namespace $NAMESPACE"
   kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
 
+  ensure_tls_secret
   ensure_golden_images_claim
   reconcile_backend_data_pv
   ensure_pull_secret
@@ -369,6 +429,7 @@ apply_manifests() {
 
 main() {
   validate_public_scheme
+  validate_tls_config
   require_apt
   install_base_packages
   install_kubectl
@@ -380,6 +441,7 @@ main() {
   log "Using control node: $CONTROL_NODE"
   log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
   log "Using public scheme: $PUBLIC_SCHEME"
+  log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
 
