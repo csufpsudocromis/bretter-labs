@@ -34,14 +34,21 @@ Recommended: use the setup script (auto-installs prerequisites on Ubuntu/Debian)
 ```
 
 Optional flags:
+- `LOAD_LOCAL_IMAGES=1` (default) to build images locally and import them into local containerd.
 - `PUSH_IMAGES=1` to build/push images (requires GHCR credentials).
-- `CREATE_PULL_SECRET=1` to create `ghcr-creds` for private image pulls.
+- `CREATE_PULL_SECRET=1` to create/update `ghcr-creds` for private image pulls.
 - `BACKEND_IMAGE` / `FRONTEND_IMAGE` to override image tags.
+- `RUNNER_IMAGE` to override the VM runner image passed to backend env.
 - `NAMESPACE` to override the namespace (default `labs`).
 - `KUBECONFIG` to point at a specific kubeconfig.
-- `APPLY_GOLDEN_PVC=1` to apply `deploy/golden-pvc.yaml`.
+- `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
+- `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
+- `APPLY_GOLDEN_HOSTPATH=1` (default) to create `golden-images` hostPath PV/PVC on control node.
+- `APPLY_GOLDEN_PVC=1` to apply `deploy/golden-pvc.yaml` (use this for RWX storage classes).
 
-If you use prebuilt public images, you can skip GHCR entirely (leave `PUSH_IMAGES=0` and `CREATE_PULL_SECRET=0`).
+The script now renders manifests dynamically for namespace/control-node/IP/image values, and applies control-plane tolerations for control-node scheduling.
+
+If you use prebuilt public images, you can skip local builds with `LOAD_LOCAL_IMAGES=0`. If your registry is private, use `CREATE_PULL_SECRET=1` (or keep `LOAD_LOCAL_IMAGES=1`).
 
 Manual build/push (edit tags as needed):
 ```bash
@@ -51,14 +58,15 @@ podman build -t ghcr.io/csufpsudocromis/bretter-frontend:latest -f frontend-vite
 podman push ghcr.io/csufpsudocromis/bretter-frontend:latest
 ```
 
-Apply manifests:
+After build/push, deploy with setup script so placeholders are rendered:
 ```bash
-kubectl --kubeconfig /etc/kubernetes/admin.conf apply -f deploy/app.yaml
+PUSH_IMAGES=1 CREATE_PULL_SECRET=1 ./scripts/setup.sh
 ```
 
 Storage and runtime notes:
-- `golden-images` PVC stores VM images. Create RWX PVC if needed: `kubectl apply -f deploy/golden-pvc.yaml`.
-- Backend DB uses `backend-data` (hostPath `/home/cbeis/backend-data` on kub1).
+- `golden-images` PVC stores VM images. By default setup uses `deploy/golden-hostpath.yaml`.
+- For shared RWX storage, use `APPLY_GOLDEN_HOSTPATH=0 APPLY_GOLDEN_PVC=1` and set the storage class in `deploy/golden-pvc.yaml`.
+- Backend DB uses `backend-data` hostPath on the selected control node.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` must be available to containerd on the node(s).
 
 ## Usage

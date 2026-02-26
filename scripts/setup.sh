@@ -5,10 +5,19 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NAMESPACE="${NAMESPACE:-labs}"
 BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-backend:latest}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-frontend:latest}"
+RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/csufpsudocromis/win-vm-runner:latest}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
 APPLY_GOLDEN_PVC="${APPLY_GOLDEN_PVC:-0}"
+APPLY_GOLDEN_HOSTPATH="${APPLY_GOLDEN_HOSTPATH:-1}"
 PUSH_IMAGES="${PUSH_IMAGES:-0}"
+LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-1}"
 CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
+CONTROL_NODE="${CONTROL_NODE:-}"
+NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
+
+RENDERED_APP_MANIFEST=""
+RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
+RENDERED_GOLDEN_PVC_MANIFEST=""
 
 log() {
   echo "==> $*"
@@ -33,6 +42,15 @@ require_apt() {
   fi
 }
 
+cleanup() {
+  rm -f \
+    "${RENDERED_APP_MANIFEST:-}" \
+    "${RENDERED_GOLDEN_HOSTPATH_MANIFEST:-}" \
+    "${RENDERED_GOLDEN_PVC_MANIFEST:-}"
+}
+
+trap cleanup EXIT
+
 install_base_packages() {
   log "Installing base packages..."
   sudo_cmd apt-get update -y
@@ -50,7 +68,11 @@ install_node() {
   fi
   if [ "$need_node" -eq 1 ]; then
     log "Installing Node.js 20..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo_cmd -E bash -
+    if [ "$(id -u)" -eq 0 ]; then
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    else
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    fi
     sudo_cmd apt-get install -y nodejs
   fi
 }
@@ -92,6 +114,70 @@ ensure_kubeconfig() {
   fi
 }
 
+detect_control_node() {
+  if [ -n "$CONTROL_NODE" ]; then
+    return
+  fi
+
+  CONTROL_NODE="$(kubectl get nodes -l node-role.kubernetes.io/control-plane -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  if [ -z "$CONTROL_NODE" ]; then
+    CONTROL_NODE="$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+  fi
+  if [ -z "$CONTROL_NODE" ]; then
+    fail "Could not determine a control node. Set CONTROL_NODE explicitly."
+  fi
+}
+
+detect_node_external_host() {
+  if [ -n "$NODE_EXTERNAL_HOST" ]; then
+    return
+  fi
+
+  NODE_EXTERNAL_HOST="$(kubectl get node "$CONTROL_NODE" -o jsonpath='{.status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || true)"
+  if [ -z "$NODE_EXTERNAL_HOST" ]; then
+    NODE_EXTERNAL_HOST="$(kubectl get node "$CONTROL_NODE" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true)"
+  fi
+  if [ -z "$NODE_EXTERNAL_HOST" ]; then
+    fail "Could not determine NODE_EXTERNAL_HOST from node $CONTROL_NODE."
+  fi
+}
+
+escape_sed_replacement() {
+  printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
+}
+
+render_manifest_template() {
+  local input="$1"
+  local output="$2"
+
+  local ns control_node node_external_host backend_image frontend_image runner_image
+  ns="$(escape_sed_replacement "$NAMESPACE")"
+  control_node="$(escape_sed_replacement "$CONTROL_NODE")"
+  node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
+  backend_image="$(escape_sed_replacement "$BACKEND_IMAGE")"
+  frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
+  runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
+
+  sed \
+    -e "s/__NAMESPACE__/${ns}/g" \
+    -e "s/__CONTROL_NODE__/${control_node}/g" \
+    -e "s/__NODE_EXTERNAL_HOST__/${node_external_host}/g" \
+    -e "s/__BACKEND_IMAGE__/${backend_image}/g" \
+    -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
+    -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
+    "$input" >"$output"
+}
+
+prepare_rendered_manifests() {
+  RENDERED_APP_MANIFEST="$(mktemp /tmp/bretter-app.XXXXXX.yaml)"
+  RENDERED_GOLDEN_HOSTPATH_MANIFEST="$(mktemp /tmp/bretter-golden-hostpath.XXXXXX.yaml)"
+  RENDERED_GOLDEN_PVC_MANIFEST="$(mktemp /tmp/bretter-golden-pvc.XXXXXX.yaml)"
+
+  render_manifest_template "$ROOT_DIR/deploy/app.yaml" "$RENDERED_APP_MANIFEST"
+  render_manifest_template "$ROOT_DIR/deploy/golden-hostpath.yaml" "$RENDERED_GOLDEN_HOSTPATH_MANIFEST"
+  render_manifest_template "$ROOT_DIR/deploy/golden-pvc.yaml" "$RENDERED_GOLDEN_PVC_MANIFEST"
+}
+
 ensure_ghcr_login() {
   local ghcr_user="${GHCR_USERNAME:-}"
   local ghcr_token="${GHCR_TOKEN:-}"
@@ -110,21 +196,93 @@ ensure_ghcr_login() {
   echo "$ghcr_token" | podman login ghcr.io --username "$ghcr_user" --password-stdin
 }
 
-build_and_push_images() {
+build_images() {
+  local vite_api_base="${VITE_API_BASE:-http://${NODE_EXTERNAL_HOST}:30080}"
+
   log "Building backend image: $BACKEND_IMAGE"
   podman build -t "$BACKEND_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
+
+  log "Building frontend image: $FRONTEND_IMAGE"
+  podman build --build-arg "VITE_API_BASE=${vite_api_base}" -t "$FRONTEND_IMAGE" -f "$ROOT_DIR/frontend-vite/Dockerfile" "$ROOT_DIR"
+}
+
+push_images() {
   log "Pushing backend image..."
   podman push "$BACKEND_IMAGE"
 
-  log "Building frontend image: $FRONTEND_IMAGE"
-  podman build -t "$FRONTEND_IMAGE" -f "$ROOT_DIR/frontend-vite/Dockerfile" "$ROOT_DIR"
   log "Pushing frontend image..."
   podman push "$FRONTEND_IMAGE"
+}
+
+load_images_into_containerd() {
+  if ! command -v ctr >/dev/null 2>&1; then
+    fail "ctr is required to load local images into containerd."
+  fi
+
+  local backend_tar frontend_tar
+  backend_tar="$(mktemp /tmp/bretter-backend-image.XXXXXX.tar)"
+  frontend_tar="$(mktemp /tmp/bretter-frontend-image.XXXXXX.tar)"
+
+  log "Saving local backend image tar..."
+  podman save -o "$backend_tar" "$BACKEND_IMAGE"
+  log "Saving local frontend image tar..."
+  podman save -o "$frontend_tar" "$FRONTEND_IMAGE"
+
+  log "Importing backend image into containerd..."
+  sudo_cmd ctr -n k8s.io images import "$backend_tar"
+  log "Importing frontend image into containerd..."
+  sudo_cmd ctr -n k8s.io images import "$frontend_tar"
+
+  rm -f "$backend_tar" "$frontend_tar"
+}
+
+ensure_golden_images_claim() {
+  if kubectl -n "$NAMESPACE" get pvc golden-images >/dev/null 2>&1; then
+    log "golden-images PVC already exists; skipping storage manifest apply."
+    return
+  fi
+
+  if [ "$APPLY_GOLDEN_HOSTPATH" -eq 1 ]; then
+    log "Applying golden-images hostPath PV/PVC for node $CONTROL_NODE"
+    kubectl apply -f "$RENDERED_GOLDEN_HOSTPATH_MANIFEST"
+    return
+  fi
+
+  if [ "$APPLY_GOLDEN_PVC" -eq 1 ]; then
+    log "Applying golden-images PVC (ensure storageClassName is set correctly)"
+    kubectl apply -f "$RENDERED_GOLDEN_PVC_MANIFEST"
+    return
+  fi
+
+  fail "golden-images PVC is missing. Set APPLY_GOLDEN_HOSTPATH=1 or APPLY_GOLDEN_PVC=1, or create the claim manually."
+}
+
+reconcile_backend_data_pv() {
+  if ! kubectl get pv backend-data-pv >/dev/null 2>&1; then
+    return
+  fi
+
+  local current_hostnames
+  current_hostnames="$(kubectl get pv backend-data-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' \
+    | awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
+
+  if [ -z "$current_hostnames" ] || [[ "$current_hostnames" == *"$CONTROL_NODE"* ]]; then
+    return
+  fi
+
+  log "backend-data-pv node affinity ($current_hostnames) does not match $CONTROL_NODE; recreating PV/PVC."
+  kubectl -n "$NAMESPACE" scale deployment bretter-backend --replicas=0 >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" wait --for=delete pod -l app=bretter-backend --timeout=180s >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" delete pvc backend-data --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete pv backend-data-pv --ignore-not-found=true >/dev/null 2>&1 || true
 }
 
 apply_manifests() {
   log "Ensuring namespace $NAMESPACE"
   kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
+
+  ensure_golden_images_claim
+  reconcile_backend_data_pv
 
   if [ "$CREATE_PULL_SECRET" -eq 1 ]; then
     log "Updating ghcr-creds secret"
@@ -154,21 +312,12 @@ apply_manifests() {
       --dry-run=client -o yaml | kubectl apply -f -
   fi
 
-  if [ "$APPLY_GOLDEN_PVC" -eq 1 ] && [ -f "$ROOT_DIR/deploy/golden-pvc.yaml" ]; then
-    log "Applying golden-images PVC (ensure storageClassName is set correctly)"
-    kubectl apply -f "$ROOT_DIR/deploy/golden-pvc.yaml"
-  fi
-
   log "Applying base manifests"
-  kubectl apply -f "$ROOT_DIR/deploy/app.yaml"
-
-  log "Setting images on deployments"
-  kubectl -n "$NAMESPACE" set image deployment/bretter-backend backend="$BACKEND_IMAGE"
-  kubectl -n "$NAMESPACE" set image deployment/bretter-frontend frontend="$FRONTEND_IMAGE"
+  kubectl apply -f "$RENDERED_APP_MANIFEST"
 
   log "Waiting for rollout"
-  kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=180s
-  kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=180s
+  kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s
+  kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
 }
 
 main() {
@@ -176,13 +325,33 @@ main() {
   install_base_packages
   install_kubectl
   ensure_kubeconfig
+  detect_control_node
+  detect_node_external_host
+  prepare_rendered_manifests
 
-  if [ "$PUSH_IMAGES" -eq 1 ]; then
+  log "Using control node: $CONTROL_NODE"
+  log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
+
+  if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
     install_node
     install_podman
+  fi
+
+  if [ "$PUSH_IMAGES" -eq 1 ]; then
     ensure_ghcr_login
-    build_and_push_images
     CREATE_PULL_SECRET=1
+  fi
+
+  if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
+    build_images
+  fi
+
+  if [ "$PUSH_IMAGES" -eq 1 ]; then
+    push_images
+  fi
+
+  if [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
+    load_images_into_containerd
   fi
 
   if [ "$CREATE_PULL_SECRET" -eq 1 ] && ! command -v podman >/dev/null 2>&1; then

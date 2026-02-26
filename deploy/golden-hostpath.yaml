@@ -20,13 +20,13 @@ spec:
             - key: kubernetes.io/hostname
               operator: In
               values:
-                - kub1
+                - __CONTROL_NODE__
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: golden-images
-  namespace: labs
+  namespace: __NAMESPACE__
 spec:
   accessModes:
     - ReadWriteMany
