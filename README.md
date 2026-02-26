@@ -42,6 +42,7 @@ Optional flags:
 - `NAMESPACE` to override the namespace (default `labs`).
 - `KUBECONFIG` to point at a specific kubeconfig.
 - `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
+- `RUNNER_NODE_SELECTOR_VALUE` to pin VM runner pods to one node; leave empty (default) to allow scheduling on any eligible node.
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
@@ -73,6 +74,7 @@ PUSH_IMAGES=1 CREATE_PULL_SECRET=1 ./scripts/setup.sh
 Storage and runtime notes:
 - `golden-images` PVC stores VM images. By default setup uses `deploy/golden-hostpath.yaml`.
 - For shared RWX storage, use `APPLY_GOLDEN_HOSTPATH=0 APPLY_GOLDEN_PVC=1` and set the storage class in `deploy/golden-pvc.yaml`.
+- Multi-node runner scheduling requires shared storage for `golden-images` (RWX). A single-node hostPath PV keeps VM pods effectively tied to that node.
 - Backend DB uses `backend-data` hostPath on the selected control node.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` must be available to containerd on the node(s).
 

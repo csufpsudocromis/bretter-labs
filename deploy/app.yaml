@@ -114,7 +114,7 @@ spec:
             - name: BLABS_KUBE_TLS_SECRET
               value: __TLS_SECRET_NAME__
             - name: BLABS_KUBE_NODE_SELECTOR_VALUE
-              value: __CONTROL_NODE__
+              value: "__RUNNER_NODE_SELECTOR_VALUE__"
             - name: BLABS_RUNNER_IMAGE
               value: __RUNNER_IMAGE__
             - name: BLABS_IMAGE_PULL_SECRET

@@ -14,6 +14,7 @@ LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-1}"
 CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
+RUNNER_NODE_SELECTOR_VALUE="${RUNNER_NODE_SELECTOR_VALUE:-}"
 PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
 TLS_ENABLED="${TLS_ENABLED:-1}"
 TLS_SECRET_NAME="${TLS_SECRET_NAME:-bretter-tls}"
@@ -180,10 +181,12 @@ render_manifest_template() {
   local output="$2"
 
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
+  local runner_node_selector_value
   local backend_data_hostpath golden_images_hostpath
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
+  runner_node_selector_value="$(escape_sed_replacement "$RUNNER_NODE_SELECTOR_VALUE")"
   backend_image="$(escape_sed_replacement "$BACKEND_IMAGE")"
   frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
@@ -196,6 +199,7 @@ render_manifest_template() {
     -e "s/__NAMESPACE__/${ns}/g" \
     -e "s/__CONTROL_NODE__/${control_node}/g" \
     -e "s/__NODE_EXTERNAL_HOST__/${node_external_host}/g" \
+    -e "s/__RUNNER_NODE_SELECTOR_VALUE__/${runner_node_selector_value}/g" \
     -e "s/__BACKEND_IMAGE__/${backend_image}/g" \
     -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
@@ -440,6 +444,11 @@ main() {
 
   log "Using control node: $CONTROL_NODE"
   log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
+  if [ -n "$RUNNER_NODE_SELECTOR_VALUE" ]; then
+    log "Pinning runner pods to node: $RUNNER_NODE_SELECTOR_VALUE"
+  else
+    log "Runner pods are not node-pinned (scheduler can choose any eligible node)."
+  fi
   log "Using public scheme: $PUBLIC_SCHEME"
   log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
