@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 import sqlite3
 import subprocess
@@ -47,6 +48,27 @@ ALLOWED_SUFFIXES = {".vhd", ".qcow", ".qcow2", ".vdi"}
 PVC_HELPER_IMAGE = "alpine:3.19"
 POD_READY_WAIT_SECONDS = 120
 POD_READY_SLEEP = 2
+
+
+def _helper_overrides(worker_image: str) -> str:
+    spec: dict = {
+        "spec": {
+            "volumes": [{"name": "images", "persistentVolumeClaim": {"claimName": settings.kube_image_pvc}}],
+            "containers": [
+                {
+                    "name": "worker",
+                    "image": worker_image,
+                    "imagePullPolicy": "IfNotPresent",
+                    "command": ["/bin/sh", "-c", "sleep 3600"],
+                    "volumeMounts": [{"name": "images", "mountPath": "/images"}],
+                }
+            ],
+            "restartPolicy": "Never",
+        }
+    }
+    if settings.image_pull_secret:
+        spec["spec"]["imagePullSecrets"] = [{"name": settings.image_pull_secret}]
+    return json.dumps(spec, separators=(",", ":"))
 
 
 def _ensure_config_columns() -> None:
@@ -162,15 +184,7 @@ def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproc
 def _with_pvc_helper(command: list[str], *, image: str | None = None, capture_output: bool = True) -> subprocess.CompletedProcess:
     helper = f"image-sync-{uuid4().hex[:8]}"
     helper_image = image or PVC_HELPER_IMAGE
-    pod_spec = (
-        '{"spec":{"volumes":[{"name":"images","persistentVolumeClaim":{"claimName":"'
-        f'{settings.kube_image_pvc}'
-        '"}}],"containers":[{"name":"worker","image":"'
-        f'{helper_image}'
-        '","command":["/bin/sh","-c","sleep 3600"],'
-        '"volumeMounts":[{"name":"images","mountPath":"/images"}]}],'
-        '"restartPolicy":"Never"}}'
-    )
+    pod_spec = _helper_overrides(helper_image)
     try:
         _run(
             [
@@ -181,7 +195,7 @@ def _with_pvc_helper(command: list[str], *, image: str | None = None, capture_ou
                 settings.kube_namespace,
                 "--restart=Never",
                 "--image",
-                PVC_HELPER_IMAGE,
+                helper_image,
                 "--overrides",
                 pod_spec,
                 "--command",
@@ -230,15 +244,7 @@ def _copy_file_to_pvc(source_path: Path, filename: str) -> None:
     if not source_path.exists():
         raise FileNotFoundError(f"source file not found: {source_path}")
     helper = f"image-sync-{uuid4().hex[:8]}"
-    pod_spec = (
-        '{"spec":{"volumes":[{"name":"images","persistentVolumeClaim":{"claimName":"'
-        f'{settings.kube_image_pvc}'
-        '"}}],"containers":[{"name":"worker","image":"'
-        f'{PVC_HELPER_IMAGE}'
-        '","command":["/bin/sh","-c","sleep 3600"],'
-        '"volumeMounts":[{"name":"images","mountPath":"/images"}]}],'
-        '"restartPolicy":"Never"}}'
-    )
+    pod_spec = _helper_overrides(PVC_HELPER_IMAGE)
     try:
         _run(
             [
