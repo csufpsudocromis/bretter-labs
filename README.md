@@ -43,12 +43,15 @@ Optional flags:
 - `KUBECONFIG` to point at a specific kubeconfig.
 - `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
+- `BACKEND_DATA_HOSTPATH` to override backend DB hostPath (default `/var/lib/bretter-labs/backend-data`).
+- `GOLDEN_IMAGES_HOSTPATH` to override golden image hostPath (default `/var/lib/bretter-labs/golden-images`).
 - `APPLY_GOLDEN_HOSTPATH=1` (default) to create `golden-images` hostPath PV/PVC on control node.
 - `APPLY_GOLDEN_PVC=1` to apply `deploy/golden-pvc.yaml` (use this for RWX storage classes).
 
 The script now renders manifests dynamically for namespace/control-node/IP/image values, and applies control-plane tolerations for control-node scheduling.
+It also creates a placeholder `ghcr-creds` secret by default so fresh clusters do not fail on a missing imagePullSecret.
 
-If you use prebuilt public images, you can skip local builds with `LOAD_LOCAL_IMAGES=0`. If your registry is private, use `CREATE_PULL_SECRET=1` (or keep `LOAD_LOCAL_IMAGES=1`).
+If you use prebuilt public images, you can skip local builds with `LOAD_LOCAL_IMAGES=0`. If your registry is private, use `CREATE_PULL_SECRET=1`.
 
 Manual build/push (edit tags as needed):
 ```bash

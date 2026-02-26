@@ -11,7 +11,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   volumeMode: Filesystem
   hostPath:
-    path: /home/cbeis/golden-images
+    path: __GOLDEN_IMAGES_HOSTPATH__
     type: DirectoryOrCreate
   nodeAffinity:
     required:

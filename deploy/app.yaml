@@ -42,7 +42,7 @@ spec:
   persistentVolumeReclaimPolicy: Retain
   volumeMode: Filesystem
   hostPath:
-    path: /home/cbeis/backend-data
+    path: __BACKEND_DATA_HOSTPATH__
     type: DirectoryOrCreate
   nodeAffinity:
     required:

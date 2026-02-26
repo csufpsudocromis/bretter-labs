@@ -14,6 +14,8 @@ LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-1}"
 CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
+BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
+GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 
 RENDERED_APP_MANIFEST=""
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
@@ -105,6 +107,12 @@ install_podman() {
 ensure_kubeconfig() {
   if [ -n "$KUBECONFIG_PATH" ]; then
     export KUBECONFIG="$KUBECONFIG_PATH"
+  elif [ -z "${KUBECONFIG:-}" ]; then
+    if [ -f "$HOME/.kube/config" ]; then
+      export KUBECONFIG="$HOME/.kube/config"
+    elif [ -r /etc/kubernetes/admin.conf ]; then
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+    fi
   fi
   if ! kubectl version --client >/dev/null 2>&1; then
     fail "kubectl is not working. Check your PATH or installation."
@@ -151,12 +159,15 @@ render_manifest_template() {
   local output="$2"
 
   local ns control_node node_external_host backend_image frontend_image runner_image
+  local backend_data_hostpath golden_images_hostpath
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
   backend_image="$(escape_sed_replacement "$BACKEND_IMAGE")"
   frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
+  backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
+  golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
 
   sed \
     -e "s/__NAMESPACE__/${ns}/g" \
@@ -165,6 +176,8 @@ render_manifest_template() {
     -e "s/__BACKEND_IMAGE__/${backend_image}/g" \
     -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
+    -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
+    -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     "$input" >"$output"
 }
 
@@ -277,13 +290,7 @@ reconcile_backend_data_pv() {
   kubectl delete pv backend-data-pv --ignore-not-found=true >/dev/null 2>&1 || true
 }
 
-apply_manifests() {
-  log "Ensuring namespace $NAMESPACE"
-  kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
-
-  ensure_golden_images_claim
-  reconcile_backend_data_pv
-
+ensure_pull_secret() {
   if [ "$CREATE_PULL_SECRET" -eq 1 ]; then
     log "Updating ghcr-creds secret"
     if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
@@ -301,9 +308,28 @@ apply_manifests() {
         --type=kubernetes.io/dockerconfigjson \
         --dry-run=client -o yaml | kubectl apply -f -
     fi
-  else
-    log "Skipping image pull secret (set CREATE_PULL_SECRET=1 if images are private)"
+    return
   fi
+
+  if kubectl -n "$NAMESPACE" get secret ghcr-creds >/dev/null 2>&1; then
+    log "Using existing ghcr-creds secret"
+    return
+  fi
+
+  log "Creating placeholder ghcr-creds secret (set CREATE_PULL_SECRET=1 for private registries)"
+  kubectl -n "$NAMESPACE" create secret generic ghcr-creds \
+    --from-literal=.dockerconfigjson='{"auths":{}}' \
+    --type=kubernetes.io/dockerconfigjson \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+apply_manifests() {
+  log "Ensuring namespace $NAMESPACE"
+  kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
+
+  ensure_golden_images_claim
+  reconcile_backend_data_pv
+  ensure_pull_secret
 
   if [ -f "$ROOT_DIR/runner/spice-embed.html" ]; then
     log "Updating spice-embed ConfigMap"
@@ -331,6 +357,8 @@ main() {
 
   log "Using control node: $CONTROL_NODE"
   log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
+  log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
+  log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
 
   if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
     install_node
