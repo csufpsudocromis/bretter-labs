@@ -285,15 +285,26 @@ reconcile_backend_data_pv() {
     return
   fi
 
-  local current_hostnames
+  local current_hostnames current_hostpath recreate_reason
   current_hostnames="$(kubectl get pv backend-data-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' \
     | awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
+  current_hostpath="$(kubectl get pv backend-data-pv -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)"
+  recreate_reason=""
 
-  if [ -z "$current_hostnames" ] || [[ "$current_hostnames" == *"$CONTROL_NODE"* ]]; then
+  if [ -n "$current_hostnames" ] && [[ "$current_hostnames" != *"$CONTROL_NODE"* ]]; then
+    recreate_reason="node affinity ($current_hostnames) does not match $CONTROL_NODE"
+  fi
+  if [ "$current_hostpath" != "$BACKEND_DATA_HOSTPATH" ]; then
+    if [ -n "$recreate_reason" ]; then
+      recreate_reason="$recreate_reason; "
+    fi
+    recreate_reason="${recreate_reason}hostPath ($current_hostpath) does not match $BACKEND_DATA_HOSTPATH"
+  fi
+  if [ -z "$recreate_reason" ]; then
     return
   fi
 
-  log "backend-data-pv node affinity ($current_hostnames) does not match $CONTROL_NODE; recreating PV/PVC."
+  log "backend-data-pv ${recreate_reason}; recreating PV/PVC."
   kubectl -n "$NAMESPACE" scale deployment bretter-backend --replicas=0 >/dev/null 2>&1 || true
   kubectl -n "$NAMESPACE" wait --for=delete pod -l app=bretter-backend --timeout=180s >/dev/null 2>&1 || true
   kubectl -n "$NAMESPACE" delete pvc backend-data --ignore-not-found=true >/dev/null 2>&1 || true
