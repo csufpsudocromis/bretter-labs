@@ -1,7 +1,12 @@
 import axios from 'axios';
 
+const defaultApiBase =
+  typeof window !== 'undefined'
+    ? `${window.location.protocol}//${window.location.hostname}:30080`
+    : 'https://127.0.0.1:30080';
+
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8000',
+  baseURL: import.meta.env.VITE_API_BASE || defaultApiBase,
 });
 
 api.interceptors.request.use((config) => {

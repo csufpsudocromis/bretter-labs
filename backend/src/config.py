@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     kube_use_kvm: bool = True  # set False if /dev/kvm is unavailable
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
     kube_node_external_host: str = "10.68.48.105"
+    public_scheme: str = "https"
+    cors_allow_http: bool = False
     image_pull_secret: str = "ghcr-creds"  # optional: name of imagePullSecret in the namespace
 
     model_config = {"env_prefix": "BLABS_"}

@@ -14,6 +14,7 @@ LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-1}"
 CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
+PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 
@@ -28,6 +29,13 @@ log() {
 fail() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+validate_public_scheme() {
+  case "$PUBLIC_SCHEME" in
+    https|http) ;;
+    *) fail "PUBLIC_SCHEME must be either https or http." ;;
+  esac
 }
 
 sudo_cmd() {
@@ -158,7 +166,7 @@ render_manifest_template() {
   local input="$1"
   local output="$2"
 
-  local ns control_node node_external_host backend_image frontend_image runner_image
+  local ns control_node node_external_host backend_image frontend_image runner_image public_scheme
   local backend_data_hostpath golden_images_hostpath
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
@@ -166,6 +174,7 @@ render_manifest_template() {
   backend_image="$(escape_sed_replacement "$BACKEND_IMAGE")"
   frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
+  public_scheme="$(escape_sed_replacement "$PUBLIC_SCHEME")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
 
@@ -176,6 +185,7 @@ render_manifest_template() {
     -e "s/__BACKEND_IMAGE__/${backend_image}/g" \
     -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
+    -e "s/__PUBLIC_SCHEME__/${public_scheme}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     "$input" >"$output"
@@ -210,7 +220,7 @@ ensure_ghcr_login() {
 }
 
 build_images() {
-  local vite_api_base="${VITE_API_BASE:-http://${NODE_EXTERNAL_HOST}:30080}"
+  local vite_api_base="${VITE_API_BASE:-${PUBLIC_SCHEME}://${NODE_EXTERNAL_HOST}:30080}"
 
   log "Building backend image: $BACKEND_IMAGE"
   podman build -t "$BACKEND_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
@@ -347,6 +357,7 @@ apply_manifests() {
 }
 
 main() {
+  validate_public_scheme
   require_apt
   install_base_packages
   install_kubectl
@@ -357,6 +368,7 @@ main() {
 
   log "Using control node: $CONTROL_NODE"
   log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
+  log "Using public scheme: $PUBLIC_SCHEME"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
 

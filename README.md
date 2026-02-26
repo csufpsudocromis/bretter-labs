@@ -43,6 +43,7 @@ Optional flags:
 - `KUBECONFIG` to point at a specific kubeconfig.
 - `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
+- `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `BACKEND_DATA_HOSTPATH` to override backend DB hostPath (default `/var/lib/bretter-labs/backend-data`).
 - `GOLDEN_IMAGES_HOSTPATH` to override golden image hostPath (default `/var/lib/bretter-labs/golden-images`).
 - `APPLY_GOLDEN_HOSTPATH=1` (default) to create `golden-images` hostPath PV/PVC on control node.
@@ -73,9 +74,13 @@ Storage and runtime notes:
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` must be available to containerd on the node(s).
 
 ## Usage
-- UI: NodePort `30073` (e.g. `http://<node-external-host>:30073`).
-- API: NodePort `30080` (e.g. `http://<node-external-host>:30080`).
+- UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).
+- API: NodePort `30080` (e.g. `https://<node-external-host>:30080`).
 - Default admin: `admin` / `admin` (forced change on first login).
+
+TLS note:
+- `PUBLIC_SCHEME=https` makes frontend/backend URLs and console links use HTTPS/WSS.
+- Your ingress/proxy/service endpoint must actually terminate TLS for those ports/hosts.
 
 Admin workflow:
 - Upload images and create templates (CPU/RAM, idle timeout, enable/disable).

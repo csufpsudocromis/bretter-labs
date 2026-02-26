@@ -109,6 +109,8 @@ spec:
               value: /data/app.db
             - name: BLABS_KUBE_NODE_EXTERNAL_HOST
               value: __NODE_EXTERNAL_HOST__
+            - name: BLABS_PUBLIC_SCHEME
+              value: __PUBLIC_SCHEME__
             - name: BLABS_KUBE_NODE_SELECTOR_VALUE
               value: __CONTROL_NODE__
             - name: BLABS_RUNNER_IMAGE

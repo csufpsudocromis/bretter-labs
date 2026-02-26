@@ -19,16 +19,19 @@ app = FastAPI(title="Bretter Labs API", version="0.3.0")
 _reaper_task: asyncio.Task | None = None
 
 ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://10.68.48.169:5173",
-    "http://10.68.49.229:5173",
-    "http://10.68.48.105:5173",
-    "http://10.68.48.105:30073",
-    "http://10.68.48.169:30073",
+    "https://localhost:5173",
+    "https://127.0.0.1:5173",
 ]
+if settings.cors_allow_http:
+    ALLOWED_ORIGINS.extend(
+        [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
 origin_host = settings.kube_node_external_host or "127.0.0.1"
-origin_regex = rf"^http://{re.escape(origin_host)}:\d+$"
+origin_schemes = "https|http" if settings.cors_allow_http else "https"
+origin_regex = rf"^({origin_schemes})://{re.escape(origin_host)}:\d+$"
 
 app.add_middleware(
     CORSMiddleware,
