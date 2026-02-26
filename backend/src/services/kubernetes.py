@@ -6,7 +6,6 @@ Creates/stops/deletes VM pods, applies egress-only NetworkPolicies, and generate
 
 import logging
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -81,8 +80,10 @@ class KubernetesService:
         pvc_name = self._instance_disk_pvc_name(req.instance_id, req.owner)
         try:
             existing = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
-            if (existing.status.phase or "").lower() == "bound":
-                return pvc_name
+            phase = (existing.status.phase or "").lower()
+            if phase == "lost":
+                raise RuntimeError(f"instance PVC {pvc_name} entered Lost phase")
+            return pvc_name
         except ApiException as exc:
             if exc.status != 404:
                 raise
@@ -111,17 +112,7 @@ class KubernetesService:
             ),
         )
         core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
-
-        deadline = time.time() + 600
-        while time.time() < deadline:
-            current = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
-            phase = (current.status.phase or "").lower()
-            if phase == "bound":
-                return pvc_name
-            if phase == "lost":
-                raise RuntimeError(f"instance PVC {pvc_name} entered Lost phase")
-            time.sleep(2)
-        raise RuntimeError(f"timed out waiting for instance PVC {pvc_name} to bind")
+        return pvc_name
 
     def create_service_for_pod(self, pod_name: str, service_name: str) -> int:
         core = self._client()

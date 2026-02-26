@@ -47,6 +47,7 @@ IMAGE_DIR = Path(settings.storage_root)
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024 * 1024  # 60 GB
 ALLOWED_SUFFIXES = {".vhd", ".qcow", ".qcow2", ".vdi"}
+RAW_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".qcow", ".qcow2", ".vdi"}
 
 PVC_HELPER_IMAGE = "alpine:3.19"
 POD_READY_WAIT_SECONDS = 120
@@ -472,9 +473,9 @@ def _exists_on_pvc(filename: str, *, claim_name: str | None = None) -> bool:
         return False
 
 
-def _convert_qcow_to_raw_on_pvc(filename: str) -> str:
+def _convert_image_to_raw_on_pvc(filename: str) -> str:
     """
-    Convert a qcow/qcow2 image on the PVC to raw. Returns new filename.
+    Convert a non-raw disk image on the PVC to raw. Returns new filename.
     """
     stem = Path(filename).stem
     raw_name = f"{stem}.raw"
@@ -483,11 +484,11 @@ def _convert_qcow_to_raw_on_pvc(filename: str) -> str:
         ["/bin/sh", "-c", cmd],
         image=settings.runner_image,
     )
-    # Remove original to save space.
+    # Remove original after successful conversion to save space.
     try:
         _with_pvc_helper(["/bin/sh", "-c", f"rm -f /images/{filename}"])
     except Exception:
-        logger.warning("Failed to delete source qcow after conversion: %s", filename)
+        logger.warning("Failed to delete source image after conversion: %s", filename)
     return raw_name
 
 
@@ -601,8 +602,6 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     filename = Path(file.filename).name
     image_id = str(uuid4())
     source_pvc = None
-    allow_skip_validation = suffix in {".vhd", ".vhdx"}
-
     try:
         dest_path = IMAGE_DIR / filename
         with dest_path.open("wb") as buffer:
@@ -618,10 +617,10 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         if size_bytes == 0:
             dest_path.unlink(missing_ok=True)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
-        # Auto-convert qcow/qcow2 to raw for better compatibility.
-        if suffix in {".qcow", ".qcow2"}:
+        # Auto-convert non-raw formats to raw for better runtime compatibility.
+        if suffix in RAW_CONVERSION_SUFFIXES:
             try:
-                raw_name = _convert_qcow_to_raw_on_pvc(dest_path.name)
+                raw_name = _convert_image_to_raw_on_pvc(dest_path.name)
                 filename = raw_name
                 dest_path = IMAGE_DIR / raw_name
                 # Recompute checksum/size from converted raw.
@@ -632,8 +631,8 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
                         size_bytes += len(chunk)
                         sha256.update(chunk)
             except Exception as exc:
-                logger.error("Failed to convert qcow to raw: %s", exc, exc_info=True)
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to convert qcow to raw") from exc
+                logger.error("Failed to convert image to raw: %s", exc, exc_info=True)
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to convert image to raw") from exc
         if settings.kube_vm_storage_class:
             source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
     except HTTPException:
@@ -671,11 +670,24 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
     dest_path = IMAGE_DIR / Path(payload.filename).name
     if not dest_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found on storage")
+    suffix = dest_path.suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
+    if suffix in RAW_CONVERSION_SUFFIXES:
+        try:
+            raw_name = _convert_image_to_raw_on_pvc(dest_path.name)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"image conversion failed: {exc}") from exc
+        dest_path = IMAGE_DIR / raw_name
+        if not dest_path.exists():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"converted image missing on storage: {raw_name}",
+            )
     existing = session.exec(select(Image).where(Image.filename == dest_path.name)).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="image already registered")
-    if dest_path.suffix.lower() not in ALLOWED_SUFFIXES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
+
     image_id = str(uuid4())
     source_pvc = None
 
