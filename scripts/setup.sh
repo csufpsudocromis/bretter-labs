@@ -93,7 +93,7 @@ install_node() {
   local need_node=1
   if command -v node >/dev/null 2>&1; then
     local major
-    major="$(node -v | sed -E 's/^v([0-9]+).*/\\1/')"
+    major="$(node -v | sed -E 's/^v([0-9]+).*/\1/')"
     if [ "${major:-0}" -ge 18 ]; then
       need_node=0
     fi
@@ -318,6 +318,7 @@ preload_runner_image_on_worker_nodes() {
   local runner_tar="$1"
   local nodes=()
   local node
+  local preload_output
 
   if [ "$PRELOAD_RUNNER_ON_ALL_NODES" -ne 1 ]; then
     log "Skipping cross-node runner image preload (PRELOAD_RUNNER_ON_ALL_NODES=0)."
@@ -340,8 +341,16 @@ preload_runner_image_on_worker_nodes() {
 
     log "Preloading runner image into containerd on node $node..."
     cleanup_node_debugger_pods "$node"
-    if ! cat "$runner_tar" | kubectl debug "node/${node}" --quiet --image=busybox:1.36 -- chroot /host ctr -n k8s.io images import - >/dev/null; then
+    # Stage the tar on the host and import from file for reliable cross-node loads.
+    if ! preload_output="$(
+      kubectl debug "node/${node}" --quiet --image=busybox:1.36 -- \
+        sh -c 'set -eu; tmp=/host/tmp/bretter-runner-image.tar; cat >"$tmp"; chroot /host ctr -n k8s.io images import /tmp/bretter-runner-image.tar; rm -f "$tmp"' \
+        < "$runner_tar" 2>&1
+    )"; then
       cleanup_node_debugger_pods "$node"
+      if [ -n "$preload_output" ]; then
+        echo "$preload_output" >&2
+      fi
       fail "Failed to preload runner image on node $node."
     fi
     cleanup_node_debugger_pods "$node"
