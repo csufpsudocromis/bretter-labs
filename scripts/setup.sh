@@ -246,6 +246,9 @@ build_images() {
 
   log "Building frontend image: $FRONTEND_IMAGE"
   podman build --build-arg "VITE_API_BASE=${vite_api_base}" -t "$FRONTEND_IMAGE" -f "$ROOT_DIR/frontend-vite/Dockerfile" "$ROOT_DIR"
+
+  log "Building runner image: $RUNNER_IMAGE"
+  podman build -t "$RUNNER_IMAGE" -f "$ROOT_DIR/runner/Dockerfile" "$ROOT_DIR/runner"
 }
 
 push_images() {
@@ -254,6 +257,9 @@ push_images() {
 
   log "Pushing frontend image..."
   podman push "$FRONTEND_IMAGE"
+
+  log "Pushing runner image..."
+  podman push "$RUNNER_IMAGE"
 }
 
 load_images_into_containerd() {
@@ -261,21 +267,26 @@ load_images_into_containerd() {
     fail "ctr is required to load local images into containerd."
   fi
 
-  local backend_tar frontend_tar
+  local backend_tar frontend_tar runner_tar
   backend_tar="$(mktemp /tmp/bretter-backend-image.XXXXXX.tar)"
   frontend_tar="$(mktemp /tmp/bretter-frontend-image.XXXXXX.tar)"
+  runner_tar="$(mktemp /tmp/bretter-runner-image.XXXXXX.tar)"
 
   log "Saving local backend image tar..."
   podman save -o "$backend_tar" "$BACKEND_IMAGE"
   log "Saving local frontend image tar..."
   podman save -o "$frontend_tar" "$FRONTEND_IMAGE"
+  log "Saving local runner image tar..."
+  podman save -o "$runner_tar" "$RUNNER_IMAGE"
 
   log "Importing backend image into containerd..."
   sudo_cmd ctr -n k8s.io images import "$backend_tar"
   log "Importing frontend image into containerd..."
   sudo_cmd ctr -n k8s.io images import "$frontend_tar"
+  log "Importing runner image into containerd..."
+  sudo_cmd ctr -n k8s.io images import "$runner_tar"
 
-  rm -f "$backend_tar" "$frontend_tar"
+  rm -f "$backend_tar" "$frontend_tar" "$runner_tar"
 }
 
 ensure_golden_images_claim() {
