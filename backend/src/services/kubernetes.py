@@ -204,6 +204,18 @@ class KubernetesService:
             "restart_policy": "Never",
             "volumes": volumes,
             "host_network": host_network,
+            "tolerations": [
+                client.V1Toleration(
+                    key="node-role.kubernetes.io/control-plane",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+                client.V1Toleration(
+                    key="node-role.kubernetes.io/master",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+            ],
         }
         if settings.image_pull_secret:
             spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
