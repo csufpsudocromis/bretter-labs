@@ -11,6 +11,7 @@ APPLY_GOLDEN_PVC="${APPLY_GOLDEN_PVC:-0}"
 APPLY_GOLDEN_HOSTPATH="${APPLY_GOLDEN_HOSTPATH:-1}"
 PUSH_IMAGES="${PUSH_IMAGES:-0}"
 LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-1}"
+PRELOAD_RUNNER_ON_ALL_NODES="${PRELOAD_RUNNER_ON_ALL_NODES:-1}"
 CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
@@ -50,6 +51,13 @@ validate_tls_config() {
   if [ "$TLS_ENABLED" -ne 1 ] && [ "$PUBLIC_SCHEME" = "https" ]; then
     log "WARNING: PUBLIC_SCHEME=https with TLS_ENABLED=0. Ensure secret $TLS_SECRET_NAME already exists."
   fi
+}
+
+validate_preload_config() {
+  case "$PRELOAD_RUNNER_ON_ALL_NODES" in
+    0|1) ;;
+    *) fail "PRELOAD_RUNNER_ON_ALL_NODES must be either 0 or 1." ;;
+  esac
 }
 
 sudo_cmd() {
@@ -286,7 +294,58 @@ load_images_into_containerd() {
   log "Importing runner image into containerd..."
   sudo_cmd ctr -n k8s.io images import "$runner_tar"
 
+  preload_runner_image_on_worker_nodes "$runner_tar"
+
   rm -f "$backend_tar" "$frontend_tar" "$runner_tar"
+}
+
+cleanup_node_debugger_pods() {
+  local node="$1"
+  local pod_names
+
+  pod_names="$(kubectl -n default get pods --no-headers -o custom-columns=':metadata.name' 2>/dev/null \
+    | grep "^node-debugger-${node}-" || true)"
+  if [ -z "$pod_names" ]; then
+    return
+  fi
+
+  # Delete any prior node-debugger pods to avoid clutter or stale failures.
+  # shellcheck disable=SC2086
+  kubectl -n default delete pod $pod_names --ignore-not-found=true >/dev/null 2>&1 || true
+}
+
+preload_runner_image_on_worker_nodes() {
+  local runner_tar="$1"
+  local nodes=()
+  local node
+
+  if [ "$PRELOAD_RUNNER_ON_ALL_NODES" -ne 1 ]; then
+    log "Skipping cross-node runner image preload (PRELOAD_RUNNER_ON_ALL_NODES=0)."
+    return
+  fi
+
+  mapfile -t nodes < <(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+  if [ "${#nodes[@]}" -le 1 ]; then
+    return
+  fi
+
+  if ! kubectl debug -h >/dev/null 2>&1; then
+    fail "kubectl debug is required to preload runner images across nodes."
+  fi
+
+  for node in "${nodes[@]}"; do
+    if [ "$node" = "$CONTROL_NODE" ]; then
+      continue
+    fi
+
+    log "Preloading runner image into containerd on node $node..."
+    cleanup_node_debugger_pods "$node"
+    if ! cat "$runner_tar" | kubectl debug "node/${node}" --quiet --image=busybox:1.36 -- chroot /host ctr -n k8s.io images import - >/dev/null; then
+      cleanup_node_debugger_pods "$node"
+      fail "Failed to preload runner image on node $node."
+    fi
+    cleanup_node_debugger_pods "$node"
+  done
 }
 
 ensure_golden_images_claim() {
@@ -445,6 +504,7 @@ apply_manifests() {
 main() {
   validate_public_scheme
   validate_tls_config
+  validate_preload_config
   require_apt
   install_base_packages
   install_kubectl

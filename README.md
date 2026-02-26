@@ -35,6 +35,7 @@ Recommended: use the setup script (auto-installs prerequisites on Ubuntu/Debian)
 
 Optional flags:
 - `LOAD_LOCAL_IMAGES=1` (default) to build images locally and import them into local containerd.
+- `PRELOAD_RUNNER_ON_ALL_NODES=1` (default) to preload the VM runner image onto every non-control node via `kubectl debug`.
 - `PUSH_IMAGES=1` to build/push images (requires GHCR credentials).
 - `CREATE_PULL_SECRET=1` to create/update `ghcr-creds` for private image pulls.
 - `BACKEND_IMAGE` / `FRONTEND_IMAGE` to override image tags.
@@ -76,7 +77,7 @@ Storage and runtime notes:
 - For shared RWX storage, use `APPLY_GOLDEN_HOSTPATH=0 APPLY_GOLDEN_PVC=1` and set the storage class in `deploy/golden-pvc.yaml`.
 - Multi-node runner scheduling requires shared storage for `golden-images` (RWX). A single-node hostPath PV keeps VM pods effectively tied to that node.
 - Backend DB uses `backend-data` hostPath on the selected control node.
-- Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` must be available to containerd on the node(s).
+- Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).
