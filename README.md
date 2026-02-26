@@ -44,7 +44,14 @@ Optional flags:
 - `KUBECONFIG` to point at a specific kubeconfig.
 - `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
 - `RUNNER_NODE_SELECTOR_VALUE` to pin VM runner pods to one node; leave empty (default) to allow scheduling on any eligible node.
-- `VM_STORAGE_CLASS` to enable clone-based per-VM disks from source image PVCs (for example, `longhorn`).
+- `VM_STORAGE_CLASS` to enable clone-based per-VM disks from source image PVCs. If unset and Longhorn tuning is enabled, setup defaults this to `longhorn-r1`.
+- `LONGHORN_TUNE=1` (default) to apply phase-2 Longhorn defaults when Longhorn is installed.
+- `LONGHORN_VM_STORAGE_CLASS` to set the VM clone StorageClass name created/used by setup (default `longhorn-r1`).
+- `LONGHORN_VM_REPLICA_COUNT` to set replica count for `LONGHORN_VM_STORAGE_CLASS` (default `1`).
+- `LONGHORN_DEFAULT_REPLICA_COUNT` to set Longhorn's default replica count (default `2`).
+- `LONGHORN_RESERVED_PERCENT` to reserve per-node Longhorn disk capacity (default `10`).
+- `LONGHORN_MIN_AVAILABLE_PERCENT` to set Longhorn minimal available capacity threshold (default `5`).
+- `LONGHORN_OVERPROVISION_PERCENT` to set Longhorn overprovisioning percentage (default `200`).
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
@@ -83,6 +90,7 @@ Storage and runtime notes:
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 - With `VM_STORAGE_CLASS` set, uploaded/imported images also get a source PVC and VM launches use per-instance cloned PVC disks (no large init-container file copy).
+- With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).

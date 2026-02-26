@@ -17,6 +17,13 @@ CONTROL_NODE="${CONTROL_NODE:-}"
 NODE_EXTERNAL_HOST="${NODE_EXTERNAL_HOST:-}"
 RUNNER_NODE_SELECTOR_VALUE="${RUNNER_NODE_SELECTOR_VALUE:-}"
 VM_STORAGE_CLASS="${VM_STORAGE_CLASS:-}"
+LONGHORN_TUNE="${LONGHORN_TUNE:-1}"
+LONGHORN_VM_STORAGE_CLASS="${LONGHORN_VM_STORAGE_CLASS:-longhorn-r1}"
+LONGHORN_VM_REPLICA_COUNT="${LONGHORN_VM_REPLICA_COUNT:-1}"
+LONGHORN_DEFAULT_REPLICA_COUNT="${LONGHORN_DEFAULT_REPLICA_COUNT:-2}"
+LONGHORN_RESERVED_PERCENT="${LONGHORN_RESERVED_PERCENT:-10}"
+LONGHORN_MIN_AVAILABLE_PERCENT="${LONGHORN_MIN_AVAILABLE_PERCENT:-5}"
+LONGHORN_OVERPROVISION_PERCENT="${LONGHORN_OVERPROVISION_PERCENT:-200}"
 PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
 TLS_ENABLED="${TLS_ENABLED:-1}"
 TLS_SECRET_NAME="${TLS_SECRET_NAME:-bretter-tls}"
@@ -59,6 +66,33 @@ validate_preload_config() {
     0|1) ;;
     *) fail "PRELOAD_RUNNER_ON_ALL_NODES must be either 0 or 1." ;;
   esac
+}
+
+is_uint() {
+  [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+validate_longhorn_tuning_config() {
+  case "$LONGHORN_TUNE" in
+    0|1) ;;
+    *) fail "LONGHORN_TUNE must be either 0 or 1." ;;
+  esac
+
+  if ! is_uint "$LONGHORN_VM_REPLICA_COUNT" || [ "$LONGHORN_VM_REPLICA_COUNT" -lt 1 ]; then
+    fail "LONGHORN_VM_REPLICA_COUNT must be an integer >= 1."
+  fi
+  if ! is_uint "$LONGHORN_DEFAULT_REPLICA_COUNT" || [ "$LONGHORN_DEFAULT_REPLICA_COUNT" -lt 1 ]; then
+    fail "LONGHORN_DEFAULT_REPLICA_COUNT must be an integer >= 1."
+  fi
+  if ! is_uint "$LONGHORN_RESERVED_PERCENT" || [ "$LONGHORN_RESERVED_PERCENT" -gt 99 ]; then
+    fail "LONGHORN_RESERVED_PERCENT must be an integer between 0 and 99."
+  fi
+  if ! is_uint "$LONGHORN_MIN_AVAILABLE_PERCENT" || [ "$LONGHORN_MIN_AVAILABLE_PERCENT" -gt 99 ]; then
+    fail "LONGHORN_MIN_AVAILABLE_PERCENT must be an integer between 0 and 99."
+  fi
+  if ! is_uint "$LONGHORN_OVERPROVISION_PERCENT" || [ "$LONGHORN_OVERPROVISION_PERCENT" -lt 1 ]; then
+    fail "LONGHORN_OVERPROVISION_PERCENT must be an integer >= 1."
+  fi
 }
 
 sudo_cmd() {
@@ -150,6 +184,112 @@ ensure_kubeconfig() {
   fi
   if ! kubectl get ns >/dev/null 2>&1; then
     fail "kubectl cannot reach a cluster. Ensure KUBECONFIG is set correctly."
+  fi
+}
+
+longhorn_available() {
+  kubectl -n longhorn-system get settings.longhorn.io default-replica-count >/dev/null 2>&1
+}
+
+patch_longhorn_setting() {
+  local name="$1"
+  local value="$2"
+
+  if ! kubectl -n longhorn-system get settings.longhorn.io "$name" >/dev/null 2>&1; then
+    log "Longhorn setting $name not found; skipping."
+    return
+  fi
+  kubectl -n longhorn-system patch settings.longhorn.io "$name" --type=merge -p "{\"value\":\"$value\"}" >/dev/null
+}
+
+sync_longhorn_reserved_capacity() {
+  local node disk reserved payload
+  while IFS=$'\t' read -r node disk reserved; do
+    [ -n "$node" ] || continue
+    [ -n "$disk" ] || continue
+    [ -n "$reserved" ] || continue
+    payload="$(printf '{"spec":{"disks":{"%s":{"storageReserved":%s}}}}' "$disk" "$reserved")"
+    if ! kubectl -n longhorn-system patch nodes.longhorn.io "$node" --type=merge -p "$payload" >/dev/null 2>&1; then
+      log "WARNING: failed to update Longhorn reserved bytes on node=$node disk=$disk"
+    fi
+  done < <(
+    python3 - "$LONGHORN_RESERVED_PERCENT" <<'PY'
+import json
+import subprocess
+import sys
+
+reserve_percent = int(sys.argv[1])
+raw = subprocess.check_output(
+    ["kubectl", "-n", "longhorn-system", "get", "nodes.longhorn.io", "-o", "json"],
+    text=True,
+)
+data = json.loads(raw)
+for item in data.get("items", []):
+    node_name = item.get("metadata", {}).get("name")
+    disk_status = item.get("status", {}).get("diskStatus", {})
+    for disk_name, disk in disk_status.items():
+        max_bytes = int(disk.get("storageMaximum") or 0)
+        if max_bytes <= 0:
+            continue
+        reserved = max_bytes * reserve_percent // 100
+        print(f"{node_name}\t{disk_name}\t{reserved}")
+PY
+  )
+}
+
+ensure_longhorn_vm_storage_class() {
+  if kubectl get storageclass "$LONGHORN_VM_STORAGE_CLASS" >/dev/null 2>&1; then
+    local provisioner existing_replicas
+    provisioner="$(kubectl get storageclass "$LONGHORN_VM_STORAGE_CLASS" -o jsonpath='{.provisioner}' 2>/dev/null || true)"
+    if [ "$provisioner" != "driver.longhorn.io" ]; then
+      fail "StorageClass $LONGHORN_VM_STORAGE_CLASS exists but is not managed by Longhorn."
+    fi
+    existing_replicas="$(kubectl get storageclass "$LONGHORN_VM_STORAGE_CLASS" -o jsonpath='{.parameters.numberOfReplicas}' 2>/dev/null || true)"
+    if [ -n "$existing_replicas" ] && [ "$existing_replicas" != "$LONGHORN_VM_REPLICA_COUNT" ]; then
+      log "Longhorn VM StorageClass $LONGHORN_VM_STORAGE_CLASS already exists with numberOfReplicas=$existing_replicas; keeping existing definition."
+    fi
+    return
+  fi
+
+  kubectl apply -f - <<EOF
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ${LONGHORN_VM_STORAGE_CLASS}
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+parameters:
+  numberOfReplicas: "${LONGHORN_VM_REPLICA_COUNT}"
+  staleReplicaTimeout: "30"
+  fromBackup: ""
+  fsType: ext4
+  dataLocality: disabled
+  unmapMarkSnapChainRemoved: ignored
+EOF
+}
+
+tune_longhorn_for_phase2() {
+  if [ "$LONGHORN_TUNE" -ne 1 ]; then
+    return
+  fi
+  if ! longhorn_available; then
+    log "Longhorn not detected; skipping Longhorn phase-2 tuning."
+    return
+  fi
+
+  log "Applying Longhorn phase-2 defaults..."
+  patch_longhorn_setting "default-replica-count" "$LONGHORN_DEFAULT_REPLICA_COUNT"
+  patch_longhorn_setting "storage-reserved-percentage-for-default-disk" "$LONGHORN_RESERVED_PERCENT"
+  patch_longhorn_setting "storage-minimal-available-percentage" "$LONGHORN_MIN_AVAILABLE_PERCENT"
+  patch_longhorn_setting "storage-over-provisioning-percentage" "$LONGHORN_OVERPROVISION_PERCENT"
+  sync_longhorn_reserved_capacity
+  ensure_longhorn_vm_storage_class
+
+  if [ -z "$VM_STORAGE_CLASS" ]; then
+    VM_STORAGE_CLASS="$LONGHORN_VM_STORAGE_CLASS"
+    log "VM_STORAGE_CLASS not set; defaulting to $VM_STORAGE_CLASS for clone-based VM disks."
   fi
 }
 
@@ -517,10 +657,12 @@ main() {
   validate_public_scheme
   validate_tls_config
   validate_preload_config
+  validate_longhorn_tuning_config
   require_apt
   install_base_packages
   install_kubectl
   ensure_kubeconfig
+  tune_longhorn_for_phase2
   detect_control_node
   detect_node_external_host
   prepare_rendered_manifests
@@ -537,6 +679,7 @@ main() {
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
+  log "Longhorn tuning enabled: $LONGHORN_TUNE"
 
   if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
     install_node
