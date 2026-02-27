@@ -73,6 +73,12 @@ class KubernetesService:
             safe_owner = "user"
         return f"vm-disk-{safe_owner[:20]}-{instance_id[:8]}"
 
+    def _instance_service_name(self, instance_id: str) -> str:
+        return f"svc-{instance_id[:8]}"
+
+    def _instance_netpol_name(self, instance_id: str, owner: str) -> str:
+        return f"{self._find_pod_name(instance_id, owner)}-egress-only"
+
     def _ensure_instance_disk_pvc(self, req: PodRequest) -> Optional[str]:
         if not req.image_source_pvc:
             return None
@@ -364,8 +370,23 @@ class KubernetesService:
 
     def delete_pod(self, instance_id: str, owner: str) -> None:
         core = self._client()
+        networking = self._networking_client()
         pod_name = self._find_pod_name(instance_id, owner)
         pvc_name = self._instance_disk_pvc_name(instance_id, owner)
+        service_name = self._instance_service_name(instance_id)
+        netpol_name = self._instance_netpol_name(instance_id, owner)
+        try:
+            core.delete_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.error("Failed to delete service %s: %s", service_name, exc)
+                raise
+        try:
+            networking.delete_namespaced_network_policy(name=netpol_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.error("Failed to delete network policy %s: %s", netpol_name, exc)
+                raise
         try:
             core.delete_namespaced_pod(
                 name=pod_name, namespace=settings.kube_namespace, grace_period_seconds=0, propagation_policy="Foreground"
