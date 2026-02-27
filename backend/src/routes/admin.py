@@ -395,6 +395,28 @@ def _copy_file_to_pvc(source_path: Path, filename: str, *, claim_name: str | Non
                         seek_blocks,
                     )
                 offset_bytes += len(chunk)
+        # Ensure writes are durably flushed before the source PVC is used as a clone parent.
+        _run(["kubectl", "exec", "-n", settings.kube_namespace, helper, "--", "sync"])
+        expected_size = source_path.stat().st_size
+        safe_filename = filename.replace("'", "'\"'\"'")
+        size_stdout = _run(
+            [
+                "kubectl",
+                "exec",
+                "-n",
+                settings.kube_namespace,
+                helper,
+                "--",
+                "/bin/sh",
+                "-c",
+                f"wc -c < '/images/{safe_filename}'",
+            ]
+        ).stdout.strip()
+        actual_size = int(size_stdout or "0")
+        if actual_size != expected_size:
+            raise RuntimeError(
+                f"copied file size mismatch for {filename}: expected {expected_size} bytes, got {actual_size} bytes"
+            )
     finally:
         _run(["kubectl", "delete", "pod", helper, "-n", settings.kube_namespace, "--ignore-not-found=true"], check=False)
 

@@ -7,6 +7,7 @@ DISK_FORMAT_ENV="${DISK_FORMAT:-}"
 OS_TYPE="${OS_TYPE:-windows}"
 MACHINE_TYPE="${MACHINE_TYPE:-q35}"
 EFI_ENABLED="${EFI_ENABLED:-false}"
+CPU_MODEL="${CPU_MODEL:-host}"
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
@@ -107,6 +108,9 @@ QEMU_ARGS=(
 # If KVM is available, add -enable-kvm
 if [[ -c /dev/kvm ]]; then
   QEMU_ARGS+=(-enable-kvm)
+elif [[ "${CPU_MODEL}" == "host" ]]; then
+  # host CPU model requires hardware acceleration; use a safe emulated model when KVM is absent.
+  CPU_MODEL="max"
 fi
 
 # Optional UEFI pflash.
@@ -121,7 +125,7 @@ fi
 
 QEMU_ARGS+=(
   -machine "${MACHINE_TYPE}"
-  -cpu host
+  -cpu "${CPU_MODEL}"
   -vga "${VGA_TYPE}"
   -serial stdio
 )

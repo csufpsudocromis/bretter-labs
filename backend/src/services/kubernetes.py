@@ -199,7 +199,8 @@ class KubernetesService:
                 )
             )
             volume_mounts.append(client.V1VolumeMount(name="kvm", mount_path="/dev/kvm"))
-        is_linux = req.os_type.lower() == "linux"
+        os_type = req.os_type.lower()
+        is_linux = os_type == "linux"
         # For Linux VHDs, convert to raw for better kernel/EFI support; Windows copies as-is.
         dest_disk = f"/data/{Path(req.image_path).name}"
         drive_if = "ide"
@@ -217,15 +218,18 @@ class KubernetesService:
             disk_format = "raw"
         elif suffix == ".vdi":
             disk_format = "vdi"
+        machine_type = settings.linux_machine_type if is_linux else settings.windows_machine_type
+        efi_enabled = settings.linux_efi_enabled if is_linux else settings.windows_efi_enabled
+        cpu_model = settings.linux_cpu_model if is_linux else settings.windows_cpu_model
         env_vars = [
             client.V1EnvVar(name="CPU_CORES", value=str(req.cpu_cores)),
             client.V1EnvVar(name="RAM_MB", value=str(req.ram_mb)),
-            client.V1EnvVar(name="OS_TYPE", value=req.os_type.lower()),
+            client.V1EnvVar(name="OS_TYPE", value=os_type),
             client.V1EnvVar(name="DRIVE_IF", value=drive_if),
             client.V1EnvVar(name="VGA_TYPE", value=vga),
-            client.V1EnvVar(name="MACHINE_TYPE", value="q35"),
-            # Linux images are UEFI; enable EFI for both OS types.
-            client.V1EnvVar(name="EFI_ENABLED", value="true"),
+            client.V1EnvVar(name="MACHINE_TYPE", value=machine_type),
+            client.V1EnvVar(name="EFI_ENABLED", value=str(efi_enabled).lower()),
+            client.V1EnvVar(name="CPU_MODEL", value=cpu_model),
         ]
         if tls_secret_name:
             env_vars.extend(
