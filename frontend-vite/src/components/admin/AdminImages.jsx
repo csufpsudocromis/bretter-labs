@@ -7,6 +7,7 @@ const AdminImages = () => {
   const [error, setError] = useState('');
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadStage, setUploadStage] = useState('idle');
   const [progress, setProgress] = useState(0);
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState('');
@@ -32,6 +33,7 @@ const AdminImages = () => {
     const formData = new FormData();
     formData.append('file', file);
     setUploading(true);
+    setUploadStage('uploading');
     setProgress(0);
     setMessage('');
     setError('');
@@ -40,17 +42,23 @@ const AdminImages = () => {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (evt) => {
           if (evt.total) {
-            setProgress(Math.round((evt.loaded / evt.total) * 100));
+            const percent = Math.min(100, Math.round((evt.loaded / evt.total) * 100));
+            setProgress(percent);
+            if (percent >= 100) {
+              setUploadStage('finalizing');
+            }
           }
         },
       });
       setFile(null);
       setProgress(0);
+      setUploadStage('idle');
       setMessage('Upload complete');
       load();
     } catch (err) {
       setError(err.response?.data?.detail || 'Upload failed');
     } finally {
+      setUploadStage('idle');
       setUploading(false);
     }
   };
@@ -98,9 +106,14 @@ const AdminImages = () => {
           <h3>Upload image</h3>
           <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button onClick={upload} disabled={!file || uploading}>
-            {uploading ? `Uploading (${progress}%)` : 'Upload'}
+            {!uploading && 'Upload'}
+            {uploading && uploadStage === 'uploading' && `Uploading (${progress}%)`}
+            {uploading && uploadStage === 'finalizing' && 'Finalizing on cluster...'}
           </button>
-          {uploading && <p>Progress: {progress}%</p>}
+          {uploading && uploadStage === 'uploading' && <p>Uploading from browser: {progress}%</p>}
+          {uploading && uploadStage === 'finalizing' && (
+            <p>Upload complete. Finalizing on cluster (copy/normalize). This can take a few minutes.</p>
+          )}
           <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
         </div>
         <div>
