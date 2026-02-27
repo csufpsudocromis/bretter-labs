@@ -22,13 +22,13 @@ class Settings(BaseSettings):
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
     kube_node_external_host: str = "10.68.48.105"
     kube_tls_secret: str = "bretter-tls"
-    # Windows images are often BIOS-era VirtualBox exports; default to BIOS + i440fx for safer boot compatibility.
-    windows_efi_enabled: bool = False
-    windows_machine_type: str = "pc"
-    windows_cpu_model: str = "qemu64"
-    # Linux images in this stack are typically UEFI-capable.
-    linux_efi_enabled: bool = True
-    linux_machine_type: str = "q35"
+    # Default Windows to UEFI/q35; can be overridden per environment.
+    windows_efi_enabled: bool = True
+    windows_machine_type: str = "q35"
+    windows_cpu_model: str = "host"
+    # Linux lab images are often BIOS-era exports; default to BIOS + i440fx.
+    linux_efi_enabled: bool = False
+    linux_machine_type: str = "pc"
     linux_cpu_model: str = "host"
     public_scheme: str = "https"
     cors_allow_http: bool = False

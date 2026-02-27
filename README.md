@@ -54,6 +54,8 @@ Optional flags:
 - `LONGHORN_OVERPROVISION_PERCENT` to set Longhorn overprovisioning percentage (default `200`).
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
+- `WINDOWS_MACHINE_TYPE` / `WINDOWS_EFI_ENABLED` / `WINDOWS_CPU_MODEL` to control Windows VM firmware/machine defaults (defaults: `q35`/`true`/`host`).
+- `LINUX_MACHINE_TYPE` / `LINUX_EFI_ENABLED` / `LINUX_CPU_MODEL` to control Linux VM firmware/machine defaults (defaults: `pc`/`false`/`host`).
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
 - `TLS_SECRET_NAME` to set the TLS secret name (default `bretter-tls`).
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to use your own certificate/key when creating the TLS secret.
@@ -91,7 +93,7 @@ Storage and runtime notes:
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 - With `VM_STORAGE_CLASS` set, uploaded/imported images also get a source PVC and VM launches use per-instance cloned PVC disks (no large init-container file copy).
 - Uploaded/imported images are normalized automatically (`.qcow`/`.qcow2` -> `.raw`, `.vhd`/`.vdi` -> `.qcow2`) for more reliable VM boot behavior.
-- Runtime defaults use BIOS+i440fx for Windows images and UEFI+q35 for Linux images; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
+- Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
 
 ## Usage

@@ -443,13 +443,16 @@ def _ensure_image_source_pvc(image_id: str, image_path: Path, size_bytes: int) -
         raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for clone-based disks")
 
     claim_name = _source_pvc_name(image_id)
+    # Always size the source PVC from the on-disk file size as a floor. Some qcow2
+    # uploads can have stale/under-reported metadata sizes, which causes short PVCs.
+    source_size_bytes = max(size_bytes, image_path.stat().st_size)
     core = kube._client()
     try:
         core.read_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
     except ApiException as exc:
         if exc.status != 404:
             raise
-        requested_gi = max(1, math.ceil(size_bytes / (1024 ** 3)))
+        requested_gi = max(1, math.ceil(source_size_bytes / (1024 ** 3)))
         body = client.V1PersistentVolumeClaim(
             metadata=client.V1ObjectMeta(
                 name=claim_name,
@@ -502,6 +505,9 @@ def _convert_image_on_pvc(filename: str, *, output_format: str, output_suffix: s
     """
     stem = Path(filename).stem
     converted_name = f"{stem}.{output_suffix}"
+    if _exists_on_pvc(converted_name):
+        # Avoid clobbering an existing normalized image with the same stem.
+        converted_name = f"{stem}-{uuid4().hex[:8]}.{output_suffix}"
     cmd = f"qemu-img convert -O {output_format} /images/{filename} /images/{converted_name} && sync"
     _with_pvc_helper(
         ["/bin/sh", "-c", cmd],
@@ -658,7 +664,10 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
                         sha256.update(chunk)
             except Exception as exc:
                 logger.error("Failed to convert image: %s", exc, exc_info=True)
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to normalize image format") from exc
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"failed to normalize image format: {exc}",
+                ) from exc
         if settings.kube_vm_storage_class:
             source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
     except HTTPException:

@@ -6,6 +6,7 @@ Creates/stops/deletes VM pods, applies egress-only NetworkPolicies, and generate
 
 import logging
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -80,6 +81,21 @@ class KubernetesService:
         pvc_name = self._instance_disk_pvc_name(req.instance_id, req.owner)
         try:
             existing = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+            # A restart can race with PVC deletion. If we reuse a claim that is terminating,
+            # the pod references a missing claim and remains Pending indefinitely.
+            if existing.metadata and existing.metadata.deletion_timestamp:
+                deadline = time.time() + 90
+                while time.time() < deadline:
+                    try:
+                        core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+                    except ApiException as check_exc:
+                        if check_exc.status == 404:
+                            break
+                        raise
+                    time.sleep(2)
+                else:
+                    raise RuntimeError(f"instance PVC {pvc_name} is still terminating")
+                raise ApiException(status=404)
             phase = (existing.status.phase or "").lower()
             if phase == "lost":
                 raise RuntimeError(f"instance PVC {pvc_name} entered Lost phase")
@@ -273,6 +289,13 @@ class KubernetesService:
                 ),
                 client.V1Toleration(
                     key="node-role.kubernetes.io/master",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+                # Worker nodes can briefly taint themselves during image clone/copy spikes.
+                # Allow VM pods to schedule so startup can complete instead of stalling Pending.
+                client.V1Toleration(
+                    key="node.kubernetes.io/disk-pressure",
                     operator="Exists",
                     effect="NoSchedule",
                 ),

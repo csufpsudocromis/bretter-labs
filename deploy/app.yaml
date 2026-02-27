@@ -121,6 +121,18 @@ spec:
               value: __RUNNER_IMAGE__
             - name: BLABS_IMAGE_PULL_SECRET
               value: ghcr-creds
+            - name: BLABS_WINDOWS_MACHINE_TYPE
+              value: __WINDOWS_MACHINE_TYPE__
+            - name: BLABS_WINDOWS_EFI_ENABLED
+              value: "__WINDOWS_EFI_ENABLED__"
+            - name: BLABS_WINDOWS_CPU_MODEL
+              value: __WINDOWS_CPU_MODEL__
+            - name: BLABS_LINUX_MACHINE_TYPE
+              value: __LINUX_MACHINE_TYPE__
+            - name: BLABS_LINUX_EFI_ENABLED
+              value: "__LINUX_EFI_ENABLED__"
+            - name: BLABS_LINUX_CPU_MODEL
+              value: __LINUX_CPU_MODEL__
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images

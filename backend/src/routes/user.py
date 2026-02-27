@@ -170,6 +170,11 @@ def start_vm(
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    if settings.kube_vm_storage_class and not image.source_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image is not prepared for clone-based storage; re-import the image from admin",
+        )
     if not image.source_pvc:
         disk_path = Path(settings.storage_root) / Path(image.filename).name
         if not disk_path.exists():
@@ -277,6 +282,11 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    if settings.kube_vm_storage_class and not image.source_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image is not prepared for clone-based storage; re-import the image from admin",
+        )
     if not image.source_pvc:
         disk_path = Path(settings.storage_root) / Path(image.filename).name
         if not disk_path.exists():

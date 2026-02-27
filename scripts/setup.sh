@@ -29,6 +29,12 @@ TLS_ENABLED="${TLS_ENABLED:-1}"
 TLS_SECRET_NAME="${TLS_SECRET_NAME:-bretter-tls}"
 TLS_CERT_FILE="${TLS_CERT_FILE:-}"
 TLS_KEY_FILE="${TLS_KEY_FILE:-}"
+WINDOWS_MACHINE_TYPE="${WINDOWS_MACHINE_TYPE:-q35}"
+WINDOWS_EFI_ENABLED="${WINDOWS_EFI_ENABLED:-true}"
+WINDOWS_CPU_MODEL="${WINDOWS_CPU_MODEL:-host}"
+LINUX_MACHINE_TYPE="${LINUX_MACHINE_TYPE:-pc}"
+LINUX_EFI_ENABLED="${LINUX_EFI_ENABLED:-false}"
+LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 
@@ -332,6 +338,7 @@ render_manifest_template() {
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath
+  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
@@ -342,6 +349,12 @@ render_manifest_template() {
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
   public_scheme="$(escape_sed_replacement "$PUBLIC_SCHEME")"
   tls_secret_name="$(escape_sed_replacement "$TLS_SECRET_NAME")"
+  windows_machine_type="$(escape_sed_replacement "$WINDOWS_MACHINE_TYPE")"
+  windows_efi_enabled="$(escape_sed_replacement "$WINDOWS_EFI_ENABLED")"
+  windows_cpu_model="$(escape_sed_replacement "$WINDOWS_CPU_MODEL")"
+  linux_machine_type="$(escape_sed_replacement "$LINUX_MACHINE_TYPE")"
+  linux_efi_enabled="$(escape_sed_replacement "$LINUX_EFI_ENABLED")"
+  linux_cpu_model="$(escape_sed_replacement "$LINUX_CPU_MODEL")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
 
@@ -356,6 +369,12 @@ render_manifest_template() {
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
     -e "s/__PUBLIC_SCHEME__/${public_scheme}/g" \
     -e "s/__TLS_SECRET_NAME__/${tls_secret_name}/g" \
+    -e "s/__WINDOWS_MACHINE_TYPE__/${windows_machine_type}/g" \
+    -e "s/__WINDOWS_EFI_ENABLED__/${windows_efi_enabled}/g" \
+    -e "s/__WINDOWS_CPU_MODEL__/${windows_cpu_model}/g" \
+    -e "s/__LINUX_MACHINE_TYPE__/${linux_machine_type}/g" \
+    -e "s/__LINUX_EFI_ENABLED__/${linux_efi_enabled}/g" \
+    -e "s/__LINUX_CPU_MODEL__/${linux_cpu_model}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     "$input" >"$output"
