@@ -98,6 +98,15 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+              ephemeral-storage: 4Gi
           env:
             - name: BLABS_KUBE_NAMESPACE
               value: __NAMESPACE__
@@ -196,6 +205,15 @@ spec:
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 443
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
           volumeMounts:
             - name: tls-cert
               mountPath: /tls

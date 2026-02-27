@@ -101,7 +101,7 @@ const AdminImages = () => {
             {uploading ? `Uploading (${progress}%)` : 'Upload'}
           </button>
           {uploading && <p>Progress: {progress}%</p>}
-          <p className="muted small">Allowed: .vhd, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
+          <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
         </div>
         <div>
           <h3>Golden Images</h3>

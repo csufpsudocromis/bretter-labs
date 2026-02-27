@@ -2,10 +2,11 @@ import hashlib
 import json
 import logging
 import math
+import shutil
 import sqlite3
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -46,9 +47,11 @@ logger = logging.getLogger(__name__)
 IMAGE_DIR = Path(settings.storage_root)
 IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024 * 1024  # 60 GB
-ALLOWED_SUFFIXES = {".vhd", ".qcow", ".qcow2", ".vdi"}
+ALLOWED_SUFFIXES = {".vhd", ".vhdx", ".qcow", ".qcow2", ".vdi"}
 RAW_CONVERSION_SUFFIXES = {".qcow", ".qcow2"}
 QCOW2_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".vdi"}
+MIN_FREE_UPLOAD_BYTES = 18 * 1024 * 1024 * 1024  # keep nodefs above kubelet disk-pressure headroom
+SOURCE_PVC_OVERHEAD_BYTES = 1024 * 1024 * 1024  # account for filesystem metadata/lost+found overhead
 
 # Reuse the runner image for helper pods so fresh/private clusters do not depend on Docker Hub pulls.
 PVC_HELPER_IMAGE = settings.runner_image or "alpine:3.19"
@@ -206,6 +209,40 @@ def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproc
     return result
 
 
+def _ensure_free_space(required_free_bytes: int, *, context: str) -> None:
+    free_bytes = shutil.disk_usage(IMAGE_DIR).free
+    if free_bytes >= required_free_bytes:
+        return
+    free_gib = free_bytes / (1024 ** 3)
+    required_gib = required_free_bytes / (1024 ** 3)
+    raise HTTPException(
+        status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+        detail=f"insufficient free storage for {context} (free={free_gib:.1f}Gi, required={required_gib:.1f}Gi)",
+    )
+
+
+def _cleanup_stale_helper_pods(max_age_minutes: int = 20) -> None:
+    try:
+        core = kube._client()
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(minutes=max_age_minutes)
+        for pod in core.list_namespaced_pod(namespace=settings.kube_namespace).items:
+            name = pod.metadata.name or ""
+            if not name.startswith("image-sync-"):
+                continue
+            phase = (pod.status.phase or "").lower()
+            created = pod.metadata.creation_timestamp
+            if phase in {"succeeded", "failed"} or (created and created < cutoff):
+                core.delete_namespaced_pod(
+                    name=name,
+                    namespace=settings.kube_namespace,
+                    grace_period_seconds=0,
+                    propagation_policy="Background",
+                )
+    except Exception:
+        logger.warning("Failed to cleanup stale image helper pods", exc_info=True)
+
+
 def _with_pvc_helper(
     command: list[str],
     *,
@@ -216,6 +253,7 @@ def _with_pvc_helper(
     helper = f"image-sync-{uuid4().hex[:8]}"
     helper_image = image or PVC_HELPER_IMAGE
     claim = claim_name or settings.kube_image_pvc
+    _cleanup_stale_helper_pods()
     pod_spec = _helper_overrides(helper_image, claim)
     try:
         _run(
@@ -277,6 +315,7 @@ def _copy_file_to_pvc(source_path: Path, filename: str, *, claim_name: str | Non
         raise FileNotFoundError(f"source file not found: {source_path}")
     helper = f"image-sync-{uuid4().hex[:8]}"
     claim = claim_name or settings.kube_image_pvc
+    _cleanup_stale_helper_pods()
     pod_spec = _helper_overrides(PVC_HELPER_IMAGE, claim)
     try:
         _run(
@@ -439,6 +478,19 @@ def _wait_for_pvc_bound(core: client.CoreV1Api, claim_name: str, timeout_seconds
     raise RuntimeError(f"timed out waiting for PVC {claim_name} to bind")
 
 
+def _wait_for_pvc_deleted(core: client.CoreV1Api, claim_name: str, timeout_seconds: int = 180) -> None:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            core.read_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return
+            raise
+        time.sleep(2)
+    raise RuntimeError(f"timed out waiting for PVC {claim_name} to delete")
+
+
 def _ensure_image_source_pvc(image_id: str, image_path: Path, size_bytes: int) -> str:
     if not settings.kube_vm_storage_class:
         raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for clone-based disks")
@@ -447,13 +499,32 @@ def _ensure_image_source_pvc(image_id: str, image_path: Path, size_bytes: int) -
     # Always size the source PVC from the on-disk file size as a floor. Some qcow2
     # uploads can have stale/under-reported metadata sizes, which causes short PVCs.
     source_size_bytes = max(size_bytes, image_path.stat().st_size)
+    required_bytes = source_size_bytes + SOURCE_PVC_OVERHEAD_BYTES
+    requested_gi = max(1, math.ceil(required_bytes / (1024 ** 3)))
     core = kube._client()
+    existing_pvc = None
     try:
-        core.read_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
+        existing_pvc = core.read_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
     except ApiException as exc:
         if exc.status != 404:
             raise
-        requested_gi = max(1, math.ceil(source_size_bytes / (1024 ** 3)))
+    if existing_pvc:
+        existing_request = None
+        if existing_pvc.spec and existing_pvc.spec.resources and existing_pvc.spec.resources.requests:
+            existing_request = existing_pvc.spec.resources.requests.get("storage")
+        existing_bytes = int(parse_quantity(existing_request)) if existing_request else 0
+        if existing_bytes < required_bytes:
+            logger.warning(
+                "Recreating source PVC %s with larger capacity (current=%s bytes, required=%s bytes)",
+                claim_name,
+                existing_bytes,
+                required_bytes,
+            )
+            core.delete_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
+            _wait_for_pvc_deleted(core, claim_name)
+            existing_pvc = None
+
+    if not existing_pvc:
         body = client.V1PersistentVolumeClaim(
             metadata=client.V1ObjectMeta(
                 name=claim_name,
@@ -659,6 +730,7 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         dest_path = IMAGE_DIR / filename
         with dest_path.open("wb") as buffer:
             while chunk := file.file.read(1024 * 1024):
+                _ensure_free_space(MIN_FREE_UPLOAD_BYTES + len(chunk), context="upload")
                 size_bytes += len(chunk)
                 if size_bytes > MAX_UPLOAD_BYTES:
                     raise HTTPException(
@@ -673,6 +745,7 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         # Normalize uploaded formats so VM boot behavior is consistent across nodes.
         if suffix in RAW_CONVERSION_SUFFIXES or suffix in QCOW2_CONVERSION_SUFFIXES:
             try:
+                _ensure_free_space(MIN_FREE_UPLOAD_BYTES + size_bytes, context="image normalization")
                 if suffix in RAW_CONVERSION_SUFFIXES:
                     converted_name = _convert_image_on_pvc(dest_path.name, output_format="raw", output_suffix="raw")
                 else:
