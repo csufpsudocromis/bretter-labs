@@ -27,6 +27,19 @@ class Image(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class ImageUploadTask(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    original_filename: str
+    filename: str
+    size_bytes: int = 0
+    status: str = "queued"
+    detail: str = ""
+    error_message: Optional[str] = None
+    image_id: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class Template(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str

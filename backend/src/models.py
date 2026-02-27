@@ -43,6 +43,19 @@ class ImageCreateResponse(ImageMeta):
     filename: str
 
 
+class ImageUploadTaskStatus(BaseModel):
+    task_id: str
+    status: str
+    original_filename: str
+    filename: str
+    size_bytes: int
+    detail: str = ""
+    error: str | None = None
+    image_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class VMTemplateCreate(BaseModel):
     name: str
     description: Optional[str] = ""

@@ -22,6 +22,19 @@ def _public_scheme() -> str:
     return scheme if scheme in {"http", "https"} else "https"
 
 
+def _require_clone_ready(image: Image) -> None:
+    if not settings.kube_vm_storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clone-based VM launch is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
+        )
+    if not image.source_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image is not prepared for clone-based storage; re-import the image from admin",
+        )
+
+
 @router.get("/templates", response_model=list[VMTemplate])
 def list_available_templates(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[VMTemplate]:
     templates = session.exec(select(Template).where(Template.enabled == True)).all()  # noqa: E712
@@ -170,15 +183,7 @@ def start_vm(
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
-    if settings.kube_vm_storage_class and not image.source_pvc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="image is not prepared for clone-based storage; re-import the image from admin",
-        )
-    if not image.source_pvc:
-        disk_path = Path(settings.storage_root) / Path(image.filename).name
-        if not disk_path.exists():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"image file not found on storage: {disk_path}")
+    _require_clone_ready(image)
 
     config = session.get(Config, 1) or Config()
     total_running = session.exec(select(Instance).where(Instance.status == "running")).all()
@@ -282,15 +287,7 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
-    if settings.kube_vm_storage_class and not image.source_pvc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="image is not prepared for clone-based storage; re-import the image from admin",
-        )
-    if not image.source_pvc:
-        disk_path = Path(settings.storage_root) / Path(image.filename).name
-        if not disk_path.exists():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"image file not found on storage: {disk_path}")
+    _require_clone_ready(image)
 
     # Ensure any old pod with the same name is removed before re-create.
     try:

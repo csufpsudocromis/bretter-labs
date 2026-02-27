@@ -79,9 +79,9 @@ class KubernetesService:
     def _instance_netpol_name(self, instance_id: str, owner: str) -> str:
         return f"{self._find_pod_name(instance_id, owner)}-egress-only"
 
-    def _ensure_instance_disk_pvc(self, req: PodRequest) -> Optional[str]:
+    def _ensure_instance_disk_pvc(self, req: PodRequest) -> str:
         if not req.image_source_pvc:
-            return None
+            raise RuntimeError("image source PVC is required for clone-based VM launch")
 
         core = self._client()
         pvc_name = self._instance_disk_pvc_name(req.instance_id, req.owner)
@@ -178,22 +178,12 @@ class KubernetesService:
             requests={"cpu": str(req.cpu_cores), "memory": f"{req.ram_mb}Mi"},
         )
         volume_mounts = [client.V1VolumeMount(name="data", mount_path="/data", read_only=False)]
-        if instance_disk_pvc:
-            volumes = [
-                client.V1Volume(
-                    name="data",
-                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=instance_disk_pvc),
-                )
-            ]
-        else:
-            volume_mounts.insert(0, client.V1VolumeMount(name="images", mount_path="/images", read_only=True))
-            volumes = [
-                client.V1Volume(
-                    name="images",
-                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=settings.kube_image_pvc),
-                ),
-                client.V1Volume(name="data", empty_dir=client.V1EmptyDirVolumeSource()),
-            ]
+        volumes = [
+            client.V1Volume(
+                name="data",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=instance_disk_pvc),
+            )
+        ]
         if tls_secret_name:
             volumes.append(
                 client.V1Volume(
@@ -223,15 +213,13 @@ class KubernetesService:
             volume_mounts.append(client.V1VolumeMount(name="kvm", mount_path="/dev/kvm"))
         os_type = req.os_type.lower()
         is_linux = os_type == "linux"
-        # For Linux VHDs, convert to raw for better kernel/EFI support; Windows copies as-is.
+        # Clone-backed instance disks are mounted at /data; Linux defaults to virtio for faster IO.
         dest_disk = f"/data/{Path(req.image_path).name}"
-        drive_if = "ide"
+        drive_if = "virtio" if is_linux else "ide"
         vga = "std" if is_linux else "qxl"
         suffix = Path(req.image_path).suffix.lower()
         # Use the native disk format for both Linux and Windows.
         disk_format = None
-        if is_linux:
-            drive_if = "ide"
         if suffix in {".vhd", ".vhdx"}:
             disk_format = "vpc"
         elif suffix in {".qcow", ".qcow2"}:
@@ -309,18 +297,6 @@ class KubernetesService:
         }
         if settings.image_pull_secret:
             spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
-        if not instance_disk_pvc:
-            init_cmd = f"cp /images/{req.image_path} {dest_disk} && sync"
-            init_container = client.V1Container(
-                name="prepare-disk",
-                image="busybox:1.36",
-                command=["/bin/sh", "-c", init_cmd],
-                volume_mounts=[
-                    client.V1VolumeMount(name="images", mount_path="/images", read_only=True),
-                    client.V1VolumeMount(name="data", mount_path="/data", read_only=False),
-                ],
-            )
-            spec_kwargs["init_containers"] = [init_container]
         if settings.kube_runtime_class:
             spec_kwargs["runtime_class_name"] = settings.kube_runtime_class
         if settings.image_pull_secret:

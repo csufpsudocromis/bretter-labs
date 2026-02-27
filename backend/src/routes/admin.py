@@ -5,6 +5,7 @@ import math
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,12 +20,13 @@ from kubernetes.utils import parse_quantity
 
 from ..auth import hash_password, require_admin, revoke_tokens
 from ..config import settings
-from ..db import get_session
+from ..db import get_session, session_scope
 from ..models import (
     ConcurrencySettings,
     IdleTimeoutSettings,
     ImageCreateResponse,
     ImageMeta,
+    ImageUploadTaskStatus,
     RuntimeSettingsRead,
     SiteSettings,
     SSOSettings,
@@ -39,7 +41,7 @@ from ..models import (
     VMTemplateUpdate,
 )
 from ..services.kubernetes import kube
-from ..tables import Config, Image, Instance, Template, User
+from ..tables import Config, Image, ImageUploadTask, Instance, Template, User
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 logger = logging.getLogger(__name__)
@@ -194,6 +196,161 @@ def _ensure_image_columns() -> None:
 _ensure_config_columns()
 _ensure_template_columns()
 _ensure_image_columns()
+
+
+def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
+    return ImageUploadTaskStatus(
+        task_id=task.id,
+        status=task.status,
+        original_filename=task.original_filename,
+        filename=task.filename,
+        size_bytes=task.size_bytes,
+        detail=task.detail or "",
+        error=task.error_message,
+        image_id=task.image_id,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+    )
+
+
+def _update_upload_task(
+    task_id: str,
+    *,
+    status: str | None = None,
+    detail: str | None = None,
+    error_message: str | None = None,
+    image_id: str | None = None,
+    filename: str | None = None,
+    size_bytes: int | None = None,
+) -> None:
+    with session_scope() as session:
+        task = session.get(ImageUploadTask, task_id)
+        if not task:
+            return
+        if status is not None:
+            task.status = status
+        if detail is not None:
+            task.detail = detail
+        if error_message is not None:
+            task.error_message = error_message
+        if image_id is not None:
+            task.image_id = image_id
+        if filename is not None:
+            task.filename = filename
+        if size_bytes is not None:
+            task.size_bytes = size_bytes
+        task.updated_at = datetime.utcnow()
+        session.add(task)
+        session.commit()
+
+
+def _finalize_upload_task(
+    task_id: str,
+    *,
+    image_id: str,
+    initial_filename: str,
+    initial_suffix: str,
+    initial_size_bytes: int,
+) -> None:
+    filename = initial_filename
+    size_bytes = initial_size_bytes
+    dest_path = IMAGE_DIR / filename
+    source_pvc = None
+    try:
+        if not settings.kube_vm_storage_class:
+            raise RuntimeError("clone-based storage is not configured (BLABS_KUBE_VM_STORAGE_CLASS)")
+
+        _update_upload_task(task_id, status="finalizing", detail="Preparing image")
+
+        if initial_suffix in RAW_CONVERSION_SUFFIXES or initial_suffix in QCOW2_CONVERSION_SUFFIXES:
+            _ensure_free_space(MIN_FREE_UPLOAD_BYTES + size_bytes, context="image normalization")
+            _update_upload_task(task_id, status="finalizing", detail="Normalizing image format on cluster storage")
+            if initial_suffix in RAW_CONVERSION_SUFFIXES:
+                filename = _convert_image_on_pvc(dest_path.name, output_format="raw", output_suffix="raw")
+            else:
+                filename = _convert_image_on_pvc(dest_path.name, output_format="qcow2", output_suffix="qcow2")
+            dest_path = IMAGE_DIR / filename
+            if not dest_path.exists():
+                raise RuntimeError(f"normalized image missing on storage: {filename}")
+
+        _update_upload_task(task_id, status="finalizing", detail="Calculating checksum")
+        sha256 = hashlib.sha256()
+        size_bytes = 0
+        with dest_path.open("rb") as infile:
+            while chunk := infile.read(1024 * 1024):
+                size_bytes += len(chunk)
+                sha256.update(chunk)
+
+        _update_upload_task(
+            task_id,
+            status="finalizing",
+            filename=filename,
+            size_bytes=size_bytes,
+            detail="Preparing clone source PVC",
+        )
+        source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
+
+        with session_scope() as session:
+            record = Image(
+                id=image_id,
+                name=filename,
+                filename=filename,
+                source_pvc=source_pvc,
+                checksum=sha256.hexdigest(),
+                size_bytes=size_bytes,
+                created_at=datetime.utcnow(),
+            )
+            session.add(record)
+            session.commit()
+
+        _update_upload_task(
+            task_id,
+            status="completed",
+            filename=filename,
+            size_bytes=size_bytes,
+            image_id=image_id,
+            detail="Image ready",
+            error_message="",
+        )
+    except Exception as exc:
+        logger.error("Image upload finalize failed for task %s: %s", task_id, exc, exc_info=True)
+        if source_pvc:
+            try:
+                kube._client().delete_namespaced_persistent_volume_claim(
+                    name=source_pvc,
+                    namespace=settings.kube_namespace,
+                )
+            except Exception:
+                logger.warning("Failed to cleanup source PVC %s after upload failure", source_pvc, exc_info=True)
+        _update_upload_task(
+            task_id,
+            status="failed",
+            detail="Finalize failed",
+            error_message=str(exc),
+        )
+
+
+def _start_upload_finalize_task(
+    task_id: str,
+    *,
+    image_id: str,
+    initial_filename: str,
+    initial_suffix: str,
+    initial_size_bytes: int,
+) -> None:
+    worker = threading.Thread(
+        target=_finalize_upload_task,
+        kwargs={
+            "task_id": task_id,
+            "image_id": image_id,
+            "initial_filename": initial_filename,
+            "initial_suffix": initial_suffix,
+            "initial_size_bytes": initial_size_bytes,
+        },
+        daemon=True,
+        name=f"img-finalize-{task_id[:8]}",
+    )
+    worker.start()
 
 
 def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
@@ -714,18 +871,22 @@ def remove_user(username: str, session: Session = Depends(get_session)) -> None:
     session.commit()
 
 
-@router.post("/images", response_model=ImageCreateResponse, status_code=status.HTTP_201_CREATED)
-def upload_image(file: UploadFile = File(...), session: Session = Depends(get_session)) -> ImageCreateResponse:
+@router.post("/images", response_model=ImageUploadTaskStatus, status_code=status.HTTP_202_ACCEPTED)
+def upload_image(file: UploadFile = File(...), session: Session = Depends(get_session)) -> ImageUploadTaskStatus:
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filename required")
+    if not settings.kube_vm_storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clone-based VM storage is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
+        )
     suffix = Path(file.filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
-    sha256 = hashlib.sha256()
     size_bytes = 0
     filename = Path(file.filename).name
+    task_id = str(uuid4())
     image_id = str(uuid4())
-    source_pvc = None
     try:
         dest_path = IMAGE_DIR / filename
         with dest_path.open("wb") as buffer:
@@ -738,35 +899,9 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
                         detail="image too large (max 60GB)",
                     )
                 buffer.write(chunk)
-                sha256.update(chunk)
         if size_bytes == 0:
             dest_path.unlink(missing_ok=True)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
-        # Normalize uploaded formats so VM boot behavior is consistent across nodes.
-        if suffix in RAW_CONVERSION_SUFFIXES or suffix in QCOW2_CONVERSION_SUFFIXES:
-            try:
-                _ensure_free_space(MIN_FREE_UPLOAD_BYTES + size_bytes, context="image normalization")
-                if suffix in RAW_CONVERSION_SUFFIXES:
-                    converted_name = _convert_image_on_pvc(dest_path.name, output_format="raw", output_suffix="raw")
-                else:
-                    converted_name = _convert_image_on_pvc(dest_path.name, output_format="qcow2", output_suffix="qcow2")
-                filename = converted_name
-                dest_path = IMAGE_DIR / converted_name
-                # Recompute checksum/size from converted image.
-                sha256 = hashlib.sha256()
-                size_bytes = 0
-                with dest_path.open("rb") as infile:
-                    while chunk := infile.read(1024 * 1024):
-                        size_bytes += len(chunk)
-                        sha256.update(chunk)
-            except Exception as exc:
-                logger.error("Failed to convert image: %s", exc, exc_info=True)
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"failed to normalize image format: {exc}",
-                ) from exc
-        if settings.kube_vm_storage_class:
-            source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
     except HTTPException:
         raise
     except Exception as exc:
@@ -776,29 +911,48 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     if size_bytes == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
 
-    record = Image(
-        id=image_id,
-        name=filename,
+    task = ImageUploadTask(
+        id=task_id,
+        original_filename=Path(file.filename).name,
         filename=filename,
-        source_pvc=source_pvc,
-        checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
+        status="finalizing",
+        detail="Upload complete; finalizing on cluster storage",
+        error_message=None,
+        image_id=None,
         created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
     )
-    session.add(record)
+    session.add(task)
     session.commit()
-    return ImageCreateResponse(
-        id=record.id,
-        name=record.name,
-        filename=record.filename,
-        checksum=record.checksum,
-        size_bytes=record.size_bytes,
-        created_at=record.created_at,
+    session.refresh(task)
+
+    _start_upload_finalize_task(
+        task_id=task_id,
+        image_id=image_id,
+        initial_filename=filename,
+        initial_suffix=suffix,
+        initial_size_bytes=size_bytes,
     )
+
+    return _upload_task_out(task)
+
+
+@router.get("/images/upload-tasks/{task_id}", response_model=ImageUploadTaskStatus)
+def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> ImageUploadTaskStatus:
+    task = session.get(ImageUploadTask, task_id)
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
+    return _upload_task_out(task)
 
 
 @router.post("/images/import", response_model=ImageCreateResponse, status_code=status.HTTP_201_CREATED)
 def import_image(payload: ImageImport, session: Session = Depends(get_session)) -> ImageCreateResponse:
+    if not settings.kube_vm_storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clone-based VM storage is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
+        )
     dest_path = IMAGE_DIR / Path(payload.filename).name
     if not dest_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found on storage")
@@ -838,11 +992,10 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
             _validate_file_on_pvc(dest_path.name)
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"validation failed: {exc}") from exc
-    if settings.kube_vm_storage_class:
-        try:
-            source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
-        except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc provision failed: {exc}") from exc
+    try:
+        source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc provision failed: {exc}") from exc
 
     record = Image(
         id=image_id,
@@ -975,9 +1128,10 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
     if not image.source_pvc:
-        src_path = IMAGE_DIR / image.filename
-        if not src_path.exists():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image file missing on storage")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image is not ready for clone-based launch; re-import or re-upload the image",
+        )
     record = Template(
         id=str(uuid4()),
         name=payload.name,
@@ -1048,6 +1202,11 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         image = session.get(Image, payload.image_id)
         if not image:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+        if not image.source_pvc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="image is not ready for clone-based launch; re-import or re-upload the image",
+            )
         record.image_id = payload.image_id
     if payload.cpu_cores is not None:
         record.cpu_cores = payload.cpu_cores

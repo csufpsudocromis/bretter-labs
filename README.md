@@ -98,9 +98,10 @@ Storage and runtime notes:
 - Backend DB uses `backend-data` hostPath on the selected control node.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
-- With `VM_STORAGE_CLASS` set, uploaded/imported images also get a source PVC and VM launches use per-instance cloned PVC disks (no large init-container file copy).
+- `VM_STORAGE_CLASS` is required for VM launch. Uploaded/imported images get a source PVC and all VM launches use per-instance cloned PVC disks (no init-container file copy path).
 - Uploaded/imported images are normalized automatically (`.qcow`/`.qcow2` -> `.raw`, `.vhd`/`.vhdx`/`.vdi` -> `.qcow2`) for more reliable VM boot behavior.
-- Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
+- Image uploads return quickly after browser transfer and continue as an async finalize task (normalize/checksum/source-PVC). The UI shows "Finalizing on cluster" and polls task status.
+- Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx with `virtio` disk bus for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
 
 ## Usage

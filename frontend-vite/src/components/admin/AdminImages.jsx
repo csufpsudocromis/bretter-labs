@@ -9,6 +9,8 @@ const AdminImages = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadStage, setUploadStage] = useState('idle');
   const [progress, setProgress] = useState(0);
+  const [uploadTaskId, setUploadTaskId] = useState('');
+  const [uploadDetail, setUploadDetail] = useState('');
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editFilename, setEditFilename] = useState('');
@@ -28,6 +30,24 @@ const AdminImages = () => {
     load();
   }, []);
 
+  const sleep = (ms) =>
+    new Promise((resolve) => {
+      window.setTimeout(resolve, ms);
+    });
+
+  const waitForUploadTask = async (taskId) => {
+    for (;;) {
+      const res = await api.get(`/admin/images/upload-tasks/${taskId}`);
+      const task = res.data;
+      setUploadDetail(task.detail || '');
+      if (task.status === 'completed') return task;
+      if (task.status === 'failed') {
+        throw new Error(task.error || 'Upload finalize failed');
+      }
+      await sleep(2000);
+    }
+  };
+
   const upload = async () => {
     if (!file) return;
     const formData = new FormData();
@@ -35,10 +55,12 @@ const AdminImages = () => {
     setUploading(true);
     setUploadStage('uploading');
     setProgress(0);
+    setUploadTaskId('');
+    setUploadDetail('');
     setMessage('');
     setError('');
     try {
-      await api.post('/admin/images', formData, {
+      const kickoff = await api.post('/admin/images', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (evt) => {
           if (evt.total) {
@@ -50,13 +72,23 @@ const AdminImages = () => {
           }
         },
       });
+      const taskId = kickoff.data?.task_id;
+      if (!taskId) {
+        throw new Error('Upload task did not start');
+      }
+      setUploadTaskId(taskId);
+      setUploadStage('finalizing');
+      setUploadDetail(kickoff.data?.detail || 'Finalizing on cluster storage');
+      await waitForUploadTask(taskId);
       setFile(null);
       setProgress(0);
       setUploadStage('idle');
+      setUploadTaskId('');
+      setUploadDetail('');
       setMessage('Upload complete');
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Upload failed');
+      setError(err.response?.data?.detail || err.message || 'Upload failed');
     } finally {
       setUploadStage('idle');
       setUploading(false);
@@ -112,7 +144,11 @@ const AdminImages = () => {
           </button>
           {uploading && uploadStage === 'uploading' && <p>Uploading from browser: {progress}%</p>}
           {uploading && uploadStage === 'finalizing' && (
-            <p>Upload complete. Finalizing on cluster (copy/normalize). This can take a few minutes.</p>
+            <p>
+              Upload complete. Finalizing on cluster (copy/normalize). This can take a few minutes.
+              {uploadDetail ? ` ${uploadDetail}` : ''}
+              {uploadTaskId ? ` (task ${uploadTaskId.slice(0, 8)})` : ''}
+            </p>
           )}
           <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
         </div>
