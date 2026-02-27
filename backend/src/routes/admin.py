@@ -50,7 +50,8 @@ ALLOWED_SUFFIXES = {".vhd", ".qcow", ".qcow2", ".vdi"}
 RAW_CONVERSION_SUFFIXES = {".qcow", ".qcow2"}
 QCOW2_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".vdi"}
 
-PVC_HELPER_IMAGE = "alpine:3.19"
+# Reuse the runner image for helper pods so fresh/private clusters do not depend on Docker Hub pulls.
+PVC_HELPER_IMAGE = settings.runner_image or "alpine:3.19"
 POD_READY_WAIT_SECONDS = 120
 POD_READY_SLEEP = 2
 
@@ -467,7 +468,21 @@ def _ensure_image_source_pvc(image_id: str, image_path: Path, size_bytes: int) -
         core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
         _wait_for_pvc_bound(core, claim_name)
 
-    if not _exists_on_pvc(image_path.name, claim_name=claim_name):
+    expected_size = image_path.stat().st_size
+    copy_needed = True
+    if _exists_on_pvc(image_path.name, claim_name=claim_name):
+        existing_size = _pvc_file_size(image_path.name, claim_name=claim_name)
+        if existing_size == expected_size:
+            copy_needed = False
+        else:
+            logger.warning(
+                "Refreshing source image %s in PVC %s due size mismatch (pvc=%s, host=%s)",
+                image_path.name,
+                claim_name,
+                existing_size,
+                expected_size,
+            )
+    if copy_needed:
         _copy_file_to_pvc(image_path, image_path.name, claim_name=claim_name)
     return claim_name
 
@@ -497,6 +512,15 @@ def _exists_on_pvc(filename: str, *, claim_name: str | None = None) -> bool:
         return True
     except Exception:
         return False
+
+
+def _pvc_file_size(filename: str, *, claim_name: str | None = None) -> int:
+    safe_filename = filename.replace("'", "'\"'\"'")
+    result = _with_pvc_helper(
+        ["/bin/sh", "-c", f"wc -c < '/images/{safe_filename}'"],
+        claim_name=claim_name,
+    )
+    return int((result.stdout or "0").strip() or "0")
 
 
 def _convert_image_on_pvc(filename: str, *, output_format: str, output_suffix: str) -> str:
