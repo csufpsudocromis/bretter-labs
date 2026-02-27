@@ -24,6 +24,12 @@ LONGHORN_DEFAULT_REPLICA_COUNT="${LONGHORN_DEFAULT_REPLICA_COUNT:-2}"
 LONGHORN_RESERVED_PERCENT="${LONGHORN_RESERVED_PERCENT:-10}"
 LONGHORN_MIN_AVAILABLE_PERCENT="${LONGHORN_MIN_AVAILABLE_PERCENT:-5}"
 LONGHORN_OVERPROVISION_PERCENT="${LONGHORN_OVERPROVISION_PERCENT:-200}"
+ENABLE_AUTOCLEANUP="${ENABLE_AUTOCLEANUP:-1}"
+AUTOCLEANUP_SCHEDULE="${AUTOCLEANUP_SCHEDULE:-*/15 * * * *}"
+AUTOCLEANUP_HELPER_MAX_AGE_MINUTES="${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES:-30}"
+AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES="${AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES:-60}"
+SETUP_MIN_FREE_GIB="${SETUP_MIN_FREE_GIB:-25}"
+SETUP_WARN_FREE_GIB="${SETUP_WARN_FREE_GIB:-40}"
 PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
 TLS_ENABLED="${TLS_ENABLED:-1}"
 TLS_SECRET_NAME="${TLS_SECRET_NAME:-bretter-tls}"
@@ -98,6 +104,38 @@ validate_longhorn_tuning_config() {
   fi
   if ! is_uint "$LONGHORN_OVERPROVISION_PERCENT" || [ "$LONGHORN_OVERPROVISION_PERCENT" -lt 1 ]; then
     fail "LONGHORN_OVERPROVISION_PERCENT must be an integer >= 1."
+  fi
+}
+
+validate_autocleanup_config() {
+  case "$ENABLE_AUTOCLEANUP" in
+    0|1) ;;
+    *) fail "ENABLE_AUTOCLEANUP must be either 0 or 1." ;;
+  esac
+
+  if [ "$ENABLE_AUTOCLEANUP" -eq 0 ]; then
+    return
+  fi
+  if [ -z "$AUTOCLEANUP_SCHEDULE" ]; then
+    fail "AUTOCLEANUP_SCHEDULE cannot be empty when ENABLE_AUTOCLEANUP=1."
+  fi
+  if ! is_uint "$AUTOCLEANUP_HELPER_MAX_AGE_MINUTES" || [ "$AUTOCLEANUP_HELPER_MAX_AGE_MINUTES" -lt 1 ]; then
+    fail "AUTOCLEANUP_HELPER_MAX_AGE_MINUTES must be an integer >= 1."
+  fi
+  if ! is_uint "$AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES" || [ "$AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES" -lt 1 ]; then
+    fail "AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES must be an integer >= 1."
+  fi
+}
+
+validate_storage_guard_config() {
+  if ! is_uint "$SETUP_MIN_FREE_GIB" || [ "$SETUP_MIN_FREE_GIB" -lt 1 ]; then
+    fail "SETUP_MIN_FREE_GIB must be an integer >= 1."
+  fi
+  if ! is_uint "$SETUP_WARN_FREE_GIB" || [ "$SETUP_WARN_FREE_GIB" -lt 1 ]; then
+    fail "SETUP_WARN_FREE_GIB must be an integer >= 1."
+  fi
+  if [ "$SETUP_WARN_FREE_GIB" -lt "$SETUP_MIN_FREE_GIB" ]; then
+    fail "SETUP_WARN_FREE_GIB must be >= SETUP_MIN_FREE_GIB."
   fi
 }
 
@@ -325,6 +363,50 @@ detect_node_external_host() {
   if [ -z "$NODE_EXTERNAL_HOST" ]; then
     fail "Could not determine NODE_EXTERNAL_HOST from node $CONTROL_NODE."
   fi
+}
+
+check_free_space_guard() {
+  local path="$1"
+  local label="$2"
+  local avail_kib avail_gib
+
+  if [ ! -e "$path" ]; then
+    return
+  fi
+
+  avail_kib="$(df -Pk "$path" | awk 'NR==2 {print $4}')"
+  avail_gib=$((avail_kib / 1024 / 1024))
+
+  if [ "$avail_gib" -lt "$SETUP_MIN_FREE_GIB" ]; then
+    fail "${label} is low on free space (${avail_gib}Gi available, minimum ${SETUP_MIN_FREE_GIB}Gi)."
+  fi
+  if [ "$avail_gib" -lt "$SETUP_WARN_FREE_GIB" ]; then
+    log "WARNING: ${label} free space is low (${avail_gib}Gi available)."
+  fi
+}
+
+warn_if_diskpressure_nodes() {
+  local pressured
+  pressured="$(
+    kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="DiskPressure")].status}{"\n"}{end}' \
+      | awk '$2=="True"{print $1}' \
+      | xargs || true
+  )"
+  if [ -n "$pressured" ]; then
+    log "WARNING: nodes currently reporting DiskPressure: $pressured"
+  fi
+}
+
+run_storage_preflight_checks() {
+  log "Running storage preflight checks..."
+  check_free_space_guard "/" "root filesystem (/)"
+  check_free_space_guard "/var/lib" "/var/lib"
+  if [ -d "$GOLDEN_IMAGES_HOSTPATH" ]; then
+    check_free_space_guard "$GOLDEN_IMAGES_HOSTPATH" "golden image storage path"
+  else
+    check_free_space_guard "$(dirname "$GOLDEN_IMAGES_HOSTPATH")" "golden image storage parent path"
+  fi
+  warn_if_diskpressure_nodes
 }
 
 escape_sed_replacement() {
@@ -648,6 +730,132 @@ ensure_pull_secret() {
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
+apply_cleanup_automation() {
+  if [ "$ENABLE_AUTOCLEANUP" -ne 1 ]; then
+    log "Skipping cleanup automation (ENABLE_AUTOCLEANUP=0)."
+    return
+  fi
+
+  log "Applying cleanup automation CronJob (schedule: $AUTOCLEANUP_SCHEDULE)"
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bretter-maintenance
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bretter-maintenance
+  namespace: ${NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bretter-maintenance
+  namespace: ${NAMESPACE}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bretter-maintenance
+subjects:
+  - kind: ServiceAccount
+    name: bretter-maintenance
+    namespace: ${NAMESPACE}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-cleanup
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${AUTOCLEANUP_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: bretter-maintenance
+          nodeSelector:
+            kubernetes.io/hostname: ${CONTROL_NODE}
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: cleanup
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/bash
+                - -lc
+                - |
+                  set -euo pipefail
+                  NS="${NAMESPACE}"
+                  HELPER_MAX_MINUTES=${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES}
+                  FINISHED_MAX_MINUTES=${AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES}
+                  now_epoch="$(date +%s)"
+
+                  while IFS='|' read -r name phase created; do
+                    [ -n "\$name" ] || continue
+                    created_epoch="\$now_epoch"
+                    if [ -n "\$created" ]; then
+                      parsed="\$(date -d "\$created" +%s 2>/dev/null || true)"
+                      if [ -n "\$parsed" ]; then
+                        created_epoch="\$parsed"
+                      fi
+                    fi
+                    age_min=\$(( (now_epoch - created_epoch) / 60 ))
+
+                    if [[ "\$name" == image-sync-* ]]; then
+                      if [[ "\$phase" == "Failed" || "\$phase" == "Succeeded" ]]; then
+                        kubectl -n "\$NS" delete pod "\$name" --ignore-not-found=true >/dev/null || true
+                        continue
+                      fi
+                      if [[ "\$phase" == "Running" && "\$age_min" -ge "\$HELPER_MAX_MINUTES" ]]; then
+                        kubectl -n "\$NS" delete pod "\$name" --ignore-not-found=true >/dev/null || true
+                        continue
+                      fi
+                    fi
+
+                    if [[ "\$phase" == "Failed" || "\$phase" == "Succeeded" ]]; then
+                      if [ "\$age_min" -ge "\$FINISHED_MAX_MINUTES" ]; then
+                        kubectl -n "\$NS" delete pod "\$name" --ignore-not-found=true >/dev/null || true
+                      fi
+                    fi
+                  done < <(
+                    kubectl -n "\$NS" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"|"}{.metadata.creationTimestamp}{"\n"}{end}'
+                  )
+
+                  for svc in \$(kubectl -n "\$NS" get svc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep '^svc-' || true); do
+                    pod="\$(kubectl -n "\$NS" get svc "\$svc" -o jsonpath='{.spec.selector.app}' 2>/dev/null || true)"
+                    if [ -z "\$pod" ] || ! kubectl -n "\$NS" get pod "\$pod" >/dev/null 2>&1; then
+                      kubectl -n "\$NS" delete svc "\$svc" --ignore-not-found=true >/dev/null || true
+                    fi
+                  done
+
+                  for np in \$(kubectl -n "\$NS" get netpol -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep '^vm-' || true); do
+                    app="\$(kubectl -n "\$NS" get netpol "\$np" -o jsonpath='{.spec.podSelector.matchLabels.app}' 2>/dev/null || true)"
+                    if [ -z "\$app" ] || ! kubectl -n "\$NS" get pod "\$app" >/dev/null 2>&1; then
+                      kubectl -n "\$NS" delete netpol "\$np" --ignore-not-found=true >/dev/null || true
+                    fi
+                  done
+EOF
+}
+
 apply_manifests() {
   log "Ensuring namespace $NAMESPACE"
   kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
@@ -656,6 +864,7 @@ apply_manifests() {
   ensure_golden_images_claim
   reconcile_backend_data_pv
   ensure_pull_secret
+  apply_cleanup_automation
 
   if [ -f "$ROOT_DIR/runner/spice-embed.html" ]; then
     log "Updating spice-embed ConfigMap"
@@ -677,6 +886,8 @@ main() {
   validate_tls_config
   validate_preload_config
   validate_longhorn_tuning_config
+  validate_autocleanup_config
+  validate_storage_guard_config
   require_apt
   install_base_packages
   install_kubectl
@@ -699,6 +910,9 @@ main() {
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
+  log "Cleanup automation enabled: $ENABLE_AUTOCLEANUP (schedule: $AUTOCLEANUP_SCHEDULE)"
+  log "Storage guard thresholds: warn<${SETUP_WARN_FREE_GIB}Gi, fail<${SETUP_MIN_FREE_GIB}Gi"
+  run_storage_preflight_checks
 
   if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
     install_node

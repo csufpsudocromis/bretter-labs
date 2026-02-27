@@ -52,6 +52,10 @@ Optional flags:
 - `LONGHORN_RESERVED_PERCENT` to reserve per-node Longhorn disk capacity (default `10`).
 - `LONGHORN_MIN_AVAILABLE_PERCENT` to set Longhorn minimal available capacity threshold (default `5`).
 - `LONGHORN_OVERPROVISION_PERCENT` to set Longhorn overprovisioning percentage (default `200`).
+- `ENABLE_AUTOCLEANUP=1` (default) to install/update a `bretter-cleanup` CronJob in the app namespace.
+- `AUTOCLEANUP_SCHEDULE` to control cleanup CronJob cadence (default `*/15 * * * *`).
+- `AUTOCLEANUP_HELPER_MAX_AGE_MINUTES` to cull stale `image-sync-*` helper pods (default `30`).
+- `AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES` to cull old `Failed`/`Succeeded` pods (default `60`).
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `WINDOWS_MACHINE_TYPE` / `WINDOWS_EFI_ENABLED` / `WINDOWS_CPU_MODEL` to control Windows VM firmware/machine defaults (defaults: `q35`/`true`/`host`).
@@ -61,11 +65,14 @@ Optional flags:
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to use your own certificate/key when creating the TLS secret.
 - `BACKEND_DATA_HOSTPATH` to override backend DB hostPath (default `/var/lib/bretter-labs/backend-data`).
 - `GOLDEN_IMAGES_HOSTPATH` to override golden image hostPath (default `/var/lib/bretter-labs/golden-images`).
+- `SETUP_WARN_FREE_GIB` to set setup-time low-space warning threshold (default `40` GiB free).
+- `SETUP_MIN_FREE_GIB` to set setup-time low-space hard-fail threshold (default `25` GiB free).
 - `APPLY_GOLDEN_HOSTPATH=1` (default) to create `golden-images` hostPath PV/PVC on control node.
 - `APPLY_GOLDEN_PVC=1` to apply `deploy/golden-pvc.yaml` (use this for RWX storage classes).
 
 The script now renders manifests dynamically for namespace/control-node/IP/image values, and applies control-plane tolerations for control-node scheduling.
 It also creates a placeholder `ghcr-creds` secret by default so fresh clusters do not fail on a missing imagePullSecret.
+It also runs storage preflight checks and can install a cleanup CronJob to remove stale helper pods/orphan VM services.
 
 If you use prebuilt public images, you can skip local builds with `LOAD_LOCAL_IMAGES=0`. If your registry is private, use `CREATE_PULL_SECRET=1`.
 
