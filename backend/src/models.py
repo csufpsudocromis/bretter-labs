@@ -66,6 +66,7 @@ class VMTemplateCreate(BaseModel):
     auto_delete_minutes: int = Field(..., ge=1, le=30)
     idle_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     preclone_pool_size: int = Field(default=0, ge=0, le=50)
+    preclone_pool_max: int = Field(default=0, ge=0, le=50)
     enabled: bool = False
     network_mode: str = Field(
         default="bridge", pattern="^(bridge|host|none|unrestricted|isolated)$"
@@ -82,6 +83,7 @@ class VMTemplateUpdate(BaseModel):
     auto_delete_minutes: Optional[int] = Field(default=None, ge=1, le=30)
     idle_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     preclone_pool_size: Optional[int] = Field(default=None, ge=0, le=50)
+    preclone_pool_max: Optional[int] = Field(default=None, ge=0, le=50)
     enabled: Optional[bool] = None
     network_mode: Optional[str] = Field(
         default=None, pattern="^(bridge|host|none|unrestricted|isolated)$"
@@ -99,6 +101,7 @@ class VMTemplate(BaseModel):
     auto_delete_minutes: int
     idle_timeout_minutes: int
     preclone_pool_size: int = 0
+    preclone_pool_max: int = 0
     enabled: bool
     network_mode: str = "bridge"
     created_at: datetime

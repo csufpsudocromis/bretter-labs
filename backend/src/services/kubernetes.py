@@ -5,6 +5,7 @@ Creates/stops/deletes VM pods, applies egress-only NetworkPolicies, and generate
 """
 
 import logging
+import math
 import re
 import time
 from dataclasses import dataclass
@@ -175,16 +176,45 @@ class KubernetesService:
                 continue
         return None
 
+    def _autoscaled_warm_pool_target(self, min_pool: int, max_pool: int, recent_launches: int) -> int:
+        if max_pool < min_pool:
+            max_pool = min_pool
+        if max_pool <= min_pool:
+            return min_pool
+        if not settings.warm_pool_autoscale_enabled:
+            return min_pool
+        window_minutes = max(1, int(settings.warm_pool_window_minutes))
+        refill_minutes = max(1, int(settings.warm_pool_refill_minutes))
+        safety_factor = max(1.0, float(settings.warm_pool_safety_factor))
+        launches_per_minute = float(recent_launches) / float(window_minutes)
+        demand_target = int(math.ceil(launches_per_minute * refill_minutes * safety_factor))
+        return max(min_pool, min(max_pool, demand_target))
+
     def ensure_warm_pool(self, template_id: str, image_source_pvc: str, desired: int) -> None:
-        if desired <= 0:
-            return
         core = self._client()
         selector = f"blabs-pool=true,template-id={template_id},pool-state=ready"
-        existing_ready = core.list_namespaced_persistent_volume_claim(
+        ready_pool = core.list_namespaced_persistent_volume_claim(
             namespace=settings.kube_namespace,
             label_selector=selector,
         ).items
-        current = len(existing_ready)
+        # Include Pending/Bound "ready" clones in current so we don't over-provision while clones bind.
+        current = len([pvc for pvc in ready_pool if not (pvc.metadata and pvc.metadata.deletion_timestamp)])
+        if current > desired:
+            # Trim oldest ready clones first; claimed clones are not selected by this label set.
+            ordered = sorted(
+                (pvc for pvc in ready_pool if not (pvc.metadata and pvc.metadata.deletion_timestamp)),
+                key=lambda pvc: pvc.metadata.creation_timestamp.timestamp() if pvc.metadata.creation_timestamp else 0,
+            )
+            for pvc in ordered[: current - desired]:
+                try:
+                    core.delete_namespaced_persistent_volume_claim(
+                        name=pvc.metadata.name,
+                        namespace=settings.kube_namespace,
+                    )
+                except ApiException as exc:
+                    if exc.status != 404:
+                        logger.warning("Failed to delete warm pool PVC %s", pvc.metadata.name, exc_info=True)
+            return
         if current >= desired:
             return
 
@@ -573,9 +603,15 @@ class KubernetesService:
             except Exception:
                 logger.warning("Failed to delete pod for instance %s during reaper", inst.id)
             session.delete(inst)
+        recent_cutoff = now - timedelta(minutes=max(1, int(settings.warm_pool_window_minutes)))
+        recent_launches: dict[str, int] = {}
+        for template_id in session.exec(select(Instance.template_id).where(Instance.started_at >= recent_cutoff)).all():
+            recent_launches[template_id] = recent_launches.get(template_id, 0) + 1
         for tmpl in templates.values():
-            desired = int(getattr(tmpl, "preclone_pool_size", 0) or 0)
-            if desired <= 0 or not tmpl.enabled:
+            min_pool = int(getattr(tmpl, "preclone_pool_size", 0) or 0)
+            max_pool = int(getattr(tmpl, "preclone_pool_max", min_pool) or min_pool)
+            desired = self._autoscaled_warm_pool_target(min_pool, max_pool, recent_launches.get(tmpl.id, 0))
+            if not tmpl.enabled:
                 continue
             image = images.get(tmpl.image_id)
             if not image or not image.source_pvc:

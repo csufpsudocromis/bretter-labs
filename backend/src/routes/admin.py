@@ -162,6 +162,8 @@ def _ensure_template_columns() -> None:
             )
         if "preclone_pool_size" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN preclone_pool_size INTEGER DEFAULT 0")
+        if "preclone_pool_max" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN preclone_pool_max INTEGER DEFAULT 0")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -174,6 +176,9 @@ def _ensure_template_columns() -> None:
                 (settings.idle_timeout_minutes,),
             )
             cur.execute("UPDATE template SET preclone_pool_size = 0 WHERE preclone_pool_size IS NULL")
+            # Keep existing behavior for upgraded rows: max defaults to min.
+            cur.execute("UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max IS NULL")
+            cur.execute("UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max < preclone_pool_size")
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -1779,6 +1784,13 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
             status_code=status.HTTP_409_CONFLICT,
             detail="image is not ready for clone-based launch; re-import or re-upload the image",
         )
+    pool_min = int(payload.preclone_pool_size or 0)
+    pool_max = int(payload.preclone_pool_max or 0)
+    if pool_max < pool_min:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="preclone_pool_max must be greater than or equal to preclone_pool_size",
+        )
     record = Template(
         id=str(uuid4()),
         name=payload.name,
@@ -1789,7 +1801,8 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         ram_mb=payload.ram_mb,
         auto_delete_minutes=payload.auto_delete_minutes,
         idle_timeout_minutes=payload.idle_timeout_minutes or settings.idle_timeout_minutes,
-        preclone_pool_size=payload.preclone_pool_size,
+        preclone_pool_size=pool_min,
+        preclone_pool_max=pool_max,
         enabled=payload.enabled,
         network_mode=payload.network_mode,
         created_at=datetime.utcnow(),
@@ -1808,6 +1821,7 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         auto_delete_minutes=record.auto_delete_minutes,
         idle_timeout_minutes=record.idle_timeout_minutes,
         preclone_pool_size=record.preclone_pool_size,
+        preclone_pool_max=record.preclone_pool_max,
         enabled=record.enabled,
         network_mode=record.network_mode,
         created_at=record.created_at,
@@ -1829,6 +1843,7 @@ def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
             auto_delete_minutes=record.auto_delete_minutes,
             idle_timeout_minutes=record.idle_timeout_minutes,
             preclone_pool_size=record.preclone_pool_size,
+            preclone_pool_max=record.preclone_pool_max,
             enabled=record.enabled,
             network_mode=record.network_mode,
             created_at=record.created_at,
@@ -1866,8 +1881,19 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         record.auto_delete_minutes = payload.auto_delete_minutes
     if payload.idle_timeout_minutes is not None:
         record.idle_timeout_minutes = payload.idle_timeout_minutes
+    next_min = record.preclone_pool_size
+    next_max = getattr(record, "preclone_pool_max", record.preclone_pool_size)
     if payload.preclone_pool_size is not None:
-        record.preclone_pool_size = payload.preclone_pool_size
+        next_min = payload.preclone_pool_size
+    if payload.preclone_pool_max is not None:
+        next_max = payload.preclone_pool_max
+    if next_max < next_min:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="preclone_pool_max must be greater than or equal to preclone_pool_size",
+        )
+    record.preclone_pool_size = next_min
+    record.preclone_pool_max = next_max
     if payload.enabled is not None:
         record.enabled = payload.enabled
     if payload.network_mode is not None:
@@ -1886,6 +1912,7 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         auto_delete_minutes=record.auto_delete_minutes,
         idle_timeout_minutes=record.idle_timeout_minutes,
         preclone_pool_size=record.preclone_pool_size,
+        preclone_pool_max=record.preclone_pool_max,
         enabled=record.enabled,
         network_mode=record.network_mode,
         created_at=record.created_at,

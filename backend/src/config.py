@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     linux_machine_type: str = "pc"
     linux_cpu_model: str = "host"
     vm_net_backend: str = "tap-nat"
+    warm_pool_autoscale_enabled: bool = True
+    warm_pool_window_minutes: int = 15
+    warm_pool_refill_minutes: int = 2
+    warm_pool_safety_factor: float = 1.5
     public_scheme: str = "https"
     cors_allow_http: bool = False
 

@@ -61,6 +61,7 @@ Optional flags:
 - `WINDOWS_MACHINE_TYPE` / `WINDOWS_EFI_ENABLED` / `WINDOWS_CPU_MODEL` to control Windows VM firmware/machine defaults (defaults: `q35`/`true`/`host`).
 - `LINUX_MACHINE_TYPE` / `LINUX_EFI_ENABLED` / `LINUX_CPU_MODEL` to control Linux VM firmware/machine defaults (defaults: `pc`/`false`/`host`).
 - `VM_NET_BACKEND` to choose VM networking backend (`tap-nat` default, `user` for legacy qemu slirp).
+- `BLABS_WARM_POOL_AUTOSCALE_ENABLED`, `BLABS_WARM_POOL_WINDOW_MINUTES`, `BLABS_WARM_POOL_REFILL_MINUTES`, `BLABS_WARM_POOL_SAFETY_FACTOR` to tune warm pool autoscaling behavior.
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
 - `TLS_SECRET_NAME` to set the TLS secret name (default `bretter-tls`).
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to use your own certificate/key when creating the TLS secret.
@@ -103,7 +104,7 @@ Storage and runtime notes:
 - Uploaded/imported images are normalized automatically (`.qcow`/`.qcow2` -> `.raw`, `.vhd`/`.vhdx`/`.vdi` -> `.qcow2`) for more reliable VM boot behavior.
 - Image uploads return quickly after browser transfer and continue as async Kubernetes jobs (finalize + source-PVC import). The UI shows "Finalizing on cluster" and polls task status.
 - If CDI DataVolume CRDs are installed, uploads use CDI HTTP import into source PVCs; otherwise the backend falls back to a Kubernetes copy job (no `kubectl exec` stream loop).
-- Templates include `preclone_pool_size` to keep warm pre-cloned disks ready for faster start times.
+- Templates include `preclone_pool_size` (min) and `preclone_pool_max` (max) so warm pre-cloned disks auto-scale with recent launch demand while staying within bounds.
 - Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx with `virtio` disk bus for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
 - Runner networking defaults to `tap-nat` (kernel NAT + dnsmasq in-pod) for better throughput than qemu user-mode networking.
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.

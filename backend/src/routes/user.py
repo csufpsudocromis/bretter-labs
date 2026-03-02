@@ -50,6 +50,7 @@ def list_available_templates(user: User = Depends(require_user), session: Sessio
             auto_delete_minutes=record.auto_delete_minutes,
             idle_timeout_minutes=getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes),
             preclone_pool_size=getattr(record, "preclone_pool_size", 0),
+            preclone_pool_max=getattr(record, "preclone_pool_max", getattr(record, "preclone_pool_size", 0)),
             enabled=record.enabled,
             network_mode=getattr(record, "network_mode", "bridge"),
             created_at=record.created_at,

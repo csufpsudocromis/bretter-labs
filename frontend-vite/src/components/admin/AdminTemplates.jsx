@@ -15,6 +15,7 @@ const AdminTemplates = () => {
     auto_delete_minutes: 30,
     idle_timeout_minutes: 30,
     preclone_pool_size: 0,
+    preclone_pool_max: 0,
     network_mode: 'bridge',
   });
   const [editingId, setEditingId] = useState(null);
@@ -28,6 +29,7 @@ const AdminTemplates = () => {
     auto_delete_minutes: 30,
     idle_timeout_minutes: 30,
     preclone_pool_size: 0,
+    preclone_pool_max: 0,
     enabled: false,
     network_mode: 'bridge',
   });
@@ -60,6 +62,7 @@ const AdminTemplates = () => {
         auto_delete_minutes: 30,
         idle_timeout_minutes: 30,
         preclone_pool_size: 0,
+        preclone_pool_max: 0,
         network_mode: 'bridge',
       });
       load();
@@ -102,6 +105,7 @@ const AdminTemplates = () => {
       auto_delete_minutes: tmpl.auto_delete_minutes,
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
       preclone_pool_size: tmpl.preclone_pool_size || 0,
+      preclone_pool_max: tmpl.preclone_pool_max ?? tmpl.preclone_pool_size ?? 0,
       enabled: tmpl.enabled,
       network_mode: tmpl.network_mode || 'bridge',
     });
@@ -199,20 +203,43 @@ const AdminTemplates = () => {
               <span className="muted small">User inactivity before showing a prompt and auto-stopping the VM.</span>
             </label>
             <label>
-              Pre-clone pool size (warm disks)
+              Pre-clone min available
               <input
                 type="number"
                 min={0}
                 max={50}
                 value={form.preclone_pool_size}
                 onChange={(e) =>
-                  setForm({
-                    ...form,
-                    preclone_pool_size: Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                  setForm((prev) => {
+                    const minVal = Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0));
+                    return {
+                      ...prev,
+                      preclone_pool_size: minVal,
+                      preclone_pool_max: Math.max(minVal, prev.preclone_pool_max || 0),
+                    };
                   })
                 }
               />
-              <span className="muted small">Keeps this many clone-ready disks warm for faster starts.</span>
+              <span className="muted small">Always keep at least this many clone-ready disks.</span>
+            </label>
+            <label>
+              Pre-clone max available
+              <input
+                type="number"
+                min={0}
+                max={50}
+                value={form.preclone_pool_max}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    preclone_pool_max: Math.max(
+                      prev.preclone_pool_size || 0,
+                      Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                    ),
+                  }))
+                }
+              />
+              <span className="muted small">Autoscaler can grow available pre-clones up to this cap.</span>
             </label>
             <label>
               Network mode
@@ -243,7 +270,7 @@ const AdminTemplates = () => {
                   <span>{t.cpu_cores} CPU</span>
                   <span>{Math.round(t.ram_mb / 1024)} GB RAM</span>
                 </div>
-                <div className="muted small">Pre-clone pool: {t.preclone_pool_size || 0}</div>
+                <div className="muted small">Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}</div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">
@@ -352,20 +379,43 @@ const AdminTemplates = () => {
                   <span className="muted small">User inactivity before showing a prompt and auto-stopping the VM.</span>
                 </label>
                 <label>
-                  Pre-clone pool size (warm disks)
+                  Pre-clone min available
                   <input
                     type="number"
                     min={0}
                     max={50}
                     value={editForm.preclone_pool_size}
                     onChange={(e) =>
-                      setEditForm({
-                        ...editForm,
-                        preclone_pool_size: Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                      setEditForm((prev) => {
+                        const minVal = Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0));
+                        return {
+                          ...prev,
+                          preclone_pool_size: minVal,
+                          preclone_pool_max: Math.max(minVal, prev.preclone_pool_max || 0),
+                        };
                       })
                     }
                   />
-                  <span className="muted small">Keeps this many clone-ready disks warm for faster starts.</span>
+                  <span className="muted small">Always keep at least this many clone-ready disks.</span>
+                </label>
+                <label>
+                  Pre-clone max available
+                  <input
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={editForm.preclone_pool_max}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        preclone_pool_max: Math.max(
+                          prev.preclone_pool_size || 0,
+                          Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                        ),
+                      }))
+                    }
+                  />
+                  <span className="muted small">Autoscaler can grow available pre-clones up to this cap.</span>
                 </label>
                 <label>
                   Network mode

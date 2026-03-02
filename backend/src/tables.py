@@ -55,6 +55,7 @@ class Template(SQLModel, table=True):
     auto_delete_minutes: int = 30
     idle_timeout_minutes: int = 30
     preclone_pool_size: int = 0
+    preclone_pool_max: int = 0
     enabled: bool = False
     network_mode: str = "bridge"
     created_at: datetime = Field(default_factory=datetime.utcnow)
