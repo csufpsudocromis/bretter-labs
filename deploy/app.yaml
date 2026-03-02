@@ -114,6 +114,8 @@ spec:
               value: golden-images
             - name: BLABS_KUBE_VM_STORAGE_CLASS
               value: "__VM_STORAGE_CLASS__"
+            - name: BLABS_KUBE_UPLOAD_USE_CDI
+              value: "true"
             - name: BLABS_STORAGE_ROOT
               value: /mnt/lab-images
             - name: BLABS_DATABASE_PATH
@@ -142,6 +144,8 @@ spec:
               value: "__LINUX_EFI_ENABLED__"
             - name: BLABS_LINUX_CPU_MODEL
               value: __LINUX_CPU_MODEL__
+            - name: BLABS_VM_NET_BACKEND
+              value: __VM_NET_BACKEND__
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images

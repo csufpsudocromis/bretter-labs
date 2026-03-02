@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
+from uuid import uuid4
 
 from kubernetes import client, config
 from kubernetes.stream import stream
@@ -18,7 +19,7 @@ from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
 from ..config import settings
-from ..tables import Config, Instance, Template
+from ..tables import Config, Image, Instance, Template
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,7 @@ class PodRequest:
     ram_mb: int
     owner: str
     network_mode: str = "default"
+    instance_disk_pvc: Optional[str] = None
 
 
 @dataclass
@@ -43,6 +45,7 @@ class PodStatus:
     node: Optional[str] = None
     message: Optional[str] = None
     console_endpoint: Optional[str] = None
+    disk_pvc: Optional[str] = None
 
 
 class KubernetesService:
@@ -79,11 +82,23 @@ class KubernetesService:
     def _instance_netpol_name(self, instance_id: str, owner: str) -> str:
         return f"{self._find_pod_name(instance_id, owner)}-egress-only"
 
+    def _pool_pvc_name(self, template_id: str) -> str:
+        return f"pool-{template_id[:8]}-{uuid4().hex[:6]}"
+
     def _ensure_instance_disk_pvc(self, req: PodRequest) -> str:
+        core = self._client()
+        if req.instance_disk_pvc:
+            existing = core.read_namespaced_persistent_volume_claim(
+                name=req.instance_disk_pvc,
+                namespace=settings.kube_namespace,
+            )
+            phase = (existing.status.phase or "").lower()
+            if phase == "lost":
+                raise RuntimeError(f"instance PVC {req.instance_disk_pvc} entered Lost phase")
+            return req.instance_disk_pvc
         if not req.image_source_pvc:
             raise RuntimeError("image source PVC is required for clone-based VM launch")
 
-        core = self._client()
         pvc_name = self._instance_disk_pvc_name(req.instance_id, req.owner)
         try:
             existing = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
@@ -135,6 +150,80 @@ class KubernetesService:
         )
         core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
         return pvc_name
+
+    def reserve_warm_pool_pvc(self, template_id: str, instance_id: str, owner: str) -> Optional[str]:
+        core = self._client()
+        selector = f"blabs-pool=true,template-id={template_id},pool-state=ready"
+        items = core.list_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, label_selector=selector).items
+        for pvc in items:
+            if (pvc.status.phase or "").lower() != "bound":
+                continue
+            if pvc.metadata and pvc.metadata.deletion_timestamp:
+                continue
+            labels = dict(pvc.metadata.labels or {})
+            labels["pool-state"] = "claimed"
+            labels["pool-owner"] = owner
+            labels["pool-instance"] = instance_id
+            try:
+                core.patch_namespaced_persistent_volume_claim(
+                    name=pvc.metadata.name,
+                    namespace=settings.kube_namespace,
+                    body={"metadata": {"labels": labels}},
+                )
+                return pvc.metadata.name
+            except ApiException:
+                continue
+        return None
+
+    def ensure_warm_pool(self, template_id: str, image_source_pvc: str, desired: int) -> None:
+        if desired <= 0:
+            return
+        core = self._client()
+        selector = f"blabs-pool=true,template-id={template_id},pool-state=ready"
+        existing_ready = core.list_namespaced_persistent_volume_claim(
+            namespace=settings.kube_namespace,
+            label_selector=selector,
+        ).items
+        current = len(existing_ready)
+        if current >= desired:
+            return
+
+        source = core.read_namespaced_persistent_volume_claim(name=image_source_pvc, namespace=settings.kube_namespace)
+        source_request = None
+        if source.spec and source.spec.resources and source.spec.resources.requests:
+            source_request = source.spec.resources.requests.get("storage")
+        if not source_request:
+            raise RuntimeError(f"source PVC {image_source_pvc} has no storage request")
+
+        storage_class = settings.kube_vm_storage_class or source.spec.storage_class_name or None
+        for _ in range(desired - current):
+            name = self._pool_pvc_name(template_id)
+            body = client.V1PersistentVolumeClaim(
+                metadata=client.V1ObjectMeta(
+                    name=name,
+                    labels={
+                        "blabs-pool": "true",
+                        "template-id": template_id,
+                        "pool-state": "ready",
+                        "app.kubernetes.io/part-of": "bretter-labs",
+                    },
+                ),
+                spec=client.V1PersistentVolumeClaimSpec(
+                    access_modes=["ReadWriteOnce"],
+                    storage_class_name=storage_class,
+                    resources=client.V1ResourceRequirements(requests={"storage": source_request}),
+                    data_source=client.V1TypedLocalObjectReference(
+                        api_group="",
+                        kind="PersistentVolumeClaim",
+                        name=image_source_pvc,
+                    ),
+                ),
+            )
+            try:
+                core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
+            except ApiException as exc:
+                if exc.status != 409:
+                    raise
 
     def create_service_for_pod(self, pod_name: str, service_name: str) -> int:
         core = self._client()
@@ -211,6 +300,14 @@ class KubernetesService:
                 )
             )
             volume_mounts.append(client.V1VolumeMount(name="kvm", mount_path="/dev/kvm"))
+        if settings.vm_net_backend == "tap-nat":
+            volumes.append(
+                client.V1Volume(
+                    name="tun",
+                    host_path=client.V1HostPathVolumeSource(path="/dev/net/tun", type="CharDevice"),
+                )
+            )
+            volume_mounts.append(client.V1VolumeMount(name="tun", mount_path="/dev/net/tun"))
         os_type = req.os_type.lower()
         is_linux = os_type == "linux"
         # Clone-backed instance disks are mounted at /data; Linux defaults to virtio for faster IO.
@@ -240,6 +337,7 @@ class KubernetesService:
             client.V1EnvVar(name="MACHINE_TYPE", value=machine_type),
             client.V1EnvVar(name="EFI_ENABLED", value=str(efi_enabled).lower()),
             client.V1EnvVar(name="CPU_MODEL", value=cpu_model),
+            client.V1EnvVar(name="VM_NET_BACKEND", value=settings.vm_net_backend),
         ]
         if tls_secret_name:
             env_vars.extend(
@@ -258,7 +356,9 @@ class KubernetesService:
             resources=resources,
             volume_mounts=volume_mounts,
             image_pull_policy="IfNotPresent",
-            security_context=client.V1SecurityContext(privileged=settings.kube_use_kvm),
+            security_context=client.V1SecurityContext(
+                privileged=(settings.kube_use_kvm or settings.vm_net_backend == "tap-nat")
+            ),
         )
         if settings.kube_spice_embed_configmap:
             volume_mounts.append(
@@ -309,7 +409,12 @@ class KubernetesService:
             core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
             if (req.network_mode or "bridge") not in {"unrestricted", "host"}:
                 self.apply_network_policy(pod_name, mode=req.network_mode or "bridge")
-            return PodStatus(instance_id=req.instance_id, phase="Pending", console_endpoint=self._console_url(req))
+            return PodStatus(
+                instance_id=req.instance_id,
+                phase="Pending",
+                console_endpoint=self._console_url(req),
+                disk_pvc=instance_disk_pvc,
+            )
         except ApiException as exc:
             logger.error("Failed to create pod: %s", exc)
             raise
@@ -344,11 +449,11 @@ class KubernetesService:
                 logger.warning("Failed to send stop signal to %s: %s", pod_name, exc)
         return PodStatus(instance_id=instance_id, phase="Succeeded")
 
-    def delete_pod(self, instance_id: str, owner: str) -> None:
+    def delete_pod(self, instance_id: str, owner: str, disk_pvc: Optional[str] = None) -> None:
         core = self._client()
         networking = self._networking_client()
         pod_name = self._find_pod_name(instance_id, owner)
-        pvc_name = self._instance_disk_pvc_name(instance_id, owner)
+        pvc_name = disk_pvc or self._instance_disk_pvc_name(instance_id, owner)
         service_name = self._instance_service_name(instance_id)
         netpol_name = self._instance_netpol_name(instance_id, owner)
         try:
@@ -449,6 +554,7 @@ class KubernetesService:
     def reaper_tick(self, session: Session) -> None:
         config_row = session.get(Config, 1) or Config()
         templates = {t.id: t for t in session.exec(select(Template)).all()}
+        images = {img.id: img for img in session.exec(select(Image)).all()}
         now = datetime.utcnow()
         stale_instances: list[Instance] = []
         for inst in session.exec(select(Instance).where(Instance.status == "running")).all():
@@ -463,10 +569,21 @@ class KubernetesService:
                 stale_instances.append(inst)
         for inst in stale_instances:
             try:
-                self.delete_pod(inst.id, inst.owner)
+                self.delete_pod(inst.id, inst.owner, disk_pvc=inst.disk_pvc)
             except Exception:
                 logger.warning("Failed to delete pod for instance %s during reaper", inst.id)
             session.delete(inst)
+        for tmpl in templates.values():
+            desired = int(getattr(tmpl, "preclone_pool_size", 0) or 0)
+            if desired <= 0 or not tmpl.enabled:
+                continue
+            image = images.get(tmpl.image_id)
+            if not image or not image.source_pvc:
+                continue
+            try:
+                self.ensure_warm_pool(tmpl.id, image.source_pvc, desired)
+            except Exception:
+                logger.warning("Failed to reconcile warm pool for template %s", tmpl.id, exc_info=True)
         if stale_instances:
             session.commit()
 

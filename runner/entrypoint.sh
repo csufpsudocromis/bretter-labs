@@ -8,6 +8,7 @@ OS_TYPE="${OS_TYPE:-windows}"
 MACHINE_TYPE="${MACHINE_TYPE:-q35}"
 EFI_ENABLED="${EFI_ENABLED:-false}"
 CPU_MODEL="${CPU_MODEL:-host}"
+VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
@@ -130,11 +131,61 @@ QEMU_ARGS+=(
   -serial stdio
 )
 
+cleanup_net() {
+  set +e
+  if [[ -f /tmp/dnsmasq.pid ]]; then
+    kill "$(cat /tmp/dnsmasq.pid)" >/dev/null 2>&1 || true
+    rm -f /tmp/dnsmasq.pid
+  fi
+  iptables -t nat -D POSTROUTING -s 192.168.241.0/24 -o eth0 -j MASQUERADE >/dev/null 2>&1 || true
+  iptables -D FORWARD -i tap0 -o eth0 -j ACCEPT >/dev/null 2>&1 || true
+  iptables -D FORWARD -i eth0 -o tap0 -m state --state RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || true
+  ip addr del 192.168.241.1/24 dev tap0 >/dev/null 2>&1 || true
+  ip link set tap0 down >/dev/null 2>&1 || true
+  ip tuntap del dev tap0 mode tap >/dev/null 2>&1 || true
+}
+
+setup_tap_nat() {
+  if [[ ! -c /dev/net/tun ]]; then
+    echo "tap-nat requested but /dev/net/tun is unavailable; falling back to slirp user networking"
+    VM_NET_BACKEND="user"
+    return
+  fi
+  ip tuntap add dev tap0 mode tap
+  ip addr add 192.168.241.1/24 dev tap0
+  ip link set tap0 up
+  # Forward VM traffic through pod eth0 with kernel NAT instead of qemu slirp.
+  echo 1 > /proc/sys/net/ipv4/ip_forward
+  iptables -t nat -A POSTROUTING -s 192.168.241.0/24 -o eth0 -j MASQUERADE
+  iptables -A FORWARD -i tap0 -o eth0 -j ACCEPT
+  iptables -A FORWARD -i eth0 -o tap0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+  dnsmasq \
+    --interface=tap0 \
+    --bind-interfaces \
+    --except-interface=lo \
+    --dhcp-range=192.168.241.50,192.168.241.200,12h \
+    --dhcp-option=option:router,192.168.241.1 \
+    --dhcp-option=option:dns-server,1.1.1.1,8.8.8.8 \
+    --pid-file=/tmp/dnsmasq.pid
+  trap cleanup_net EXIT
+}
+
+if [[ "${VM_NET_BACKEND,,}" == "tap-nat" ]]; then
+  setup_tap_nat
+fi
+
 # Single virtio net device for all OS types.
-QEMU_ARGS+=(
-  -netdev user,id=net0
-  -device virtio-net-pci,netdev=net0
-)
+if [[ "${VM_NET_BACKEND,,}" == "tap-nat" ]]; then
+  QEMU_ARGS+=(
+    -netdev tap,id=net0,ifname=tap0,script=no,downscript=no
+    -device virtio-net-pci,netdev=net0
+  )
+else
+  QEMU_ARGS+=(
+    -netdev user,id=net0
+    -device virtio-net-pci,netdev=net0
+  )
+fi
 
 if [[ "${OS_TYPE,,}" == "linux" ]]; then
   # Single disk path for Linux based on DRIVE_IF (default: sata).

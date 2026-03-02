@@ -60,6 +60,7 @@ Optional flags:
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `WINDOWS_MACHINE_TYPE` / `WINDOWS_EFI_ENABLED` / `WINDOWS_CPU_MODEL` to control Windows VM firmware/machine defaults (defaults: `q35`/`true`/`host`).
 - `LINUX_MACHINE_TYPE` / `LINUX_EFI_ENABLED` / `LINUX_CPU_MODEL` to control Linux VM firmware/machine defaults (defaults: `pc`/`false`/`host`).
+- `VM_NET_BACKEND` to choose VM networking backend (`tap-nat` default, `user` for legacy qemu slirp).
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
 - `TLS_SECRET_NAME` to set the TLS secret name (default `bretter-tls`).
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to use your own certificate/key when creating the TLS secret.
@@ -100,8 +101,11 @@ Storage and runtime notes:
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 - `VM_STORAGE_CLASS` is required for VM launch. Uploaded/imported images get a source PVC and all VM launches use per-instance cloned PVC disks (no init-container file copy path).
 - Uploaded/imported images are normalized automatically (`.qcow`/`.qcow2` -> `.raw`, `.vhd`/`.vhdx`/`.vdi` -> `.qcow2`) for more reliable VM boot behavior.
-- Image uploads return quickly after browser transfer and continue as an async finalize task (normalize/checksum/source-PVC). The UI shows "Finalizing on cluster" and polls task status.
+- Image uploads return quickly after browser transfer and continue as async Kubernetes jobs (finalize + source-PVC import). The UI shows "Finalizing on cluster" and polls task status.
+- If CDI DataVolume CRDs are installed, uploads use CDI HTTP import into source PVCs; otherwise the backend falls back to a Kubernetes copy job (no `kubectl exec` stream loop).
+- Templates include `preclone_pool_size` to keep warm pre-cloned disks ready for faster start times.
 - Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx with `virtio` disk bus for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
+- Runner networking defaults to `tap-nat` (kernel NAT + dnsmasq in-pod) for better throughput than qemu user-mode networking.
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
 
 ## Usage

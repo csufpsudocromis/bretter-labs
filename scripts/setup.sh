@@ -41,6 +41,7 @@ WINDOWS_CPU_MODEL="${WINDOWS_CPU_MODEL:-host}"
 LINUX_MACHINE_TYPE="${LINUX_MACHINE_TYPE:-pc}"
 LINUX_EFI_ENABLED="${LINUX_EFI_ENABLED:-false}"
 LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
+VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 
@@ -137,6 +138,13 @@ validate_storage_guard_config() {
   if [ "$SETUP_WARN_FREE_GIB" -lt "$SETUP_MIN_FREE_GIB" ]; then
     fail "SETUP_WARN_FREE_GIB must be >= SETUP_MIN_FREE_GIB."
   fi
+}
+
+validate_vm_network_config() {
+  case "$VM_NET_BACKEND" in
+    tap-nat|user) ;;
+    *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
+  esac
 }
 
 sudo_cmd() {
@@ -420,7 +428,7 @@ render_manifest_template() {
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath
-  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
+  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
@@ -437,6 +445,7 @@ render_manifest_template() {
   linux_machine_type="$(escape_sed_replacement "$LINUX_MACHINE_TYPE")"
   linux_efi_enabled="$(escape_sed_replacement "$LINUX_EFI_ENABLED")"
   linux_cpu_model="$(escape_sed_replacement "$LINUX_CPU_MODEL")"
+  vm_net_backend="$(escape_sed_replacement "$VM_NET_BACKEND")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
 
@@ -457,6 +466,7 @@ render_manifest_template() {
     -e "s/__LINUX_MACHINE_TYPE__/${linux_machine_type}/g" \
     -e "s/__LINUX_EFI_ENABLED__/${linux_efi_enabled}/g" \
     -e "s/__LINUX_CPU_MODEL__/${linux_cpu_model}/g" \
+    -e "s/__VM_NET_BACKEND__/${vm_net_backend}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     "$input" >"$output"
@@ -888,6 +898,7 @@ main() {
   validate_longhorn_tuning_config
   validate_autocleanup_config
   validate_storage_guard_config
+  validate_vm_network_config
   require_apt
   install_base_packages
   install_kubectl
@@ -909,6 +920,7 @@ main() {
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
+  log "Using VM network backend: $VM_NET_BACKEND"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   log "Cleanup automation enabled: $ENABLE_AUTOCLEANUP (schedule: $AUTOCLEANUP_SCHEDULE)"
   log "Storage guard thresholds: warn<${SETUP_WARN_FREE_GIB}Gi, fail<${SETUP_MIN_FREE_GIB}Gi"

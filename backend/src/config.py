@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     kube_node_selector_key: str = "kubernetes.io/hostname"
     kube_node_selector_value: str = ""  # set to pin pods to a node (e.g., kub1)
     kube_vm_storage_class: str = ""  # set to enable per-VM cloned PVC disks (e.g., longhorn)
+    kube_upload_use_cdi: bool = True
+    kube_cdi_namespace: str = "cdi"
     kube_use_kvm: bool = True  # set False if /dev/kvm is unavailable
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
     kube_node_external_host: str = "10.68.48.105"
@@ -30,6 +32,7 @@ class Settings(BaseSettings):
     linux_efi_enabled: bool = False
     linux_machine_type: str = "pc"
     linux_cpu_model: str = "host"
+    vm_net_backend: str = "tap-nat"
     public_scheme: str = "https"
     cors_allow_http: bool = False
 

@@ -36,6 +36,10 @@ class ImageUploadTask(SQLModel, table=True):
     detail: str = ""
     error_message: Optional[str] = None
     image_id: Optional[str] = None
+    checksum: Optional[str] = None
+    source_pvc: Optional[str] = None
+    finalize_job: Optional[str] = None
+    copy_job: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -50,6 +54,7 @@ class Template(SQLModel, table=True):
     ram_mb: int
     auto_delete_minutes: int = 30
     idle_timeout_minutes: int = 30
+    preclone_pool_size: int = 0
     enabled: bool = False
     network_mode: str = "bridge"
     created_at: datetime = Field(default_factory=datetime.utcnow)
@@ -60,6 +65,7 @@ class Instance(SQLModel, table=True):
     template_id: str = Field(foreign_key="template.id")
     owner: str = Field(foreign_key="user.username")
     status: str = "pending"
+    disk_pvc: Optional[str] = None
     started_at: datetime = Field(default_factory=datetime.utcnow)
     last_active_at: datetime = Field(default_factory=datetime.utcnow)
     console_url: Optional[str] = None

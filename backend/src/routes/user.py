@@ -45,16 +45,17 @@ def list_available_templates(user: User = Depends(require_user), session: Sessio
             description=record.description,
             os_type=record.os_type,
             image_id=record.image_id,
-        cpu_cores=record.cpu_cores,
-        ram_mb=record.ram_mb,
-        auto_delete_minutes=record.auto_delete_minutes,
-        enabled=record.enabled,
-        idle_timeout_minutes=getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes),
-        network_mode=getattr(record, "network_mode", "bridge"),
-        created_at=record.created_at,
-    )
-    for record in templates
-]
+            cpu_cores=record.cpu_cores,
+            ram_mb=record.ram_mb,
+            auto_delete_minutes=record.auto_delete_minutes,
+            idle_timeout_minutes=getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes),
+            preclone_pool_size=getattr(record, "preclone_pool_size", 0),
+            enabled=record.enabled,
+            network_mode=getattr(record, "network_mode", "bridge"),
+            created_at=record.created_at,
+        )
+        for record in templates
+    ]
 
 
 @router.get("/pods", response_model=list[VMInstance])
@@ -95,7 +96,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             cutoff = datetime.utcnow() - timedelta(minutes=tmpl.auto_delete_minutes)
             if record.last_active_at < cutoff:
                 try:
-                    kube.delete_pod(record.id, record.owner)
+                    kube.delete_pod(record.id, record.owner, disk_pvc=record.disk_pvc)
                 except Exception:
                     pass
                 to_delete.append(record)
@@ -203,6 +204,10 @@ def start_vm(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="per-user concurrency limit reached")
 
     instance_id = str(uuid4())
+    try:
+        warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, instance_id, user.username)
+    except Exception:
+        warm_pool_pvc = None
     pod_request = PodRequest(
         instance_id=instance_id,
         template_id=template.id,
@@ -213,8 +218,20 @@ def start_vm(
         ram_mb=template.ram_mb,
         owner=user.username,
         network_mode=getattr(template, "network_mode", "bridge"),
+        instance_disk_pvc=warm_pool_pvc,
     )
-    pod_status = kube.create_pod(pod_request)
+    try:
+        pod_status = kube.create_pod(pod_request)
+    except Exception:
+        if warm_pool_pvc:
+            try:
+                kube._client().delete_namespaced_persistent_volume_claim(
+                    name=warm_pool_pvc,
+                    namespace=settings.kube_namespace,
+                )
+            except Exception:
+                pass
+        raise
     # Create a NodePort service for browser-based SPICE (websockify on 6080).
     service_name = f"svc-{instance_id[:8]}"
     node_port = kube.create_service_for_pod(pod_name=kube._pod_name(pod_request), service_name=service_name)
@@ -236,6 +253,7 @@ def start_vm(
         template_id=template.id,
         owner=user.username,
         status="pending",
+        disk_pvc=pod_status.disk_pvc,
         started_at=datetime.utcnow(),
         last_active_at=datetime.utcnow(),
         console_url=console_url,
@@ -291,11 +309,15 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
 
     # Ensure any old pod with the same name is removed before re-create.
     try:
-        kube.delete_pod(instance_id, user.username)
+        kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc)
     except ApiException as exc:
         if exc.status != 404:
             raise
 
+    try:
+        warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, record.id, user.username)
+    except Exception:
+        warm_pool_pvc = None
     pod_request = PodRequest(
         instance_id=record.id,
         template_id=template.id,
@@ -306,8 +328,20 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
         ram_mb=template.ram_mb,
         owner=user.username,
         network_mode=getattr(template, "network_mode", "bridge"),
+        instance_disk_pvc=warm_pool_pvc,
     )
-    kube.create_pod(pod_request)
+    try:
+        pod_status = kube.create_pod(pod_request)
+    except Exception:
+        if warm_pool_pvc:
+            try:
+                kube._client().delete_namespaced_persistent_volume_claim(
+                    name=warm_pool_pvc,
+                    namespace=settings.kube_namespace,
+                )
+            except Exception:
+                pass
+        raise
     service_name = f"svc-{instance_id[:8]}"
     node_port = kube.create_service_for_pod(pod_name=kube._pod_name(pod_request), service_name=service_name)
     external_host = settings.kube_node_external_host or "127.0.0.1"
@@ -323,6 +357,7 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     )
 
     record.status = "pending"
+    record.disk_pvc = pod_status.disk_pvc
     record.started_at = datetime.utcnow()
     record.last_active_at = datetime.utcnow()
     record.console_url = console_url
@@ -345,6 +380,6 @@ def delete_vm(instance_id: str, user: User = Depends(require_user), session: Ses
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    kube.delete_pod(instance_id, record.owner)
+    kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc)
     session.delete(record)
     session.commit()

@@ -22,6 +22,9 @@ RUN apt-get update && \
       novnc \
       spice-html5 \
       ovmf \
+      dnsmasq-base \
+      iproute2 \
+      iptables \
       python3 \
       ca-certificates && \
     apt-get clean && \

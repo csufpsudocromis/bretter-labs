@@ -14,6 +14,7 @@ const AdminTemplates = () => {
     ram_mb: 4096,
     auto_delete_minutes: 30,
     idle_timeout_minutes: 30,
+    preclone_pool_size: 0,
     network_mode: 'bridge',
   });
   const [editingId, setEditingId] = useState(null);
@@ -26,6 +27,7 @@ const AdminTemplates = () => {
     ram_mb: 4096,
     auto_delete_minutes: 30,
     idle_timeout_minutes: 30,
+    preclone_pool_size: 0,
     enabled: false,
     network_mode: 'bridge',
   });
@@ -57,6 +59,7 @@ const AdminTemplates = () => {
         ram_mb: 4096,
         auto_delete_minutes: 30,
         idle_timeout_minutes: 30,
+        preclone_pool_size: 0,
         network_mode: 'bridge',
       });
       load();
@@ -98,6 +101,7 @@ const AdminTemplates = () => {
       ram_mb: tmpl.ram_mb,
       auto_delete_minutes: tmpl.auto_delete_minutes,
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
+      preclone_pool_size: tmpl.preclone_pool_size || 0,
       enabled: tmpl.enabled,
       network_mode: tmpl.network_mode || 'bridge',
     });
@@ -195,6 +199,22 @@ const AdminTemplates = () => {
               <span className="muted small">User inactivity before showing a prompt and auto-stopping the VM.</span>
             </label>
             <label>
+              Pre-clone pool size (warm disks)
+              <input
+                type="number"
+                min={0}
+                max={50}
+                value={form.preclone_pool_size}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    preclone_pool_size: Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                  })
+                }
+              />
+              <span className="muted small">Keeps this many clone-ready disks warm for faster starts.</span>
+            </label>
+            <label>
               Network mode
               <select value={form.network_mode} onChange={(e) => setForm({ ...form, network_mode: e.target.value })}>
                 <option value="bridge">Bridge (DNS/HTTP/HTTPS egress)</option>
@@ -223,6 +243,7 @@ const AdminTemplates = () => {
                   <span>{t.cpu_cores} CPU</span>
                   <span>{Math.round(t.ram_mb / 1024)} GB RAM</span>
                 </div>
+                <div className="muted small">Pre-clone pool: {t.preclone_pool_size || 0}</div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">
@@ -329,6 +350,22 @@ const AdminTemplates = () => {
                     }
                   />
                   <span className="muted small">User inactivity before showing a prompt and auto-stopping the VM.</span>
+                </label>
+                <label>
+                  Pre-clone pool size (warm disks)
+                  <input
+                    type="number"
+                    min={0}
+                    max={50}
+                    value={editForm.preclone_pool_size}
+                    onChange={(e) =>
+                      setEditForm({
+                        ...editForm,
+                        preclone_pool_size: Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                      })
+                    }
+                  />
+                  <span className="muted small">Keeps this many clone-ready disks warm for faster starts.</span>
                 </label>
                 <label>
                   Network mode
