@@ -292,7 +292,13 @@ class KubernetesService:
         tls_secret_name = (settings.kube_tls_secret or "").strip()
         metadata = client.V1ObjectMeta(
             name=pod_name,
-            labels={"app": pod_name, "owner": req.owner, "instance": req.instance_id},
+            labels={
+                "app": pod_name,
+                "owner": req.owner,
+                "instance": req.instance_id,
+                "app.kubernetes.io/component": "vm-runner",
+                "app.kubernetes.io/part-of": "bretter-labs",
+            },
         )
         cpu_value = str(max(1, int(req.cpu_cores)))
         if settings.vm_qos_guaranteed:
@@ -407,6 +413,24 @@ class KubernetesService:
             resources=resources,
             volume_mounts=volume_mounts,
             image_pull_policy="IfNotPresent",
+            startup_probe=client.V1Probe(
+                tcp_socket=client.V1TCPSocketAction(port=6080),
+                failure_threshold=60,
+                period_seconds=5,
+                timeout_seconds=2,
+            ),
+            readiness_probe=client.V1Probe(
+                tcp_socket=client.V1TCPSocketAction(port=6080),
+                period_seconds=10,
+                timeout_seconds=2,
+                failure_threshold=3,
+            ),
+            liveness_probe=client.V1Probe(
+                tcp_socket=client.V1TCPSocketAction(port=6080),
+                period_seconds=20,
+                timeout_seconds=2,
+                failure_threshold=3,
+            ),
             security_context=client.V1SecurityContext(
                 privileged=(settings.kube_use_kvm or settings.vm_net_backend == "tap-nat")
             ),
@@ -446,6 +470,33 @@ class KubernetesService:
                 ),
             ],
         }
+        if settings.vm_runner_anti_affinity_enabled:
+            spec_kwargs["affinity"] = client.V1Affinity(
+                pod_anti_affinity=client.V1PodAntiAffinity(
+                    preferred_during_scheduling_ignored_during_execution=[
+                        client.V1WeightedPodAffinityTerm(
+                            weight=100,
+                            pod_affinity_term=client.V1PodAffinityTerm(
+                                label_selector=client.V1LabelSelector(
+                                    match_labels={"app.kubernetes.io/component": "vm-runner"}
+                                ),
+                                topology_key="kubernetes.io/hostname",
+                            ),
+                        )
+                    ]
+                )
+            )
+        if settings.vm_runner_topology_spread_enabled:
+            spec_kwargs["topology_spread_constraints"] = [
+                client.V1TopologySpreadConstraint(
+                    max_skew=1,
+                    topology_key="kubernetes.io/hostname",
+                    when_unsatisfiable="ScheduleAnyway",
+                    label_selector=client.V1LabelSelector(
+                        match_labels={"app.kubernetes.io/component": "vm-runner"}
+                    ),
+                )
+            ]
         if settings.image_pull_secret:
             spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
         if settings.kube_runtime_class:

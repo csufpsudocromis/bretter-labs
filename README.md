@@ -57,12 +57,17 @@ Optional flags:
 - `AUTOCLEANUP_SCHEDULE` to control cleanup CronJob cadence (default `*/15 * * * *`).
 - `AUTOCLEANUP_HELPER_MAX_AGE_MINUTES` to cull stale `image-sync-*` helper pods (default `30`).
 - `AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES` to cull old `Failed`/`Succeeded` pods (default `60`).
+- `AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES` to remove stale completed direct-upload DataVolumes/PVCs (default `180`).
+- `AUTOCLEANUP_RESTART_ALERT_COUNT` to log restart alerts when a pod crosses this count (default `3`).
+- `AUTOCLEANUP_NODEFS_WARN_PCT` / `AUTOCLEANUP_NODEFS_CRITICAL_PCT` / `AUTOCLEANUP_NODEFS_EMERGENCY_PCT` for nodefs alert levels (defaults `70/85/95`).
+- `AUTOCLEANUP_PVC_WARN_PCT` / `AUTOCLEANUP_PVC_CRITICAL_PCT` / `AUTOCLEANUP_PVC_EMERGENCY_PCT` for PVC-path alert levels (defaults `70/85/95`).
 - `NODE_EXTERNAL_HOST` to set backend's advertised NodePort host (defaults to control node ExternalIP/InternalIP).
 - `PUBLIC_SCHEME` to set external URL scheme for API/console links (`https` default, set `http` only for non-TLS environments).
 - `WINDOWS_MACHINE_TYPE` / `WINDOWS_EFI_ENABLED` / `WINDOWS_CPU_MODEL` to control Windows VM firmware/machine defaults (defaults: `q35`/`true`/`host`).
 - `LINUX_MACHINE_TYPE` / `LINUX_EFI_ENABLED` / `LINUX_CPU_MODEL` to control Linux VM firmware/machine defaults (defaults: `pc`/`false`/`host`).
 - `VM_NET_BACKEND` to choose VM networking backend (`tap-nat` default, `user` for legacy qemu slirp).
-- `CPU_MANAGER_STATIC=1` to enable kubelet `cpuManagerPolicy: static` on the node running setup (optional, requires kubelet restart).
+- `CPU_MANAGER_STATIC=1` to enable kubelet `cpuManagerPolicy: static` on all nodes via `kubectl debug` (optional, requires kubelet restart).
+- `INSTALL_CDI=1` and `CDI_VERSION` to auto-install CDI when missing (defaults: enabled, `v1.61.0`).
 - `CDI_NAMESPACE`, `CDI_UPLOAD_NODEPORT`, `CDI_UPLOAD_PROXY_URL` to control CDI uploadproxy exposure/URL used by browser direct uploads.
 - `BLABS_WARM_POOL_AUTOSCALE_ENABLED`, `BLABS_WARM_POOL_WINDOW_MINUTES`, `BLABS_WARM_POOL_REFILL_MINUTES`, `BLABS_WARM_POOL_SAFETY_FACTOR` to tune warm pool autoscaling behavior.
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
@@ -102,18 +107,20 @@ Storage and runtime notes:
 - For shared RWX storage, use `APPLY_GOLDEN_HOSTPATH=0 APPLY_GOLDEN_PVC=1` and set the storage class in `deploy/golden-pvc.yaml`.
 - Multi-node runner scheduling requires shared storage for `golden-images` (RWX). A single-node hostPath PV keeps VM pods effectively tied to that node.
 - Backend uses in-cluster Postgres (`bretter-postgres`) with hostPath persistence on `POSTGRES_DATA_HOSTPATH`.
+- Backend schema migrations are versioned with Alembic and run automatically on startup (`upgrade head`), including legacy baseline stamping for pre-Alembic installs.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 - `VM_STORAGE_CLASS` is required for VM launch. Uploaded/imported images get a source PVC and all VM launches use per-instance cloned PVC disks (no init-container file copy path).
 - Uploaded/imported images are normalized automatically (`.qcow`/`.qcow2` -> `.raw`, `.vhd`/`.vhdx`/`.vdi` -> `.qcow2`) for more reliable VM boot behavior.
-- Image uploads use browser direct CDI upload (uploadproxy/DataVolume) when CDI is available and configured; the UI then polls async Kubernetes finalize/import jobs.
+- Setup installs CDI by default (if missing), wires uploadproxy NodePort, and image uploads use browser direct CDI upload (uploadproxy/DataVolume) with async finalize/import jobs.
 - If CDI direct upload is not available, the UI falls back to legacy backend multipart upload.
 - Templates include `preclone_pool_size` (min) and `preclone_pool_max` (max) so warm pre-cloned disks auto-scale with recent launch demand while staying within bounds.
 - Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx with `virtio` disk bus for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
 - Runner networking defaults to `tap-nat` with virtio-net multiqueue and optional `vhost-net` acceleration for higher throughput/lower latency.
 - VM pods use Guaranteed QoS by default (memory requests = limits, with configurable overhead via `BLABS_VM_MEMORY_OVERHEAD_MB`).
+- Runner pods now include startup/readiness/liveness probes, preferred anti-affinity, and topology-spread constraints across nodes.
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
-- For steadier CPU pinning, optionally enable kubelet `cpuManagerPolicy: static` on nodes hosting VM runner pods.
+- Cleanup automation now adds nodefs/PVC pressure alerts (70/85/95) and tightens cleanup thresholds before DiskPressure hits.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).

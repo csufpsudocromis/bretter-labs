@@ -29,6 +29,14 @@ ENABLE_AUTOCLEANUP="${ENABLE_AUTOCLEANUP:-1}"
 AUTOCLEANUP_SCHEDULE="${AUTOCLEANUP_SCHEDULE:-*/15 * * * *}"
 AUTOCLEANUP_HELPER_MAX_AGE_MINUTES="${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES:-30}"
 AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES="${AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES:-60}"
+AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES="${AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES:-180}"
+AUTOCLEANUP_RESTART_ALERT_COUNT="${AUTOCLEANUP_RESTART_ALERT_COUNT:-3}"
+AUTOCLEANUP_NODEFS_WARN_PCT="${AUTOCLEANUP_NODEFS_WARN_PCT:-70}"
+AUTOCLEANUP_NODEFS_CRITICAL_PCT="${AUTOCLEANUP_NODEFS_CRITICAL_PCT:-85}"
+AUTOCLEANUP_NODEFS_EMERGENCY_PCT="${AUTOCLEANUP_NODEFS_EMERGENCY_PCT:-95}"
+AUTOCLEANUP_PVC_WARN_PCT="${AUTOCLEANUP_PVC_WARN_PCT:-70}"
+AUTOCLEANUP_PVC_CRITICAL_PCT="${AUTOCLEANUP_PVC_CRITICAL_PCT:-85}"
+AUTOCLEANUP_PVC_EMERGENCY_PCT="${AUTOCLEANUP_PVC_EMERGENCY_PCT:-95}"
 SETUP_MIN_FREE_GIB="${SETUP_MIN_FREE_GIB:-25}"
 SETUP_WARN_FREE_GIB="${SETUP_WARN_FREE_GIB:-40}"
 PUBLIC_SCHEME="${PUBLIC_SCHEME:-https}"
@@ -50,6 +58,8 @@ POSTGRES_USER="${POSTGRES_USER:-bretter}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-bretterpass}"
 POSTGRES_DB="${POSTGRES_DB:-bretterlabs}"
 CDI_NAMESPACE="${CDI_NAMESPACE:-cdi}"
+INSTALL_CDI="${INSTALL_CDI:-1}"
+CDI_VERSION="${CDI_VERSION:-v1.61.0}"
 CDI_UPLOAD_NODEPORT="${CDI_UPLOAD_NODEPORT:-30443}"
 CDI_UPLOAD_PROXY_URL="${CDI_UPLOAD_PROXY_URL:-}"
 CPU_MANAGER_STATIC="${CPU_MANAGER_STATIC:-0}"
@@ -135,6 +145,38 @@ validate_autocleanup_config() {
   if ! is_uint "$AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES" || [ "$AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES" -lt 1 ]; then
     fail "AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES must be an integer >= 1."
   fi
+  if ! is_uint "$AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES" || [ "$AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES" -lt 1 ]; then
+    fail "AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES must be an integer >= 1."
+  fi
+  if ! is_uint "$AUTOCLEANUP_RESTART_ALERT_COUNT" || [ "$AUTOCLEANUP_RESTART_ALERT_COUNT" -lt 1 ]; then
+    fail "AUTOCLEANUP_RESTART_ALERT_COUNT must be an integer >= 1."
+  fi
+  if ! is_uint "$AUTOCLEANUP_NODEFS_WARN_PCT" || [ "$AUTOCLEANUP_NODEFS_WARN_PCT" -gt 100 ]; then
+    fail "AUTOCLEANUP_NODEFS_WARN_PCT must be an integer between 0 and 100."
+  fi
+  if ! is_uint "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" || [ "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" -gt 100 ]; then
+    fail "AUTOCLEANUP_NODEFS_CRITICAL_PCT must be an integer between 0 and 100."
+  fi
+  if ! is_uint "$AUTOCLEANUP_NODEFS_EMERGENCY_PCT" || [ "$AUTOCLEANUP_NODEFS_EMERGENCY_PCT" -gt 100 ]; then
+    fail "AUTOCLEANUP_NODEFS_EMERGENCY_PCT must be an integer between 0 and 100."
+  fi
+  if ! is_uint "$AUTOCLEANUP_PVC_WARN_PCT" || [ "$AUTOCLEANUP_PVC_WARN_PCT" -gt 100 ]; then
+    fail "AUTOCLEANUP_PVC_WARN_PCT must be an integer between 0 and 100."
+  fi
+  if ! is_uint "$AUTOCLEANUP_PVC_CRITICAL_PCT" || [ "$AUTOCLEANUP_PVC_CRITICAL_PCT" -gt 100 ]; then
+    fail "AUTOCLEANUP_PVC_CRITICAL_PCT must be an integer between 0 and 100."
+  fi
+  if ! is_uint "$AUTOCLEANUP_PVC_EMERGENCY_PCT" || [ "$AUTOCLEANUP_PVC_EMERGENCY_PCT" -gt 100 ]; then
+    fail "AUTOCLEANUP_PVC_EMERGENCY_PCT must be an integer between 0 and 100."
+  fi
+  if [ "$AUTOCLEANUP_NODEFS_WARN_PCT" -gt "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" ] || \
+     [ "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" -gt "$AUTOCLEANUP_NODEFS_EMERGENCY_PCT" ]; then
+    fail "Nodefs alert thresholds must be non-decreasing (warn <= critical <= emergency)."
+  fi
+  if [ "$AUTOCLEANUP_PVC_WARN_PCT" -gt "$AUTOCLEANUP_PVC_CRITICAL_PCT" ] || \
+     [ "$AUTOCLEANUP_PVC_CRITICAL_PCT" -gt "$AUTOCLEANUP_PVC_EMERGENCY_PCT" ]; then
+    fail "PVC alert thresholds must be non-decreasing (warn <= critical <= emergency)."
+  fi
 }
 
 validate_storage_guard_config() {
@@ -163,6 +205,11 @@ validate_postgres_config() {
 }
 
 validate_cdi_upload_config() {
+  case "$INSTALL_CDI" in
+    0|1) ;;
+    *) fail "INSTALL_CDI must be either 0 or 1." ;;
+  esac
+  [ -n "$CDI_VERSION" ] || fail "CDI_VERSION cannot be empty."
   if ! is_uint "$CDI_UPLOAD_NODEPORT" || [ "$CDI_UPLOAD_NODEPORT" -lt 30000 ] || [ "$CDI_UPLOAD_NODEPORT" -gt 32767 ]; then
     fail "CDI_UPLOAD_NODEPORT must be a valid NodePort in 30000-32767."
   fi
@@ -376,6 +423,26 @@ tune_longhorn_for_phase2() {
   fi
 }
 
+ensure_cdi_installed() {
+  if kubectl get crd datavolumes.cdi.kubevirt.io >/dev/null 2>&1 && \
+     kubectl get crd uploadtokenrequests.upload.cdi.kubevirt.io >/dev/null 2>&1; then
+    return
+  fi
+  if [ "$INSTALL_CDI" -ne 1 ]; then
+    log "CDI CRDs not found and INSTALL_CDI=0; direct CDI uploads will remain disabled."
+    return
+  fi
+
+  log "Installing CDI ${CDI_VERSION}..."
+  kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI_VERSION}/cdi-operator.yaml"
+  kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI_VERSION}/cdi-cr.yaml"
+
+  kubectl wait --for=condition=Established crd/datavolumes.cdi.kubevirt.io --timeout=300s
+  kubectl wait --for=condition=Established crd/uploadtokenrequests.upload.cdi.kubevirt.io --timeout=300s
+  kubectl -n "$CDI_NAMESPACE" rollout status deployment/cdi-operator --timeout=300s >/dev/null 2>&1 || true
+  kubectl -n "$CDI_NAMESPACE" wait --for=condition=Available deployment --all --timeout=600s >/dev/null 2>&1 || true
+}
+
 ensure_cdi_uploadproxy_nodeport() {
   if ! kubectl -n "$CDI_NAMESPACE" get svc cdi-uploadproxy >/dev/null 2>&1; then
     return
@@ -421,6 +488,9 @@ PY
 }
 
 configure_cdi_upload_proxy_url() {
+  if kubectl -n "$CDI_NAMESPACE" get svc cdi-uploadproxy >/dev/null 2>&1; then
+    ensure_cdi_uploadproxy_nodeport
+  fi
   if [ -n "$CDI_UPLOAD_PROXY_URL" ]; then
     return
   fi
@@ -433,23 +503,35 @@ configure_cdi_upload_proxy_url() {
   CDI_UPLOAD_PROXY_URL="https://${NODE_EXTERNAL_HOST}:${CDI_UPLOAD_NODEPORT}"
 }
 
-enable_cpu_manager_static_local() {
+enable_cpu_manager_static_all_nodes() {
   if [ "$CPU_MANAGER_STATIC" -ne 1 ]; then
     return
   fi
-  if [ ! -f /var/lib/kubelet/config.yaml ]; then
-    log "WARNING: /var/lib/kubelet/config.yaml not found; skipping CPU manager configuration."
-    return
-  fi
-  if grep -Eq '^\s*cpuManagerPolicy:\s*static\s*$' /var/lib/kubelet/config.yaml; then
-    log "CPU manager policy is already static on this node."
-    return
+  if ! kubectl debug -h >/dev/null 2>&1; then
+    fail "kubectl debug is required to enable CPU manager static on all nodes."
   fi
 
-  log "Enabling kubelet cpuManagerPolicy=static on this node (requires kubelet restart)..."
-  sudo_cmd python3 - <<'PY'
+  local nodes=()
+  local node
+  local debug_output
+  mapfile -t nodes < <(kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+  if [ "${#nodes[@]}" -eq 0 ]; then
+    fail "No nodes found while enabling CPU manager static."
+  fi
+
+  for node in "${nodes[@]}"; do
+    log "Ensuring kubelet cpuManagerPolicy=static on node ${node}..."
+    cleanup_node_debugger_pods "$node"
+    if ! debug_output="$(
+      kubectl debug "node/${node}" --quiet --image=ubuntu:24.04 --profile=sysadmin -- \
+        chroot /host bash -lc '
+set -euo pipefail
+if [ ! -f /var/lib/kubelet/config.yaml ]; then
+  echo "kubelet config not found, skipping"
+  exit 0
+fi
+python3 - <<'"'"'PY'"'"'
 from pathlib import Path
-
 cfg = Path("/var/lib/kubelet/config.yaml")
 lines = cfg.read_text().splitlines()
 out = []
@@ -470,10 +552,26 @@ if not found_reconcile:
     out.append("cpuManagerReconcilePeriod: 5s")
 cfg.write_text("\n".join(out) + "\n")
 PY
-  sudo_cmd systemctl restart kubelet
-  kubectl wait --for=condition=Ready "node/${CONTROL_NODE}" --timeout=180s >/dev/null 2>&1 || \
-    log "WARNING: kubelet restarted but node readiness check did not complete within timeout."
-  log "CPU manager static enabled on ${CONTROL_NODE}. Repeat on worker nodes if you want cluster-wide pinning."
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl restart kubelet || true
+fi
+if pgrep -x kubelet >/dev/null 2>&1; then
+  pkill -HUP kubelet || true
+fi
+'
+    )"; then
+      cleanup_node_debugger_pods "$node"
+      if [ -n "$debug_output" ]; then
+        echo "$debug_output" >&2
+      fi
+      fail "Failed to enable cpuManagerPolicy=static on node $node."
+    fi
+    cleanup_node_debugger_pods "$node"
+  done
+
+  kubectl wait --for=condition=Ready nodes --all --timeout=300s >/dev/null 2>&1 || \
+    log "WARNING: kubelet restart finished but not all nodes reported Ready within timeout."
+  log "CPU manager static enabled on all nodes."
 }
 
 detect_control_node() {
@@ -944,10 +1042,13 @@ metadata:
   namespace: ${NAMESPACE}
 rules:
   - apiGroups: [""]
-    resources: ["pods", "services"]
+    resources: ["pods", "services", "persistentvolumeclaims"]
     verbs: ["get", "list", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
     verbs: ["get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -959,6 +1060,28 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: bretter-maintenance
+subjects:
+  - kind: ServiceAccount
+    name: bretter-maintenance
+    namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bretter-maintenance-node-read
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bretter-maintenance-node-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bretter-maintenance-node-read
 subjects:
   - kind: ServiceAccount
     name: bretter-maintenance
@@ -992,6 +1115,13 @@ spec:
             - name: cleanup
               image: ${BACKEND_IMAGE}
               imagePullPolicy: IfNotPresent
+              env:
+                - name: BACKEND_DATA_HOSTPATH
+                  value: "${BACKEND_DATA_HOSTPATH}"
+                - name: POSTGRES_DATA_HOSTPATH
+                  value: "${POSTGRES_DATA_HOSTPATH}"
+                - name: GOLDEN_IMAGES_HOSTPATH
+                  value: "${GOLDEN_IMAGES_HOSTPATH}"
               command:
                 - /bin/bash
                 - -lc
@@ -1000,7 +1130,68 @@ spec:
                   NS="${NAMESPACE}"
                   HELPER_MAX_MINUTES=${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES}
                   FINISHED_MAX_MINUTES=${AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES}
+                  STALE_UPLOAD_MAX_MINUTES=${AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES}
+                  RESTART_ALERT_COUNT=${AUTOCLEANUP_RESTART_ALERT_COUNT}
+                  NODEFS_WARN_PCT=${AUTOCLEANUP_NODEFS_WARN_PCT}
+                  NODEFS_CRITICAL_PCT=${AUTOCLEANUP_NODEFS_CRITICAL_PCT}
+                  NODEFS_EMERGENCY_PCT=${AUTOCLEANUP_NODEFS_EMERGENCY_PCT}
+                  PVC_WARN_PCT=${AUTOCLEANUP_PVC_WARN_PCT}
+                  PVC_CRITICAL_PCT=${AUTOCLEANUP_PVC_CRITICAL_PCT}
+                  PVC_EMERGENCY_PCT=${AUTOCLEANUP_PVC_EMERGENCY_PCT}
                   now_epoch="$(date +%s)"
+                  pressure_mode=0
+
+                  pct_used() {
+                    local path="\$1"
+                    df -Pk "\$path" 2>/dev/null | awk 'NR==2 {gsub(/%/, "", \$5); print \$5}'
+                  }
+
+                  check_path_alerts() {
+                    local kind="\$1"
+                    local label="\$2"
+                    local path="\$3"
+                    local warn="\$4"
+                    local critical="\$5"
+                    local emergency="\$6"
+                    local target=""
+                    local used_pct=""
+                    if [ -d "/host-root\${path}" ]; then
+                      target="/host-root\${path}"
+                    elif [ -d "\$path" ]; then
+                      target="\$path"
+                    else
+                      return
+                    fi
+                    used_pct="\$(pct_used "\$target" || true)"
+                    if ! [[ "\$used_pct" =~ ^[0-9]+$ ]]; then
+                      return
+                    fi
+                    if [ "\$used_pct" -ge "\$warn" ]; then
+                      echo "ALERT[\$kind] \${label} usage is \${used_pct}% (warn=\${warn} critical=\${critical} emergency=\${emergency})"
+                    fi
+                    if [ "\$used_pct" -ge "\$critical" ] && [ "\$pressure_mode" -lt 1 ]; then
+                      pressure_mode=1
+                    fi
+                    if [ "\$used_pct" -ge "\$emergency" ] && [ "\$pressure_mode" -lt 2 ]; then
+                      pressure_mode=2
+                    fi
+                  }
+
+                  check_path_alerts "nodefs" "control-node rootfs" "/" "\$NODEFS_WARN_PCT" "\$NODEFS_CRITICAL_PCT" "\$NODEFS_EMERGENCY_PCT"
+                  check_path_alerts "nodefs" "control-node /var/lib" "/var/lib" "\$NODEFS_WARN_PCT" "\$NODEFS_CRITICAL_PCT" "\$NODEFS_EMERGENCY_PCT"
+                  check_path_alerts "pvc" "backend data path" "\$BACKEND_DATA_HOSTPATH" "\$PVC_WARN_PCT" "\$PVC_CRITICAL_PCT" "\$PVC_EMERGENCY_PCT"
+                  check_path_alerts "pvc" "postgres data path" "\$POSTGRES_DATA_HOSTPATH" "\$PVC_WARN_PCT" "\$PVC_CRITICAL_PCT" "\$PVC_EMERGENCY_PCT"
+                  check_path_alerts "pvc" "golden image path" "\$GOLDEN_IMAGES_HOSTPATH" "\$PVC_WARN_PCT" "\$PVC_CRITICAL_PCT" "\$PVC_EMERGENCY_PCT"
+
+                  if [ "\$pressure_mode" -eq 1 ]; then
+                    FINISHED_MAX_MINUTES=\$(( FINISHED_MAX_MINUTES < 15 ? FINISHED_MAX_MINUTES : 15 ))
+                    STALE_UPLOAD_MAX_MINUTES=\$(( STALE_UPLOAD_MAX_MINUTES < 60 ? STALE_UPLOAD_MAX_MINUTES : 60 ))
+                    echo "ALERT[nodefs] critical storage pressure mode active; tightening cleanup thresholds."
+                  elif [ "\$pressure_mode" -ge 2 ]; then
+                    FINISHED_MAX_MINUTES=\$(( FINISHED_MAX_MINUTES < 5 ? FINISHED_MAX_MINUTES : 5 ))
+                    STALE_UPLOAD_MAX_MINUTES=\$(( STALE_UPLOAD_MAX_MINUTES < 20 ? STALE_UPLOAD_MAX_MINUTES : 20 ))
+                    echo "ALERT[nodefs] emergency storage pressure mode active; aggressive cleanup enabled."
+                  fi
 
                   while IFS='|' read -r name phase created; do
                     [ -n "\$name" ] || continue
@@ -1033,6 +1224,57 @@ spec:
                     kubectl -n "\$NS" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"|"}{.metadata.creationTimestamp}{"\n"}{end}'
                   )
 
+                  if kubectl -n "\$NS" get datavolumes.cdi.kubevirt.io >/dev/null 2>&1; then
+                    while IFS='|' read -r dv_name dv_phase dv_created; do
+                      [ -n "\$dv_name" ] || continue
+                      dv_epoch="\$now_epoch"
+                      if [ -n "\$dv_created" ]; then
+                        parsed="\$(date -d "\$dv_created" +%s 2>/dev/null || true)"
+                        if [ -n "\$parsed" ]; then
+                          dv_epoch="\$parsed"
+                        fi
+                      fi
+                      dv_age_min=\$(( (now_epoch - dv_epoch) / 60 ))
+                      if [[ "\$dv_name" != img-upload-* ]]; then
+                        continue
+                      fi
+                      if [[ "\$dv_phase" == "Succeeded" || "\$dv_phase" == "Failed" ]]; then
+                        if [ "\$dv_age_min" -ge "\$STALE_UPLOAD_MAX_MINUTES" ]; then
+                          kubectl -n "\$NS" delete datavolume "\$dv_name" --ignore-not-found=true >/dev/null || true
+                          kubectl -n "\$NS" delete pvc "\$dv_name" --ignore-not-found=true >/dev/null || true
+                        fi
+                      fi
+                    done < <(
+                      kubectl -n "\$NS" get datavolumes.cdi.kubevirt.io -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"|"}{.metadata.creationTimestamp}{"\n"}{end}' || true
+                    )
+                  fi
+
+                  while IFS='|' read -r pod_name restart_counts; do
+                    [ -n "\$pod_name" ] || continue
+                    total_restarts=0
+                    IFS=',' read -ra parts <<< "\$restart_counts"
+                    for c in "\${parts[@]}"; do
+                      [ -n "\$c" ] || continue
+                      if [[ "\$c" =~ ^[0-9]+$ ]]; then
+                        total_restarts=\$((total_restarts + c))
+                      fi
+                    done
+                    if [ "\$total_restarts" -ge "\$RESTART_ALERT_COUNT" ]; then
+                      echo "ALERT[restart] pod=\$pod_name restarts=\$total_restarts (threshold=\$RESTART_ALERT_COUNT)"
+                    fi
+                  done < <(
+                    kubectl -n "\$NS" get pods -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{range .status.containerStatuses[*]}{.restartCount}{","}{end}{"\n"}{end}'
+                  )
+
+                  pressured_nodes="\$(
+                    kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.conditions[?(@.type=="DiskPressure")].status}{"\n"}{end}' \
+                      | awk -F'|' '\$2=="True"{print \$1}' \
+                      | xargs || true
+                  )"
+                  if [ -n "\$pressured_nodes" ]; then
+                    echo "ALERT[nodefs] nodes reporting DiskPressure: \$pressured_nodes"
+                  fi
+
                   for svc in \$(kubectl -n "\$NS" get svc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | grep '^svc-' || true); do
                     pod="\$(kubectl -n "\$NS" get svc "\$svc" -o jsonpath='{.spec.selector.app}' 2>/dev/null || true)"
                     if [ -z "\$pod" ] || ! kubectl -n "\$NS" get pod "\$pod" >/dev/null 2>&1; then
@@ -1046,6 +1288,15 @@ spec:
                       kubectl -n "\$NS" delete netpol "\$np" --ignore-not-found=true >/dev/null || true
                     fi
                   done
+              volumeMounts:
+                - name: host-root
+                  mountPath: /host-root
+                  readOnly: true
+          volumes:
+            - name: host-root
+              hostPath:
+                path: /
+                type: Directory
 EOF
 }
 
@@ -1094,7 +1345,8 @@ main() {
   tune_longhorn_for_phase2
   detect_control_node
   detect_node_external_host
-  enable_cpu_manager_static_local
+  enable_cpu_manager_static_all_nodes
+  ensure_cdi_installed
   configure_cdi_upload_proxy_url
   prepare_rendered_manifests
 
@@ -1112,13 +1364,15 @@ main() {
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Using VM network backend: $VM_NET_BACKEND"
-  log "CPU manager static on local node: $CPU_MANAGER_STATIC"
+  log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
+  log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
     log "Longhorn default data path override: $LONGHORN_DEFAULT_DATA_PATH"
   fi
   log "Cleanup automation enabled: $ENABLE_AUTOCLEANUP (schedule: $AUTOCLEANUP_SCHEDULE)"
+  log "Cleanup alert thresholds: nodefs ${AUTOCLEANUP_NODEFS_WARN_PCT}/${AUTOCLEANUP_NODEFS_CRITICAL_PCT}/${AUTOCLEANUP_NODEFS_EMERGENCY_PCT}% pvc ${AUTOCLEANUP_PVC_WARN_PCT}/${AUTOCLEANUP_PVC_CRITICAL_PCT}/${AUTOCLEANUP_PVC_EMERGENCY_PCT}%"
   log "Storage guard thresholds: warn<${SETUP_WARN_FREE_GIB}Gi, fail<${SETUP_MIN_FREE_GIB}Gi"
   run_storage_preflight_checks
 

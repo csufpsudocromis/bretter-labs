@@ -38,6 +38,8 @@ class Settings(BaseSettings):
     vm_net_multiqueue_enabled: bool = True
     vm_qos_guaranteed: bool = True
     vm_memory_overhead_mb: int = 1024
+    vm_runner_topology_spread_enabled: bool = True
+    vm_runner_anti_affinity_enabled: bool = True
     warm_pool_autoscale_enabled: bool = True
     warm_pool_window_minutes: int = 15
     warm_pool_refill_minutes: int = 2

@@ -13,3 +13,4 @@ typing_extensions==4.15.0
 kubernetes==34.1.0
 PyYAML==6.0.3
 psycopg[binary]==3.2.12
+alembic==1.17.2

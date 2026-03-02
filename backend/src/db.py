@@ -2,10 +2,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import text
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, create_engine
 
 from .config import settings
+from .migrations import run_db_migrations
 
 
 def _database_url() -> str:
@@ -32,13 +32,7 @@ engine = create_engine(
 
 
 def init_db() -> None:
-    SQLModel.metadata.create_all(engine)
-    if SQLITE_DB:
-        return
-    # Existing clusters may already have int4 size columns from older schemas.
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE IF EXISTS image ALTER COLUMN size_bytes TYPE BIGINT"))
-        conn.execute(text("ALTER TABLE IF EXISTS imageuploadtask ALTER COLUMN size_bytes TYPE BIGINT"))
+    run_db_migrations(engine=engine, database_url=DATABASE_URL)
 
 
 @contextmanager
