@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     cors_allow_http: bool = False
     alertmanager_api_url: str = "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
     alertmanager_timeout_seconds: int = 5
-    error_log_file_path: str = ""
+    error_log_file_path: str = "/data/error.log"
     error_log_max_bytes: int = 10 * 1024 * 1024
 
     model_config = {"env_prefix": "BLABS_"}

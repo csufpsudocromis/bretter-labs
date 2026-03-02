@@ -71,6 +71,8 @@ MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
 MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
 MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
+ENABLE_METRICS_SERVER="${ENABLE_METRICS_SERVER:-1}"
+METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml}"
 
 RENDERED_APP_MANIFEST=""
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
@@ -258,6 +260,16 @@ validate_monitoring_config() {
   fi
   if [ -z "$HELM_VERSION" ]; then
     fail "HELM_VERSION cannot be empty when ENABLE_MONITORING=1."
+  fi
+}
+
+validate_metrics_server_config() {
+  case "$ENABLE_METRICS_SERVER" in
+    0|1) ;;
+    *) fail "ENABLE_METRICS_SERVER must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_METRICS_SERVER" -eq 1 ] && [ -z "$METRICS_SERVER_MANIFEST_URL" ]; then
+    fail "METRICS_SERVER_MANIFEST_URL cannot be empty when ENABLE_METRICS_SERVER=1."
   fi
 }
 
@@ -632,6 +644,24 @@ EOF
     [ -n "$sts" ] || continue
     kubectl -n "$MONITORING_NAMESPACE" rollout status "$sts" --timeout=600s
   done < <(kubectl -n "$MONITORING_NAMESPACE" get statefulset -l app.kubernetes.io/instance="$MONITORING_RELEASE_NAME" -o name)
+}
+
+install_metrics_server() {
+  if [ "$ENABLE_METRICS_SERVER" -ne 1 ]; then
+    log "Skipping metrics-server install (ENABLE_METRICS_SERVER=0)."
+    return
+  fi
+
+  log "Installing metrics-server from ${METRICS_SERVER_MANIFEST_URL}..."
+  kubectl apply -f "$METRICS_SERVER_MANIFEST_URL"
+
+  local args
+  args="$(kubectl -n kube-system get deployment metrics-server -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || true)"
+  if ! grep -q -- "--kubelet-insecure-tls" <<<"$args"; then
+    kubectl -n kube-system patch deployment metrics-server --type='json' \
+      -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+  fi
+  kubectl -n kube-system rollout status deployment/metrics-server --timeout=600s
 }
 
 apply_monitoring_alert_rules() {
@@ -1634,6 +1664,7 @@ main() {
   validate_cdi_upload_config
   validate_cpu_manager_config
   validate_monitoring_config
+  validate_metrics_server_config
   require_apt
   install_base_packages
   install_kubectl
@@ -1664,6 +1695,7 @@ main() {
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
+  log "Metrics-server enabled: $ENABLE_METRICS_SERVER"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
     log "Longhorn default data path override: $LONGHORN_DEFAULT_DATA_PATH"
@@ -1700,6 +1732,7 @@ main() {
   fi
 
   apply_manifests
+  install_metrics_server
   install_monitoring_stack
   apply_monitoring_alert_rules
   log "Done."

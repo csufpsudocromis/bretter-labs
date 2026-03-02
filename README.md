@@ -132,6 +132,10 @@ Storage and runtime notes:
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
 - Cleanup automation now adds nodefs/PVC pressure alerts (70/85/95) and tightens cleanup thresholds before DiskPressure hits.
 - Monitoring stack installs kube-prometheus-stack and applies Bretter-specific alerts for stale upload DataVolumes, warm-pool depletion, pod restart bursts, PVC/nodefs usage (70/85/95), and DiskPressure.
+- Admin Alerts and Errors uses a capped 10MB backend error log that continuously drops oldest entries (never blocks logging), paginates 50 errors per page, and supports one-click log clear.
+- Admin Resources now includes risk/headroom scoring, pending-pod blockers, top resource consumers, and Longhorn health; live usage requires metrics-server.
+- Admin Storage Options now supports persisted overrides (storage root/image PVC/VM clone storage class), env-default reset, and live readiness checks (path free space, namespace/PVC/StorageClass, clone compatibility, CDI).
+- Setup installs metrics-server by default (`ENABLE_METRICS_SERVER=1`) so `/admin/resources` can show live node/pod usage.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).

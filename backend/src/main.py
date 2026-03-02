@@ -9,9 +9,12 @@ from sqlmodel import Session
 from .auth import hash_password
 from .config import settings
 from .db import engine, init_db
+from .logging_utils import configure_capped_error_file_logging
 from .routes import admin, auth, user
 from .services.kubernetes import kube
 from .tables import Config, User
+
+configure_capped_error_file_logging(settings.error_log_file_path, settings.error_log_max_bytes)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,19 @@ app.add_middleware(
 )
 
 
+def _apply_storage_overrides(config: Config) -> None:
+    if config.storage_root_override is not None:
+        value = str(config.storage_root_override).strip()
+        if value:
+            settings.storage_root = value
+    if config.kube_image_pvc_override is not None:
+        value = str(config.kube_image_pvc_override).strip()
+        if value:
+            settings.kube_image_pvc = value
+    if config.kube_vm_storage_class_override is not None:
+        settings.kube_vm_storage_class = str(config.kube_vm_storage_class_override).strip()
+
+
 async def reaper_loop() -> None:
     while True:
         try:
@@ -59,14 +75,14 @@ def bootstrap_defaults() -> None:
     with Session(engine) as session:
         config = session.get(Config, 1)
         if not config:
-            session.add(
-                Config(
-                    id=1,
-                    max_concurrent_vms=settings.max_concurrent_vms,
-                    per_user_vm_limit=settings.per_user_vm_limit,
-                    idle_timeout_minutes=settings.idle_timeout_minutes,
-                )
+            config = Config(
+                id=1,
+                max_concurrent_vms=settings.max_concurrent_vms,
+                per_user_vm_limit=settings.per_user_vm_limit,
+                idle_timeout_minutes=settings.idle_timeout_minutes,
             )
+            session.add(config)
+        _apply_storage_overrides(config)
         admin_user = session.get(User, settings.admin_default_username)
         if not admin_user:
             session.add(

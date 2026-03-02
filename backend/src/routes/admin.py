@@ -4,21 +4,24 @@ import logging
 import math
 import os
 import re
+import shlex
 import shutil
 import sqlite3
 import subprocess
 import time
+from collections import Counter, defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote as urlquote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 import requests
 from sqlmodel import Session, select
 from kubernetes import client
 from kubernetes.client import ApiException
+from kubernetes.stream import stream
 from kubernetes.utils import parse_quantity
 
 from ..auth import hash_password, require_admin, revoke_tokens
@@ -28,11 +31,15 @@ from ..models import (
     AlertManagerAlert,
     AlertsAndErrorsView,
     ConcurrencySettings,
+    ErrorLogClearResult,
     ErrorLogView,
     IdleTimeoutSettings,
     ImageCreateResponse,
     ImageMeta,
     ImageUploadTaskStatus,
+    StorageSettingsRead,
+    StorageSettingsUpdate,
+    StorageValidationCheck,
     RuntimeSettingsRead,
     SiteSettings,
     SSOSettings,
@@ -51,9 +58,6 @@ from ..tables import Config, Image, ImageUploadTask, Instance, Template, User
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 logger = logging.getLogger(__name__)
-
-IMAGE_DIR = Path(settings.storage_root)
-IMAGE_DIR.mkdir(parents=True, exist_ok=True)
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024 * 1024  # 60 GB
 ALLOWED_SUFFIXES = {".vhd", ".vhdx", ".qcow", ".qcow2", ".vdi"}
 RAW_CONVERSION_SUFFIXES = {".qcow", ".qcow2"}
@@ -71,7 +75,14 @@ TASK_RETENTION_HOURS = 24
 
 _CDI_AVAILABLE: bool | None = None
 ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
+ERROR_LOG_PAGE_SIZE = 50
 ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
+
+
+def _image_dir() -> Path:
+    path = Path(settings.storage_root)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def _to_str(value: object) -> str:
@@ -80,24 +91,391 @@ def _to_str(value: object) -> str:
     return str(value).strip()
 
 
-def _trim_log_bytes(content: str, max_bytes: int) -> tuple[str, bool]:
-    raw = content.encode("utf-8", errors="replace")
-    if len(raw) <= max_bytes:
-        return content, False
-    clipped = raw[-max_bytes:]
-    # Keep whole lines in the clipped view when possible.
-    newline_idx = clipped.find(b"\n")
-    if newline_idx != -1 and newline_idx + 1 < len(clipped):
-        clipped = clipped[newline_idx + 1 :]
-    return clipped.decode("utf-8", errors="replace"), True
+def _format_bytes(value: int) -> str:
+    if value <= 0:
+        return "0 B"
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{value} B"
 
 
-def _extract_error_lines(content: str) -> str:
-    lines = [line for line in content.splitlines() if ERROR_LOG_LINE_RE.search(line)]
-    return "\n".join(lines)
+def _get_or_create_config(session: Session) -> Config:
+    cfg = session.get(Config, 1)
+    if cfg:
+        return cfg
+    cfg = Config(
+        id=1,
+        max_concurrent_vms=settings.max_concurrent_vms,
+        per_user_vm_limit=settings.per_user_vm_limit,
+        idle_timeout_minutes=settings.idle_timeout_minutes,
+    )
+    session.add(cfg)
+    session.commit()
+    session.refresh(cfg)
+    return cfg
 
 
-def _read_error_log_file(path: Path, max_bytes: int) -> ErrorLogView:
+def _effective_storage_values(cfg: Config | None) -> tuple[str, str, str, dict[str, str]]:
+    source: dict[str, str] = {}
+
+    if cfg and cfg.storage_root_override is not None and _to_str(cfg.storage_root_override):
+        storage_root = _to_str(cfg.storage_root_override)
+        source["storage_root"] = "database override"
+    else:
+        storage_root = _to_str(settings.storage_root)
+        source["storage_root"] = "environment"
+
+    if cfg and cfg.kube_image_pvc_override is not None and _to_str(cfg.kube_image_pvc_override):
+        kube_image_pvc = _to_str(cfg.kube_image_pvc_override)
+        source["kube_image_pvc"] = "database override"
+    else:
+        kube_image_pvc = _to_str(settings.kube_image_pvc)
+        source["kube_image_pvc"] = "environment"
+
+    if cfg and cfg.kube_vm_storage_class_override is not None:
+        kube_vm_storage_class = _to_str(cfg.kube_vm_storage_class_override)
+        source["kube_vm_storage_class"] = "database override"
+    else:
+        kube_vm_storage_class = _to_str(settings.kube_vm_storage_class)
+        source["kube_vm_storage_class"] = "environment"
+
+    return storage_root, kube_image_pvc, kube_vm_storage_class, source
+
+
+def _apply_runtime_storage_settings(storage_root: str, kube_image_pvc: str, kube_vm_storage_class: str) -> None:
+    settings.storage_root = storage_root
+    settings.kube_image_pvc = kube_image_pvc
+    settings.kube_vm_storage_class = kube_vm_storage_class
+    _image_dir()
+
+
+def _build_storage_validation(
+    *,
+    storage_root: str,
+    kube_namespace: str,
+    kube_image_pvc: str,
+    kube_vm_storage_class: str,
+) -> tuple[list[StorageValidationCheck], list[str]]:
+    checks: list[StorageValidationCheck] = []
+    warnings: list[str] = []
+
+    storage_path = Path(storage_root)
+    try:
+        storage_path.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(storage_path)
+        free = int(usage.free)
+        status = "ok" if free >= MIN_FREE_UPLOAD_BYTES else "warn"
+        checks.append(
+            StorageValidationCheck(
+                key="storage_root",
+                status=status,
+                title="Backend image path",
+                detail=(
+                    f"{storage_path} is writable. Free: {_format_bytes(free)} of {_format_bytes(int(usage.total))}."
+                    + (" Low free space can cause upload/finalize failures." if status != "ok" else "")
+                ),
+            )
+        )
+        if status != "ok":
+            warnings.append(
+                f"Low free space on backend storage root ({_format_bytes(free)} free). "
+                "Increase node disk or cleanup stale upload artifacts."
+            )
+    except Exception as exc:
+        checks.append(
+            StorageValidationCheck(
+                key="storage_root",
+                status="error",
+                title="Backend image path",
+                detail=f"{storage_path} is not usable by backend: {exc}",
+            )
+        )
+        warnings.append("Backend storage root is not writable; uploads and image finalization will fail.")
+
+    core = None
+    try:
+        core = kube._client()
+    except Exception as exc:
+        checks.append(
+            StorageValidationCheck(
+                key="kube_api",
+                status="error",
+                title="Kubernetes API",
+                detail=f"Failed to initialize Kubernetes client: {exc}",
+            )
+        )
+        warnings.append("Kubernetes API is unavailable; storage checks are incomplete.")
+    namespace_ok = False
+    if core is not None:
+        try:
+            core.read_namespace(name=kube_namespace)
+            namespace_ok = True
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_namespace",
+                    status="ok",
+                    title="Kubernetes namespace",
+                    detail=f"Namespace {kube_namespace} exists.",
+                )
+            )
+        except ApiException as exc:
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_namespace",
+                    status="error",
+                    title="Kubernetes namespace",
+                    detail=f"Namespace {kube_namespace} lookup failed: {exc.reason or exc.status}",
+                )
+            )
+            warnings.append(f"Kubernetes namespace {kube_namespace} is not reachable; storage checks are incomplete.")
+    else:
+        checks.append(
+            StorageValidationCheck(
+                key="kube_namespace",
+                status="warn",
+                title="Kubernetes namespace",
+                detail=f"Skipped namespace check for {kube_namespace} because Kubernetes client failed to initialize.",
+            )
+        )
+
+    image_pvc = None
+    if namespace_ok:
+        try:
+            image_pvc = core.read_namespaced_persistent_volume_claim(name=kube_image_pvc, namespace=kube_namespace)
+            phase = _to_str(image_pvc.status.phase) or "Unknown"
+            storage_class = _to_str(image_pvc.spec.storage_class_name) or "unspecified"
+            capacity_raw = ""
+            if image_pvc.status and image_pvc.status.capacity:
+                capacity_raw = _to_str(image_pvc.status.capacity.get("storage"))
+            requested_raw = ""
+            if image_pvc.spec and image_pvc.spec.resources and image_pvc.spec.resources.requests:
+                requested_raw = _to_str(image_pvc.spec.resources.requests.get("storage"))
+            capacity_detail = ""
+            if requested_raw:
+                capacity_detail = f" requested={requested_raw}"
+            if capacity_raw:
+                capacity_detail += f", capacity={capacity_raw}"
+            access_modes = ",".join(image_pvc.spec.access_modes or []) if image_pvc.spec else ""
+            status = "ok" if phase.lower() == "bound" else "error"
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_image_pvc",
+                    status=status,
+                    title="Golden image PVC",
+                    detail=(
+                        f"PVC {kube_image_pvc} phase={phase}, storageClass={storage_class}"
+                        f"{capacity_detail}, accessModes={access_modes or 'unknown'}."
+                    ),
+                )
+            )
+            if status != "ok":
+                warnings.append(f"Image PVC {kube_image_pvc} is not Bound; VM launches can remain Pending.")
+        except ApiException as exc:
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_image_pvc",
+                    status="error",
+                    title="Golden image PVC",
+                    detail=f"PVC {kube_image_pvc} not available in {kube_namespace}: {exc.reason or exc.status}",
+                )
+            )
+            warnings.append(f"Image PVC {kube_image_pvc} is missing in namespace {kube_namespace}.")
+
+    if kube_vm_storage_class:
+        storage_v1 = client.StorageV1Api()
+        try:
+            storage_class_obj = storage_v1.read_storage_class(name=kube_vm_storage_class)
+            provisioner = _to_str(storage_class_obj.provisioner) or "unknown"
+            volume_binding_mode = _to_str(storage_class_obj.volume_binding_mode) or "default"
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_vm_storage_class",
+                    status="ok",
+                    title="VM clone storage class",
+                    detail=(
+                        f"StorageClass {kube_vm_storage_class} exists "
+                        f"(provisioner={provisioner}, bindingMode={volume_binding_mode})."
+                    ),
+                )
+            )
+            if image_pvc and image_pvc.spec:
+                source_sc = _to_str(image_pvc.spec.storage_class_name)
+                if source_sc and source_sc != kube_vm_storage_class:
+                    checks.append(
+                        StorageValidationCheck(
+                            key="clone_compatibility",
+                            status="warn",
+                            title="Clone compatibility",
+                            detail=(
+                                f"Image PVC storageClass is {source_sc} while clone storageClass is "
+                                f"{kube_vm_storage_class}. Cross-class cloning can fail with some CSI drivers."
+                            ),
+                        )
+                    )
+                    warnings.append("Source and target storage classes differ; verify CSI clone support.")
+                else:
+                    checks.append(
+                        StorageValidationCheck(
+                            key="clone_compatibility",
+                            status="ok",
+                            title="Clone compatibility",
+                            detail="Source image PVC and VM clone storage class are aligned for clone-based launches.",
+                        )
+                    )
+        except ApiException as exc:
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_vm_storage_class",
+                    status="error",
+                    title="VM clone storage class",
+                    detail=f"StorageClass {kube_vm_storage_class} lookup failed: {exc.reason or exc.status}",
+                )
+            )
+            warnings.append(
+                f"StorageClass {kube_vm_storage_class} is unavailable; clone-only VM launch path will fail."
+            )
+        except Exception as exc:
+            checks.append(
+                StorageValidationCheck(
+                    key="kube_vm_storage_class",
+                    status="error",
+                    title="VM clone storage class",
+                    detail=f"StorageClass {kube_vm_storage_class} check failed: {exc}",
+                )
+            )
+            warnings.append(
+                f"StorageClass {kube_vm_storage_class} check failed due to Kubernetes API error."
+            )
+    else:
+        checks.append(
+            StorageValidationCheck(
+                key="kube_vm_storage_class",
+                status="warn",
+                title="VM clone storage class",
+                detail="Not set. Clone-only VM launch path is disabled; starts may fall back or fail.",
+            )
+        )
+        warnings.append("Set VM clone storage class to keep cross-node clone-based VM launches reliable.")
+
+    cdi_enabled = bool(settings.cdi_direct_upload_enabled)
+    cdi_available = _has_cdi_datavolume()
+    if cdi_enabled and cdi_available:
+        checks.append(
+            StorageValidationCheck(
+                key="cdi",
+                status="ok",
+                title="CDI direct upload",
+                detail="DataVolume CRD detected and direct upload is enabled.",
+            )
+        )
+    elif cdi_enabled and not cdi_available:
+        checks.append(
+            StorageValidationCheck(
+                key="cdi",
+                status="warn",
+                title="CDI direct upload",
+                detail="Direct upload enabled but DataVolume CRD not detected; uploads can fall back to slower paths.",
+            )
+        )
+        warnings.append("Install/repair CDI so uploads use direct DataVolume flow.")
+    else:
+        checks.append(
+            StorageValidationCheck(
+                key="cdi",
+                status="info",
+                title="CDI direct upload",
+                detail="Direct upload is disabled by configuration.",
+            )
+        )
+
+    return checks, warnings
+
+
+def _storage_settings_view(cfg: Config | None) -> StorageSettingsRead:
+    storage_root, kube_image_pvc, kube_vm_storage_class, sources = _effective_storage_values(cfg)
+    checks, warnings = _build_storage_validation(
+        storage_root=storage_root,
+        kube_namespace=settings.kube_namespace,
+        kube_image_pvc=kube_image_pvc,
+        kube_vm_storage_class=kube_vm_storage_class,
+    )
+    return StorageSettingsRead(
+        storage_root=storage_root,
+        kube_namespace=settings.kube_namespace,
+        kube_image_pvc=kube_image_pvc,
+        kube_vm_storage_class=kube_vm_storage_class,
+        sources=sources,
+        checks=checks,
+        warnings=warnings,
+    )
+
+
+def _extract_error_lines(content: str) -> list[str]:
+    return [line for line in content.splitlines() if ERROR_LOG_LINE_RE.search(line)]
+
+
+def _cap_lines_to_bytes(lines: list[str], max_bytes: int) -> tuple[list[str], bool, int]:
+    if not lines:
+        return [], False, 0
+    kept: deque[tuple[str, int]] = deque()
+    total_bytes = 0
+    truncated = False
+    for line in lines:
+        line_bytes = len((line + "\n").encode("utf-8", errors="replace"))
+        kept.append((line, line_bytes))
+        total_bytes += line_bytes
+        while total_bytes > max_bytes and kept:
+            _, dropped_bytes = kept.popleft()
+            total_bytes -= dropped_bytes
+            truncated = True
+    return [line for line, _ in kept], truncated, total_bytes
+
+
+def _paginate_lines(lines: list[str], page: int, per_page: int) -> tuple[list[str], int, int, int, bool, bool]:
+    total_lines = len(lines)
+    if total_lines == 0:
+        return [], 1, 1, 0, False, False
+    total_pages = max(1, math.ceil(total_lines / per_page))
+    page = min(max(1, page), total_pages)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_lines = lines[start:end]
+    return page_lines, page, total_pages, total_lines, page > 1, page < total_pages
+
+
+def _build_error_log_view(source: str, lines: list[str], max_bytes: int, truncated: bool, page: int, per_page: int) -> ErrorLogView:
+    bounded_lines, bounded_truncated, bounded_bytes = _cap_lines_to_bytes(lines, max_bytes=max_bytes)
+    page_lines, page, total_pages, total_lines, has_prev, has_next = _paginate_lines(
+        bounded_lines, page=page, per_page=per_page
+    )
+    if page_lines:
+        content = "\n".join(page_lines)
+    elif total_lines == 0:
+        content = "No error lines found."
+    else:
+        content = ""
+    return ErrorLogView(
+        source=source,
+        bytes=bounded_bytes,
+        truncated=truncated or bounded_truncated,
+        total_lines=total_lines,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        has_prev=has_prev,
+        has_next=has_next,
+        lines=page_lines,
+        content=content,
+    )
+
+
+def _read_error_log_file(path: Path, max_bytes: int, page: int, per_page: int) -> ErrorLogView:
     source = f"file:{path}"
     if not path.exists():
         return ErrorLogView(source=source, bytes=0, truncated=False, content="Log file not found.")
@@ -112,19 +490,18 @@ def _read_error_log_file(path: Path, max_bytes: int) -> ErrorLogView:
         return ErrorLogView(source=source, bytes=0, truncated=False, content=f"Failed to read log file: {exc}")
 
     text = raw.decode("utf-8", errors="replace")
-    filtered = _extract_error_lines(text)
-    if not filtered:
-        filtered = "No error lines found in the selected log file."
-    clipped, clipped_flag = _trim_log_bytes(filtered, max_bytes)
-    return ErrorLogView(
+    filtered_lines = _extract_error_lines(text)
+    return _build_error_log_view(
         source=source,
-        bytes=len(clipped.encode("utf-8", errors="replace")),
-        truncated=(file_size > max_bytes) or clipped_flag,
-        content=clipped,
+        lines=filtered_lines,
+        max_bytes=max_bytes,
+        truncated=file_size > max_bytes,
+        page=page,
+        per_page=per_page,
     )
 
 
-def _collect_k8s_error_logs(max_bytes: int) -> ErrorLogView:
+def _collect_k8s_error_logs(max_bytes: int, page: int, per_page: int) -> ErrorLogView:
     source = f"kubernetes:{settings.kube_namespace}"
     core = kube._client()
     try:
@@ -138,7 +515,8 @@ def _collect_k8s_error_logs(max_bytes: int) -> ErrorLogView:
         key=lambda pod: (pod.metadata.creation_timestamp or datetime.min.replace(tzinfo=timezone.utc)),
         reverse=True,
     )
-    sections: list[str] = []
+    lines: list[str] = []
+    approx_bytes = 0
     max_per_pod = min(max_bytes, 1024 * 1024)
     for pod in pods_sorted:
         name = _to_str(pod.metadata.name)
@@ -154,22 +532,92 @@ def _collect_k8s_error_logs(max_bytes: int) -> ErrorLogView:
             )
         except ApiException:
             continue
-        filtered = _extract_error_lines(log_text or "")
-        if not filtered:
+        pod_lines = _extract_error_lines(log_text or "")
+        if not pod_lines:
             continue
-        sections.append(f"===== {name} =====\n{filtered}\n")
-        if len("".join(sections).encode("utf-8", errors="replace")) >= max_bytes * 2:
+        prefixed_lines = [f"[{name}] {line}" for line in pod_lines]
+        lines.extend(prefixed_lines)
+        approx_bytes += sum(len((line + "\n").encode("utf-8", errors="replace")) for line in prefixed_lines)
+        if approx_bytes >= max_bytes * 2:
             break
 
-    content = "".join(sections).strip()
-    if not content:
-        content = "No error lines found in current Kubernetes pod logs."
-    clipped, clipped_flag = _trim_log_bytes(content, max_bytes)
-    return ErrorLogView(
+    return _build_error_log_view(
         source=source,
-        bytes=len(clipped.encode("utf-8", errors="replace")),
-        truncated=clipped_flag,
-        content=clipped,
+        lines=lines,
+        max_bytes=max_bytes,
+        truncated=False,
+        page=page,
+        per_page=per_page,
+    )
+
+
+def _truncate_local_error_log(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb"):
+        pass
+
+
+def _clear_backend_error_logs(path: Path) -> ErrorLogClearResult:
+    source = f"file:{path}"
+    clear_cmd = f"mkdir -p {shlex.quote(str(path.parent))} && : > {shlex.quote(str(path))}"
+    core = kube._client()
+    try:
+        pods = core.list_namespaced_pod(
+            namespace=settings.kube_namespace,
+            label_selector="app=bretter-backend",
+        ).items
+    except ApiException as exc:
+        logger.warning("Failed listing backend pods for error log clear: %s", exc)
+        _truncate_local_error_log(path)
+        return ErrorLogClearResult(
+            source=source,
+            cleared_pods=1,
+            total_pods=1,
+            detail="Cleared local backend error log.",
+        )
+
+    pod_names = [_to_str(pod.metadata.name) for pod in pods if _to_str(pod.metadata.name)]
+    if not pod_names:
+        _truncate_local_error_log(path)
+        return ErrorLogClearResult(
+            source=source,
+            cleared_pods=1,
+            total_pods=1,
+            detail="Cleared local backend error log.",
+        )
+
+    failed_pods: list[str] = []
+    cleared = 0
+    for pod_name in pod_names:
+        try:
+            stream(
+                core.connect_get_namespaced_pod_exec,
+                name=pod_name,
+                namespace=settings.kube_namespace,
+                command=["/bin/sh", "-c", clear_cmd],
+                stderr=True,
+                stdin=False,
+                stdout=True,
+                tty=False,
+            )
+            cleared += 1
+        except Exception as exc:
+            failed_pods.append(f"{pod_name}: {exc}")
+
+    if cleared == 0:
+        _truncate_local_error_log(path)
+        cleared = 1
+        failed_pods.append("Fallback applied: cleared local pod log only.")
+
+    detail = f"Cleared error logs on {cleared}/{len(pod_names)} backend pods."
+    if failed_pods:
+        detail = f"{detail} {len(failed_pods)} pod(s) failed."
+    return ErrorLogClearResult(
+        source=source,
+        cleared_pods=cleared,
+        total_pods=len(pod_names),
+        failed_pods=failed_pods,
+        detail=detail,
     )
 
 
@@ -244,6 +692,12 @@ def _ensure_config_columns() -> None:
         cur = conn.cursor()
         cols = {row[1] for row in cur.execute("PRAGMA table_info(config)")}
         to_add = []
+        if "storage_root_override" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN storage_root_override TEXT")
+        if "kube_image_pvc_override" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN kube_image_pvc_override TEXT")
+        if "kube_vm_storage_class_override" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN kube_vm_storage_class_override TEXT")
         if "site_title" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN site_title TEXT DEFAULT 'Bretter Labs'")
         if "site_tagline" not in cols:
@@ -1459,7 +1913,7 @@ def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subproc
 
 
 def _ensure_free_space(required_free_bytes: int, *, context: str) -> None:
-    free_bytes = shutil.disk_usage(IMAGE_DIR).free
+    free_bytes = shutil.disk_usage(_image_dir()).free
     if free_bytes >= required_free_bytes:
         return
     free_gib = free_bytes / (1024 ** 3)
@@ -1946,7 +2400,7 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     task_id = str(uuid4())
     image_id = str(uuid4())
     try:
-        dest_path = IMAGE_DIR / filename
+        dest_path = _image_dir() / filename
         with dest_path.open("wb") as buffer:
             while chunk := file.file.read(1024 * 1024):
                 _ensure_free_space(MIN_FREE_UPLOAD_BYTES + len(chunk), context="upload")
@@ -2095,7 +2549,7 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
             status_code=status.HTTP_409_CONFLICT,
             detail="clone-based VM storage is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
         )
-    dest_path = IMAGE_DIR / Path(payload.filename).name
+    dest_path = _image_dir() / Path(payload.filename).name
     if not dest_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file not found on storage")
     suffix = dest_path.suffix.lower()
@@ -2109,7 +2563,7 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
                 converted_name = _convert_image_on_pvc(dest_path.name, output_format="qcow2", output_suffix="qcow2")
         except Exception as exc:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"image conversion failed: {exc}") from exc
-        dest_path = IMAGE_DIR / converted_name
+        dest_path = _image_dir() / converted_name
         if not dest_path.exists():
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -2197,7 +2651,7 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
     record = session.get(Image, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
-    dest_path = IMAGE_DIR / Path(record.filename).name
+    dest_path = _image_dir() / Path(record.filename).name
     if dest_path.exists():
         try:
             dest_path.unlink()
@@ -2233,8 +2687,8 @@ def rename_image(image_id: str, payload: ImageRename, session: Session = Depends
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="filename already exists")
 
-    src_path = IMAGE_DIR / record.filename
-    dst_path = IMAGE_DIR / new_filename
+    src_path = _image_dir() / record.filename
+    dst_path = _image_dir() / new_filename
     try:
         if src_path.exists():
             src_path.replace(dst_path)
@@ -2418,51 +2872,550 @@ def delete_template(template_id: str, session: Session = Depends(get_session)) -
     session.commit()
 
 
+def _parse_cpu_m(value: object) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(parse_quantity(str(value)) * 1000)
+    except Exception:
+        return 0
+
+
+def _parse_bytes(value: object) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(parse_quantity(str(value)))
+    except Exception:
+        return 0
+
+
+def _resource_pct(used: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((used / total) * 100.0, 1)
+
+
+def _risk_level_for_pct(pct: float) -> str:
+    if pct >= 95:
+        return "critical"
+    if pct >= 85:
+        return "high"
+    if pct >= 70:
+        return "warning"
+    return "healthy"
+
+
+def _worst_risk(levels: list[str]) -> str:
+    rank = {"healthy": 0, "info": 1, "warning": 2, "high": 3, "critical": 4}
+    normalized = [lvl if lvl in rank else "healthy" for lvl in levels]
+    return max(normalized, key=lambda lvl: rank[lvl]) if normalized else "healthy"
+
+
+def _node_roles(node: client.V1Node) -> list[str]:
+    labels = node.metadata.labels or {}
+    roles = [key.split("/", 1)[1] for key in labels if key.startswith("node-role.kubernetes.io/")]
+    return sorted({role for role in roles if role}) or ["worker"]
+
+
+def _pending_reason_for_pod(pod: client.V1Pod) -> tuple[str, str]:
+    for cond in pod.status.conditions or []:
+        if _to_str(cond.type) == "PodScheduled" and _to_str(cond.status) == "False":
+            reason = _to_str(cond.reason) or "Unschedulable"
+            detail = _to_str(cond.message) or "Pod is pending scheduling."
+            return reason, detail
+    for status_obj in list(pod.status.init_container_statuses or []) + list(pod.status.container_statuses or []):
+        waiting = status_obj.state.waiting if status_obj.state else None
+        if waiting:
+            reason = _to_str(waiting.reason) or "ContainerWaiting"
+            detail = _to_str(waiting.message) or "Container is waiting to start."
+            return reason, detail
+    reason = _to_str(pod.status.reason) or "Pending"
+    detail = _to_str(pod.status.message) or "Pod is pending."
+    return reason, detail
+
+
+def _collect_metrics_usage() -> tuple[dict[str, dict[str, int]], dict[tuple[str, str], dict[str, int]], bool, str]:
+    custom = client.CustomObjectsApi()
+    node_usage: dict[str, dict[str, int]] = {}
+    pod_usage: dict[tuple[str, str], dict[str, int]] = {}
+    try:
+        nodes_payload = custom.list_cluster_custom_object(group="metrics.k8s.io", version="v1beta1", plural="nodes")
+        for item in nodes_payload.get("items", []):
+            metadata = item.get("metadata") or {}
+            name = _to_str(metadata.get("name"))
+            if not name:
+                continue
+            usage = item.get("usage") or {}
+            node_usage[name] = {
+                "cpu_m": _parse_cpu_m(usage.get("cpu")),
+                "memory_bytes": _parse_bytes(usage.get("memory")),
+            }
+        pods_payload = custom.list_cluster_custom_object(group="metrics.k8s.io", version="v1beta1", plural="pods")
+        for item in pods_payload.get("items", []):
+            metadata = item.get("metadata") or {}
+            namespace = _to_str(metadata.get("namespace"))
+            name = _to_str(metadata.get("name"))
+            if not namespace or not name:
+                continue
+            cpu_m = 0
+            memory_bytes = 0
+            for container_metrics in item.get("containers", []):
+                usage = (container_metrics or {}).get("usage") or {}
+                cpu_m += _parse_cpu_m(usage.get("cpu"))
+                memory_bytes += _parse_bytes(usage.get("memory"))
+            pod_usage[(namespace, name)] = {"cpu_m": cpu_m, "memory_bytes": memory_bytes}
+        return node_usage, pod_usage, True, ""
+    except ApiException as exc:
+        detail = f"{exc.status} {exc.reason}".strip()
+        if not detail:
+            detail = "unreachable"
+        return {}, {}, False, f"metrics-server unavailable: {detail}"
+    except Exception as exc:
+        return {}, {}, False, f"metrics-server unavailable: {exc}"
+
+
+def _collect_longhorn_storage_summary() -> dict:
+    summary = {
+        "available": False,
+        "detail": "Longhorn data unavailable.",
+        "version": "",
+        "node_count": 0,
+        "volume_count": 0,
+        "capacity_bytes": 0,
+        "free_bytes": 0,
+        "used_bytes": 0,
+        "utilization_pct": 0.0,
+        "risk": "healthy",
+        "degraded_nodes": 0,
+        "unschedulable_nodes": 0,
+        "detached_volumes": 0,
+        "volume_robustness": {},
+        "volume_states": {},
+        "nodes": [],
+    }
+    custom = client.CustomObjectsApi()
+    last_error = ""
+    for version in ("v1beta2", "v1beta1"):
+        try:
+            nodes_payload = custom.list_cluster_custom_object(group="longhorn.io", version=version, plural="nodes")
+            volumes_payload = custom.list_cluster_custom_object(group="longhorn.io", version=version, plural="volumes")
+            nodes_items = nodes_payload.get("items", [])
+            volume_items = volumes_payload.get("items", [])
+            total_capacity = 0
+            total_free = 0
+            degraded_nodes = 0
+            unschedulable_nodes = 0
+            longhorn_nodes: list[dict] = []
+
+            def condition_status(raw_conditions: object, target_type: str) -> str:
+                if isinstance(raw_conditions, dict):
+                    value = raw_conditions.get(target_type)
+                    if isinstance(value, dict):
+                        return _to_str(value.get("status"))
+                    return ""
+                if isinstance(raw_conditions, list):
+                    for item in raw_conditions:
+                        if not isinstance(item, dict):
+                            continue
+                        if _to_str(item.get("type")) == target_type:
+                            return _to_str(item.get("status"))
+                return ""
+
+            for item in nodes_items:
+                metadata = item.get("metadata") or {}
+                spec = item.get("spec") or {}
+                status_obj = item.get("status") or {}
+                name = _to_str(metadata.get("name")) or "unknown"
+                disk_status = status_obj.get("diskStatus") or {}
+                node_capacity = 0
+                node_free = 0
+                if isinstance(disk_status, dict):
+                    for disk in disk_status.values():
+                        if not isinstance(disk, dict):
+                            continue
+                        node_capacity += int(disk.get("storageMaximum") or 0)
+                        node_free += int(disk.get("storageAvailable") or 0)
+                conditions = status_obj.get("conditions") or []
+                ready = condition_status(conditions, "Ready") == "True"
+                schedulable_status = condition_status(conditions, "Schedulable")
+                allow_scheduling = bool(spec.get("allowScheduling", True))
+                schedulable = allow_scheduling and schedulable_status != "False"
+                if not ready:
+                    degraded_nodes += 1
+                if not schedulable:
+                    unschedulable_nodes += 1
+                total_capacity += node_capacity
+                total_free += node_free
+                longhorn_nodes.append(
+                    {
+                        "name": name,
+                        "ready": ready,
+                        "schedulable": schedulable,
+                        "capacity_bytes": node_capacity,
+                        "free_bytes": node_free,
+                        "utilization_pct": _resource_pct(max(node_capacity - node_free, 0), node_capacity),
+                    }
+                )
+            robustness = Counter()
+            states = Counter()
+            detached_unknown = 0
+            for item in volume_items:
+                status_obj = item.get("status") or {}
+                state = (_to_str(status_obj.get("state")) or "unknown").lower()
+                robustness_state = (_to_str(status_obj.get("robustness")) or "unknown").lower()
+                states[state] += 1
+                if robustness_state == "unknown" and state == "detached":
+                    robustness["detached"] += 1
+                    detached_unknown += 1
+                else:
+                    robustness[robustness_state] += 1
+            used_bytes = max(total_capacity - total_free, 0)
+            utilization_pct = _resource_pct(used_bytes, total_capacity)
+            risk = _risk_level_for_pct(utilization_pct)
+            if robustness.get("faulted", 0) > 0:
+                risk = _worst_risk([risk, "critical"])
+            elif robustness.get("degraded", 0) > 0:
+                risk = _worst_risk([risk, "warning"])
+            if degraded_nodes > 0:
+                risk = _worst_risk([risk, "warning"])
+            summary.update(
+                {
+                    "available": True,
+                    "detail": f"Longhorn {version} metrics loaded.",
+                    "version": version,
+                    "node_count": len(nodes_items),
+                    "volume_count": len(volume_items),
+                    "capacity_bytes": total_capacity,
+                    "free_bytes": total_free,
+                    "used_bytes": used_bytes,
+                    "utilization_pct": utilization_pct,
+                    "risk": risk,
+                    "degraded_nodes": degraded_nodes,
+                    "unschedulable_nodes": unschedulable_nodes,
+                    "detached_volumes": detached_unknown,
+                    "volume_robustness": dict(robustness),
+                    "volume_states": dict(states),
+                    "nodes": longhorn_nodes,
+                }
+            )
+            return summary
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+    if last_error:
+        summary["detail"] = f"Longhorn metrics unavailable: {last_error}"
+    return summary
+
+
+def _build_resource_recommendations(utilization: dict, pending: dict, nodes: list[dict], longhorn: dict) -> list[dict]:
+    recs: list[dict] = []
+    for key, label in (("cpu_pct", "CPU"), ("memory_pct", "Memory"), ("disk_pct", "Disk")):
+        pct = float(utilization.get(key, 0))
+        risk = _risk_level_for_pct(pct)
+        if risk in {"warning", "high", "critical"}:
+            recs.append(
+                {
+                    "severity": risk,
+                    "title": f"{label} headroom is low ({pct:.1f}%)",
+                    "detail": f"{label} requested resources are at {pct:.1f}% of allocatable capacity.",
+                    "action": "Scale nodes/resources or reduce per-VM requests and warm pool pressure.",
+                }
+            )
+    not_ready = [n["name"] for n in nodes if n.get("conditions", {}).get("Ready") != "True"]
+    if not_ready:
+        recs.append(
+            {
+                "severity": "critical",
+                "title": "One or more nodes are NotReady",
+                "detail": f"NotReady nodes: {', '.join(not_ready)}.",
+                "action": "Check kubelet/runtime health and node connectivity before scheduling additional labs.",
+            }
+        )
+    pressure_nodes = [n["name"] for n in nodes if n.get("pressures")]
+    if pressure_nodes:
+        recs.append(
+            {
+                "severity": "high",
+                "title": "Node pressure detected",
+                "detail": f"Pressure conditions present on: {', '.join(pressure_nodes)}.",
+                "action": "Run cleanup, free disk/memory, and verify Longhorn/PVC usage on affected nodes.",
+            }
+        )
+    unschedulable = [n["name"] for n in nodes if not n.get("schedulable", True)]
+    if unschedulable:
+        recs.append(
+            {
+                "severity": "warning",
+                "title": "Unschedulable nodes present",
+                "detail": f"Unschedulable nodes: {', '.join(unschedulable)}.",
+                "action": "Uncordon nodes when ready or adjust placement constraints.",
+            }
+        )
+    pending_count = int(pending.get("count") or 0)
+    top_reasons = pending.get("top_reasons") or []
+    if pending_count > 0:
+        top_reason = top_reasons[0]["reason"] if top_reasons else "pending workload"
+        recs.append(
+            {
+                "severity": "high",
+                "title": f"{pending_count} pods are pending",
+                "detail": f"Top blocker: {top_reason}.",
+                "action": "Resolve pending blockers first to avoid delayed lab start times.",
+            }
+        )
+    if longhorn.get("available"):
+        lh_risk = longhorn.get("risk", "healthy")
+        if lh_risk in {"warning", "high", "critical"}:
+            recs.append(
+                {
+                    "severity": lh_risk,
+                    "title": "Longhorn capacity/health risk",
+                    "detail": f"Longhorn utilization is {longhorn.get('utilization_pct', 0):.1f}% (risk: {lh_risk}).",
+                    "action": "Increase storage headroom, trim stale volumes, and keep replica count low for ephemeral labs.",
+                }
+            )
+        faulted = int((longhorn.get("volume_robustness") or {}).get("faulted", 0))
+        degraded = int((longhorn.get("volume_robustness") or {}).get("degraded", 0))
+        if faulted > 0 or degraded > 0:
+            recs.append(
+                {
+                    "severity": "critical" if faulted > 0 else "warning",
+                    "title": "Longhorn volume robustness issues",
+                    "detail": f"Faulted volumes: {faulted}, degraded volumes: {degraded}.",
+                    "action": "Repair affected volumes and verify replica/node health before heavy lab activity.",
+                }
+            )
+    if not recs:
+        recs.append(
+            {
+                "severity": "info",
+                "title": "Cluster looks healthy",
+                "detail": "No immediate capacity or scheduling risks detected.",
+                "action": "Keep monitoring pending reasons and pressure thresholds during peak usage.",
+            }
+        )
+    return recs[:10]
+
+
 @router.get("/resources")
 def cluster_resources() -> dict:
     core = kube._client()
     nodes = core.list_node().items
+    pods = core.list_pod_for_all_namespaces().items
+    node_usage, pod_usage, metrics_available, metrics_error = _collect_metrics_usage()
+    longhorn = _collect_longhorn_storage_summary()
+
     total_capacity_cpu = 0
     total_capacity_mem = 0
     total_capacity_disk = 0
     total_allocatable_cpu = 0
     total_allocatable_mem = 0
     total_allocatable_disk = 0
+    node_requested: dict[str, dict[str, int]] = defaultdict(lambda: {"cpu_m": 0, "memory_bytes": 0, "disk_bytes": 0})
+
     for node in nodes:
         cap = node.status.capacity or {}
         alloc = node.status.allocatable or {}
-        total_capacity_cpu += int(parse_quantity(cap.get("cpu", "0")) * 1000)  # cores -> millicores
-        total_capacity_mem += int(parse_quantity(cap.get("memory", "0")))  # bytes
-        total_capacity_disk += int(parse_quantity(cap.get("ephemeral-storage", "0")))
-        total_allocatable_cpu += int(parse_quantity(alloc.get("cpu", "0")) * 1000)
-        total_allocatable_mem += int(parse_quantity(alloc.get("memory", "0")))
-        total_allocatable_disk += int(parse_quantity(alloc.get("ephemeral-storage", "0")))
+        total_capacity_cpu += _parse_cpu_m(cap.get("cpu"))
+        total_capacity_mem += _parse_bytes(cap.get("memory"))
+        total_capacity_disk += _parse_bytes(cap.get("ephemeral-storage"))
+        total_allocatable_cpu += _parse_cpu_m(alloc.get("cpu"))
+        total_allocatable_mem += _parse_bytes(alloc.get("memory"))
+        total_allocatable_disk += _parse_bytes(alloc.get("ephemeral-storage"))
 
     requested_cpu = 0
     requested_mem = 0
     requested_disk = 0
-    pods = core.list_pod_for_all_namespaces().items
+    pending_reasons: Counter = Counter()
+    pending_reason_examples: dict[str, list[str]] = defaultdict(list)
+    pending_pods: list[dict] = []
+    pod_consumers: list[dict] = []
+    now = datetime.now(timezone.utc)
+
     for pod in pods:
-        for container in pod.spec.containers:
+        pod_cpu = 0
+        pod_mem = 0
+        pod_disk = 0
+        for container in pod.spec.containers or []:
             req = (container.resources and container.resources.requests) or {}
             if "cpu" in req:
-                requested_cpu += int(parse_quantity(req["cpu"]) * 1000)
+                pod_cpu += _parse_cpu_m(req["cpu"])
             if "memory" in req:
-                requested_mem += int(parse_quantity(req["memory"]))
+                pod_mem += _parse_bytes(req["memory"])
             if "ephemeral-storage" in req:
-                requested_disk += int(parse_quantity(req["ephemeral-storage"]))
+                pod_disk += _parse_bytes(req["ephemeral-storage"])
+
+        requested_cpu += pod_cpu
+        requested_mem += pod_mem
+        requested_disk += pod_disk
+
+        namespace = _to_str(pod.metadata.namespace)
+        pod_name = _to_str(pod.metadata.name)
+        node_name = _to_str(pod.spec.node_name)
+        phase = _to_str(pod.status.phase)
+
+        if node_name:
+            node_requested[node_name]["cpu_m"] += pod_cpu
+            node_requested[node_name]["memory_bytes"] += pod_mem
+            node_requested[node_name]["disk_bytes"] += pod_disk
+
+        owner_refs = pod.metadata.owner_references or []
+        owner = f"{owner_refs[0].kind}/{owner_refs[0].name}" if owner_refs else ""
+        consumer = {
+            "namespace": namespace,
+            "name": pod_name,
+            "owner": owner,
+            "phase": phase,
+            "node": node_name,
+            "requested": {"cpu_m": pod_cpu, "memory_bytes": pod_mem, "disk_bytes": pod_disk},
+        }
+        if metrics_available:
+            consumer["usage"] = pod_usage.get((namespace, pod_name), {"cpu_m": 0, "memory_bytes": 0})
+        pod_consumers.append(consumer)
+
+        if phase.lower() == "pending":
+            reason, detail = _pending_reason_for_pod(pod)
+            pending_reasons[reason] += 1
+            detail_trimmed = (detail[:220] + "...") if len(detail) > 220 else detail
+            if detail_trimmed and detail_trimmed not in pending_reason_examples[reason] and len(pending_reason_examples[reason]) < 3:
+                pending_reason_examples[reason].append(detail_trimmed)
+            created = pod.metadata.creation_timestamp
+            age_seconds = int((now - created).total_seconds()) if created else 0
+            pending_pods.append(
+                {
+                    "namespace": namespace,
+                    "name": pod_name,
+                    "node": node_name,
+                    "reason": reason,
+                    "detail": detail_trimmed,
+                    "age_seconds": max(0, age_seconds),
+                }
+            )
 
     node_list = []
     for node in nodes:
-        name = node.metadata.name
+        name = _to_str(node.metadata.name)
         internal_ip = ""
         for addr in node.status.addresses or []:
             if addr.type == "InternalIP":
                 internal_ip = addr.address
+        cap = node.status.capacity or {}
+        alloc = node.status.allocatable or {}
+        req = node_requested.get(name, {"cpu_m": 0, "memory_bytes": 0, "disk_bytes": 0})
+        alloc_cpu = _parse_cpu_m(alloc.get("cpu"))
+        alloc_mem = _parse_bytes(alloc.get("memory"))
+        alloc_disk = _parse_bytes(alloc.get("ephemeral-storage"))
+        cpu_pct = _resource_pct(req["cpu_m"], alloc_cpu)
+        mem_pct = _resource_pct(req["memory_bytes"], alloc_mem)
+        disk_pct = _resource_pct(req["disk_bytes"], alloc_disk)
+        conditions: dict[str, str] = {}
+        pressures: list[str] = []
+        for cond in node.status.conditions or []:
+            ctype = _to_str(cond.type)
+            cstatus = _to_str(cond.status)
+            if ctype:
+                conditions[ctype] = cstatus
+            if ctype.endswith("Pressure") and cstatus == "True":
+                pressures.append(ctype)
+        node_risk = _worst_risk([_risk_level_for_pct(cpu_pct), _risk_level_for_pct(mem_pct), _risk_level_for_pct(disk_pct)])
+        if conditions.get("Ready") != "True":
+            node_risk = _worst_risk([node_risk, "critical"])
+        elif pressures:
+            node_risk = _worst_risk([node_risk, "high"])
+        if bool(node.spec.unschedulable):
+            node_risk = _worst_risk([node_risk, "warning"])
         taints = [f"{t.key}={t.value}:{t.effect}" for t in (node.spec.taints or [])]
-        node_list.append({"name": name, "ip": internal_ip, "taints": taints})
+        node_entry = {
+            "name": name,
+            "ip": internal_ip,
+            "roles": _node_roles(node),
+            "taints": taints,
+            "schedulable": not bool(node.spec.unschedulable),
+            "conditions": conditions,
+            "pressures": pressures,
+            "risk": node_risk,
+            "capacity": {
+                "cpu_m": _parse_cpu_m(cap.get("cpu")),
+                "memory_bytes": _parse_bytes(cap.get("memory")),
+                "disk_bytes": _parse_bytes(cap.get("ephemeral-storage")),
+            },
+            "allocatable": {"cpu_m": alloc_cpu, "memory_bytes": alloc_mem, "disk_bytes": alloc_disk},
+            "requested": req,
+            "utilization_pct": {"cpu": cpu_pct, "memory": mem_pct, "disk": disk_pct},
+            # Backward-compatible aliases used by older UI builds.
+            "capacity_cpu_m": alloc_cpu,
+            "capacity_mem_bytes": alloc_mem,
+            "capacity_disk_bytes": alloc_disk,
+            "usage": {"cpu_m": req["cpu_m"], "mem_bytes": req["memory_bytes"], "disk_bytes": req["disk_bytes"]},
+        }
+        if metrics_available:
+            node_entry["usage"] = {
+                "cpu_m": node_usage.get(name, {}).get("cpu_m", 0),
+                "memory_bytes": node_usage.get(name, {}).get("memory_bytes", 0),
+                "disk_bytes": req["disk_bytes"],
+            }
+        node_list.append(node_entry)
+
+    utilization = {
+        "cpu_pct": _resource_pct(requested_cpu, total_allocatable_cpu),
+        "memory_pct": _resource_pct(requested_mem, total_allocatable_mem),
+        "disk_pct": _resource_pct(requested_disk, total_allocatable_disk),
+    }
+    risk = {
+        "cpu": _risk_level_for_pct(utilization["cpu_pct"]),
+        "memory": _risk_level_for_pct(utilization["memory_pct"]),
+        "disk": _risk_level_for_pct(utilization["disk_pct"]),
+    }
+    risk["overall"] = _worst_risk([risk["cpu"], risk["memory"], risk["disk"]])
+
+    pending = {
+        "count": len(pending_pods),
+        "top_reasons": [
+            {"reason": reason, "count": count, "examples": pending_reason_examples.get(reason, [])}
+            for reason, count in pending_reasons.most_common(8)
+        ],
+        "pods": sorted(pending_pods, key=lambda item: item.get("age_seconds", 0), reverse=True)[:30],
+    }
+    top_consumers = {
+        "cpu": sorted(
+            [row for row in pod_consumers if row["requested"]["cpu_m"] > 0],
+            key=lambda row: row["requested"]["cpu_m"],
+            reverse=True,
+        )[:10],
+        "memory": sorted(
+            [row for row in pod_consumers if row["requested"]["memory_bytes"] > 0],
+            key=lambda row: row["requested"]["memory_bytes"],
+            reverse=True,
+        )[:10],
+        "disk": sorted(
+            [row for row in pod_consumers if row["requested"]["disk_bytes"] > 0],
+            key=lambda row: row["requested"]["disk_bytes"],
+            reverse=True,
+        )[:10],
+        "metrics_available": metrics_available,
+        "metrics_error": metrics_error,
+    }
+    summary = {
+        "total_nodes": len(node_list),
+        "ready_nodes": sum(1 for item in node_list if item.get("conditions", {}).get("Ready") == "True"),
+        "unschedulable_nodes": sum(1 for item in node_list if not item.get("schedulable", True)),
+        "pressure_nodes": sum(1 for item in node_list if item.get("pressures")),
+    }
+    recommendations = _build_resource_recommendations(
+        utilization=utilization,
+        pending=pending,
+        nodes=node_list,
+        longhorn=longhorn,
+    )
+    headroom = {
+        "cpu_m": total_allocatable_cpu - requested_cpu,
+        "memory_bytes": total_allocatable_mem - requested_mem,
+        "disk_bytes": total_allocatable_disk - requested_disk,
+    }
 
     return {
+        "fetched_at": datetime.now(timezone.utc),
         "capacity": {"cpu_m": total_capacity_cpu, "memory_bytes": total_capacity_mem, "disk_bytes": total_capacity_disk},
         "allocatable": {
             "cpu_m": total_allocatable_cpu,
@@ -2470,22 +3423,31 @@ def cluster_resources() -> dict:
             "disk_bytes": total_allocatable_disk,
         },
         "requested": {"cpu_m": requested_cpu, "memory_bytes": requested_mem, "disk_bytes": requested_disk},
+        "headroom": headroom,
+        "utilization_pct": utilization,
+        "risk": risk,
+        "summary": summary,
         "nodes": node_list,
+        "pending": pending,
+        "top_consumers": top_consumers,
+        "storage": {"longhorn": longhorn},
+        "recommendations": recommendations,
     }
 
 
 @router.get("/alerts-errors", response_model=AlertsAndErrorsView)
-def alerts_and_errors() -> AlertsAndErrorsView:
+def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
     max_bytes = min(max(1024, int(settings.error_log_max_bytes)), ALERTS_ERRORS_MAX_LOG_BYTES)
+    per_page = max(1, int(ERROR_LOG_PAGE_SIZE))
     alerts, alertmanager_error = _fetch_alertmanager_alerts()
     log_file_path = _to_str(settings.error_log_file_path)
     if log_file_path:
-        error_log = _read_error_log_file(Path(log_file_path), max_bytes=max_bytes)
+        error_log = _read_error_log_file(Path(log_file_path), max_bytes=max_bytes, page=page, per_page=per_page)
         if error_log.content.startswith("Log file not found.") or error_log.content.startswith("Failed to read log file:"):
             # Fall back to Kubernetes logs if file logging is not available.
-            error_log = _collect_k8s_error_logs(max_bytes=max_bytes)
+            error_log = _collect_k8s_error_logs(max_bytes=max_bytes, page=page, per_page=per_page)
     else:
-        error_log = _collect_k8s_error_logs(max_bytes=max_bytes)
+        error_log = _collect_k8s_error_logs(max_bytes=max_bytes, page=page, per_page=per_page)
 
     return AlertsAndErrorsView(
         fetched_at=datetime.now(timezone.utc),
@@ -2494,6 +3456,18 @@ def alerts_and_errors() -> AlertsAndErrorsView:
         alerts=alerts,
         error_log=error_log,
     )
+
+
+@router.post("/alerts-errors/clear", response_model=ErrorLogClearResult)
+def clear_alerts_error_log() -> ErrorLogClearResult:
+    log_file_path = _to_str(settings.error_log_file_path)
+    if not log_file_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Error log file path is not configured.")
+    try:
+        return _clear_backend_error_logs(Path(log_file_path))
+    except Exception as exc:
+        logger.warning("Failed clearing error log file %s: %s", log_file_path, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear error log: {exc}")
 
 
 @router.post("/settings/concurrency", response_model=ConcurrencySettings)
@@ -2515,14 +3489,56 @@ def update_idle_timeout(settings_payload: IdleTimeoutSettings, session: Session 
     return settings_payload
 
 
+@router.get("/settings/storage", response_model=StorageSettingsRead)
+def get_storage_settings(session: Session = Depends(get_session)) -> StorageSettingsRead:
+    cfg = session.get(Config, 1)
+    return _storage_settings_view(cfg)
+
+
+@router.patch("/settings/storage", response_model=StorageSettingsRead)
+def update_storage_settings(
+    payload: StorageSettingsUpdate,
+    session: Session = Depends(get_session),
+) -> StorageSettingsRead:
+    cfg = _get_or_create_config(session)
+    if payload.clear_overrides:
+        cfg.storage_root_override = None
+        cfg.kube_image_pvc_override = None
+        cfg.kube_vm_storage_class_override = None
+    else:
+        storage_root = _to_str(payload.storage_root)
+        kube_image_pvc = _to_str(payload.kube_image_pvc)
+        if not storage_root:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="storage_root is required.")
+        if not kube_image_pvc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="kube_image_pvc is required.")
+        cfg.storage_root_override = storage_root
+        cfg.kube_image_pvc_override = kube_image_pvc
+        if payload.kube_vm_storage_class is not None:
+            cfg.kube_vm_storage_class_override = _to_str(payload.kube_vm_storage_class)
+    session.add(cfg)
+    session.commit()
+    session.refresh(cfg)
+
+    storage_root, kube_image_pvc, kube_vm_storage_class, _ = _effective_storage_values(cfg)
+    _apply_runtime_storage_settings(
+        storage_root=storage_root,
+        kube_image_pvc=kube_image_pvc,
+        kube_vm_storage_class=kube_vm_storage_class,
+    )
+    return _storage_settings_view(cfg)
+
+
 @router.get("/settings/runtime", response_model=RuntimeSettingsRead)
-def get_runtime_settings() -> RuntimeSettingsRead:
+def get_runtime_settings(session: Session = Depends(get_session)) -> RuntimeSettingsRead:
+    cfg = session.get(Config, 1)
+    storage_root, kube_image_pvc, kube_vm_storage_class, _ = _effective_storage_values(cfg)
     return RuntimeSettingsRead(
-        storage_root=settings.storage_root,
+        storage_root=storage_root,
         kube_namespace=settings.kube_namespace,
-        kube_image_pvc=settings.kube_image_pvc,
+        kube_image_pvc=kube_image_pvc,
         kube_runtime_class=settings.kube_runtime_class,
-        kube_vm_storage_class=settings.kube_vm_storage_class,
+        kube_vm_storage_class=kube_vm_storage_class,
         runner_image=settings.runner_image,
         image_pull_secret=settings.image_pull_secret,
         kube_node_selector_key=settings.kube_node_selector_key,
@@ -2531,6 +3547,16 @@ def get_runtime_settings() -> RuntimeSettingsRead:
         kube_spice_embed_configmap=settings.kube_spice_embed_configmap,
         kube_node_external_host=settings.kube_node_external_host,
     )
+
+
+@router.patch("/settings/runtime", response_model=RuntimeSettingsRead)
+def update_runtime_storage_settings(
+    payload: StorageSettingsUpdate,
+    session: Session = Depends(get_session),
+) -> RuntimeSettingsRead:
+    # Backward-compatible path used by older frontend builds.
+    update_storage_settings(payload=payload, session=session)
+    return get_runtime_settings(session=session)
 
 
 @router.get("/settings/site", response_model=SiteSettings)

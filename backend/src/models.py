@@ -126,6 +126,30 @@ class RuntimeSettingsRead(BaseModel):
     kube_node_external_host: str
 
 
+class StorageValidationCheck(BaseModel):
+    key: str
+    status: Literal["ok", "warn", "error", "info"]
+    title: str
+    detail: str
+
+
+class StorageSettingsRead(BaseModel):
+    storage_root: str
+    kube_namespace: str
+    kube_image_pvc: str
+    kube_vm_storage_class: str
+    sources: dict[str, str] = Field(default_factory=dict)
+    checks: list[StorageValidationCheck] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StorageSettingsUpdate(BaseModel):
+    storage_root: str | None = None
+    kube_image_pvc: str | None = None
+    kube_vm_storage_class: str | None = None
+    clear_overrides: bool = False
+
+
 class AlertManagerAlert(BaseModel):
     name: str
     state: str
@@ -142,6 +166,13 @@ class ErrorLogView(BaseModel):
     source: str
     bytes: int
     truncated: bool
+    total_lines: int = 0
+    page: int = 1
+    per_page: int = 50
+    total_pages: int = 1
+    has_prev: bool = False
+    has_next: bool = False
+    lines: list[str] = Field(default_factory=list)
     content: str
 
 
@@ -151,6 +182,14 @@ class AlertsAndErrorsView(BaseModel):
     alertmanager_error: str = ""
     alerts: list[AlertManagerAlert] = Field(default_factory=list)
     error_log: ErrorLogView
+
+
+class ErrorLogClearResult(BaseModel):
+    source: str
+    cleared_pods: int = 0
+    total_pods: int = 0
+    failed_pods: list[str] = Field(default_factory=list)
+    detail: str = ""
 
 
 class SiteSettings(BaseModel):

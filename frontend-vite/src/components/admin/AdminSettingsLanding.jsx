@@ -12,7 +12,7 @@ const AdminSettingsLanding = () => (
       </Link>
       <Link to="/admin/settings/storage" className="tile">
         <h3>Storage Options</h3>
-        <p>Configure storage root and image PVC.</p>
+        <p>Configure image storage and run readiness checks.</p>
       </Link>
       <Link to="/admin/settings/runtime" className="tile">
         <h3>Runtime Settings</h3>
