@@ -2628,24 +2628,6 @@ def update_sso_settings(payload: SSOSettings, session: Session = Depends(get_ses
     )
 
 
-@router.get("/settings/runtime", response_model=RuntimeSettingsRead)
-def get_runtime_settings() -> RuntimeSettingsRead:
-    return RuntimeSettingsRead(
-        storage_root=settings.storage_root,
-        kube_namespace=settings.kube_namespace,
-        kube_image_pvc=settings.kube_image_pvc,
-        kube_runtime_class=settings.kube_runtime_class,
-        kube_vm_storage_class=settings.kube_vm_storage_class,
-        runner_image=settings.runner_image,
-        image_pull_secret=settings.image_pull_secret,
-        kube_node_selector_key=settings.kube_node_selector_key,
-        kube_node_selector_value=settings.kube_node_selector_value,
-        kube_use_kvm=settings.kube_use_kvm,
-        kube_spice_embed_configmap=settings.kube_spice_embed_configmap,
-        kube_node_external_host=settings.kube_node_external_host,
-    )
-
-
 @router.get("/pods", response_model=list[VMInstance])
 def list_running_pods(session: Session = Depends(get_session)) -> list[VMInstance]:
     instances = session.exec(select(Instance)).all()

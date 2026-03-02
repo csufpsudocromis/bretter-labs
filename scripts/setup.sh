@@ -595,6 +595,17 @@ grafana:
   defaultDashboardsEnabled: true
 alertmanager:
   enabled: true
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+defaultRules:
+  rules:
+    etcd: false
 kube-state-metrics:
   metricLabelsAllowlist:
     - persistentvolumeclaims=[blabs-pool,pool-state,template-id]
