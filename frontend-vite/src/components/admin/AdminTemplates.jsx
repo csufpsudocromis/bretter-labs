@@ -177,19 +177,6 @@ const AdminTemplates = () => {
               />
             </label>
             <label>
-              Auto-delete stopped/completed after (minutes)
-              <select
-                value={form.auto_delete_minutes}
-                onChange={(e) => setForm({ ...form, auto_delete_minutes: parseInt(e.target.value, 10) || 1 })}
-              >
-                {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => (
-                  <option key={n} value={n}>
-                    {n} minute{n > 1 ? 's' : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
               Idle timeout (minutes)
               <input
                 type="number"
@@ -343,24 +330,6 @@ const AdminTemplates = () => {
                       setEditForm({ ...editForm, ram_mb: parseInt(e.target.value, 10) || editForm.ram_mb })
                     }
                   />
-                </label>
-                <label>
-                  Auto-delete stopped/completed after (minutes)
-                  <select
-                    value={editForm.auto_delete_minutes}
-                    onChange={(e) =>
-                      setEditForm({
-                        ...editForm,
-                        auto_delete_minutes: parseInt(e.target.value, 10) || editForm.auto_delete_minutes,
-                      })
-                    }
-                  >
-                    {Array.from({ length: 30 }, (_, i) => i + 1).map((n) => (
-                      <option key={n} value={n}>
-                        {n} minute{n > 1 ? 's' : ''}
-                      </option>
-                    ))}
-                  </select>
                 </label>
                 <label>
                   Idle timeout (minutes)
