@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Link, Route, Routes, useNavigate } from 'react-router-dom';
 
-import { api } from './api';
+import { api, AUTH_INVALID_EVENT } from './api';
 import Login from './components/Login.jsx';
 import UserPanel from './components/UserPanel.jsx';
 import AdminDashboard from './components/admin/AdminDashboard.jsx';
@@ -40,6 +40,20 @@ const AppShell = () => {
     if (savedToken) setToken(savedToken);
     if (savedUser) setUser(JSON.parse(savedUser));
   }, []);
+
+  useEffect(() => {
+    const handleAuthInvalid = (event) => {
+      const msg = event?.detail?.message || 'Session expired. Please sign in again.';
+      setToken(null);
+      setUser(null);
+      setError(msg);
+      localStorage.removeItem('blabs_token');
+      localStorage.removeItem('blabs_user');
+      navigate('/');
+    };
+    window.addEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
+    return () => window.removeEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
+  }, [navigate]);
 
   const onLogin = async (username, password) => {
     try {
