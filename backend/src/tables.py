@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import BigInteger, Column
 from sqlmodel import Field, SQLModel
 
 
@@ -23,7 +24,7 @@ class Image(SQLModel, table=True):
     filename: str
     source_pvc: Optional[str] = None
     checksum: str
-    size_bytes: int
+    size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -31,7 +32,7 @@ class ImageUploadTask(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     original_filename: str
     filename: str
-    size_bytes: int = 0
+    size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "queued"
     detail: str = ""
     error_message: Optional[str] = None
