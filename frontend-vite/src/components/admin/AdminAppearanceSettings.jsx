@@ -280,14 +280,40 @@ const AdminAppearanceSettings = () => {
     );
   };
 
-  const applyTarget = (key) => {
-    setContrastTargets((prev) =>
-      normalizeContrastTargets({
-        ...prev,
-        [key]: draftContrastTargets[key],
-      }),
-    );
-    setMessage(`Applied target contrast for ${key}. Click Save to persist.`);
+  const applyTarget = async (key) => {
+    if (loading || saving) return;
+    const nextTargets = normalizeContrastTargets({
+      ...contrastTargets,
+      [key]: draftContrastTargets[key],
+    });
+    setContrastTargets(nextTargets);
+    setSaving(true);
+    setError('');
+    try {
+      const payload = {
+        ...normalizeTheme(savedSite),
+        theme_contrast_body: nextTargets.body,
+        theme_contrast_button: nextTargets.button,
+        theme_contrast_tile: nextTargets.tile,
+        theme_contrast_tile_border: nextTargets.tile_border,
+      };
+      const res = await api.patch('/admin/settings/site', payload);
+      const nextRaw = res.data || payload;
+      const persistedTargets = normalizeContrastTargets({
+        body: nextRaw.theme_contrast_body,
+        button: nextRaw.theme_contrast_button,
+        tile: nextRaw.theme_contrast_tile,
+        tile_border: nextRaw.theme_contrast_tile_border,
+      });
+      setContrastTargets(persistedTargets);
+      setDraftContrastTargets(persistedTargets);
+      setSavedContrastTargets(persistedTargets);
+      setMessage(`Saved target contrast for ${key}.`);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to save target contrast');
+    } finally {
+      setSaving(false);
+    }
   };
 
   useEffect(() => {
