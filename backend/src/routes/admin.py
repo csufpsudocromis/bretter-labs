@@ -37,6 +37,8 @@ from ..models import (
     ImageCreateResponse,
     ImageMeta,
     ImageUploadTaskStatus,
+    RuntimeDriftItem,
+    RuntimeHealthCheck,
     StorageSettingsRead,
     StorageSettingsUpdate,
     StorageValidationCheck,
@@ -77,6 +79,34 @@ _CDI_AVAILABLE: bool | None = None
 ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
 ERROR_LOG_PAGE_SIZE = 50
 ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
+RUNTIME_ENV_NAMES: dict[str, str] = {
+    "storage_root": "BLABS_STORAGE_ROOT",
+    "kube_namespace": "BLABS_KUBE_NAMESPACE",
+    "kube_image_pvc": "BLABS_KUBE_IMAGE_PVC",
+    "kube_runtime_class": "BLABS_KUBE_RUNTIME_CLASS",
+    "kube_vm_storage_class": "BLABS_KUBE_VM_STORAGE_CLASS",
+    "runner_image": "BLABS_RUNNER_IMAGE",
+    "image_pull_secret": "BLABS_IMAGE_PULL_SECRET",
+    "kube_node_selector_key": "BLABS_KUBE_NODE_SELECTOR_KEY",
+    "kube_node_selector_value": "BLABS_KUBE_NODE_SELECTOR_VALUE",
+    "kube_use_kvm": "BLABS_KUBE_USE_KVM",
+    "kube_spice_embed_configmap": "BLABS_KUBE_SPICE_EMBED_CONFIGMAP",
+    "kube_node_external_host": "BLABS_KUBE_NODE_EXTERNAL_HOST",
+}
+RUNTIME_APPLY_BEHAVIOR: dict[str, str] = {
+    "storage_root": "Immediate for current backend process; persists via DB override.",
+    "kube_image_pvc": "Immediate for new image operations; persists via DB override.",
+    "kube_vm_storage_class": "Immediate for new clone operations; persists via DB override.",
+    "kube_namespace": "Environment controlled. Requires backend rollout after env change.",
+    "kube_runtime_class": "Environment controlled. Requires backend rollout after env change.",
+    "runner_image": "Environment controlled. Requires backend rollout after env change.",
+    "image_pull_secret": "Environment controlled. Requires backend rollout after env change.",
+    "kube_node_selector_key": "Environment controlled. Requires backend rollout after env change.",
+    "kube_node_selector_value": "Environment controlled. Requires backend rollout after env change.",
+    "kube_use_kvm": "Environment controlled. Requires backend rollout after env change.",
+    "kube_spice_embed_configmap": "Environment controlled. Requires backend rollout after env change.",
+    "kube_node_external_host": "Environment controlled. Requires backend rollout after env change.",
+}
 
 
 def _image_dir() -> Path:
@@ -153,6 +183,229 @@ def _apply_runtime_storage_settings(storage_root: str, kube_image_pvc: str, kube
     settings.kube_image_pvc = kube_image_pvc
     settings.kube_vm_storage_class = kube_vm_storage_class
     _image_dir()
+
+
+def _serialize_runtime_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return _to_str(value)
+
+
+def _runtime_config_values(cfg: Config | None) -> tuple[dict[str, object], dict[str, str]]:
+    storage_root, kube_image_pvc, kube_vm_storage_class, sources = _effective_storage_values(cfg)
+    values: dict[str, object] = {
+        "storage_root": storage_root,
+        "kube_namespace": settings.kube_namespace,
+        "kube_image_pvc": kube_image_pvc,
+        "kube_runtime_class": settings.kube_runtime_class,
+        "kube_vm_storage_class": kube_vm_storage_class,
+        "runner_image": settings.runner_image,
+        "image_pull_secret": settings.image_pull_secret,
+        "kube_node_selector_key": settings.kube_node_selector_key,
+        "kube_node_selector_value": settings.kube_node_selector_value,
+        "kube_use_kvm": settings.kube_use_kvm,
+        "kube_spice_embed_configmap": settings.kube_spice_embed_configmap,
+        "kube_node_external_host": settings.kube_node_external_host,
+    }
+    for key in values:
+        sources.setdefault(key, "environment")
+    return values, sources
+
+
+def _runtime_drift(values: dict[str, object], kube_namespace: str) -> tuple[list[RuntimeDriftItem], int]:
+    drift: list[RuntimeDriftItem] = []
+    try:
+        core = kube._client()
+        pods = core.list_namespaced_pod(namespace=kube_namespace, label_selector="app=bretter-backend").items
+    except Exception:
+        return drift, 0
+
+    for pod in pods:
+        pod_name = _to_str(pod.metadata.name)
+        backend_container = None
+        for container in pod.spec.containers or []:
+            if _to_str(container.name) == "backend":
+                backend_container = container
+                break
+        if backend_container is None and (pod.spec.containers or []):
+            backend_container = pod.spec.containers[0]
+        if backend_container is None:
+            continue
+
+        pod_env: dict[str, str] = {}
+        for env_item in backend_container.env or []:
+            env_name = _to_str(env_item.name)
+            if not env_name:
+                continue
+            if env_item.value is not None:
+                pod_env[env_name] = _to_str(env_item.value)
+            elif env_item.value_from is not None:
+                pod_env[env_name] = "<valueFrom>"
+
+        for field_key, env_name in RUNTIME_ENV_NAMES.items():
+            if env_name not in pod_env:
+                continue
+            pod_value = _to_str(pod_env[env_name])
+            if pod_value == "<valueFrom>":
+                continue
+            configured_value = _serialize_runtime_value(values.get(field_key))
+            if pod_value != configured_value:
+                drift.append(
+                    RuntimeDriftItem(
+                        field_key=field_key,
+                        env_var=env_name,
+                        pod_name=pod_name,
+                        configured_value=configured_value,
+                        pod_value=pod_value,
+                        detail=f"{env_name} in pod {pod_name} differs from effective runtime configuration.",
+                    )
+                )
+
+    return drift, len(pods)
+
+
+def _build_runtime_health(
+    *,
+    values: dict[str, object],
+    drift: list[RuntimeDriftItem],
+    backend_pod_count: int,
+) -> tuple[str, list[RuntimeHealthCheck]]:
+    checks: list[RuntimeHealthCheck] = []
+    storage_checks, _ = _build_storage_validation(
+        storage_root=_to_str(values.get("storage_root")),
+        kube_namespace=_to_str(values.get("kube_namespace")),
+        kube_image_pvc=_to_str(values.get("kube_image_pvc")),
+        kube_vm_storage_class=_to_str(values.get("kube_vm_storage_class")),
+    )
+    for check in storage_checks:
+        checks.append(
+            RuntimeHealthCheck(
+                key=check.key,
+                status=check.status,
+                title=check.title,
+                detail=check.detail,
+            )
+        )
+
+    if drift:
+        checks.append(
+            RuntimeHealthCheck(
+                key="runtime_drift",
+                status="warn",
+                title="Runtime drift",
+                detail=f"Detected {len(drift)} backend env drift item(s). Roll out backend after config/env updates.",
+            )
+        )
+    else:
+        checks.append(
+            RuntimeHealthCheck(
+                key="runtime_drift",
+                status="ok",
+                title="Runtime drift",
+                detail="No backend env drift detected across current backend pods.",
+            )
+        )
+
+    if backend_pod_count <= 0:
+        checks.append(
+            RuntimeHealthCheck(
+                key="backend_pods",
+                status="warn",
+                title="Backend pods",
+                detail="No backend pods found to validate runtime state.",
+            )
+        )
+    else:
+        checks.append(
+            RuntimeHealthCheck(
+                key="backend_pods",
+                status="ok",
+                title="Backend pods",
+                detail=f"Validated runtime state against {backend_pod_count} backend pod(s).",
+            )
+        )
+
+    if not bool(values.get("kube_use_kvm")):
+        checks.append(
+            RuntimeHealthCheck(
+                key="kvm",
+                status="info",
+                title="KVM acceleration",
+                detail="KVM is disabled by configuration.",
+            )
+        )
+    else:
+        try:
+            core = kube._client()
+            vm_pods = core.list_namespaced_pod(
+                namespace=_to_str(values.get("kube_namespace")),
+                label_selector="app.kubernetes.io/component=vm-runner",
+            ).items
+            kvm_signals: list[str] = []
+            running = 0
+            for pod in vm_pods:
+                if _to_str(pod.status.phase).lower() == "running":
+                    running += 1
+                for status_obj in pod.status.container_statuses or []:
+                    candidates = []
+                    if status_obj.state and status_obj.state.waiting:
+                        candidates.append(status_obj.state.waiting)
+                    if status_obj.state and status_obj.state.terminated:
+                        candidates.append(status_obj.state.terminated)
+                    for state_obj in candidates:
+                        text = f"{_to_str(state_obj.reason)} {_to_str(state_obj.message)}".lower()
+                        if "kvm" in text or "/dev/kvm" in text:
+                            kvm_signals.append(_to_str(pod.metadata.name))
+                            break
+
+            if kvm_signals:
+                examples = ", ".join(sorted(set(kvm_signals))[:3])
+                checks.append(
+                    RuntimeHealthCheck(
+                        key="kvm",
+                        status="error",
+                        title="KVM acceleration",
+                        detail=f"Detected KVM-related errors on VM runner pod(s): {examples}.",
+                    )
+                )
+            elif running > 0:
+                checks.append(
+                    RuntimeHealthCheck(
+                        key="kvm",
+                        status="ok",
+                        title="KVM acceleration",
+                        detail=f"KVM enabled and {running} VM runner pod(s) currently running.",
+                    )
+                )
+            else:
+                checks.append(
+                    RuntimeHealthCheck(
+                        key="kvm",
+                        status="info",
+                        title="KVM acceleration",
+                        detail="KVM enabled; no active VM runner pods to probe right now.",
+                    )
+                )
+        except Exception as exc:
+            checks.append(
+                RuntimeHealthCheck(
+                    key="kvm",
+                    status="warn",
+                    title="KVM acceleration",
+                    detail=f"Unable to verify KVM runner state: {exc}",
+                )
+            )
+
+    statuses = {check.status for check in checks}
+    if "error" in statuses:
+        overall = "critical"
+    elif "warn" in statuses:
+        overall = "warning"
+    elif statuses:
+        overall = "healthy"
+    else:
+        overall = "unknown"
+    return overall, checks
 
 
 def _build_storage_validation(
@@ -304,28 +557,86 @@ def _build_storage_validation(
                     ),
                 )
             )
-            if image_pvc and image_pvc.spec:
-                source_sc = _to_str(image_pvc.spec.storage_class_name)
-                if source_sc and source_sc != kube_vm_storage_class:
+            source_pvc_rows: list[tuple[str, str]] = []
+            if namespace_ok and core is not None:
+                try:
+                    pvc_items = core.list_namespaced_persistent_volume_claim(
+                        namespace=kube_namespace,
+                        label_selector="app.kubernetes.io/part-of=bretter-labs",
+                    ).items
+                    for pvc in pvc_items:
+                        name = _to_str(pvc.metadata.name)
+                        if not name.startswith("img-src-"):
+                            continue
+                        sc = _to_str(pvc.spec.storage_class_name) if pvc.spec else ""
+                        source_pvc_rows.append((name, sc))
+                except ApiException as exc:
+                    checks.append(
+                        StorageValidationCheck(
+                            key="clone_compatibility",
+                            status="warn",
+                            title="Clone compatibility",
+                            detail=f"Unable to list image source PVCs: {exc.reason or exc.status}",
+                        )
+                    )
+
+            if source_pvc_rows:
+                mismatched = [
+                    (name, sc or "unspecified")
+                    for name, sc in source_pvc_rows
+                    if (sc or "") != kube_vm_storage_class
+                ]
+                if mismatched:
+                    examples = ", ".join(f"{name}({sc})" for name, sc in mismatched[:3])
                     checks.append(
                         StorageValidationCheck(
                             key="clone_compatibility",
                             status="warn",
                             title="Clone compatibility",
                             detail=(
-                                f"Image PVC storageClass is {source_sc} while clone storageClass is "
-                                f"{kube_vm_storage_class}. Cross-class cloning can fail with some CSI drivers."
+                                f"{len(mismatched)} image source PVC(s) do not use {kube_vm_storage_class} "
+                                f"(examples: {examples}). New VM clone PVCs may fail for those images."
                             ),
                         )
                     )
-                    warnings.append("Source and target storage classes differ; verify CSI clone support.")
+                    warnings.append(
+                        "Some image source PVCs use a different storage class than VM clone storage class."
+                    )
                 else:
                     checks.append(
                         StorageValidationCheck(
                             key="clone_compatibility",
                             status="ok",
                             title="Clone compatibility",
-                            detail="Source image PVC and VM clone storage class are aligned for clone-based launches.",
+                            detail=(
+                                f"Detected {len(source_pvc_rows)} image source PVC(s); all use "
+                                f"{kube_vm_storage_class} for clone-based launches."
+                            ),
+                        )
+                    )
+            else:
+                checks.append(
+                    StorageValidationCheck(
+                        key="clone_compatibility",
+                        status="info",
+                        title="Clone compatibility",
+                        detail="No image source PVCs detected yet. Upload/import an image to validate clone alignment.",
+                    )
+                )
+
+            if image_pvc and image_pvc.spec:
+                staging_sc = _to_str(image_pvc.spec.storage_class_name)
+                if staging_sc and staging_sc != kube_vm_storage_class:
+                    checks.append(
+                        StorageValidationCheck(
+                            key="upload_staging_compatibility",
+                            status="info",
+                            title="Upload staging compatibility",
+                            detail=(
+                                f"Golden image PVC uses {staging_sc} while VM clone storage class is "
+                                f"{kube_vm_storage_class}. This is acceptable when images are imported into "
+                                "per-image source PVCs before VM launch."
+                            ),
                         )
                     )
         except ApiException as exc:
@@ -413,6 +724,37 @@ def _storage_settings_view(cfg: Config | None) -> StorageSettingsRead:
         sources=sources,
         checks=checks,
         warnings=warnings,
+    )
+
+
+def _runtime_settings_view(cfg: Config | None) -> RuntimeSettingsRead:
+    values, sources = _runtime_config_values(cfg)
+    drift, backend_pod_count = _runtime_drift(values, _to_str(values.get("kube_namespace")))
+    health_status, health_checks = _build_runtime_health(
+        values=values,
+        drift=drift,
+        backend_pod_count=backend_pod_count,
+    )
+    return RuntimeSettingsRead(
+        storage_root=_to_str(values.get("storage_root")),
+        kube_namespace=_to_str(values.get("kube_namespace")),
+        kube_image_pvc=_to_str(values.get("kube_image_pvc")),
+        kube_runtime_class=_to_str(values.get("kube_runtime_class")),
+        kube_vm_storage_class=_to_str(values.get("kube_vm_storage_class")),
+        runner_image=_to_str(values.get("runner_image")),
+        image_pull_secret=_to_str(values.get("image_pull_secret")),
+        kube_node_selector_key=_to_str(values.get("kube_node_selector_key")),
+        kube_node_selector_value=_to_str(values.get("kube_node_selector_value")),
+        kube_use_kvm=bool(values.get("kube_use_kvm")),
+        kube_spice_embed_configmap=_to_str(values.get("kube_spice_embed_configmap")),
+        kube_node_external_host=_to_str(values.get("kube_node_external_host")),
+        sources=sources,
+        apply_behavior=RUNTIME_APPLY_BEHAVIOR,
+        env_names=RUNTIME_ENV_NAMES,
+        health_status=health_status,
+        health_checks=health_checks,
+        drift=drift,
+        backend_pod_count=backend_pod_count,
     )
 
 
@@ -712,6 +1054,24 @@ def _ensure_config_columns() -> None:
             to_add.append("ALTER TABLE config ADD COLUMN theme_button_text_color TEXT DEFAULT '#ffffff'")
         if "theme_bg_image" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN theme_bg_image TEXT DEFAULT ''")
+        if "theme_bg_image_overlay_opacity" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_bg_image_overlay_opacity REAL DEFAULT 0.0")
+        if "theme_contrast_body" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_contrast_body REAL DEFAULT 4.5")
+        if "theme_contrast_button" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_contrast_button REAL DEFAULT 4.5")
+        if "theme_contrast_tile" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_contrast_tile REAL DEFAULT 4.5")
+        if "theme_contrast_tile_border" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_contrast_tile_border REAL DEFAULT 1.5")
+        if "theme_font_family" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_font_family TEXT DEFAULT 'Inter, system-ui, -apple-system, sans-serif'")
+        if "theme_font_size_base" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_font_size_base REAL DEFAULT 16.0")
+        if "theme_font_size_h1" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_font_size_h1 REAL DEFAULT 32.0")
+        if "theme_font_size_h2" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN theme_font_size_h2 REAL DEFAULT 24.0")
         if "theme_tile_bg" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN theme_tile_bg TEXT DEFAULT '#f8fafc'")
         if "theme_tile_border" not in cols:
@@ -3532,21 +3892,7 @@ def update_storage_settings(
 @router.get("/settings/runtime", response_model=RuntimeSettingsRead)
 def get_runtime_settings(session: Session = Depends(get_session)) -> RuntimeSettingsRead:
     cfg = session.get(Config, 1)
-    storage_root, kube_image_pvc, kube_vm_storage_class, _ = _effective_storage_values(cfg)
-    return RuntimeSettingsRead(
-        storage_root=storage_root,
-        kube_namespace=settings.kube_namespace,
-        kube_image_pvc=kube_image_pvc,
-        kube_runtime_class=settings.kube_runtime_class,
-        kube_vm_storage_class=kube_vm_storage_class,
-        runner_image=settings.runner_image,
-        image_pull_secret=settings.image_pull_secret,
-        kube_node_selector_key=settings.kube_node_selector_key,
-        kube_node_selector_value=settings.kube_node_selector_value,
-        kube_use_kvm=settings.kube_use_kvm,
-        kube_spice_embed_configmap=settings.kube_spice_embed_configmap,
-        kube_node_external_host=settings.kube_node_external_host,
-    )
+    return _runtime_settings_view(cfg)
 
 
 @router.patch("/settings/runtime", response_model=RuntimeSettingsRead)
@@ -3572,6 +3918,15 @@ def get_site_settings(session: Session = Depends(get_session)) -> SiteSettings:
         theme_button_color=cfg.theme_button_color,
         theme_button_text_color=cfg.theme_button_text_color,
         theme_bg_image=cfg.theme_bg_image,
+        theme_bg_image_overlay_opacity=cfg.theme_bg_image_overlay_opacity,
+        theme_contrast_body=cfg.theme_contrast_body,
+        theme_contrast_button=cfg.theme_contrast_button,
+        theme_contrast_tile=cfg.theme_contrast_tile,
+        theme_contrast_tile_border=cfg.theme_contrast_tile_border,
+        theme_font_family=cfg.theme_font_family,
+        theme_font_size_base=cfg.theme_font_size_base,
+        theme_font_size_h1=cfg.theme_font_size_h1,
+        theme_font_size_h2=cfg.theme_font_size_h2,
         theme_tile_bg=cfg.theme_tile_bg,
         theme_tile_border=cfg.theme_tile_border,
         theme_tile_opacity=cfg.theme_tile_opacity,
@@ -3589,6 +3944,15 @@ def update_site_settings(payload: SiteSettings, session: Session = Depends(get_s
     cfg.theme_button_color = payload.theme_button_color
     cfg.theme_button_text_color = payload.theme_button_text_color
     cfg.theme_bg_image = payload.theme_bg_image
+    cfg.theme_bg_image_overlay_opacity = payload.theme_bg_image_overlay_opacity
+    cfg.theme_contrast_body = payload.theme_contrast_body
+    cfg.theme_contrast_button = payload.theme_contrast_button
+    cfg.theme_contrast_tile = payload.theme_contrast_tile
+    cfg.theme_contrast_tile_border = payload.theme_contrast_tile_border
+    cfg.theme_font_family = payload.theme_font_family
+    cfg.theme_font_size_base = payload.theme_font_size_base
+    cfg.theme_font_size_h1 = payload.theme_font_size_h1
+    cfg.theme_font_size_h2 = payload.theme_font_size_h2
     cfg.theme_tile_bg = payload.theme_tile_bg
     cfg.theme_tile_border = payload.theme_tile_border
     cfg.theme_tile_opacity = payload.theme_tile_opacity
@@ -3604,6 +3968,15 @@ def update_site_settings(payload: SiteSettings, session: Session = Depends(get_s
         theme_button_color=cfg.theme_button_color,
         theme_button_text_color=cfg.theme_button_text_color,
         theme_bg_image=cfg.theme_bg_image,
+        theme_bg_image_overlay_opacity=cfg.theme_bg_image_overlay_opacity,
+        theme_contrast_body=cfg.theme_contrast_body,
+        theme_contrast_button=cfg.theme_contrast_button,
+        theme_contrast_tile=cfg.theme_contrast_tile,
+        theme_contrast_tile_border=cfg.theme_contrast_tile_border,
+        theme_font_family=cfg.theme_font_family,
+        theme_font_size_base=cfg.theme_font_size_base,
+        theme_font_size_h1=cfg.theme_font_size_h1,
+        theme_font_size_h2=cfg.theme_font_size_h2,
         theme_tile_bg=cfg.theme_tile_bg,
         theme_tile_border=cfg.theme_tile_border,
         theme_tile_opacity=cfg.theme_tile_opacity,

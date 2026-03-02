@@ -1,6 +1,10 @@
 :root {
   color-scheme: light;
   font-family: "Inter", system-ui, -apple-system, sans-serif;
+  --app-font-family: "Inter", system-ui, -apple-system, sans-serif;
+  --app-font-size-base: 16px;
+  --app-font-size-h1: 32px;
+  --app-font-size-h2: 24px;
   --bg-color: #f5f5f5;
   --bg-image: none;
   --text-color: #0f172a;
@@ -9,6 +13,8 @@
   --border-color: #e2e8f0;
   --button-bg: #2563eb;
   --button-text: #ffffff;
+  --bg-overlay: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0));
+  --bg-overlay-opacity: 0;
   --tile-bg: #f8fafc;
   --tile-bg-rgba: rgba(248, 250, 252, 1);
   --tile-border: #e2e8f0;
@@ -19,11 +25,13 @@
 
 body {
   margin: 0;
-  background: var(--bg-image, none), var(--bg-color);
+  background: var(--bg-overlay), var(--bg-image, none), var(--bg-color);
   background-size: cover;
   background-repeat: no-repeat;
   background-attachment: fixed;
   color: var(--text-color);
+  font-family: var(--app-font-family);
+  font-size: var(--app-font-size-base);
 }
 
 .page {
@@ -35,6 +43,11 @@ body {
 header h1 {
   margin: 0;
   font-weight: 700;
+  font-size: var(--app-font-size-h1);
+}
+
+h2 {
+  font-size: var(--app-font-size-h2);
 }
 
 header p {
@@ -85,6 +98,7 @@ button {
   border-radius: 8px;
   border: 1px solid var(--border-color);
   font-size: 1rem;
+  font-family: inherit;
 }
 
 textarea {

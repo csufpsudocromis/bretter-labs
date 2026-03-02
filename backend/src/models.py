@@ -111,6 +111,22 @@ class TemplateToggle(BaseModel):
     enabled: bool
 
 
+class RuntimeHealthCheck(BaseModel):
+    key: str
+    status: Literal["ok", "warn", "error", "info"]
+    title: str
+    detail: str
+
+
+class RuntimeDriftItem(BaseModel):
+    field_key: str
+    env_var: str
+    pod_name: str
+    configured_value: str
+    pod_value: str
+    detail: str
+
+
 class RuntimeSettingsRead(BaseModel):
     storage_root: str
     kube_namespace: str
@@ -124,6 +140,13 @@ class RuntimeSettingsRead(BaseModel):
     kube_use_kvm: bool
     kube_spice_embed_configmap: str
     kube_node_external_host: str
+    sources: dict[str, str] = Field(default_factory=dict)
+    apply_behavior: dict[str, str] = Field(default_factory=dict)
+    env_names: dict[str, str] = Field(default_factory=dict)
+    health_status: Literal["healthy", "warning", "critical", "unknown"] = "unknown"
+    health_checks: list[RuntimeHealthCheck] = Field(default_factory=list)
+    drift: list[RuntimeDriftItem] = Field(default_factory=list)
+    backend_pod_count: int = 0
 
 
 class StorageValidationCheck(BaseModel):
@@ -200,6 +223,15 @@ class SiteSettings(BaseModel):
     theme_button_color: str
     theme_button_text_color: str
     theme_bg_image: str
+    theme_bg_image_overlay_opacity: float = Field(default=0.0, ge=0.0, le=0.85)
+    theme_contrast_body: float = Field(default=4.5, ge=1.0, le=21.0)
+    theme_contrast_button: float = Field(default=4.5, ge=1.0, le=21.0)
+    theme_contrast_tile: float = Field(default=4.5, ge=1.0, le=21.0)
+    theme_contrast_tile_border: float = Field(default=1.5, ge=1.0, le=21.0)
+    theme_font_family: str = "Inter, system-ui, -apple-system, sans-serif"
+    theme_font_size_base: float = Field(default=16.0, ge=12.0, le=24.0)
+    theme_font_size_h1: float = Field(default=32.0, ge=20.0, le=64.0)
+    theme_font_size_h2: float = Field(default=24.0, ge=16.0, le=48.0)
     theme_tile_bg: str
     theme_tile_border: str
     theme_tile_opacity: float
