@@ -163,9 +163,19 @@ const UserPanel = () => {
   const templateName = (templateId) => templates.find((t) => t.id === templateId)?.name || 'VM';
   const podName = (instance) => `vm-${instance.owner}-${instance.id.slice(0, 8)}`;
   const effectiveStatus = (instance) => instance?.status_stage || instance?.status || 'unknown';
-  const displayStatus = (instance) => {
+  const statusLabel = (instance) => {
     const status = effectiveStatus(instance);
-    return status === 'completed' ? 'stopped' : status;
+    const labelMap = {
+      pending: 'Pending',
+      building: 'Building',
+      starting: 'Starting',
+      running: 'Running',
+      stopped: 'Stopped',
+      completed: 'Stopped',
+      failed: 'Failed',
+      unknown: 'Unknown',
+    };
+    return labelMap[status] || 'Unknown';
   };
   const isRunning = (instance) => effectiveStatus(instance) === 'running';
 
@@ -681,12 +691,11 @@ const UserPanel = () => {
               <div key={p.id} className="tile pod-tile">
                 <div className="tile-header">
                   <h4>{templateName(p.template_id)}</h4>
-                  <span className={`badge ${isRunning(p) ? 'success' : 'warn'}`}>{displayStatus(p)}</span>
+                  <span className={`badge ${isRunning(p) ? 'success' : 'warn'}`}>{statusLabel(p)}</span>
                 </div>
                 <div className="specs">
                   <span>{podName(p)}</span>
                 </div>
-                {p.status_detail && <div className="muted small">{p.status_detail}</div>}
                 <div className="actions">
                   <button className="ghost" onClick={() => remove(p.id)}>
                     Delete
@@ -695,7 +704,6 @@ const UserPanel = () => {
                     Connect
                   </button>
                 </div>
-                {!isRunning(p) && <div className="muted small">Console pending...</div>}
               </div>
             ))}
           </div>
