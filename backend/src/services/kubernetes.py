@@ -45,6 +45,10 @@ class PodStatus:
     phase: str
     node: Optional[str] = None
     message: Optional[str] = None
+    reason: Optional[str] = None
+    waiting_reason: Optional[str] = None
+    waiting_message: Optional[str] = None
+    ready: bool = False
     console_endpoint: Optional[str] = None
     disk_pvc: Optional[str] = None
 
@@ -514,6 +518,7 @@ class KubernetesService:
             return PodStatus(
                 instance_id=req.instance_id,
                 phase="Pending",
+                reason="Pending",
                 console_endpoint=self._console_url(req),
                 disk_pvc=instance_disk_pvc,
             )
@@ -596,7 +601,35 @@ class KubernetesService:
             phase = pod.status.phase or "Unknown"
             node = pod.spec.node_name
             message = pod.status.message
-            return PodStatus(instance_id=instance_id, phase=phase, node=node, message=message)
+            reason = pod.status.reason
+            waiting_reason = None
+            waiting_message = None
+            container_statuses = pod.status.container_statuses or []
+            init_statuses = pod.status.init_container_statuses or []
+            for status in [*init_statuses, *container_statuses]:
+                state = status.state
+                if state and state.waiting:
+                    waiting_reason = state.waiting.reason or waiting_reason
+                    waiting_message = state.waiting.message or waiting_message
+                    if waiting_reason or waiting_message:
+                        break
+            # If scheduling failed, surface the scheduler reason/message explicitly.
+            for cond in pod.status.conditions or []:
+                if cond.type == "PodScheduled" and cond.status == "False":
+                    reason = cond.reason or reason
+                    message = cond.message or message
+                    break
+            ready = bool(container_statuses) and all(bool(status.ready) for status in container_statuses)
+            return PodStatus(
+                instance_id=instance_id,
+                phase=phase,
+                node=node,
+                message=message,
+                reason=reason,
+                waiting_reason=waiting_reason,
+                waiting_message=waiting_message,
+                ready=ready,
+            )
         except ApiException as exc:
             logger.error("Failed to read pod %s: %s", pod_name, exc)
             raise

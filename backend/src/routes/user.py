@@ -11,7 +11,7 @@ from ..auth import require_user
 from ..config import settings
 from ..db import get_session
 from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
-from ..services.kubernetes import PodRequest, kube
+from ..services.kubernetes import PodRequest, PodStatus, kube
 from ..tables import Config, Image, Instance, Template, User
 
 router = APIRouter()
@@ -20,6 +20,69 @@ router = APIRouter()
 def _public_scheme() -> str:
     scheme = (settings.public_scheme or "https").strip().lower()
     return scheme if scheme in {"http", "https"} else "https"
+
+
+def _phase_to_instance_status(phase: str) -> str:
+    return {
+        "pending": "pending",
+        "running": "running",
+        "succeeded": "completed",
+        "failed": "failed",
+        "unknown": "unknown",
+    }.get((phase or "").lower(), "unknown")
+
+
+def _status_feedback(status: str, pod_status: PodStatus | None) -> tuple[str, str]:
+    normalized = (status or "unknown").lower()
+    if normalized == "running":
+        if pod_status and not pod_status.ready:
+            detail = (pod_status.waiting_message or pod_status.message or "").strip()
+            return "starting", detail or "VM process started; waiting for readiness."
+        return "running", "VM is running."
+    if normalized == "pending":
+        if not pod_status:
+            return "pending", "Scheduling VM pod."
+        reason_text = " ".join(
+            [
+                (pod_status.waiting_reason or "").lower(),
+                (pod_status.reason or "").lower(),
+            ]
+        )
+        detail = (pod_status.waiting_message or pod_status.message or "").strip()
+        if "unschedulable" in reason_text or "failedscheduling" in reason_text:
+            return "pending", detail or "Waiting for available node resources."
+        build_reason_keywords = (
+            "containercreating",
+            "podinitializing",
+            "createcontainer",
+            "pulling",
+            "errimagepull",
+            "imagepullbackoff",
+            "mountvolume",
+            "attachvolume",
+        )
+        build_detail_keywords = (
+            "persistentvolumeclaim",
+            "volume",
+            "mount",
+            "attach",
+            "pulling image",
+            "creating container",
+            "initializing",
+        )
+        detail_text = detail.lower()
+        if any(token in reason_text for token in build_reason_keywords) or any(
+            token in detail_text for token in build_detail_keywords
+        ):
+            return "building", detail or "Preparing VM disk and container."
+        return "pending", detail or "Waiting in scheduler queue."
+    if normalized == "completed":
+        return "completed", "VM completed and stopped."
+    if normalized == "stopped":
+        return "stopped", "VM is stopped."
+    if normalized == "failed":
+        return "failed", "VM failed to start or run."
+    return "unknown", "VM status is unknown."
 
 
 def _require_clone_ready(image: Image) -> None:
@@ -65,27 +128,23 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
     templates = {t.id: t for t in session.exec(select(Template)).all()}
     changed = False
     to_delete: list[Instance] = []
+    feedback: dict[str, tuple[str, str]] = {}
     for record in instances:
         # Treat every poll from the user as activity so the idle reaper doesn't reclaim a live VM.
         if record.status in {"running", "pending"}:
             record.last_active_at = datetime.utcnow()
             session.add(record)
             changed = True
+        pod_status: PodStatus | None = None
         try:
             pod_status = kube.get_status(record.id, record.owner)
-            phase = (pod_status.phase or "").lower()
-            mapped = {
-                "pending": "pending",
-                "running": "running",
-                "succeeded": "completed",
-                "failed": "failed",
-                "unknown": "unknown",
-            }.get(phase, "unknown")
+            mapped = _phase_to_instance_status(pod_status.phase)
         except ApiException as exc:
             if exc.status == 404:
                 mapped = "stopped"
             else:
                 raise
+        feedback[record.id] = _status_feedback(mapped, pod_status)
         if mapped != record.status:
             record.status = mapped
             record.last_active_at = datetime.utcnow()
@@ -112,12 +171,15 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
 
     items: list[VMInstance] = []
     for record in instances:
+        stage, detail = feedback.get(record.id, _status_feedback(record.status, None))
         items.append(
             VMInstance(
                 id=record.id,
                 template_id=record.template_id,
                 owner=record.owner,
                 status=record.status,
+                status_stage=stage,
+                status_detail=detail,
                 started_at=record.started_at,
                 last_active_at=record.last_active_at,
                 console_url=record.console_url,
@@ -271,11 +333,14 @@ def start_vm(
     session.add(instance)
     session.commit()
     session.refresh(instance)
+    stage, detail = _status_feedback(instance.status, pod_status)
     return VMInstance(
         id=instance.id,
         template_id=instance.template_id,
         owner=instance.owner,
         status=instance.status,
+        status_stage=stage,
+        status_detail=detail,
         started_at=instance.started_at,
         last_active_at=instance.last_active_at,
         console_url=instance.console_url,
@@ -293,11 +358,14 @@ def stop_vm(instance_id: str, user: User = Depends(require_user), session: Sessi
     session.add(record)
     session.commit()
     session.refresh(record)
+    stage, detail = _status_feedback(record.status, None)
     return VMInstance(
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
         status=record.status,
+        status_stage=stage,
+        status_detail=detail,
         started_at=record.started_at,
         last_active_at=record.last_active_at,
         console_url=record.console_url,
@@ -374,11 +442,14 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     session.add(record)
     session.commit()
     session.refresh(record)
+    stage, detail = _status_feedback(record.status, pod_status)
     return VMInstance(
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
         status=record.status,
+        status_stage=stage,
+        status_detail=detail,
         started_at=record.started_at,
         last_active_at=record.last_active_at,
         console_url=record.console_url,

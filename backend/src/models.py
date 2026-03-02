@@ -263,6 +263,8 @@ class VMInstance(BaseModel):
     template_id: str
     owner: str
     status: Literal["pending", "running", "stopped", "completed", "failed", "unknown"]
+    status_stage: Optional[str] = None
+    status_detail: Optional[str] = None
     started_at: datetime
     last_active_at: datetime
     console_url: Optional[str] = None
