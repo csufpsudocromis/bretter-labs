@@ -27,40 +27,6 @@ const DEFAULT_CONTRAST_TARGETS = {
   tile_border: 1.5,
 };
 
-const PRESETS = {
-  Light: { ...DEFAULT_THEME },
-  Dark: {
-    ...DEFAULT_THEME,
-    theme_bg_color: '#0f172a',
-    theme_text_color: '#e2e8f0',
-    theme_button_color: '#334155',
-    theme_button_text_color: '#f8fafc',
-    theme_tile_bg: '#1e293b',
-    theme_tile_border: '#334155',
-    theme_bg_image_overlay_opacity: 0.35,
-  },
-  'High Contrast': {
-    ...DEFAULT_THEME,
-    theme_bg_color: '#000000',
-    theme_text_color: '#ffffff',
-    theme_button_color: '#ffff00',
-    theme_button_text_color: '#000000',
-    theme_tile_bg: '#000000',
-    theme_tile_border: '#ffffff',
-    theme_bg_image_overlay_opacity: 0.6,
-  },
-  Brand: {
-    ...DEFAULT_THEME,
-    theme_bg_color: '#eef2ff',
-    theme_text_color: '#0f172a',
-    theme_button_color: '#1d4ed8',
-    theme_button_text_color: '#ffffff',
-    theme_tile_bg: '#ffffff',
-    theme_tile_border: '#c7d2fe',
-    theme_bg_image_overlay_opacity: 0.2,
-  },
-};
-
 const FONT_FAMILY_OPTIONS = [
   { label: 'Inter', value: 'Inter, system-ui, -apple-system, sans-serif' },
   { label: 'System UI', value: 'system-ui, -apple-system, sans-serif' },
@@ -387,12 +353,6 @@ const AdminAppearanceSettings = () => {
     }
   };
 
-  const applyPreset = (name) => {
-    setTheme(PRESETS[name] || DEFAULT_THEME);
-    setBgTestStatus('');
-    setMessage(`Applied preset: ${name}. Save to apply globally.`);
-  };
-
   const testBackgroundImage = async () => {
     const url = String(site.theme_bg_image || '').trim();
     if (!url) {
@@ -478,17 +438,6 @@ const AdminAppearanceSettings = () => {
           style={{ display: 'none' }}
           onChange={handleImportFile}
         />
-      </div>
-
-      <div className="card" style={{ marginBottom: '1rem' }}>
-        <h3>Theme Presets</h3>
-        <div className="actions" style={{ marginTop: '0.75rem', flexWrap: 'wrap' }}>
-          {Object.keys(PRESETS).map((name) => (
-            <button key={name} className="ghost" onClick={() => applyPreset(name)} disabled={loading || saving}>
-              {name}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="card" style={{ marginBottom: '1rem' }}>
