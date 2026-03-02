@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import re
 import shutil
 import sqlite3
@@ -14,6 +15,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from pydantic import BaseModel
+import requests
 from sqlmodel import Session, select
 from kubernetes import client
 from kubernetes.client import ApiException
@@ -23,7 +25,10 @@ from ..auth import hash_password, require_admin, revoke_tokens
 from ..config import settings
 from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
+    AlertManagerAlert,
+    AlertsAndErrorsView,
     ConcurrencySettings,
+    ErrorLogView,
     IdleTimeoutSettings,
     ImageCreateResponse,
     ImageMeta,
@@ -65,6 +70,148 @@ COPY_JOB_TIMEOUT_SECONDS = 3 * 60 * 60
 TASK_RETENTION_HOURS = 24
 
 _CDI_AVAILABLE: bool | None = None
+ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
+ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
+
+
+def _to_str(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _trim_log_bytes(content: str, max_bytes: int) -> tuple[str, bool]:
+    raw = content.encode("utf-8", errors="replace")
+    if len(raw) <= max_bytes:
+        return content, False
+    clipped = raw[-max_bytes:]
+    # Keep whole lines in the clipped view when possible.
+    newline_idx = clipped.find(b"\n")
+    if newline_idx != -1 and newline_idx + 1 < len(clipped):
+        clipped = clipped[newline_idx + 1 :]
+    return clipped.decode("utf-8", errors="replace"), True
+
+
+def _extract_error_lines(content: str) -> str:
+    lines = [line for line in content.splitlines() if ERROR_LOG_LINE_RE.search(line)]
+    return "\n".join(lines)
+
+
+def _read_error_log_file(path: Path, max_bytes: int) -> ErrorLogView:
+    source = f"file:{path}"
+    if not path.exists():
+        return ErrorLogView(source=source, bytes=0, truncated=False, content="Log file not found.")
+    try:
+        file_size = path.stat().st_size
+        with path.open("rb") as fh:
+            if file_size > max_bytes:
+                fh.seek(-max_bytes, os.SEEK_END)
+            raw = fh.read(max_bytes if file_size > max_bytes else file_size)
+    except Exception as exc:
+        logger.warning("Failed reading error log file %s: %s", path, exc)
+        return ErrorLogView(source=source, bytes=0, truncated=False, content=f"Failed to read log file: {exc}")
+
+    text = raw.decode("utf-8", errors="replace")
+    filtered = _extract_error_lines(text)
+    if not filtered:
+        filtered = "No error lines found in the selected log file."
+    clipped, clipped_flag = _trim_log_bytes(filtered, max_bytes)
+    return ErrorLogView(
+        source=source,
+        bytes=len(clipped.encode("utf-8", errors="replace")),
+        truncated=(file_size > max_bytes) or clipped_flag,
+        content=clipped,
+    )
+
+
+def _collect_k8s_error_logs(max_bytes: int) -> ErrorLogView:
+    source = f"kubernetes:{settings.kube_namespace}"
+    core = kube._client()
+    try:
+        pods = core.list_namespaced_pod(namespace=settings.kube_namespace).items
+    except ApiException as exc:
+        return ErrorLogView(source=source, bytes=0, truncated=False, content=f"Failed to list pods: {exc}")
+
+    # Most recent pods first so operators see the latest failures first.
+    pods_sorted = sorted(
+        pods,
+        key=lambda pod: (pod.metadata.creation_timestamp or datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=True,
+    )
+    sections: list[str] = []
+    max_per_pod = min(max_bytes, 1024 * 1024)
+    for pod in pods_sorted:
+        name = _to_str(pod.metadata.name)
+        if not name:
+            continue
+        try:
+            log_text = core.read_namespaced_pod_log(
+                name=name,
+                namespace=settings.kube_namespace,
+                timestamps=True,
+                tail_lines=4000,
+                limit_bytes=max_per_pod,
+            )
+        except ApiException:
+            continue
+        filtered = _extract_error_lines(log_text or "")
+        if not filtered:
+            continue
+        sections.append(f"===== {name} =====\n{filtered}\n")
+        if len("".join(sections).encode("utf-8", errors="replace")) >= max_bytes * 2:
+            break
+
+    content = "".join(sections).strip()
+    if not content:
+        content = "No error lines found in current Kubernetes pod logs."
+    clipped, clipped_flag = _trim_log_bytes(content, max_bytes)
+    return ErrorLogView(
+        source=source,
+        bytes=len(clipped.encode("utf-8", errors="replace")),
+        truncated=clipped_flag,
+        content=clipped,
+    )
+
+
+def _fetch_alertmanager_alerts() -> tuple[list[AlertManagerAlert], str]:
+    url = _to_str(settings.alertmanager_api_url)
+    if not url:
+        return [], "Alertmanager URL is not configured."
+    timeout_seconds = max(1, int(settings.alertmanager_timeout_seconds))
+    try:
+        resp = requests.get(url, timeout=timeout_seconds)
+        resp.raise_for_status()
+        payload = resp.json()
+    except requests.RequestException as exc:
+        return [], f"Failed to query Alertmanager: {exc}"
+    except ValueError as exc:
+        return [], f"Alertmanager returned invalid JSON: {exc}"
+
+    if not isinstance(payload, list):
+        return [], "Alertmanager response format is unexpected."
+
+    alerts: list[AlertManagerAlert] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
+        annotations = item.get("annotations") if isinstance(item.get("annotations"), dict) else {}
+        status_obj = item.get("status") if isinstance(item.get("status"), dict) else {}
+        alerts.append(
+            AlertManagerAlert(
+                name=_to_str(labels.get("alertname")) or "unnamed-alert",
+                state=_to_str(status_obj.get("state")) or "unknown",
+                severity=_to_str(labels.get("severity")),
+                summary=_to_str(annotations.get("summary")),
+                description=_to_str(annotations.get("description")),
+                starts_at=item.get("startsAt"),
+                ends_at=item.get("endsAt"),
+                source=_to_str(item.get("generatorURL")),
+                labels={str(k): _to_str(v) for k, v in labels.items()},
+            )
+        )
+    alerts.sort(key=lambda alert: (alert.state.lower() != "active", alert.name))
+    return alerts, ""
 
 
 def _helper_overrides(worker_image: str, claim_name: str) -> str:
@@ -2325,6 +2472,28 @@ def cluster_resources() -> dict:
         "requested": {"cpu_m": requested_cpu, "memory_bytes": requested_mem, "disk_bytes": requested_disk},
         "nodes": node_list,
     }
+
+
+@router.get("/alerts-errors", response_model=AlertsAndErrorsView)
+def alerts_and_errors() -> AlertsAndErrorsView:
+    max_bytes = min(max(1024, int(settings.error_log_max_bytes)), ALERTS_ERRORS_MAX_LOG_BYTES)
+    alerts, alertmanager_error = _fetch_alertmanager_alerts()
+    log_file_path = _to_str(settings.error_log_file_path)
+    if log_file_path:
+        error_log = _read_error_log_file(Path(log_file_path), max_bytes=max_bytes)
+        if error_log.content.startswith("Log file not found.") or error_log.content.startswith("Failed to read log file:"):
+            # Fall back to Kubernetes logs if file logging is not available.
+            error_log = _collect_k8s_error_logs(max_bytes=max_bytes)
+    else:
+        error_log = _collect_k8s_error_logs(max_bytes=max_bytes)
+
+    return AlertsAndErrorsView(
+        fetched_at=datetime.now(timezone.utc),
+        alertmanager_url=_to_str(settings.alertmanager_api_url),
+        alertmanager_error=alertmanager_error,
+        alerts=alerts,
+        error_log=error_log,
+    )
 
 
 @router.post("/settings/concurrency", response_model=ConcurrencySettings)

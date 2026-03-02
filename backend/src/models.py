@@ -126,6 +126,33 @@ class RuntimeSettingsRead(BaseModel):
     kube_node_external_host: str
 
 
+class AlertManagerAlert(BaseModel):
+    name: str
+    state: str
+    severity: str = ""
+    summary: str = ""
+    description: str = ""
+    starts_at: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    source: str = ""
+    labels: dict[str, str] = Field(default_factory=dict)
+
+
+class ErrorLogView(BaseModel):
+    source: str
+    bytes: int
+    truncated: bool
+    content: str
+
+
+class AlertsAndErrorsView(BaseModel):
+    fetched_at: datetime
+    alertmanager_url: str
+    alertmanager_error: str = ""
+    alerts: list[AlertManagerAlert] = Field(default_factory=list)
+    error_log: ErrorLogView
+
+
 class SiteSettings(BaseModel):
     site_title: str
     site_tagline: str

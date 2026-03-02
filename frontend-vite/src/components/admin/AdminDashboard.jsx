@@ -7,6 +7,7 @@ const tiles = [
   { title: 'Images', description: 'Upload and manage VM images', to: '/admin/images' },
   { title: 'Pods', description: 'View/stop/destroy running pods', to: '/admin/pods' },
   { title: 'Resources', description: 'Cluster capacity vs requested usage', to: '/admin/resources' },
+  { title: 'Alerts and Errors', description: 'View Alertmanager alerts and backend error logs', to: '/admin/alerts-errors' },
   { title: 'Settings', description: 'View runtime settings', to: '/admin/settings' },
 ];
 

@@ -10,6 +10,7 @@ import AdminTemplates from './components/admin/AdminTemplates.jsx';
 import AdminImages from './components/admin/AdminImages.jsx';
 import AdminPods from './components/admin/AdminPods.jsx';
 import AdminResources from './components/admin/AdminResources.jsx';
+import AdminAlertsErrors from './components/admin/AdminAlertsErrors.jsx';
 import AdminSettingsLanding from './components/admin/AdminSettingsLanding.jsx';
 import AdminAppearanceSettings from './components/admin/AdminAppearanceSettings.jsx';
 import AdminRuntimeSettings from './components/admin/AdminRuntimeSettings.jsx';
@@ -244,6 +245,14 @@ const AppShell = () => {
                   element={
                     <section className="card">
                       <AdminResources />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/admin/alerts-errors"
+                  element={
+                    <section className="card">
+                      <AdminAlertsErrors />
                     </section>
                   }
                 />
