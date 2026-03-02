@@ -96,7 +96,8 @@ const normalizeTheme = (payload) => {
   merged.theme_font_size_base = Math.min(24, Math.max(12, Number.isFinite(baseSize) ? baseSize : DEFAULT_THEME.theme_font_size_base));
   merged.theme_font_size_h1 = Math.min(64, Math.max(20, Number.isFinite(h1Size) ? h1Size : DEFAULT_THEME.theme_font_size_h1));
   merged.theme_font_size_h2 = Math.min(48, Math.max(16, Number.isFinite(h2Size) ? h2Size : DEFAULT_THEME.theme_font_size_h2));
-  merged.theme_tile_opacity = 1;
+  const tileOpacity = Number(merged.theme_tile_opacity ?? DEFAULT_THEME.theme_tile_opacity);
+  merged.theme_tile_opacity = Math.min(1, Math.max(0.1, Number.isFinite(tileOpacity) ? tileOpacity : DEFAULT_THEME.theme_tile_opacity));
   merged.theme_tile_border_opacity = 1;
   return merged;
 };
@@ -133,6 +134,13 @@ const contrastRatio = (foreground, background) => {
 };
 
 const ratioLabel = (ratio) => (ratio ? ratio.toFixed(2) : 'n/a');
+
+const colorWithAlpha = (hex, alpha, fallback = '#f8fafc') => {
+  const rgb = hexToRgb(hex) || hexToRgb(fallback);
+  if (!rgb) return fallback;
+  const clamped = Math.min(1, Math.max(0, Number(alpha || 1)));
+  return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clamped})`;
+};
 
 const contrastChecks = (theme, targets) => {
   const thresholds = normalizeContrastTargets(targets);
@@ -193,6 +201,7 @@ const applyThemeToRoot = (next) => {
   const [br, bg, bb] = toRgb(next.theme_tile_bg, '#f8fafc');
   const [cr, cg, cb] = toRgb(next.theme_tile_border, '#e2e8f0');
   const overlay = Math.min(0.85, Math.max(0, Number(next.theme_bg_image_overlay_opacity || 0)));
+  const tileOpacity = Math.min(1, Math.max(0.1, Number(next.theme_tile_opacity || DEFAULT_THEME.theme_tile_opacity)));
 
   root.style.setProperty('--bg-color', next.theme_bg_color || '#f5f5f5');
   root.style.setProperty('--text-color', next.theme_text_color || '#111111');
@@ -200,8 +209,8 @@ const applyThemeToRoot = (next) => {
   root.style.setProperty('--button-text', next.theme_button_text_color || '#ffffff');
   root.style.setProperty('--tile-bg', next.theme_tile_bg || '#f8fafc');
   root.style.setProperty('--tile-border', next.theme_tile_border || '#e2e8f0');
-  root.style.setProperty('--tile-opacity', '1');
-  root.style.setProperty('--tile-bg-rgba', `rgba(${br}, ${bg}, ${bb}, 1)`);
+  root.style.setProperty('--tile-opacity', String(tileOpacity));
+  root.style.setProperty('--tile-bg-rgba', `rgba(${br}, ${bg}, ${bb}, ${tileOpacity})`);
   root.style.setProperty('--tile-border-rgba', `rgba(${cr}, ${cg}, ${cb}, 1)`);
   root.style.setProperty('--bg-overlay-opacity', String(overlay));
   root.style.setProperty('--bg-overlay', `linear-gradient(rgba(0,0,0,${overlay}), rgba(0,0,0,${overlay}))`);
@@ -378,22 +387,6 @@ const AdminAppearanceSettings = () => {
     }
   };
 
-  const revertUnsaved = () => {
-    setTheme(savedSite);
-    setContrastTargets(savedContrastTargets);
-    setDraftContrastTargets(savedContrastTargets);
-    setBgTestStatus('');
-    setMessage('Reverted unsaved changes.');
-  };
-
-  const resetDefaults = () => {
-    setTheme(DEFAULT_THEME);
-    setContrastTargets(DEFAULT_CONTRAST_TARGETS);
-    setDraftContrastTargets(DEFAULT_CONTRAST_TARGETS);
-    setBgTestStatus('');
-    setMessage('Loaded default theme values. Save to apply globally.');
-  };
-
   const applyPreset = (name) => {
     setTheme(PRESETS[name] || DEFAULT_THEME);
     setBgTestStatus('');
@@ -472,12 +465,6 @@ const AdminAppearanceSettings = () => {
       {message && <div className="info">{message}</div>}
 
       <div className="actions" style={{ marginBottom: '1rem', flexWrap: 'wrap' }}>
-        <button className="ghost" onClick={resetDefaults} disabled={loading || saving}>
-          Reset to Defaults
-        </button>
-        <button className="ghost" onClick={revertUnsaved} disabled={!hasUnsaved || loading || saving}>
-          Revert Unsaved Changes
-        </button>
         <button className="ghost" onClick={exportThemeJson} disabled={loading || saving}>
           Export Theme JSON
         </button>
@@ -721,6 +708,17 @@ const AdminAppearanceSettings = () => {
                 onChange={(e) => setTheme({ ...site, theme_bg_image_overlay_opacity: Number(e.target.value) })}
               />
             </label>
+            <label>
+              Tile background opacity ({Number(site.theme_tile_opacity || 1).toFixed(2)})
+              <input
+                type="range"
+                min="0.1"
+                max="1"
+                step="0.05"
+                value={site.theme_tile_opacity}
+                onChange={(e) => setTheme({ ...site, theme_tile_opacity: Number(e.target.value) })}
+              />
+            </label>
 
             <div className="actions">
               <button className="ghost" onClick={testBackgroundImage} type="button" disabled={loading || saving}>
@@ -781,7 +779,7 @@ const AdminAppearanceSettings = () => {
               <div
                 className="tile"
                 style={{
-                  background: site.theme_tile_bg,
+                  background: colorWithAlpha(site.theme_tile_bg, site.theme_tile_opacity, '#f8fafc'),
                   borderColor: site.theme_tile_border,
                   color: site.theme_text_color,
                 }}

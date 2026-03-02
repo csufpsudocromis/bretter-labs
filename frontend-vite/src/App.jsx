@@ -28,6 +28,7 @@ const DEFAULT_SITE = {
   theme_bg_image_overlay_opacity: 0,
   theme_tile_bg: '#f8fafc',
   theme_tile_border: '#e2e8f0',
+  theme_tile_opacity: 1,
   theme_tile_border_opacity: 1,
   theme_font_family: 'Inter, system-ui, -apple-system, sans-serif',
   theme_font_size_base: 16,
@@ -97,6 +98,7 @@ const AppShell = () => {
           theme_bg_image_overlay_opacity: Number(res.data.theme_bg_image_overlay_opacity || 0),
           theme_tile_bg: res.data.theme_tile_bg,
           theme_tile_border: res.data.theme_tile_border,
+          theme_tile_opacity: Number(res.data.theme_tile_opacity || DEFAULT_SITE.theme_tile_opacity),
           theme_tile_border_opacity: 1,
           theme_font_family: String(res.data.theme_font_family || DEFAULT_SITE.theme_font_family),
           theme_font_size_base: Number(res.data.theme_font_size_base || DEFAULT_SITE.theme_font_size_base),
@@ -125,7 +127,7 @@ const AppShell = () => {
       }
       return [248, 250, 252];
     };
-    const bgOpacity = 1;
+    const bgOpacity = Math.min(1, Math.max(0.1, Number(site.theme_tile_opacity || DEFAULT_SITE.theme_tile_opacity)));
     const borderOpacity = 1;
     const [br, bg, bb] = toRgb(site.theme_tile_bg, '#f8fafc');
     const [cr, cg, cb] = toRgb(site.theme_tile_border, '#e2e8f0');
