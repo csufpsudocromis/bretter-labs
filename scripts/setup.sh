@@ -425,7 +425,7 @@ tune_longhorn_for_phase2() {
 
 ensure_cdi_installed() {
   if kubectl get crd datavolumes.cdi.kubevirt.io >/dev/null 2>&1 && \
-     kubectl get crd uploadtokenrequests.upload.cdi.kubevirt.io >/dev/null 2>&1; then
+     kubectl api-resources --api-group=upload.cdi.kubevirt.io 2>/dev/null | awk '{print $1}' | grep -qx "uploadtokenrequests"; then
     return
   fi
   if [ "$INSTALL_CDI" -ne 1 ]; then
@@ -438,9 +438,16 @@ ensure_cdi_installed() {
   kubectl apply -f "https://github.com/kubevirt/containerized-data-importer/releases/download/${CDI_VERSION}/cdi-cr.yaml"
 
   kubectl wait --for=condition=Established crd/datavolumes.cdi.kubevirt.io --timeout=300s
-  kubectl wait --for=condition=Established crd/uploadtokenrequests.upload.cdi.kubevirt.io --timeout=300s
   kubectl -n "$CDI_NAMESPACE" rollout status deployment/cdi-operator --timeout=300s >/dev/null 2>&1 || true
   kubectl -n "$CDI_NAMESPACE" wait --for=condition=Available deployment --all --timeout=600s >/dev/null 2>&1 || true
+  local i
+  for i in $(seq 1 30); do
+    if kubectl api-resources --api-group=upload.cdi.kubevirt.io 2>/dev/null | awk '{print $1}' | grep -qx "uploadtokenrequests"; then
+      return
+    fi
+    sleep 2
+  done
+  fail "CDI upload token API did not become available."
 }
 
 ensure_cdi_uploadproxy_nodeport() {
@@ -1160,11 +1167,11 @@ spec:
                     elif [ -d "\$path" ]; then
                       target="\$path"
                     else
-                      return
+                      return 0
                     fi
                     used_pct="\$(pct_used "\$target" || true)"
                     if ! [[ "\$used_pct" =~ ^[0-9]+$ ]]; then
-                      return
+                      return 0
                     fi
                     if [ "\$used_pct" -ge "\$warn" ]; then
                       echo "ALERT[\$kind] \${label} usage is \${used_pct}% (warn=\${warn} critical=\${critical} emergency=\${emergency})"
