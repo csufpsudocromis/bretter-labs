@@ -177,6 +177,8 @@ const UserPanel = () => {
     };
     return labelMap[status] || 'Unknown';
   };
+  const statusReason = (instance) =>
+    effectiveStatus(instance) === 'pending' ? 'waiting for available resources' : '';
   const isRunning = (instance) => effectiveStatus(instance) === 'running';
 
   const readStoredActivity = () => {
@@ -696,6 +698,7 @@ const UserPanel = () => {
                 <div className="specs">
                   <span>{podName(p)}</span>
                 </div>
+                {statusReason(p) && <div className="muted small">{statusReason(p)}</div>}
                 <div className="actions">
                   <button className="ghost" onClick={() => remove(p.id)}>
                     Delete
