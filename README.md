@@ -42,7 +42,7 @@ Optional flags:
 - `RUNNER_IMAGE` to override the VM runner image passed to backend env.
 - `NAMESPACE` to override the namespace (default `labs`).
 - `KUBECONFIG` to point at a specific kubeconfig.
-- `CONTROL_NODE` to pin backend/frontend + hostPath PV affinity to a specific node.
+- `CONTROL_NODE` to pin Postgres + hostPath PV affinity to a specific node.
 - `RUNNER_NODE_SELECTOR_VALUE` to pin VM runner pods to one node; leave empty (default) to allow scheduling on any eligible node.
 - `VM_STORAGE_CLASS` to enable clone-based per-VM disks from source image PVCs. If unset and Longhorn tuning is enabled, setup defaults this to `longhorn-r1`.
 - `LONGHORN_TUNE=1` (default) to apply phase-2 Longhorn defaults when Longhorn is installed.
@@ -69,6 +69,13 @@ Optional flags:
 - `CPU_MANAGER_STATIC=1` to enable kubelet `cpuManagerPolicy: static` on all nodes via `kubectl debug` (optional, requires kubelet restart).
 - `INSTALL_CDI=1` and `CDI_VERSION` to auto-install CDI when missing (defaults: enabled, `v1.61.0`).
 - `CDI_NAMESPACE`, `CDI_UPLOAD_NODEPORT`, `CDI_UPLOAD_PROXY_URL` to control CDI uploadproxy exposure/URL used by browser direct uploads.
+- `ENABLE_MONITORING=1` (default) to install/update `kube-prometheus-stack` (Prometheus + Alertmanager + Grafana).
+- `MONITORING_NAMESPACE` / `MONITORING_RELEASE_NAME` to control where the monitoring stack is installed.
+- `MONITORING_CHART_VERSION` to pin a specific kube-prometheus-stack chart version (default empty = latest).
+- `MONITORING_RESTART_ALERT_COUNT` to alert on pod restart bursts in 15 minutes (default `3`).
+- `MONITORING_DV_STALE_MINUTES` to alert when `img-upload-*` upload PVCs stay active too long (default `60`).
+- `MONITORING_WARM_POOL_MIN_READY` to alert when ready warm-pool PVCs drop below this count (default `1`).
+- `HELM_VERSION` to control helm install version if helm is missing (default `v3.15.4`).
 - `BLABS_WARM_POOL_AUTOSCALE_ENABLED`, `BLABS_WARM_POOL_WINDOW_MINUTES`, `BLABS_WARM_POOL_REFILL_MINUTES`, `BLABS_WARM_POOL_SAFETY_FACTOR` to tune warm pool autoscaling behavior.
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
 - `TLS_SECRET_NAME` to set the TLS secret name (default `bretter-tls`).
@@ -108,6 +115,9 @@ Storage and runtime notes:
 - Multi-node runner scheduling requires shared storage for `golden-images` (RWX). A single-node hostPath PV keeps VM pods effectively tied to that node.
 - Backend uses in-cluster Postgres (`bretter-postgres`) with hostPath persistence on `POSTGRES_DATA_HOSTPATH`.
 - Backend schema migrations are versioned with Alembic and run automatically on startup (`upgrade head`), including legacy baseline stamping for pre-Alembic installs.
+- Backend deployment runs with 2 replicas, hard pod anti-affinity, topology spread, and a PodDisruptionBudget (`minAvailable: 1`) so API remains available through a single-node worker failure.
+- Frontend deployment runs with 2 replicas, hard pod anti-affinity, topology spread, and a PodDisruptionBudget (`minAvailable: 1`) so UI remains available through a single-node worker failure.
+- Backend `/data` now uses `emptyDir` because Postgres is the source of truth; this avoids RWO PVC contention when scaling backend replicas.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 - `VM_STORAGE_CLASS` is required for VM launch. Uploaded/imported images get a source PVC and all VM launches use per-instance cloned PVC disks (no init-container file copy path).
@@ -121,6 +131,7 @@ Storage and runtime notes:
 - Runner pods now include startup/readiness/liveness probes, preferred anti-affinity, and topology-spread constraints across nodes.
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
 - Cleanup automation now adds nodefs/PVC pressure alerts (70/85/95) and tightens cleanup thresholds before DiskPressure hits.
+- Monitoring stack installs kube-prometheus-stack and applies Bretter-specific alerts for stale upload DataVolumes, warm-pool depletion, pod restart bursts, PVC/nodefs usage (70/85/95), and DiskPressure.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).

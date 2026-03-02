@@ -63,6 +63,14 @@ CDI_VERSION="${CDI_VERSION:-v1.61.0}"
 CDI_UPLOAD_NODEPORT="${CDI_UPLOAD_NODEPORT:-30443}"
 CDI_UPLOAD_PROXY_URL="${CDI_UPLOAD_PROXY_URL:-}"
 CPU_MANAGER_STATIC="${CPU_MANAGER_STATIC:-0}"
+ENABLE_MONITORING="${ENABLE_MONITORING:-1}"
+MONITORING_NAMESPACE="${MONITORING_NAMESPACE:-monitoring}"
+MONITORING_RELEASE_NAME="${MONITORING_RELEASE_NAME:-kube-prometheus-stack}"
+MONITORING_CHART_VERSION="${MONITORING_CHART_VERSION:-}"
+MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
+MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
+MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
+HELM_VERSION="${HELM_VERSION:-v3.15.4}"
 
 RENDERED_APP_MANIFEST=""
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
@@ -222,6 +230,37 @@ validate_cpu_manager_config() {
   esac
 }
 
+validate_monitoring_config() {
+  case "$ENABLE_MONITORING" in
+    0|1) ;;
+    *) fail "ENABLE_MONITORING must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_MONITORING" -eq 0 ]; then
+    return
+  fi
+
+  [ -n "$MONITORING_NAMESPACE" ] || fail "MONITORING_NAMESPACE cannot be empty when ENABLE_MONITORING=1."
+  [ -n "$MONITORING_RELEASE_NAME" ] || fail "MONITORING_RELEASE_NAME cannot be empty when ENABLE_MONITORING=1."
+  if [ -n "$MONITORING_CHART_VERSION" ] && ! [[ "$MONITORING_CHART_VERSION" =~ ^v?[0-9]+(\.[0-9]+){2}$ ]]; then
+    fail "MONITORING_CHART_VERSION must look like X.Y.Z (or be empty for latest chart)."
+  fi
+  if ! is_uint "$MONITORING_RESTART_ALERT_COUNT" || [ "$MONITORING_RESTART_ALERT_COUNT" -lt 1 ]; then
+    fail "MONITORING_RESTART_ALERT_COUNT must be an integer >= 1."
+  fi
+  if ! is_uint "$MONITORING_DV_STALE_MINUTES" || [ "$MONITORING_DV_STALE_MINUTES" -lt 1 ]; then
+    fail "MONITORING_DV_STALE_MINUTES must be an integer >= 1."
+  fi
+  if ! is_uint "$MONITORING_WARM_POOL_MIN_READY"; then
+    fail "MONITORING_WARM_POOL_MIN_READY must be an integer >= 0."
+  fi
+  if [ "$MONITORING_WARM_POOL_MIN_READY" -lt 0 ]; then
+    fail "MONITORING_WARM_POOL_MIN_READY must be an integer >= 0."
+  fi
+  if [ -z "$HELM_VERSION" ]; then
+    fail "HELM_VERSION cannot be empty when ENABLE_MONITORING=1."
+  fi
+}
+
 sudo_cmd() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -285,6 +324,33 @@ install_kubectl() {
     | sudo_cmd tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
   sudo_cmd apt-get update -y
   sudo_cmd apt-get install -y kubectl
+}
+
+install_helm() {
+  if command -v helm >/dev/null 2>&1; then
+    return
+  fi
+
+  local arch helm_arch tmp_dir
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64)
+      helm_arch="amd64"
+      ;;
+    aarch64|arm64)
+      helm_arch="arm64"
+      ;;
+    *)
+      fail "Unsupported CPU architecture for helm install: $arch"
+      ;;
+  esac
+
+  tmp_dir="$(mktemp -d /tmp/helm-install.XXXXXX)"
+  log "Installing helm ${HELM_VERSION}..."
+  curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz" -o "$tmp_dir/helm.tgz"
+  tar -xzf "$tmp_dir/helm.tgz" -C "$tmp_dir"
+  sudo_cmd install -m 0755 "$tmp_dir/linux-${helm_arch}/helm" /usr/local/bin/helm
+  rm -rf "$tmp_dir"
 }
 
 install_podman() {
@@ -508,6 +574,217 @@ configure_cdi_upload_proxy_url() {
   log "Ensuring CDI uploadproxy NodePort service in namespace $CDI_NAMESPACE..."
   ensure_cdi_uploadproxy_nodeport
   CDI_UPLOAD_PROXY_URL="https://${NODE_EXTERNAL_HOST}:${CDI_UPLOAD_NODEPORT}"
+}
+
+install_monitoring_stack() {
+  if [ "$ENABLE_MONITORING" -ne 1 ]; then
+    log "Skipping monitoring stack install (ENABLE_MONITORING=0)."
+    return
+  fi
+
+  install_helm
+  log "Installing kube-prometheus-stack in namespace ${MONITORING_NAMESPACE}..."
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
+  helm repo update >/dev/null
+
+  local values_file
+  values_file="$(mktemp /tmp/bretter-monitoring-values.XXXXXX.yaml)"
+  cat >"$values_file" <<EOF
+grafana:
+  enabled: true
+  defaultDashboardsEnabled: true
+alertmanager:
+  enabled: true
+kube-state-metrics:
+  metricLabelsAllowlist:
+    - persistentvolumeclaims=[blabs-pool,pool-state,template-id]
+prometheus:
+  prometheusSpec:
+    retention: 10d
+EOF
+
+  local helm_cmd=(upgrade --install "$MONITORING_RELEASE_NAME" prometheus-community/kube-prometheus-stack --namespace "$MONITORING_NAMESPACE" --create-namespace -f "$values_file")
+  if [ -n "$MONITORING_CHART_VERSION" ]; then
+    helm_cmd+=(--version "${MONITORING_CHART_VERSION#v}")
+  fi
+  helm "${helm_cmd[@]}"
+  rm -f "$values_file"
+
+  local deploy
+  while IFS= read -r deploy; do
+    [ -n "$deploy" ] || continue
+    kubectl -n "$MONITORING_NAMESPACE" rollout status "$deploy" --timeout=600s
+  done < <(kubectl -n "$MONITORING_NAMESPACE" get deployment -l app.kubernetes.io/instance="$MONITORING_RELEASE_NAME" -o name)
+
+  local sts
+  while IFS= read -r sts; do
+    [ -n "$sts" ] || continue
+    kubectl -n "$MONITORING_NAMESPACE" rollout status "$sts" --timeout=600s
+  done < <(kubectl -n "$MONITORING_NAMESPACE" get statefulset -l app.kubernetes.io/instance="$MONITORING_RELEASE_NAME" -o name)
+}
+
+apply_monitoring_alert_rules() {
+  if [ "$ENABLE_MONITORING" -ne 1 ]; then
+    return
+  fi
+
+  log "Applying monitoring alert rules..."
+  kubectl -n "$MONITORING_NAMESPACE" apply -f - <<EOF
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: bretter-labs-alerts
+  namespace: ${MONITORING_NAMESPACE}
+  labels:
+    release: ${MONITORING_RELEASE_NAME}
+    app.kubernetes.io/part-of: bretter-labs
+spec:
+  groups:
+    - name: bretter-labs-capacity
+      rules:
+        - alert: BretterNodeFsUsageWarning
+          expr: |
+            max by (instance) (
+              100 * (
+                1 - (
+                  node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs",device!~"rootfs"}
+                  /
+                  node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs",device!~"rootfs"}
+                )
+              )
+            ) >= ${AUTOCLEANUP_NODEFS_WARN_PCT}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Node filesystem usage is above ${AUTOCLEANUP_NODEFS_WARN_PCT}%.
+        - alert: BretterNodeFsUsageCritical
+          expr: |
+            max by (instance) (
+              100 * (
+                1 - (
+                  node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs",device!~"rootfs"}
+                  /
+                  node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs",device!~"rootfs"}
+                )
+              )
+            ) >= ${AUTOCLEANUP_NODEFS_CRITICAL_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Node filesystem usage is above ${AUTOCLEANUP_NODEFS_CRITICAL_PCT}%.
+        - alert: BretterNodeFsUsageEmergency
+          expr: |
+            max by (instance) (
+              100 * (
+                1 - (
+                  node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs",device!~"rootfs"}
+                  /
+                  node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay|squashfs",device!~"rootfs"}
+                )
+              )
+            ) >= ${AUTOCLEANUP_NODEFS_EMERGENCY_PCT}
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: Node filesystem usage is above ${AUTOCLEANUP_NODEFS_EMERGENCY_PCT}%.
+        - alert: BretterPvcUsageWarning
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              100 * (
+                1 - (
+                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}"}
+                  /
+                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}"}
+                )
+              )
+            ) >= ${AUTOCLEANUP_PVC_WARN_PCT}
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: A PVC in namespace ${NAMESPACE} is above ${AUTOCLEANUP_PVC_WARN_PCT}% usage.
+        - alert: BretterPvcUsageCritical
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              100 * (
+                1 - (
+                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}"}
+                  /
+                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}"}
+                )
+              )
+            ) >= ${AUTOCLEANUP_PVC_CRITICAL_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: A PVC in namespace ${NAMESPACE} is above ${AUTOCLEANUP_PVC_CRITICAL_PCT}% usage.
+        - alert: BretterPvcUsageEmergency
+          expr: |
+            max by (namespace, persistentvolumeclaim) (
+              100 * (
+                1 - (
+                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}"}
+                  /
+                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}"}
+                )
+              )
+            ) >= ${AUTOCLEANUP_PVC_EMERGENCY_PCT}
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: A PVC in namespace ${NAMESPACE} is above ${AUTOCLEANUP_PVC_EMERGENCY_PCT}% usage.
+        - alert: BretterNodeDiskPressure
+          expr: max by (node) (kube_node_status_condition{condition="DiskPressure",status="true"} == 1) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: One or more nodes report DiskPressure.
+    - name: bretter-labs-runtime
+      rules:
+        - alert: BretterPodRestartBurst
+          expr: |
+            sum by (namespace, pod) (
+              increase(kube_pod_container_status_restarts_total{namespace="${NAMESPACE}"}[15m])
+            ) >= ${MONITORING_RESTART_ALERT_COUNT}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Pod restart burst detected in namespace ${NAMESPACE}.
+        - alert: BretterWarmPoolDepleted
+          expr: |
+            (
+              sum(kube_persistentvolumeclaim_labels{namespace="${NAMESPACE}",label_blabs_pool="true",label_pool_state="ready"})
+              < ${MONITORING_WARM_POOL_MIN_READY}
+            )
+            and
+            (
+              sum(kube_persistentvolumeclaim_labels{namespace="${NAMESPACE}",label_blabs_pool="true"}) > 0
+            )
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Warm pool ready PVC count fell below ${MONITORING_WARM_POOL_MIN_READY}.
+        - alert: BretterDataVolumeUploadStale
+          expr: |
+            (
+              (time() - kube_persistentvolumeclaim_created{namespace="${NAMESPACE}",persistentvolumeclaim=~"img-upload-.*"}) / 60
+            ) > ${MONITORING_DV_STALE_MINUTES}
+            and on(namespace, persistentvolumeclaim)
+            kube_persistentvolumeclaim_status_phase{namespace="${NAMESPACE}",phase=~"Pending|Bound"} == 1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: A direct-upload DataVolume PVC has been active for over ${MONITORING_DV_STALE_MINUTES} minutes.
+EOF
 }
 
 enable_cpu_manager_static_all_nodes() {
@@ -1345,6 +1622,7 @@ main() {
   validate_postgres_config
   validate_cdi_upload_config
   validate_cpu_manager_config
+  validate_monitoring_config
   require_apt
   install_base_packages
   install_kubectl
@@ -1374,6 +1652,7 @@ main() {
   log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
+  log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
     log "Longhorn default data path override: $LONGHORN_DEFAULT_DATA_PATH"
@@ -1410,6 +1689,8 @@ main() {
   fi
 
   apply_manifests
+  install_monitoring_stack
+  apply_monitoring_alert_rules
   log "Done."
 }
 

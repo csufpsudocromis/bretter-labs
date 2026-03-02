@@ -233,8 +233,11 @@ metadata:
   namespace: __NAMESPACE__
 spec:
   strategy:
-    type: Recreate
-  replicas: 1
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  replicas: 2
   selector:
     matchLabels:
       app: bretter-backend
@@ -243,8 +246,20 @@ spec:
       labels:
         app: bretter-backend
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: __CONTROL_NODE__
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: bretter-backend
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: bretter-backend
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
@@ -371,8 +386,7 @@ spec:
           persistentVolumeClaim:
             claimName: golden-images
         - name: data
-          persistentVolumeClaim:
-            claimName: backend-data
+          emptyDir: {}
         - name: tls-cert
           secret:
             secretName: __TLS_SECRET_NAME__
@@ -398,7 +412,12 @@ metadata:
   name: bretter-frontend
   namespace: __NAMESPACE__
 spec:
-  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  replicas: 2
   selector:
     matchLabels:
       app: bretter-frontend
@@ -407,8 +426,20 @@ spec:
       labels:
         app: bretter-frontend
     spec:
-      nodeSelector:
-        kubernetes.io/hostname: __CONTROL_NODE__
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: bretter-frontend
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: bretter-frontend
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
@@ -471,3 +502,25 @@ spec:
     - port: 443
       targetPort: 443
       nodePort: 30073
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bretter-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bretter-frontend
+  namespace: __NAMESPACE__
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bretter-frontend
