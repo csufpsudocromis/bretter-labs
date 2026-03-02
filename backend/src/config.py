@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     idle_timeout_minutes: int = 30
     storage_root: str = "/home/cbeis/golden-images"
     database_path: str = "backend/data/app.db"
+    database_url: str = ""
     kube_namespace: str = "labs"
     kube_image_pvc: str = "golden-images"
     kube_runtime_class: str = ""  # set to your RuntimeClass name if needed
@@ -33,10 +34,17 @@ class Settings(BaseSettings):
     linux_machine_type: str = "pc"
     linux_cpu_model: str = "host"
     vm_net_backend: str = "tap-nat"
+    vm_vhost_net_enabled: bool = True
+    vm_net_multiqueue_enabled: bool = True
+    vm_qos_guaranteed: bool = True
+    vm_memory_overhead_mb: int = 1024
     warm_pool_autoscale_enabled: bool = True
     warm_pool_window_minutes: int = 15
     warm_pool_refill_minutes: int = 2
     warm_pool_safety_factor: float = 1.5
+    cdi_direct_upload_enabled: bool = True
+    cdi_upload_proxy_url: str = ""
+    cdi_upload_source_filename: str = "disk.img"
     public_scheme: str = "https"
     cors_allow_http: bool = False
 

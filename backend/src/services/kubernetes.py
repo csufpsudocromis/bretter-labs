@@ -285,17 +285,27 @@ class KubernetesService:
         pod_name = self._pod_name(req)
         self.ensure_namespace(settings.kube_namespace)
         instance_disk_pvc = self._ensure_instance_disk_pvc(req)
-        # Give QEMU some headroom above the guest RAM to avoid cgroup OOM kills from host overhead.
-        mem_limit_mb = req.ram_mb + 2048
+        guest_ram_mb = max(512, int(req.ram_mb))
+        memory_overhead_mb = max(0, int(settings.vm_memory_overhead_mb))
+        # Give QEMU headroom above guest RAM to avoid cgroup OOM kills from host overhead.
+        pod_ram_mb = guest_ram_mb + memory_overhead_mb
         tls_secret_name = (settings.kube_tls_secret or "").strip()
         metadata = client.V1ObjectMeta(
             name=pod_name,
             labels={"app": pod_name, "owner": req.owner, "instance": req.instance_id},
         )
-        resources = client.V1ResourceRequirements(
-            limits={"cpu": str(req.cpu_cores), "memory": f"{mem_limit_mb}Mi"},
-            requests={"cpu": str(req.cpu_cores), "memory": f"{req.ram_mb}Mi"},
-        )
+        cpu_value = str(max(1, int(req.cpu_cores)))
+        if settings.vm_qos_guaranteed:
+            # Guaranteed QoS reduces eviction risk and scheduler jitter for VM workloads.
+            resources = client.V1ResourceRequirements(
+                limits={"cpu": cpu_value, "memory": f"{pod_ram_mb}Mi"},
+                requests={"cpu": cpu_value, "memory": f"{pod_ram_mb}Mi"},
+            )
+        else:
+            resources = client.V1ResourceRequirements(
+                limits={"cpu": cpu_value, "memory": f"{pod_ram_mb}Mi"},
+                requests={"cpu": cpu_value, "memory": f"{guest_ram_mb}Mi"},
+            )
         volume_mounts = [client.V1VolumeMount(name="data", mount_path="/data", read_only=False)]
         volumes = [
             client.V1Volume(
@@ -338,6 +348,14 @@ class KubernetesService:
                 )
             )
             volume_mounts.append(client.V1VolumeMount(name="tun", mount_path="/dev/net/tun"))
+            if settings.vm_vhost_net_enabled:
+                volumes.append(
+                    client.V1Volume(
+                        name="vhost-net",
+                        host_path=client.V1HostPathVolumeSource(path="/dev/vhost-net"),
+                    )
+                )
+                volume_mounts.append(client.V1VolumeMount(name="vhost-net", mount_path="/dev/vhost-net"))
         os_type = req.os_type.lower()
         is_linux = os_type == "linux"
         # Clone-backed instance disks are mounted at /data; Linux defaults to virtio for faster IO.
@@ -368,6 +386,9 @@ class KubernetesService:
             client.V1EnvVar(name="EFI_ENABLED", value=str(efi_enabled).lower()),
             client.V1EnvVar(name="CPU_MODEL", value=cpu_model),
             client.V1EnvVar(name="VM_NET_BACKEND", value=settings.vm_net_backend),
+            client.V1EnvVar(name="VM_VHOST_NET_ENABLED", value=str(settings.vm_vhost_net_enabled).lower()),
+            client.V1EnvVar(name="VM_NET_MULTIQUEUE_ENABLED", value=str(settings.vm_net_multiqueue_enabled).lower()),
+            client.V1EnvVar(name="VM_NET_QUEUES", value=str(max(1, int(req.cpu_cores)))),
         ]
         if tls_secret_name:
             env_vars.extend(

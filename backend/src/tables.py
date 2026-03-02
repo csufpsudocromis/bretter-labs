@@ -38,6 +38,7 @@ class ImageUploadTask(SQLModel, table=True):
     image_id: Optional[str] = None
     checksum: Optional[str] = None
     source_pvc: Optional[str] = None
+    upload_pvc: Optional[str] = None
     finalize_job: Optional[str] = None
     copy_job: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)

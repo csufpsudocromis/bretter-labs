@@ -4,6 +4,17 @@ metadata:
   name: bretter-backend
   namespace: __NAMESPACE__
 ---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: bretter-postgres
+  namespace: __NAMESPACE__
+type: Opaque
+stringData:
+  POSTGRES_USER: "__POSTGRES_USER__"
+  POSTGRES_PASSWORD: "__POSTGRES_PASSWORD__"
+  POSTGRES_DB: "__POSTGRES_DB__"
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,9 +23,21 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "pods/exec", "services", "namespaces", "nodes", "persistentvolumeclaims", "secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["upload.cdi.kubevirt.io"]
+    resources: ["uploadtokenrequests"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -28,6 +51,116 @@ subjects:
   - kind: ServiceAccount
     name: bretter-backend
     namespace: __NAMESPACE__
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: backend-postgres-pv
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-postgres-sc
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  hostPath:
+    path: __POSTGRES_DATA_HOSTPATH__
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - __CONTROL_NODE__
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-postgres-data
+  namespace: __NAMESPACE__
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-postgres-sc
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-postgres
+  namespace: __NAMESPACE__
+spec:
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bretter-postgres
+  template:
+    metadata:
+      labels:
+        app: bretter-postgres
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: __CONTROL_NODE__
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_DB
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: backend-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-postgres
+  namespace: __NAMESPACE__
+spec:
+  type: ClusterIP
+  selector:
+    app: bretter-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
 ---
 apiVersion: v1
 kind: PersistentVolume
@@ -92,6 +225,20 @@ spec:
       serviceAccountName: bretter-backend
       imagePullSecrets:
         - name: ghcr-creds
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - until pg_isready -h bretter-postgres.__NAMESPACE__.svc.cluster.local -p 5432 -U __POSTGRES_USER__ -d __POSTGRES_DB__; do sleep 2; done
+          env:
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_PASSWORD
       containers:
         - name: backend
           image: __BACKEND_IMAGE__
@@ -116,10 +263,18 @@ spec:
               value: "__VM_STORAGE_CLASS__"
             - name: BLABS_KUBE_UPLOAD_USE_CDI
               value: "true"
+            - name: BLABS_CDI_DIRECT_UPLOAD_ENABLED
+              value: "true"
+            - name: BLABS_CDI_UPLOAD_PROXY_URL
+              value: "__CDI_UPLOAD_PROXY_URL__"
+            - name: BLABS_CDI_UPLOAD_SOURCE_FILENAME
+              value: "disk.img"
             - name: BLABS_STORAGE_ROOT
               value: /mnt/lab-images
             - name: BLABS_DATABASE_PATH
               value: /data/app.db
+            - name: BLABS_DATABASE_URL
+              value: postgresql://__POSTGRES_USER__:__POSTGRES_PASSWORD__@bretter-postgres.__NAMESPACE__.svc.cluster.local:5432/__POSTGRES_DB__
             - name: BLABS_KUBE_NODE_EXTERNAL_HOST
               value: __NODE_EXTERNAL_HOST__
             - name: BLABS_PUBLIC_SCHEME
@@ -146,6 +301,14 @@ spec:
               value: __LINUX_CPU_MODEL__
             - name: BLABS_VM_NET_BACKEND
               value: __VM_NET_BACKEND__
+            - name: BLABS_VM_VHOST_NET_ENABLED
+              value: "true"
+            - name: BLABS_VM_NET_MULTIQUEUE_ENABLED
+              value: "true"
+            - name: BLABS_VM_QOS_GUARANTEED
+              value: "true"
+            - name: BLABS_VM_MEMORY_OVERHEAD_MB
+              value: "1024"
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images

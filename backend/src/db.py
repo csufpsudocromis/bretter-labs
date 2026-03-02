@@ -1,11 +1,33 @@
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator
 
 from sqlmodel import Session, SQLModel, create_engine
 
 from .config import settings
 
-engine = create_engine(f"sqlite:///{settings.database_path}", echo=False, connect_args={"check_same_thread": False})
+
+def _database_url() -> str:
+    raw = (settings.database_url or "").strip()
+    if not raw:
+        db_path = Path(settings.database_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return f"sqlite:///{db_path}"
+    if raw.startswith("postgres://"):
+        return "postgresql+psycopg://" + raw[len("postgres://") :]
+    if raw.startswith("postgresql://"):
+        return "postgresql+psycopg://" + raw[len("postgresql://") :]
+    return raw
+
+
+DATABASE_URL = _database_url()
+SQLITE_DB = DATABASE_URL.startswith("sqlite")
+engine = create_engine(
+    DATABASE_URL,
+    echo=False,
+    connect_args={"check_same_thread": False} if SQLITE_DB else {},
+    pool_pre_ping=not SQLITE_DB,
+)
 
 
 def init_db() -> None:

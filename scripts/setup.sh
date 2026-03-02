@@ -24,6 +24,7 @@ LONGHORN_DEFAULT_REPLICA_COUNT="${LONGHORN_DEFAULT_REPLICA_COUNT:-2}"
 LONGHORN_RESERVED_PERCENT="${LONGHORN_RESERVED_PERCENT:-10}"
 LONGHORN_MIN_AVAILABLE_PERCENT="${LONGHORN_MIN_AVAILABLE_PERCENT:-5}"
 LONGHORN_OVERPROVISION_PERCENT="${LONGHORN_OVERPROVISION_PERCENT:-200}"
+LONGHORN_DEFAULT_DATA_PATH="${LONGHORN_DEFAULT_DATA_PATH:-}"
 ENABLE_AUTOCLEANUP="${ENABLE_AUTOCLEANUP:-1}"
 AUTOCLEANUP_SCHEDULE="${AUTOCLEANUP_SCHEDULE:-*/15 * * * *}"
 AUTOCLEANUP_HELPER_MAX_AGE_MINUTES="${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES:-30}"
@@ -44,6 +45,14 @@ LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
+POSTGRES_DATA_HOSTPATH="${POSTGRES_DATA_HOSTPATH:-/var/lib/bretter-labs/postgres-data}"
+POSTGRES_USER="${POSTGRES_USER:-bretter}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-bretterpass}"
+POSTGRES_DB="${POSTGRES_DB:-bretterlabs}"
+CDI_NAMESPACE="${CDI_NAMESPACE:-cdi}"
+CDI_UPLOAD_NODEPORT="${CDI_UPLOAD_NODEPORT:-30443}"
+CDI_UPLOAD_PROXY_URL="${CDI_UPLOAD_PROXY_URL:-}"
+CPU_MANAGER_STATIC="${CPU_MANAGER_STATIC:-0}"
 
 RENDERED_APP_MANIFEST=""
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
@@ -144,6 +153,25 @@ validate_vm_network_config() {
   case "$VM_NET_BACKEND" in
     tap-nat|user) ;;
     *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
+  esac
+}
+
+validate_postgres_config() {
+  [ -n "$POSTGRES_USER" ] || fail "POSTGRES_USER cannot be empty."
+  [ -n "$POSTGRES_PASSWORD" ] || fail "POSTGRES_PASSWORD cannot be empty."
+  [ -n "$POSTGRES_DB" ] || fail "POSTGRES_DB cannot be empty."
+}
+
+validate_cdi_upload_config() {
+  if ! is_uint "$CDI_UPLOAD_NODEPORT" || [ "$CDI_UPLOAD_NODEPORT" -lt 30000 ] || [ "$CDI_UPLOAD_NODEPORT" -gt 32767 ]; then
+    fail "CDI_UPLOAD_NODEPORT must be a valid NodePort in 30000-32767."
+  fi
+}
+
+validate_cpu_manager_config() {
+  case "$CPU_MANAGER_STATIC" in
+    0|1) ;;
+    *) fail "CPU_MANAGER_STATIC must be either 0 or 1." ;;
   esac
 }
 
@@ -336,6 +364,9 @@ tune_longhorn_for_phase2() {
   patch_longhorn_setting "storage-reserved-percentage-for-default-disk" "$LONGHORN_RESERVED_PERCENT"
   patch_longhorn_setting "storage-minimal-available-percentage" "$LONGHORN_MIN_AVAILABLE_PERCENT"
   patch_longhorn_setting "storage-over-provisioning-percentage" "$LONGHORN_OVERPROVISION_PERCENT"
+  if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
+    patch_longhorn_setting "default-data-path" "$LONGHORN_DEFAULT_DATA_PATH"
+  fi
   sync_longhorn_reserved_capacity
   ensure_longhorn_vm_storage_class
 
@@ -343,6 +374,106 @@ tune_longhorn_for_phase2() {
     VM_STORAGE_CLASS="$LONGHORN_VM_STORAGE_CLASS"
     log "VM_STORAGE_CLASS not set; defaulting to $VM_STORAGE_CLASS for clone-based VM disks."
   fi
+}
+
+ensure_cdi_uploadproxy_nodeport() {
+  if ! kubectl -n "$CDI_NAMESPACE" get svc cdi-uploadproxy >/dev/null 2>&1; then
+    return
+  fi
+  python3 - "$CDI_NAMESPACE" "$CDI_UPLOAD_NODEPORT" <<'PY' | kubectl apply -f -
+import json
+import subprocess
+import sys
+
+namespace = sys.argv[1]
+node_port = int(sys.argv[2])
+svc = json.loads(
+    subprocess.check_output(
+        ["kubectl", "-n", namespace, "get", "svc", "cdi-uploadproxy", "-o", "json"],
+        text=True,
+    )
+)
+selector = svc.get("spec", {}).get("selector") or {}
+ports = svc.get("spec", {}).get("ports") or []
+target_port = 443
+if ports:
+    target_port = ports[0].get("targetPort") or ports[0].get("port") or 443
+print("apiVersion: v1")
+print("kind: Service")
+print("metadata:")
+print("  name: bretter-cdi-uploadproxy")
+print(f"  namespace: {namespace}")
+print("spec:")
+print("  type: NodePort")
+if selector:
+    print("  selector:")
+    for k, v in selector.items():
+        print(f"    {k}: {v}")
+else:
+    print("  selector: {}")
+print("  ports:")
+print("    - name: https")
+print("      protocol: TCP")
+print("      port: 443")
+print(f"      targetPort: {target_port}")
+print(f"      nodePort: {node_port}")
+PY
+}
+
+configure_cdi_upload_proxy_url() {
+  if [ -n "$CDI_UPLOAD_PROXY_URL" ]; then
+    return
+  fi
+  if ! kubectl -n "$CDI_NAMESPACE" get svc cdi-uploadproxy >/dev/null 2>&1; then
+    log "CDI uploadproxy service not detected; direct CDI upload URL will be disabled."
+    return
+  fi
+  log "Ensuring CDI uploadproxy NodePort service in namespace $CDI_NAMESPACE..."
+  ensure_cdi_uploadproxy_nodeport
+  CDI_UPLOAD_PROXY_URL="https://${NODE_EXTERNAL_HOST}:${CDI_UPLOAD_NODEPORT}"
+}
+
+enable_cpu_manager_static_local() {
+  if [ "$CPU_MANAGER_STATIC" -ne 1 ]; then
+    return
+  fi
+  if [ ! -f /var/lib/kubelet/config.yaml ]; then
+    log "WARNING: /var/lib/kubelet/config.yaml not found; skipping CPU manager configuration."
+    return
+  fi
+  if grep -Eq '^\s*cpuManagerPolicy:\s*static\s*$' /var/lib/kubelet/config.yaml; then
+    log "CPU manager policy is already static on this node."
+    return
+  fi
+
+  log "Enabling kubelet cpuManagerPolicy=static on this node (requires kubelet restart)..."
+  sudo_cmd python3 - <<'PY'
+from pathlib import Path
+
+cfg = Path("/var/lib/kubelet/config.yaml")
+lines = cfg.read_text().splitlines()
+out = []
+found_policy = False
+found_reconcile = False
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("cpuManagerPolicy:"):
+        out.append("cpuManagerPolicy: static")
+        found_policy = True
+        continue
+    if stripped.startswith("cpuManagerReconcilePeriod:"):
+        found_reconcile = True
+    out.append(line)
+if not found_policy:
+    out.append("cpuManagerPolicy: static")
+if not found_reconcile:
+    out.append("cpuManagerReconcilePeriod: 5s")
+cfg.write_text("\n".join(out) + "\n")
+PY
+  sudo_cmd systemctl restart kubelet
+  kubectl wait --for=condition=Ready "node/${CONTROL_NODE}" --timeout=180s >/dev/null 2>&1 || \
+    log "WARNING: kubelet restarted but node readiness check did not complete within timeout."
+  log "CPU manager static enabled on ${CONTROL_NODE}. Repeat on worker nodes if you want cluster-wide pinning."
 }
 
 detect_control_node() {
@@ -414,6 +545,16 @@ run_storage_preflight_checks() {
   else
     check_free_space_guard "$(dirname "$GOLDEN_IMAGES_HOSTPATH")" "golden image storage parent path"
   fi
+  if [ -d "$POSTGRES_DATA_HOSTPATH" ]; then
+    check_free_space_guard "$POSTGRES_DATA_HOSTPATH" "postgres data path"
+  else
+    check_free_space_guard "$(dirname "$POSTGRES_DATA_HOSTPATH")" "postgres data parent path"
+  fi
+  if [ -d "$BACKEND_DATA_HOSTPATH" ]; then
+    check_free_space_guard "$BACKEND_DATA_HOSTPATH" "backend data path"
+  else
+    check_free_space_guard "$(dirname "$BACKEND_DATA_HOSTPATH")" "backend data parent path"
+  fi
   warn_if_diskpressure_nodes
 }
 
@@ -427,7 +568,7 @@ render_manifest_template() {
 
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local runner_node_selector_value
-  local vm_storage_class backend_data_hostpath golden_images_hostpath
+  local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath postgres_user postgres_password postgres_db cdi_upload_proxy_url
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
@@ -448,6 +589,11 @@ render_manifest_template() {
   vm_net_backend="$(escape_sed_replacement "$VM_NET_BACKEND")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
+  postgres_data_hostpath="$(escape_sed_replacement "$POSTGRES_DATA_HOSTPATH")"
+  postgres_user="$(escape_sed_replacement "$POSTGRES_USER")"
+  postgres_password="$(escape_sed_replacement "$POSTGRES_PASSWORD")"
+  postgres_db="$(escape_sed_replacement "$POSTGRES_DB")"
+  cdi_upload_proxy_url="$(escape_sed_replacement "$CDI_UPLOAD_PROXY_URL")"
 
   sed \
     -e "s/__NAMESPACE__/${ns}/g" \
@@ -469,6 +615,11 @@ render_manifest_template() {
     -e "s/__VM_NET_BACKEND__/${vm_net_backend}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
+    -e "s#__POSTGRES_DATA_HOSTPATH__#${postgres_data_hostpath}#g" \
+    -e "s/__POSTGRES_USER__/${postgres_user}/g" \
+    -e "s/__POSTGRES_PASSWORD__/${postgres_password}/g" \
+    -e "s/__POSTGRES_DB__/${postgres_db}/g" \
+    -e "s#__CDI_UPLOAD_PROXY_URL__#${cdi_upload_proxy_url}#g" \
     "$input" >"$output"
 }
 
@@ -707,6 +858,38 @@ reconcile_backend_data_pv() {
   kubectl delete pv backend-data-pv --ignore-not-found=true >/dev/null 2>&1 || true
 }
 
+reconcile_postgres_data_pv() {
+  if ! kubectl get pv backend-postgres-pv >/dev/null 2>&1; then
+    return
+  fi
+
+  local current_hostnames current_hostpath recreate_reason
+  current_hostnames="$(kubectl get pv backend-postgres-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' \
+    | awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
+  current_hostpath="$(kubectl get pv backend-postgres-pv -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)"
+  recreate_reason=""
+
+  if [ -n "$current_hostnames" ] && [[ "$current_hostnames" != *"$CONTROL_NODE"* ]]; then
+    recreate_reason="node affinity ($current_hostnames) does not match $CONTROL_NODE"
+  fi
+  if [ "$current_hostpath" != "$POSTGRES_DATA_HOSTPATH" ]; then
+    if [ -n "$recreate_reason" ]; then
+      recreate_reason="$recreate_reason; "
+    fi
+    recreate_reason="${recreate_reason}hostPath ($current_hostpath) does not match $POSTGRES_DATA_HOSTPATH"
+  fi
+  if [ -z "$recreate_reason" ]; then
+    return
+  fi
+
+  log "backend-postgres-pv ${recreate_reason}; recreating PV/PVC."
+  kubectl -n "$NAMESPACE" scale deployment bretter-backend --replicas=0 >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" scale deployment bretter-postgres --replicas=0 >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" wait --for=delete pod -l app=bretter-postgres --timeout=180s >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" delete pvc backend-postgres-data --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl delete pv backend-postgres-pv --ignore-not-found=true >/dev/null 2>&1 || true
+}
+
 ensure_pull_secret() {
   if [ "$CREATE_PULL_SECRET" -eq 1 ]; then
     log "Updating ghcr-creds secret"
@@ -873,6 +1056,7 @@ apply_manifests() {
   ensure_tls_secret
   ensure_golden_images_claim
   reconcile_backend_data_pv
+  reconcile_postgres_data_pv
   ensure_pull_secret
   apply_cleanup_automation
 
@@ -887,6 +1071,7 @@ apply_manifests() {
   kubectl apply -f "$RENDERED_APP_MANIFEST"
 
   log "Waiting for rollout"
+  kubectl -n "$NAMESPACE" rollout status deployment/bretter-postgres --timeout=300s
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
 }
@@ -899,6 +1084,9 @@ main() {
   validate_autocleanup_config
   validate_storage_guard_config
   validate_vm_network_config
+  validate_postgres_config
+  validate_cdi_upload_config
+  validate_cpu_manager_config
   require_apt
   install_base_packages
   install_kubectl
@@ -906,6 +1094,8 @@ main() {
   tune_longhorn_for_phase2
   detect_control_node
   detect_node_external_host
+  enable_cpu_manager_static_local
+  configure_cdi_upload_proxy_url
   prepare_rendered_manifests
 
   log "Using control node: $CONTROL_NODE"
@@ -918,10 +1108,16 @@ main() {
   log "Using public scheme: $PUBLIC_SCHEME"
   log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
+  log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Using VM network backend: $VM_NET_BACKEND"
+  log "CPU manager static on local node: $CPU_MANAGER_STATIC"
+  log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
+  if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
+    log "Longhorn default data path override: $LONGHORN_DEFAULT_DATA_PATH"
+  fi
   log "Cleanup automation enabled: $ENABLE_AUTOCLEANUP (schedule: $AUTOCLEANUP_SCHEDULE)"
   log "Storage guard thresholds: warn<${SETUP_WARN_FREE_GIB}Gi, fail<${SETUP_MIN_FREE_GIB}Gi"
   run_storage_preflight_checks

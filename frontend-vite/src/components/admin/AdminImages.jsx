@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 import { api } from '../../api';
 
 const AdminImages = () => {
@@ -50,8 +51,6 @@ const AdminImages = () => {
 
   const upload = async () => {
     if (!file) return;
-    const formData = new FormData();
-    formData.append('file', file);
     setUploading(true);
     setUploadStage('uploading');
     setProgress(0);
@@ -59,7 +58,24 @@ const AdminImages = () => {
     setUploadDetail('');
     setMessage('');
     setError('');
-    try {
+
+    const waitForTaskAndFinish = async (taskId) => {
+      setUploadTaskId(taskId);
+      setUploadStage('finalizing');
+      setUploadDetail('Finalizing on cluster storage');
+      await waitForUploadTask(taskId);
+      setFile(null);
+      setProgress(0);
+      setUploadStage('idle');
+      setUploadTaskId('');
+      setUploadDetail('');
+      setMessage('Upload complete');
+      load();
+    };
+
+    const uploadLegacy = async () => {
+      const formData = new FormData();
+      formData.append('file', file);
       const kickoff = await api.post('/admin/images', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
         onUploadProgress: (evt) => {
@@ -76,19 +92,51 @@ const AdminImages = () => {
       if (!taskId) {
         throw new Error('Upload task did not start');
       }
+      await waitForTaskAndFinish(taskId);
+    };
+
+    try {
+      const direct = await api.post('/admin/images/direct-upload/start', {
+        filename: file.name,
+        size_bytes: file.size,
+      });
+      const uploadUrl = direct.data?.upload_url;
+      const uploadToken = direct.data?.upload_token;
+      const taskId = direct.data?.task?.task_id;
+      if (!uploadUrl || !uploadToken || !taskId) {
+        throw new Error('Direct upload did not initialize');
+      }
       setUploadTaskId(taskId);
-      setUploadStage('finalizing');
-      setUploadDetail(kickoff.data?.detail || 'Finalizing on cluster storage');
-      await waitForUploadTask(taskId);
-      setFile(null);
-      setProgress(0);
-      setUploadStage('idle');
-      setUploadTaskId('');
-      setUploadDetail('');
-      setMessage('Upload complete');
-      load();
+      setUploadDetail('Uploading image directly to cluster storage');
+      await axios.post(uploadUrl, file, {
+        headers: {
+          Authorization: `Bearer ${uploadToken}`,
+          'Content-Type': 'application/octet-stream',
+        },
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity,
+        onUploadProgress: (evt) => {
+          if (evt.total) {
+            const percent = Math.min(100, Math.round((evt.loaded / evt.total) * 100));
+            setProgress(percent);
+            if (percent >= 100) {
+              setUploadStage('finalizing');
+            }
+          }
+        },
+      });
+      await waitForTaskAndFinish(taskId);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Upload failed');
+      const status = err?.response?.status;
+      if (status === 404 || status === 409) {
+        try {
+          await uploadLegacy();
+        } catch (legacyErr) {
+          setError(legacyErr.response?.data?.detail || legacyErr.message || 'Upload failed');
+        }
+      } else {
+        setError(err.response?.data?.detail || err.message || 'Upload failed');
+      }
     } finally {
       setUploadStage('idle');
       setUploading(false);

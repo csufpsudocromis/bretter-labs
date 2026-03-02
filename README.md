@@ -52,6 +52,7 @@ Optional flags:
 - `LONGHORN_RESERVED_PERCENT` to reserve per-node Longhorn disk capacity (default `10`).
 - `LONGHORN_MIN_AVAILABLE_PERCENT` to set Longhorn minimal available capacity threshold (default `5`).
 - `LONGHORN_OVERPROVISION_PERCENT` to set Longhorn overprovisioning percentage (default `200`).
+- `LONGHORN_DEFAULT_DATA_PATH` to move Longhorn data to a dedicated fast disk mount (for example `/mnt/longhorn-fast`).
 - `ENABLE_AUTOCLEANUP=1` (default) to install/update a `bretter-cleanup` CronJob in the app namespace.
 - `AUTOCLEANUP_SCHEDULE` to control cleanup CronJob cadence (default `*/15 * * * *`).
 - `AUTOCLEANUP_HELPER_MAX_AGE_MINUTES` to cull stale `image-sync-*` helper pods (default `30`).
@@ -61,11 +62,14 @@ Optional flags:
 - `WINDOWS_MACHINE_TYPE` / `WINDOWS_EFI_ENABLED` / `WINDOWS_CPU_MODEL` to control Windows VM firmware/machine defaults (defaults: `q35`/`true`/`host`).
 - `LINUX_MACHINE_TYPE` / `LINUX_EFI_ENABLED` / `LINUX_CPU_MODEL` to control Linux VM firmware/machine defaults (defaults: `pc`/`false`/`host`).
 - `VM_NET_BACKEND` to choose VM networking backend (`tap-nat` default, `user` for legacy qemu slirp).
+- `CPU_MANAGER_STATIC=1` to enable kubelet `cpuManagerPolicy: static` on the node running setup (optional, requires kubelet restart).
+- `CDI_NAMESPACE`, `CDI_UPLOAD_NODEPORT`, `CDI_UPLOAD_PROXY_URL` to control CDI uploadproxy exposure/URL used by browser direct uploads.
 - `BLABS_WARM_POOL_AUTOSCALE_ENABLED`, `BLABS_WARM_POOL_WINDOW_MINUTES`, `BLABS_WARM_POOL_REFILL_MINUTES`, `BLABS_WARM_POOL_SAFETY_FACTOR` to tune warm pool autoscaling behavior.
 - `TLS_ENABLED=1` (default) to ensure a TLS secret exists for backend/frontend/runner.
 - `TLS_SECRET_NAME` to set the TLS secret name (default `bretter-tls`).
 - `TLS_CERT_FILE` and `TLS_KEY_FILE` to use your own certificate/key when creating the TLS secret.
-- `BACKEND_DATA_HOSTPATH` to override backend DB hostPath (default `/var/lib/bretter-labs/backend-data`).
+- `BACKEND_DATA_HOSTPATH` to override backend app-data hostPath (sqlite fallback/cache; default `/var/lib/bretter-labs/backend-data`).
+- `POSTGRES_DATA_HOSTPATH`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` to configure the in-cluster Postgres backing store.
 - `GOLDEN_IMAGES_HOSTPATH` to override golden image hostPath (default `/var/lib/bretter-labs/golden-images`).
 - `SETUP_WARN_FREE_GIB` to set setup-time low-space warning threshold (default `40` GiB free).
 - `SETUP_MIN_FREE_GIB` to set setup-time low-space hard-fail threshold (default `25` GiB free).
@@ -97,17 +101,19 @@ Storage and runtime notes:
 - `golden-images` PVC stores VM images. By default setup uses `deploy/golden-hostpath.yaml`.
 - For shared RWX storage, use `APPLY_GOLDEN_HOSTPATH=0 APPLY_GOLDEN_PVC=1` and set the storage class in `deploy/golden-pvc.yaml`.
 - Multi-node runner scheduling requires shared storage for `golden-images` (RWX). A single-node hostPath PV keeps VM pods effectively tied to that node.
-- Backend DB uses `backend-data` hostPath on the selected control node.
+- Backend uses in-cluster Postgres (`bretter-postgres`) with hostPath persistence on `POSTGRES_DATA_HOSTPATH`.
 - Runner image `ghcr.io/csufpsudocromis/win-vm-runner:latest` is preloaded to worker nodes by setup when `LOAD_LOCAL_IMAGES=1`.
 - If `LOAD_LOCAL_IMAGES=0`, ensure the runner image is pullable from your registry or preloaded on each node.
 - `VM_STORAGE_CLASS` is required for VM launch. Uploaded/imported images get a source PVC and all VM launches use per-instance cloned PVC disks (no init-container file copy path).
 - Uploaded/imported images are normalized automatically (`.qcow`/`.qcow2` -> `.raw`, `.vhd`/`.vhdx`/`.vdi` -> `.qcow2`) for more reliable VM boot behavior.
-- Image uploads return quickly after browser transfer and continue as async Kubernetes jobs (finalize + source-PVC import). The UI shows "Finalizing on cluster" and polls task status.
-- If CDI DataVolume CRDs are installed, uploads use CDI HTTP import into source PVCs; otherwise the backend falls back to a Kubernetes copy job (no `kubectl exec` stream loop).
+- Image uploads use browser direct CDI upload (uploadproxy/DataVolume) when CDI is available and configured; the UI then polls async Kubernetes finalize/import jobs.
+- If CDI direct upload is not available, the UI falls back to legacy backend multipart upload.
 - Templates include `preclone_pool_size` (min) and `preclone_pool_max` (max) so warm pre-cloned disks auto-scale with recent launch demand while staying within bounds.
 - Runtime defaults use UEFI+q35 for Windows and BIOS+i440fx with `virtio` disk bus for Linux; override with `BLABS_WINDOWS_*` / `BLABS_LINUX_*` env vars if needed.
-- Runner networking defaults to `tap-nat` (kernel NAT + dnsmasq in-pod) for better throughput than qemu user-mode networking.
+- Runner networking defaults to `tap-nat` with virtio-net multiqueue and optional `vhost-net` acceleration for higher throughput/lower latency.
+- VM pods use Guaranteed QoS by default (memory requests = limits, with configurable overhead via `BLABS_VM_MEMORY_OVERHEAD_MB`).
 - With Longhorn installed, setup can auto-apply phase-2 defaults and create a VM clone class (`longhorn-r1`) for fresh installs.
+- For steadier CPU pinning, optionally enable kubelet `cpuManagerPolicy: static` on nodes hosting VM runner pods.
 
 ## Usage
 - UI: NodePort `30073` (e.g. `https://<node-external-host>:30073`).

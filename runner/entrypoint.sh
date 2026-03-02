@@ -9,6 +9,8 @@ MACHINE_TYPE="${MACHINE_TYPE:-q35}"
 EFI_ENABLED="${EFI_ENABLED:-false}"
 CPU_MODEL="${CPU_MODEL:-host}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
+VM_VHOST_NET_ENABLED="${VM_VHOST_NET_ENABLED:-true}"
+VM_NET_MULTIQUEUE_ENABLED="${VM_NET_MULTIQUEUE_ENABLED:-true}"
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
@@ -38,6 +40,21 @@ fi
 
 DRIVE_IF="${DRIVE_IF:-ide}"
 VGA_TYPE="${VGA_TYPE:-qxl}"
+CPU_CORES="${CPU_CORES:-2}"
+RAM_MB="${RAM_MB:-4096}"
+VM_NET_QUEUES="${VM_NET_QUEUES:-${CPU_CORES}}"
+if ! [[ "$VM_NET_QUEUES" =~ ^[0-9]+$ ]]; then
+  VM_NET_QUEUES=1
+fi
+if (( VM_NET_QUEUES < 1 )); then
+  VM_NET_QUEUES=1
+fi
+if (( VM_NET_QUEUES > 8 )); then
+  VM_NET_QUEUES=8
+fi
+if [[ "${VM_NET_MULTIQUEUE_ENABLED,,}" != "true" ]]; then
+  VM_NET_QUEUES=1
+fi
 
 # Detect disk format when not provided. VHDs (vpc) need the right format to boot.
 DISK_FORMAT="$DISK_FORMAT_ENV"
@@ -89,8 +106,8 @@ fi
 websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$SPICE_PORT" --daemon
 
 QEMU_ARGS=(
-  -m "${RAM_MB:-4096}"
-  -smp "${CPU_CORES:-2}"
+  -m "${RAM_MB}"
+  -smp "${CPU_CORES}"
   -boot c
   -display none
   -spice "port=${SPICE_PORT},addr=0.0.0.0,disable-ticketing=on"
@@ -151,7 +168,15 @@ setup_tap_nat() {
     VM_NET_BACKEND="user"
     return
   fi
-  ip tuntap add dev tap0 mode tap
+  if (( VM_NET_QUEUES > 1 )); then
+    if ! ip tuntap add dev tap0 mode tap multi_queue; then
+      echo "tap multiqueue setup failed; falling back to single queue networking"
+      VM_NET_QUEUES=1
+      ip tuntap add dev tap0 mode tap
+    fi
+  else
+    ip tuntap add dev tap0 mode tap
+  fi
   ip addr add 192.168.241.1/24 dev tap0
   ip link set tap0 up
   # Forward VM traffic through pod eth0 with kernel NAT instead of qemu slirp.
@@ -176,14 +201,30 @@ fi
 
 # Single virtio net device for all OS types.
 if [[ "${VM_NET_BACKEND,,}" == "tap-nat" ]]; then
+  TAP_NETDEV="tap,id=net0,ifname=tap0,script=no,downscript=no,queues=${VM_NET_QUEUES}"
+  if [[ "${VM_VHOST_NET_ENABLED,,}" == "true" ]]; then
+    if [[ -c /dev/vhost-net ]]; then
+      TAP_NETDEV="${TAP_NETDEV},vhost=on"
+    else
+      echo "vhost-net requested but /dev/vhost-net is unavailable; continuing without vhost acceleration"
+    fi
+  fi
+  NET_DEVICE="virtio-net-pci,netdev=net0"
+  if (( VM_NET_QUEUES > 1 )); then
+    NET_DEVICE="${NET_DEVICE},mq=on,vectors=$((2 * VM_NET_QUEUES + 2))"
+  fi
   QEMU_ARGS+=(
-    -netdev tap,id=net0,ifname=tap0,script=no,downscript=no
-    -device virtio-net-pci,netdev=net0
+    -netdev "${TAP_NETDEV}"
+    -device "${NET_DEVICE}"
   )
 else
+  NET_DEVICE="virtio-net-pci,netdev=net0"
+  if (( VM_NET_QUEUES > 1 )); then
+    NET_DEVICE="${NET_DEVICE},mq=on,vectors=$((2 * VM_NET_QUEUES + 2))"
+  fi
   QEMU_ARGS+=(
     -netdev user,id=net0
-    -device virtio-net-pci,netdev=net0
+    -device "${NET_DEVICE}"
   )
 fi
 
@@ -216,6 +257,7 @@ else
   )
 fi
 
-echo "Starting QEMU with disk=${DISK}, cpu=${CPU_CORES:-2}, ram=${RAM_MB:-4096}MB, vnc=${VNC_DISPLAY:-:0}, ws_port=${WS_PORT}"
+echo "Starting QEMU with disk=${DISK}, cpu=${CPU_CORES}, ram=${RAM_MB}MB, vnc=${VNC_DISPLAY:-:0}, ws_port=${WS_PORT}"
 echo "Disk format: ${DISK_FORMAT}"
+echo "VM networking: backend=${VM_NET_BACKEND}, queues=${VM_NET_QUEUES}, vhost_net=${VM_VHOST_NET_ENABLED}"
 exec qemu-system-x86_64 "${QEMU_ARGS[@]}"

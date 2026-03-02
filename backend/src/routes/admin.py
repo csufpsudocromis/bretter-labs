@@ -21,7 +21,7 @@ from kubernetes.utils import parse_quantity
 
 from ..auth import hash_password, require_admin, revoke_tokens
 from ..config import settings
-from ..db import get_session, session_scope
+from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
     ConcurrencySettings,
     IdleTimeoutSettings,
@@ -89,6 +89,8 @@ def _helper_overrides(worker_image: str, claim_name: str) -> str:
 
 
 def _ensure_config_columns() -> None:
+    if not SQLITE_DB:
+        return
     db_path = settings.database_path
     try:
         conn = sqlite3.connect(db_path)
@@ -150,6 +152,8 @@ def _ensure_config_columns() -> None:
 
 
 def _ensure_template_columns() -> None:
+    if not SQLITE_DB:
+        return
     db_path = settings.database_path
     try:
         conn = sqlite3.connect(db_path)
@@ -190,6 +194,8 @@ def _ensure_template_columns() -> None:
 
 
 def _ensure_image_columns() -> None:
+    if not SQLITE_DB:
+        return
     db_path = settings.database_path
     try:
         conn = sqlite3.connect(db_path)
@@ -208,6 +214,8 @@ def _ensure_image_columns() -> None:
 
 
 def _ensure_instance_columns() -> None:
+    if not SQLITE_DB:
+        return
     db_path = settings.database_path
     try:
         conn = sqlite3.connect(db_path)
@@ -229,6 +237,8 @@ def _ensure_instance_columns() -> None:
 
 
 def _ensure_upload_task_columns() -> None:
+    if not SQLITE_DB:
+        return
     db_path = settings.database_path
     try:
         conn = sqlite3.connect(db_path)
@@ -242,6 +252,8 @@ def _ensure_upload_task_columns() -> None:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN checksum TEXT")
         if "source_pvc" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN source_pvc TEXT")
+        if "upload_pvc" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN upload_pvc TEXT")
         if "finalize_job" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_job TEXT")
         if "copy_job" not in cols:
@@ -295,6 +307,7 @@ def _update_upload_task(
     size_bytes: int | None = None,
     checksum: str | None = None,
     source_pvc: str | None = None,
+    upload_pvc: str | None = None,
     finalize_job: str | None = None,
     copy_job: str | None = None,
 ) -> None:
@@ -318,6 +331,8 @@ def _update_upload_task(
             task.checksum = checksum
         if source_pvc is not None:
             task.source_pvc = source_pvc
+        if upload_pvc is not None:
+            task.upload_pvc = upload_pvc
         if finalize_job is not None:
             task.finalize_job = finalize_job
         if copy_job is not None:
@@ -341,6 +356,8 @@ def _job_phase(job: client.V1Job | None) -> str:
 
 def _cleanup_task_jobs(task: ImageUploadTask) -> None:
     batch = client.BatchV1Api()
+    custom = client.CustomObjectsApi()
+    core = kube._client()
     for name in [task.finalize_job, task.copy_job]:
         if not name:
             continue
@@ -356,6 +373,23 @@ def _cleanup_task_jobs(task: ImageUploadTask) -> None:
         except ApiException as exc:
             if exc.status != 404:
                 logger.warning("Failed to cleanup job %s for task %s", name, task.id, exc_info=True)
+    if task.upload_pvc:
+        try:
+            custom.delete_namespaced_custom_object(
+                group="cdi.kubevirt.io",
+                version="v1beta1",
+                namespace=settings.kube_namespace,
+                plural="datavolumes",
+                name=task.upload_pvc,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.warning("Failed to cleanup direct-upload DataVolume %s", task.upload_pvc, exc_info=True)
+        try:
+            core.delete_namespaced_persistent_volume_claim(name=task.upload_pvc, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.warning("Failed to cleanup direct-upload PVC %s", task.upload_pvc, exc_info=True)
     _cleanup_fileserver(task.id)
 
 
@@ -530,6 +564,85 @@ def _datavolume_phase(name: str) -> tuple[str, str]:
     return phase, msg
 
 
+def _direct_upload_pvc_name(task_id: str) -> str:
+    return f"img-upload-{task_id[:8]}"
+
+
+def _direct_upload_url() -> str:
+    base = (settings.cdi_upload_proxy_url or "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError("BLABS_CDI_UPLOAD_PROXY_URL is not configured")
+    return f"{base}/v1beta1/upload"
+
+
+def _create_direct_upload_datavolume(task: ImageUploadTask) -> str:
+    if not _has_cdi_datavolume():
+        raise RuntimeError("CDI DataVolume CRD is not installed")
+    if not settings.kube_vm_storage_class:
+        raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for direct CDI upload")
+    custom = client.CustomObjectsApi()
+    required_bytes = int(task.size_bytes) + SOURCE_PVC_OVERHEAD_BYTES
+    requested_gi = max(1, math.ceil(required_bytes / (1024 ** 3)))
+    name = _direct_upload_pvc_name(task.id)
+
+    body = {
+        "apiVersion": "cdi.kubevirt.io/v1beta1",
+        "kind": "DataVolume",
+        "metadata": {
+            "name": name,
+            "namespace": settings.kube_namespace,
+            "labels": {
+                "app.kubernetes.io/part-of": "bretter-labs",
+                "upload-task": task.id,
+                "job-type": "image-direct-upload",
+            },
+        },
+        "spec": {
+            "source": {"upload": {}},
+            "pvc": {
+                "accessModes": ["ReadWriteOnce"],
+                "storageClassName": settings.kube_vm_storage_class,
+                "resources": {"requests": {"storage": f"{requested_gi}Gi"}},
+            },
+        },
+    }
+
+    try:
+        custom.create_namespaced_custom_object(
+            group="cdi.kubevirt.io",
+            version="v1beta1",
+            namespace=settings.kube_namespace,
+            plural="datavolumes",
+            body=body,
+        )
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+    return name
+
+
+def _request_direct_upload_token(claim_name: str) -> str:
+    custom = client.CustomObjectsApi()
+    req_name = f"upload-token-{uuid4().hex[:10]}"
+    body = {
+        "apiVersion": "upload.cdi.kubevirt.io/v1beta1",
+        "kind": "UploadTokenRequest",
+        "metadata": {"name": req_name, "namespace": settings.kube_namespace},
+        "spec": {"pvcName": claim_name},
+    }
+    response = custom.create_namespaced_custom_object(
+        group="upload.cdi.kubevirt.io",
+        version="v1beta1",
+        namespace=settings.kube_namespace,
+        plural="uploadtokenrequests",
+        body=body,
+    )
+    token = str((response or {}).get("status", {}).get("token") or "").strip()
+    if not token:
+        raise RuntimeError("failed to acquire CDI upload token")
+    return token
+
+
 def _finalize_conversion_spec(suffix: str) -> tuple[str, str]:
     if suffix in RAW_CONVERSION_SUFFIXES:
         return ("raw", "raw")
@@ -660,6 +773,118 @@ echo "BLABS_OUTPUT_SHA256=${sha}"
     return job_name
 
 
+def _create_finalize_from_upload_job(task: ImageUploadTask) -> str:
+    if not task.upload_pvc:
+        raise RuntimeError("upload PVC missing for direct upload finalize")
+    batch = client.BatchV1Api()
+    suffix = Path(task.filename).suffix.lower()
+    convert_fmt, output_suffix = _finalize_conversion_spec(suffix)
+    short_id = task.id[:8]
+    job_name = _finalize_job_name(task.id)
+
+    container = client.V1Container(
+        name="finalize",
+        image=settings.runner_image,
+        image_pull_policy="IfNotPresent",
+        env=[
+            client.V1EnvVar(name="INPUT_FILENAME", value=task.filename),
+            client.V1EnvVar(name="CONVERT_FORMAT", value=convert_fmt),
+            client.V1EnvVar(name="OUTPUT_SUFFIX", value=output_suffix),
+            client.V1EnvVar(name="TASK_SHORT_ID", value=short_id),
+            client.V1EnvVar(name="UPLOAD_SOURCE_FILENAME", value=settings.cdi_upload_source_filename or "disk.img"),
+        ],
+        command=["/bin/sh", "-c"],
+        args=[
+            r"""
+set -euo pipefail
+src="/upload/${UPLOAD_SOURCE_FILENAME}"
+if [ ! -f "${src}" ]; then
+  fallback="$(find /upload -maxdepth 2 -type f | head -n 1 || true)"
+  if [ -z "${fallback}" ]; then
+    echo "BLABS_ERROR=upload source image missing"
+    exit 22
+  fi
+  src="${fallback}"
+fi
+stage="/images/${INPUT_FILENAME}"
+cp -f "${src}" "${stage}"
+sync
+out="${stage}"
+if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
+  stem="${INPUT_FILENAME%.*}"
+  out="/images/${stem}.${OUTPUT_SUFFIX}"
+  if [ -f "${out}" ]; then
+    out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
+  fi
+  qemu-img convert -O "${CONVERT_FORMAT}" "${stage}" "${out}"
+  rm -f "${stage}"
+fi
+sync
+size="$(wc -c < "${out}")"
+sha="$(sha256sum "${out}" | awk '{print $1}')"
+echo "BLABS_OUTPUT_FILENAME=$(basename "${out}")"
+echo "BLABS_OUTPUT_SIZE=${size}"
+echo "BLABS_OUTPUT_SHA256=${sha}"
+"""
+        ],
+        volume_mounts=[
+            client.V1VolumeMount(name="upload", mount_path="/upload", read_only=True),
+            client.V1VolumeMount(name="images", mount_path="/images", read_only=False),
+        ],
+    )
+    spec = client.V1PodSpec(
+        restart_policy="Never",
+        containers=[container],
+        volumes=[
+            client.V1Volume(
+                name="upload",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=task.upload_pvc),
+            ),
+            client.V1Volume(
+                name="images",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=settings.kube_image_pvc),
+            ),
+        ],
+        tolerations=[
+            client.V1Toleration(
+                key="node-role.kubernetes.io/control-plane",
+                operator="Exists",
+                effect="NoSchedule",
+            ),
+            client.V1Toleration(
+                key="node-role.kubernetes.io/master",
+                operator="Exists",
+                effect="NoSchedule",
+            ),
+        ],
+    )
+    if settings.image_pull_secret:
+        spec.image_pull_secrets = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
+
+    job = client.V1Job(
+        metadata=client.V1ObjectMeta(
+            name=job_name,
+            namespace=settings.kube_namespace,
+            labels={"app.kubernetes.io/part-of": "bretter-labs", "upload-task": task.id, "job-type": "image-finalize"},
+        ),
+        spec=client.V1JobSpec(
+            backoff_limit=1,
+            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            active_deadline_seconds=FINALIZE_JOB_TIMEOUT_SECONDS,
+            template=client.V1PodTemplateSpec(
+                metadata=client.V1ObjectMeta(labels={"upload-task": task.id, "job-type": "image-finalize"}),
+                spec=spec,
+            ),
+        ),
+    )
+    try:
+        batch.create_namespaced_job(namespace=settings.kube_namespace, body=job)
+    except ApiException as exc:
+        if exc.status != 409:
+            raise
+    return job_name
+
+
 def _parse_finalize_log(log_data: str) -> tuple[str, int, str]:
     name_match = re.search(r"BLABS_OUTPUT_FILENAME=([^\n]+)", log_data)
     size_match = re.search(r"BLABS_OUTPUT_SIZE=([0-9]+)", log_data)
@@ -692,7 +917,7 @@ def _read_job_log(job_name: str, *, tail_lines: int = 200) -> str:
 def _ensure_upload_task_finalize_job(task: ImageUploadTask) -> None:
     if task.finalize_job:
         return
-    task.finalize_job = _create_finalize_job(task)
+    task.finalize_job = _create_finalize_from_upload_job(task) if task.upload_pvc else _create_finalize_job(task)
     task.status = "finalizing"
     task.detail = "Finalizing image format/checksum on cluster"
     task.updated_at = datetime.utcnow()
@@ -827,17 +1052,56 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
 
     batch = client.BatchV1Api()
 
-    try:
-        _ensure_upload_task_finalize_job(task)
-    except Exception as exc:
-        task.status = "failed"
-        task.detail = "Failed to submit finalize job"
-        task.error_message = str(exc)
-        task.updated_at = datetime.utcnow()
-        session.add(task)
-        session.commit()
-        session.refresh(task)
-        return task
+    if task.upload_pvc and task.status == "uploading":
+        try:
+            phase, msg = _datavolume_phase(task.upload_pvc)
+        except ApiException as exc:
+            if exc.status == 404:
+                task.status = "failed"
+                task.detail = "Direct upload DataVolume not found"
+                task.error_message = "direct upload datavolume disappeared before completion"
+                task.updated_at = datetime.utcnow()
+                session.add(task)
+                session.commit()
+                session.refresh(task)
+                _cleanup_task_jobs(task)
+                return task
+            raise
+        phase_lower = phase.lower()
+        if phase_lower == "failed":
+            task.status = "failed"
+            task.detail = "Direct CDI upload failed"
+            task.error_message = msg or "direct upload failed"
+            task.updated_at = datetime.utcnow()
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            _cleanup_task_jobs(task)
+            return task
+        if phase_lower != "succeeded":
+            task.detail = "Uploading image directly to CDI DataVolume"
+            task.error_message = None
+            task.updated_at = datetime.utcnow()
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            return task
+        task.status = "finalizing"
+        task.detail = "Direct upload complete; starting finalize job"
+        task.error_message = None
+
+    if task.status != "uploading":
+        try:
+            _ensure_upload_task_finalize_job(task)
+        except Exception as exc:
+            task.status = "failed"
+            task.detail = "Failed to submit finalize job"
+            task.error_message = str(exc)
+            task.updated_at = datetime.utcnow()
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+            return task
 
     if task.status == "finalizing":
         try:
@@ -1437,6 +1701,18 @@ class ImageRename(BaseModel):
     filename: str | None = None
     skip_validation: bool = False
 
+
+class DirectUploadStart(BaseModel):
+    filename: str
+    size_bytes: int
+
+
+class DirectUploadSession(BaseModel):
+    task: ImageUploadTaskStatus
+    upload_url: str
+    upload_token: str
+
+
 def _user_out(user: User) -> UserOut:
     return UserOut(username=user.username, is_admin=user.is_admin, force_password_change=user.force_password_change)
 
@@ -1577,6 +1853,73 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         session.refresh(task)
 
     return _upload_task_out(task)
+
+
+@router.post("/images/direct-upload/start", response_model=DirectUploadSession, status_code=status.HTTP_202_ACCEPTED)
+def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(get_session)) -> DirectUploadSession:
+    if not settings.cdi_direct_upload_enabled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="direct CDI upload is disabled")
+    if not settings.kube_vm_storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clone-based VM storage is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
+        )
+    if not _has_cdi_datavolume():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="CDI DataVolume CRD is not installed")
+    try:
+        upload_url = _direct_upload_url()
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    filename = Path(payload.filename or "").name
+    if not filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filename required")
+    suffix = Path(filename).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
+    if payload.size_bytes <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="size_bytes must be > 0")
+    if payload.size_bytes > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="image too large (max 60GB)",
+        )
+
+    task = ImageUploadTask(
+        id=str(uuid4()),
+        original_filename=filename,
+        filename=filename,
+        size_bytes=payload.size_bytes,
+        status="uploading",
+        detail="Ready for direct CDI upload",
+        error_message=None,
+        image_id=str(uuid4()),
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+    )
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+
+    try:
+        task.upload_pvc = _create_direct_upload_datavolume(task)
+        token = _request_direct_upload_token(task.upload_pvc)
+        task.detail = "Uploading image directly to CDI DataVolume"
+        task.updated_at = datetime.utcnow()
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+    except Exception as exc:
+        task.status = "failed"
+        task.detail = "Failed to initialize direct CDI upload"
+        task.error_message = str(exc)
+        task.updated_at = datetime.utcnow()
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+
+    return DirectUploadSession(task=_upload_task_out(task), upload_url=upload_url, upload_token=token)
 
 
 @router.get("/images/upload-tasks/{task_id}", response_model=ImageUploadTaskStatus)
