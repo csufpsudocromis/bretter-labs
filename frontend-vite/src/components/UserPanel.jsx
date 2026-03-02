@@ -171,7 +171,7 @@ const UserPanel = () => {
       starting: 'Starting',
       running: 'Running',
       stopped: 'Stopped',
-      completed: 'Stopped',
+      completed: 'Completed',
       failed: 'Failed',
       unknown: 'Unknown',
     };
