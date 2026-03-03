@@ -15,6 +15,44 @@ stringData:
   POSTGRES_PASSWORD: "__POSTGRES_PASSWORD__"
   POSTGRES_DB: "__POSTGRES_DB__"
 ---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: bretter-default-container-limits
+  namespace: __NAMESPACE__
+spec:
+  limits:
+    - type: Container
+      min:
+        cpu: 50m
+        memory: 64Mi
+      defaultRequest:
+        cpu: 250m
+        memory: 256Mi
+      default:
+        cpu: "2"
+        memory: 2Gi
+      max:
+        cpu: "8"
+        memory: 16Gi
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: bretter-runtime-quota
+  namespace: __NAMESPACE__
+spec:
+  hard:
+    pods: "400"
+    services: "200"
+    services.nodeports: "120"
+    persistentvolumeclaims: "400"
+    requests.cpu: "32"
+    requests.memory: 64Gi
+    limits.cpu: "64"
+    limits.memory: 128Gi
+    requests.storage: 10Ti
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -40,6 +78,9 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["longhorn.io"]
     resources: ["nodes", "volumes"]
@@ -383,6 +424,18 @@ spec:
               value: "true"
             - name: BLABS_VM_RUNNER_ANTI_AFFINITY_ENABLED
               value: "true"
+            - name: BLABS_CONTAINER_INGRESS_ENABLED
+              value: "__CONTAINER_INGRESS_ENABLED__"
+            - name: BLABS_CONTAINER_INGRESS_CLASS
+              value: "__CONTAINER_INGRESS_CLASS__"
+            - name: BLABS_CONTAINER_INGRESS_BASE_DOMAIN
+              value: "__CONTAINER_INGRESS_BASE_DOMAIN__"
+            - name: BLABS_CONTAINER_INGRESS_ANNOTATIONS_JSON
+              value: "__CONTAINER_INGRESS_ANNOTATIONS_JSON__"
+            - name: BLABS_CONTAINER_IMAGE_PREPULL_ENABLED
+              value: "__CONTAINER_IMAGE_PREPULL_ENABLED__"
+            - name: BLABS_CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS
+              value: "__CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS__"
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images

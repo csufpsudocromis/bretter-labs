@@ -6,6 +6,8 @@ Creates/stops/deletes VM pods, applies egress-only NetworkPolicies, and generate
 
 import logging
 import math
+import json
+import hashlib
 import re
 import shlex
 import time
@@ -48,6 +50,12 @@ class ContainerPodRequest:
     cpu_millicores: int
     memory_mb: int
     container_port: int = 80
+    healthcheck_protocol: str = "tcp"
+    healthcheck_path: str = "/"
+    startup_timeout_seconds: int = 300
+    expose_strategy: str = "nodeport"
+    run_as_non_root: bool = False
+    read_only_root_filesystem: bool = False
     command: Optional[str] = None
     args: list[str] | None = None
     env: dict[str, str] | None = None
@@ -101,6 +109,9 @@ class KubernetesService:
 
     def _container_service_name(self, instance_id: str) -> str:
         return f"ctsvc-{instance_id[:8]}"
+
+    def _container_ingress_name(self, instance_id: str) -> str:
+        return f"cting-{instance_id[:8]}"
 
     def _instance_disk_pvc_name(self, instance_id: str, owner: str) -> str:
         safe_owner = self._safe_owner(owner)
@@ -306,11 +317,18 @@ class KubernetesService:
             existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
             return existing.spec.ports[0].node_port
 
-    def ensure_container_service(self, instance_id: str, owner: str, container_port: int) -> int:
+    def ensure_container_service(
+        self,
+        instance_id: str,
+        owner: str,
+        container_port: int,
+        service_type: str = "NodePort",
+    ) -> int | None:
         core = self._client()
         pod_name = self._container_pod_name(instance_id, owner)
         service_name = self._container_service_name(instance_id)
         tcp_port = max(1, min(65535, int(container_port or 80)))
+        normalized_service_type = "ClusterIP" if str(service_type).lower() == "clusterip" else "NodePort"
         body = client.V1Service(
             metadata=client.V1ObjectMeta(
                 name=service_name,
@@ -321,7 +339,7 @@ class KubernetesService:
             ),
             spec=client.V1ServiceSpec(
                 selector={"app": pod_name},
-                type="NodePort",
+                type=normalized_service_type,
                 ports=[
                     client.V1ServicePort(
                         name="http",
@@ -334,33 +352,228 @@ class KubernetesService:
         )
         try:
             svc = core.create_namespaced_service(namespace=settings.kube_namespace, body=body)
+            if normalized_service_type == "ClusterIP":
+                return None
             return svc.spec.ports[0].node_port
         except ApiException as exc:
             if exc.status != 409:
                 logger.error("Failed to create container service %s: %s", service_name, exc)
                 raise
             existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
-            existing_port = existing.spec.ports[0].port if existing.spec and existing.spec.ports else tcp_port
-            if int(existing_port or 0) != tcp_port:
+            existing_spec = existing.spec or client.V1ServiceSpec()
+            existing_type = str(existing_spec.type or "NodePort")
+            existing_port = existing_spec.ports[0].port if existing_spec.ports else tcp_port
+            if int(existing_port or 0) != tcp_port or existing_type != normalized_service_type:
                 patch = {
                     "spec": {
+                        "type": normalized_service_type,
                         "selector": {"app": pod_name},
                         "ports": [{"name": "http", "port": tcp_port, "targetPort": tcp_port, "protocol": "TCP"}],
                     }
                 }
                 core.patch_namespaced_service(name=service_name, namespace=settings.kube_namespace, body=patch)
                 existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            if normalized_service_type == "ClusterIP":
+                return None
             return existing.spec.ports[0].node_port
+
+    def ensure_container_ingress(self, instance_id: str, service_name: str, service_port: int) -> str | None:
+        if not settings.container_ingress_enabled:
+            return None
+        base_domain = (settings.container_ingress_base_domain or "").strip()
+        if not base_domain:
+            return None
+
+        networking = self._networking_client()
+        ingress_name = self._container_ingress_name(instance_id)
+        host = f"ct-{instance_id[:8]}.{base_domain}"
+        annotations: dict[str, str] = {}
+        try:
+            raw = (settings.container_ingress_annotations_json or "").strip()
+            if raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    annotations = {str(k): str(v) for k, v in parsed.items()}
+        except Exception:
+            logger.warning("Invalid BLABS_CONTAINER_INGRESS_ANNOTATIONS_JSON value; ignoring annotations.")
+
+        metadata = client.V1ObjectMeta(
+            name=ingress_name,
+            labels={
+                "app.kubernetes.io/component": "container-runner",
+                "app.kubernetes.io/part-of": "bretter-labs",
+            },
+            annotations=annotations or None,
+        )
+        spec = client.V1IngressSpec(
+            ingress_class_name=(settings.container_ingress_class or None),
+            rules=[
+                client.V1IngressRule(
+                    host=host,
+                    http=client.V1HTTPIngressRuleValue(
+                        paths=[
+                            client.V1HTTPIngressPath(
+                                path="/",
+                                path_type="Prefix",
+                                backend=client.V1IngressBackend(
+                                    service=client.V1IngressServiceBackend(
+                                        name=service_name,
+                                        port=client.V1ServiceBackendPort(number=max(1, int(service_port))),
+                                    )
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ],
+        )
+        body = client.V1Ingress(api_version="networking.k8s.io/v1", kind="Ingress", metadata=metadata, spec=spec)
+        try:
+            networking.create_namespaced_ingress(namespace=settings.kube_namespace, body=body)
+        except ApiException as exc:
+            if exc.status != 409:
+                logger.warning("Failed to create container ingress %s: %s", ingress_name, exc)
+                return None
+            try:
+                networking.patch_namespaced_ingress(name=ingress_name, namespace=settings.kube_namespace, body=body)
+            except ApiException as patch_exc:
+                logger.warning("Failed to patch container ingress %s: %s", ingress_name, patch_exc)
+                return None
+        return host
+
+    def delete_container_ingress(self, instance_id: str) -> None:
+        networking = self._networking_client()
+        ingress_name = self._container_ingress_name(instance_id)
+        try:
+            networking.delete_namespaced_ingress(name=ingress_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.error("Failed to delete container ingress %s: %s", ingress_name, exc)
+                raise
 
     def delete_container_service(self, instance_id: str) -> None:
         core = self._client()
         service_name = self._container_service_name(instance_id)
+        try:
+            self.delete_container_ingress(instance_id)
+        except ApiException:
+            pass
         try:
             core.delete_namespaced_service(name=service_name, namespace=settings.kube_namespace)
         except ApiException as exc:
             if exc.status != 404:
                 logger.error("Failed to delete container service %s: %s", service_name, exc)
                 raise
+
+    def prepull_container_image(self, image_ref: str, timeout_seconds: int | None = None) -> None:
+        if not settings.container_image_prepull_enabled:
+            return
+        core = self._client()
+        timeout = max(10, int(timeout_seconds or settings.container_image_prepull_timeout_seconds))
+        digest = hashlib.sha1(image_ref.encode("utf-8")).hexdigest()[:10]
+        try:
+            nodes = core.list_node().items
+        except ApiException as exc:
+            logger.warning("Failed to list nodes for container image pre-pull: %s", exc)
+            return
+
+        for node in nodes:
+            node_name = (node.metadata.name or "").strip()
+            if not node_name:
+                continue
+            node_ready = False
+            for condition in node.status.conditions or []:
+                if condition.type == "Ready" and condition.status == "True":
+                    node_ready = True
+                    break
+            if not node_ready:
+                continue
+
+            pod_name = f"imgpull-{digest}-{self._safe_owner(node_name)[:20]}".strip("-")
+            metadata = client.V1ObjectMeta(
+                name=pod_name,
+                labels={
+                    "app.kubernetes.io/component": "container-prepull",
+                    "app.kubernetes.io/part-of": "bretter-labs",
+                    "blabs-image-hash": digest,
+                },
+            )
+            container = client.V1Container(
+                name="prepull",
+                image=image_ref,
+                image_pull_policy="IfNotPresent",
+                resources=client.V1ResourceRequirements(
+                    requests={"cpu": "50m", "memory": "64Mi"},
+                    limits={"cpu": "250m", "memory": "256Mi"},
+                ),
+                security_context=client.V1SecurityContext(
+                    allow_privilege_escalation=False,
+                    capabilities=client.V1Capabilities(drop=["ALL"]),
+                    read_only_root_filesystem=False,
+                ),
+            )
+            spec_kwargs: dict[str, object] = {
+                "containers": [container],
+                "node_name": node_name,
+                "restart_policy": "Never",
+                "termination_grace_period_seconds": 0,
+                "tolerations": [
+                    client.V1Toleration(
+                        key="node-role.kubernetes.io/control-plane",
+                        operator="Exists",
+                        effect="NoSchedule",
+                    ),
+                    client.V1Toleration(
+                        key="node-role.kubernetes.io/master",
+                        operator="Exists",
+                        effect="NoSchedule",
+                    ),
+                ],
+            }
+            if settings.image_pull_secret:
+                spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
+            body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=client.V1PodSpec(**spec_kwargs))
+            try:
+                core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
+            except ApiException as exc:
+                if exc.status != 409:
+                    logger.warning("Failed to create pre-pull pod %s: %s", pod_name, exc)
+                    continue
+
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                try:
+                    pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+                except ApiException as exc:
+                    if exc.status == 404:
+                        break
+                    logger.debug("Failed to poll pre-pull pod %s: %s", pod_name, exc)
+                    time.sleep(1)
+                    continue
+
+                phase = (pod.status.phase or "").lower()
+                if phase in {"running", "succeeded", "failed"}:
+                    break
+                wait_reason = ""
+                for status in list(pod.status.init_container_statuses or []) + list(pod.status.container_statuses or []):
+                    state = status.state
+                    if state and state.waiting:
+                        wait_reason = (state.waiting.reason or "").lower()
+                        break
+                if wait_reason in {"imagepullbackoff", "errimagepull"}:
+                    break
+                time.sleep(1)
+
+            try:
+                core.delete_namespaced_pod(
+                    name=pod_name,
+                    namespace=settings.kube_namespace,
+                    grace_period_seconds=0,
+                    propagation_policy="Foreground",
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.debug("Failed to delete pre-pull pod %s: %s", pod_name, exc)
 
     def _console_url(self, req: PodRequest) -> str:
         return ""
@@ -624,16 +837,54 @@ class KubernetesService:
         )
         cpu_m = max(50, int(req.cpu_millicores))
         mem_mb = max(64, int(req.memory_mb))
+        tcp_port = max(1, min(65535, int(req.container_port or 80)))
+        protocol = "http" if str(req.healthcheck_protocol or "tcp").lower() == "http" else "tcp"
+        healthcheck_path = str(req.healthcheck_path or "/").strip() or "/"
+        if not healthcheck_path.startswith("/"):
+            healthcheck_path = f"/{healthcheck_path}"
+        startup_timeout = max(10, min(1800, int(req.startup_timeout_seconds or 300)))
+        startup_failure_threshold = max(10, int(math.ceil(startup_timeout / 5)))
         resources = client.V1ResourceRequirements(
             limits={"cpu": f"{cpu_m}m", "memory": f"{mem_mb}Mi"},
             requests={"cpu": f"{cpu_m}m", "memory": f"{mem_mb}Mi"},
         )
+        probe_kwargs: dict[str, object]
+        if protocol == "http":
+            probe_kwargs = {"http_get": client.V1HTTPGetAction(path=healthcheck_path, port=tcp_port, scheme="HTTP")}
+        else:
+            probe_kwargs = {"tcp_socket": client.V1TCPSocketAction(port=tcp_port)}
         container_kwargs: dict[str, object] = {
             "name": "container-runner",
             "image": req.image_ref,
             "resources": resources,
             "image_pull_policy": "IfNotPresent",
-            "ports": [client.V1ContainerPort(container_port=max(1, min(65535, int(req.container_port or 80))))],
+            "ports": [client.V1ContainerPort(container_port=tcp_port)],
+            "startup_probe": client.V1Probe(
+                **probe_kwargs,
+                period_seconds=5,
+                timeout_seconds=2,
+                failure_threshold=startup_failure_threshold,
+            ),
+            "readiness_probe": client.V1Probe(
+                **probe_kwargs,
+                period_seconds=5,
+                timeout_seconds=2,
+                failure_threshold=3,
+            ),
+            "liveness_probe": client.V1Probe(
+                **probe_kwargs,
+                period_seconds=20,
+                timeout_seconds=2,
+                failure_threshold=3,
+                initial_delay_seconds=max(15, min(300, startup_timeout // 2)),
+            ),
+            "security_context": client.V1SecurityContext(
+                allow_privilege_escalation=False,
+                capabilities=client.V1Capabilities(drop=["ALL"]),
+                read_only_root_filesystem=bool(req.read_only_root_filesystem),
+                run_as_non_root=True if req.run_as_non_root else None,
+                seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
+            ),
         }
         args = [arg for arg in (req.args or []) if str(arg).strip()]
         if req.command:
@@ -656,6 +907,9 @@ class KubernetesService:
         spec_kwargs: dict[str, object] = {
             "containers": [container],
             "restart_policy": "Never",
+            "security_context": client.V1PodSecurityContext(
+                seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
+            ),
             "tolerations": [
                 client.V1Toleration(
                     key="node-role.kubernetes.io/control-plane",

@@ -800,7 +800,6 @@ const UserPanel = () => {
                   <span>{c.pod_name || `ct-${c.owner}-${c.id.slice(0, 8)}`}</span>
                 </div>
                 {containerStatusReason(c) && <div className="muted small">{containerStatusReason(c)}</div>}
-                {c.access_url && <div className="muted small">URL: {c.access_url}</div>}
                 <div className="actions">
                   <button className="danger" onClick={() => removeContainer(c.id)}>
                     Delete

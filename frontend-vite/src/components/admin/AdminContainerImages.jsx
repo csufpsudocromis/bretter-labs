@@ -115,6 +115,16 @@ const AdminContainerImages = () => {
     }
   };
 
+  const prepull = async (imageId) => {
+    try {
+      const res = await api.post(`/admin/container-images/${imageId}/prepull`);
+      setMessage(res.data?.detail || 'Pre-pull triggered');
+      setError('');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to trigger pre-pull');
+    }
+  };
+
   const sourceImageRef = buildImageRef(form);
   const canCreate = Boolean(
     String(form.name || '').trim() ||
@@ -232,6 +242,9 @@ const AdminContainerImages = () => {
                   <>
                     <div className="muted small">{img.image_ref}</div>
                     <div className="actions">
+                      <button className="ghost" onClick={() => prepull(img.id)}>
+                        Pre-pull
+                      </button>
                       <button className="ghost" onClick={() => startEdit(img)}>
                         Edit
                       </button>

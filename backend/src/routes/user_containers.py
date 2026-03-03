@@ -62,7 +62,10 @@ def _status_feedback(status_name: str, pod_status: PodStatus | None) -> tuple[st
     return "unknown", "Container status is unknown."
 
 
-def _container_access_url(node_port: int | None) -> str | None:
+def _container_access_url_for_target(node_port: int | None, ingress_host: str | None) -> str | None:
+    if ingress_host:
+        scheme = (settings.public_scheme or "https").strip() or "https"
+        return f"{scheme}://{ingress_host}/"
     if not node_port:
         return None
     host = (settings.kube_node_external_host or "").strip() or "127.0.0.1"
@@ -73,11 +76,26 @@ def _container_service_host(instance_id: str) -> str:
     return f"ctsvc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
 
 
-def _container_service_ready(instance_id: str, container_port: int) -> bool:
+def _container_service_ready(
+    instance_id: str,
+    container_port: int,
+    *,
+    protocol: str = "tcp",
+    healthcheck_path: str = "/",
+) -> bool:
     host = _container_service_host(instance_id)
     port = max(1, min(65535, int(container_port or 80)))
+    normalized_protocol = str(protocol or "tcp").lower()
+    path = str(healthcheck_path or "/").strip() or "/"
+    if not path.startswith("/"):
+        path = f"/{path}"
     try:
-        with socket.create_connection((host, port), timeout=1.2):
+        with socket.create_connection((host, port), timeout=1.2) as sock:
+            if normalized_protocol == "http":
+                request = f"GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n".encode("utf-8")
+                sock.sendall(request)
+                data = sock.recv(12)
+                return data.startswith(b"HTTP/")
             return True
     except OSError:
         return False
@@ -125,6 +143,12 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplateView:
         cpu_millicores=record.cpu_millicores,
         memory_mb=record.memory_mb,
         container_port=max(1, int(getattr(record, "container_port", 80) or 80)),
+        healthcheck_protocol=str(getattr(record, "healthcheck_protocol", "tcp") or "tcp"),
+        healthcheck_path=str(getattr(record, "healthcheck_path", "/") or "/"),
+        startup_timeout_seconds=max(10, int(getattr(record, "startup_timeout_seconds", 300) or 300)),
+        expose_strategy=str(getattr(record, "expose_strategy", "nodeport") or "nodeport"),
+        run_as_non_root=bool(getattr(record, "run_as_non_root", False)),
+        read_only_root_filesystem=bool(getattr(record, "read_only_root_filesystem", False)),
         command=record.command,
         args=_parse_args(record.args_json),
         env=_parse_env(record.env_json),
@@ -185,6 +209,15 @@ def list_user_containers(
     for record in instances:
         tmpl = templates.get(record.template_id)
         container_port = max(1, int(getattr(tmpl, "container_port", 80) or 80)) if tmpl else 80
+        healthcheck_protocol = str(getattr(tmpl, "healthcheck_protocol", "tcp") or "tcp") if tmpl else "tcp"
+        healthcheck_path = str(getattr(tmpl, "healthcheck_path", "/") or "/") if tmpl else "/"
+        expose_strategy = str(getattr(tmpl, "expose_strategy", "nodeport") or "nodeport") if tmpl else "nodeport"
+        ingress_enabled = (
+            expose_strategy == "ingress"
+            and settings.container_ingress_enabled
+            and bool((settings.container_ingress_base_domain or "").strip())
+        )
+        service_type = "ClusterIP" if ingress_enabled else "NodePort"
         port_map[record.id] = container_port
         pod_status: PodStatus | None = None
         try:
@@ -200,11 +233,29 @@ def list_user_containers(
         feedback[record.id] = (stage, detail)
         if mapped in {"pending", "running"} and tmpl:
             try:
-                node_port = kube.ensure_container_service(record.id, record.owner, container_port)
-                if mapped == "running" and _container_service_ready(record.id, container_port) and _nodeport_ready(
-                    node_port
-                ):
-                    access_map[record.id] = _container_access_url(node_port)
+                node_port = kube.ensure_container_service(
+                    record.id,
+                    record.owner,
+                    container_port,
+                    service_type=service_type,
+                )
+                ingress_host = None
+                if ingress_enabled:
+                    ingress_host = kube.ensure_container_ingress(record.id, f"ctsvc-{record.id[:8]}", container_port)
+                    if ingress_host is None:
+                        node_port = kube.ensure_container_service(
+                            record.id,
+                            record.owner,
+                            container_port,
+                            service_type="NodePort",
+                        )
+                if mapped == "running" and _container_service_ready(
+                    record.id,
+                    container_port,
+                    protocol=healthcheck_protocol,
+                    healthcheck_path=healthcheck_path,
+                ) and (ingress_host is not None or _nodeport_ready(node_port)):
+                    access_map[record.id] = _container_access_url_for_target(node_port=node_port, ingress_host=ingress_host)
                 elif mapped == "running":
                     feedback[record.id] = (
                         "starting",
@@ -305,21 +356,39 @@ def start_container_template(
             cpu_millicores=template.cpu_millicores,
             memory_mb=template.memory_mb,
             container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
+            healthcheck_protocol=str(getattr(template, "healthcheck_protocol", "tcp") or "tcp"),
+            healthcheck_path=str(getattr(template, "healthcheck_path", "/") or "/"),
+            startup_timeout_seconds=max(10, int(getattr(template, "startup_timeout_seconds", 300) or 300)),
+            expose_strategy=str(getattr(template, "expose_strategy", "nodeport") or "nodeport"),
+            run_as_non_root=bool(getattr(template, "run_as_non_root", False)),
+            read_only_root_filesystem=bool(getattr(template, "read_only_root_filesystem", False)),
             command=template.command,
             args=_parse_args(template.args_json),
             env=_parse_env(template.env_json),
         )
     )
     container_port = max(1, int(getattr(template, "container_port", 80) or 80))
+    expose_strategy = str(getattr(template, "expose_strategy", "nodeport") or "nodeport")
+    ingress_enabled = (
+        expose_strategy == "ingress"
+        and settings.container_ingress_enabled
+        and bool((settings.container_ingress_base_domain or "").strip())
+    )
+    service_type = "ClusterIP" if ingress_enabled else "NodePort"
     try:
-        node_port = kube.ensure_container_service(instance_id, user.username, container_port)
+        node_port = kube.ensure_container_service(instance_id, user.username, container_port, service_type=service_type)
+        ingress_host = None
+        if ingress_enabled:
+            ingress_host = kube.ensure_container_ingress(instance_id, f"ctsvc-{instance_id[:8]}", container_port)
+            if ingress_host is None:
+                node_port = kube.ensure_container_service(instance_id, user.username, container_port, service_type="NodePort")
     except Exception:
         try:
             kube.delete_container_pod(instance_id, user.username)
         except Exception:
             pass
         raise
-    access_url = _container_access_url(node_port)
+    access_url = _container_access_url_for_target(node_port=node_port, ingress_host=ingress_host)
 
     now = datetime.utcnow()
     record = ContainerInstanceTable(
@@ -394,14 +463,32 @@ def restart_container(
             cpu_millicores=template.cpu_millicores,
             memory_mb=template.memory_mb,
             container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
+            healthcheck_protocol=str(getattr(template, "healthcheck_protocol", "tcp") or "tcp"),
+            healthcheck_path=str(getattr(template, "healthcheck_path", "/") or "/"),
+            startup_timeout_seconds=max(10, int(getattr(template, "startup_timeout_seconds", 300) or 300)),
+            expose_strategy=str(getattr(template, "expose_strategy", "nodeport") or "nodeport"),
+            run_as_non_root=bool(getattr(template, "run_as_non_root", False)),
+            read_only_root_filesystem=bool(getattr(template, "read_only_root_filesystem", False)),
             command=template.command,
             args=_parse_args(template.args_json),
             env=_parse_env(template.env_json),
         )
     )
     container_port = max(1, int(getattr(template, "container_port", 80) or 80))
-    node_port = kube.ensure_container_service(record.id, user.username, container_port)
-    access_url = _container_access_url(node_port)
+    expose_strategy = str(getattr(template, "expose_strategy", "nodeport") or "nodeport")
+    ingress_enabled = (
+        expose_strategy == "ingress"
+        and settings.container_ingress_enabled
+        and bool((settings.container_ingress_base_domain or "").strip())
+    )
+    service_type = "ClusterIP" if ingress_enabled else "NodePort"
+    node_port = kube.ensure_container_service(record.id, user.username, container_port, service_type=service_type)
+    ingress_host = None
+    if ingress_enabled:
+        ingress_host = kube.ensure_container_ingress(record.id, f"ctsvc-{record.id[:8]}", container_port)
+        if ingress_host is None:
+            node_port = kube.ensure_container_service(record.id, user.username, container_port, service_type="NodePort")
+    access_url = _container_access_url_for_target(node_port=node_port, ingress_host=ingress_host)
 
     record.status = "pending"
     record.pod_name = kube.container_pod_name(instance_id=record.id, owner=user.username)

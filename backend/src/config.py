@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     vm_memory_overhead_mb: int = 1024
     vm_runner_topology_spread_enabled: bool = True
     vm_runner_anti_affinity_enabled: bool = True
+    container_ingress_enabled: bool = False
+    container_ingress_class: str = ""
+    container_ingress_base_domain: str = ""
+    container_ingress_annotations_json: str = "{}"
+    container_image_prepull_enabled: bool = True
+    container_image_prepull_timeout_seconds: int = 45
     warm_pool_autoscale_enabled: bool = True
     warm_pool_window_minutes: int = 15
     warm_pool_refill_minutes: int = 2

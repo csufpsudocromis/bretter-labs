@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from datetime import datetime
 from uuid import uuid4
@@ -19,16 +20,23 @@ from ..models import (
 from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
+from ..services.kubernetes import kube
 
 router = APIRouter(dependencies=[Depends(require_admin)])
+logger = logging.getLogger(__name__)
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$")
 
 
 def _normalize_container_image_ref(value: str) -> str:
     ref = (value or "").strip()
     if not ref:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="image_ref is required")
+    if " " in ref:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="image_ref cannot contain spaces")
+    if not _IMAGE_REF_RE.match(ref):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="image_ref format looks invalid")
     if "@" in ref:
         return ref
     tail = ref.rsplit("/", 1)[-1]
@@ -90,6 +98,12 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         cpu_millicores=record.cpu_millicores,
         memory_mb=record.memory_mb,
         container_port=max(1, int(getattr(record, "container_port", 80) or 80)),
+        healthcheck_protocol=str(getattr(record, "healthcheck_protocol", "tcp") or "tcp"),
+        healthcheck_path=str(getattr(record, "healthcheck_path", "/") or "/"),
+        startup_timeout_seconds=max(10, int(getattr(record, "startup_timeout_seconds", 300) or 300)),
+        expose_strategy=str(getattr(record, "expose_strategy", "nodeport") or "nodeport"),
+        run_as_non_root=bool(getattr(record, "run_as_non_root", False)),
+        read_only_root_filesystem=bool(getattr(record, "read_only_root_filesystem", False)),
         command=record.command,
         args=_parse_json_list(record.args_json),
         env=_parse_json_map(record.env_json),
@@ -116,6 +130,10 @@ def create_container_image(payload: ContainerImageCreate, session: Session = Dep
     session.add(record)
     session.commit()
     session.refresh(record)
+    try:
+        kube.prepull_container_image(image_ref)
+    except Exception:
+        logger.warning("Container image pre-pull failed for %s", image_ref, exc_info=True)
     return _image_out(record)
 
 
@@ -156,6 +174,11 @@ def update_container_image(
     session.add(record)
     session.commit()
     session.refresh(record)
+    if "image_ref" in updates:
+        try:
+            kube.prepull_container_image(record.image_ref)
+        except Exception:
+            logger.warning("Container image pre-pull failed for %s", record.image_ref, exc_info=True)
     return _image_out(record)
 
 
@@ -178,6 +201,15 @@ def delete_container_image(image_id: str, session: Session = Depends(get_session
     session.commit()
 
 
+@router.post("/container-images/{image_id}/prepull", status_code=status.HTTP_202_ACCEPTED)
+def prepull_container_image(image_id: str, session: Session = Depends(get_session)) -> dict[str, str]:
+    record = session.get(ContainerImageTable, image_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+    kube.prepull_container_image(record.image_ref)
+    return {"detail": f"Pre-pull triggered for {record.image_ref}"}
+
+
 @router.post("/container-templates", response_model=ContainerTemplate, status_code=status.HTTP_201_CREATED)
 def create_container_template(
     payload: ContainerTemplateCreate,
@@ -189,6 +221,9 @@ def create_container_template(
 
     args = [str(item).strip() for item in (payload.args or []) if str(item).strip()]
     env = _validate_env(payload.env or {})
+    healthcheck_path = (payload.healthcheck_path or "/").strip() or "/"
+    if not healthcheck_path.startswith("/"):
+        healthcheck_path = f"/{healthcheck_path}"
     record = ContainerTemplateTable(
         id=str(uuid4()),
         name=(payload.name or "").strip(),
@@ -197,6 +232,12 @@ def create_container_template(
         cpu_millicores=payload.cpu_millicores,
         memory_mb=payload.memory_mb,
         container_port=payload.container_port,
+        healthcheck_protocol=(payload.healthcheck_protocol or "tcp").lower(),
+        healthcheck_path=healthcheck_path,
+        startup_timeout_seconds=max(10, int(payload.startup_timeout_seconds or 300)),
+        expose_strategy=(payload.expose_strategy or "nodeport").lower(),
+        run_as_non_root=bool(payload.run_as_non_root),
+        read_only_root_filesystem=bool(payload.read_only_root_filesystem),
         command=(payload.command or "").strip() or None,
         args_json=json.dumps(args, separators=(",", ":")),
         env_json=json.dumps(env, separators=(",", ":")),
@@ -207,6 +248,11 @@ def create_container_template(
     session.add(record)
     session.commit()
     session.refresh(record)
+    if record.enabled:
+        try:
+            kube.prepull_container_image(image.image_ref)
+        except Exception:
+            logger.warning("Container image pre-pull failed for %s", image.image_ref, exc_info=True)
     return _template_out(record)
 
 
@@ -250,6 +296,21 @@ def update_container_template(
         record.memory_mb = int(updates.get("memory_mb") or record.memory_mb)
     if "container_port" in updates:
         record.container_port = max(1, int(updates.get("container_port") or record.container_port))
+    if "healthcheck_protocol" in updates:
+        record.healthcheck_protocol = str(updates.get("healthcheck_protocol") or "tcp").strip().lower() or "tcp"
+    if "healthcheck_path" in updates:
+        path = str(updates.get("healthcheck_path") or "/").strip() or "/"
+        if not path.startswith("/"):
+            path = f"/{path}"
+        record.healthcheck_path = path
+    if "startup_timeout_seconds" in updates:
+        record.startup_timeout_seconds = max(10, int(updates.get("startup_timeout_seconds") or 300))
+    if "expose_strategy" in updates:
+        record.expose_strategy = str(updates.get("expose_strategy") or "nodeport").strip().lower() or "nodeport"
+    if "run_as_non_root" in updates:
+        record.run_as_non_root = bool(updates.get("run_as_non_root"))
+    if "read_only_root_filesystem" in updates:
+        record.read_only_root_filesystem = bool(updates.get("read_only_root_filesystem"))
     if "command" in updates:
         record.command = (str(updates.get("command") or "").strip() or None)
     if "args" in updates:
@@ -266,6 +327,13 @@ def update_container_template(
     session.add(record)
     session.commit()
     session.refresh(record)
+    if record.enabled:
+        image = session.get(ContainerImageTable, record.container_image_id)
+        if image:
+            try:
+                kube.prepull_container_image(image.image_ref)
+            except Exception:
+                logger.warning("Container image pre-pull failed for %s", image.image_ref, exc_info=True)
     return _template_out(record)
 
 

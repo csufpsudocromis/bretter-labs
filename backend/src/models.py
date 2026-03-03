@@ -131,6 +131,12 @@ class ContainerTemplateCreate(BaseModel):
     cpu_millicores: int = Field(default=500, ge=50, le=16000)
     memory_mb: int = Field(default=512, ge=64, le=131072)
     container_port: int = Field(default=80, ge=1, le=65535)
+    healthcheck_protocol: str = Field(default="tcp", pattern="^(tcp|http)$")
+    healthcheck_path: str = Field(default="/", min_length=1, max_length=256)
+    startup_timeout_seconds: int = Field(default=300, ge=10, le=1800)
+    expose_strategy: str = Field(default="nodeport", pattern="^(nodeport|ingress)$")
+    run_as_non_root: bool = False
+    read_only_root_filesystem: bool = False
     command: Optional[str] = Field(default=None, max_length=2000)
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
@@ -145,6 +151,12 @@ class ContainerTemplateUpdate(BaseModel):
     cpu_millicores: Optional[int] = Field(default=None, ge=50, le=16000)
     memory_mb: Optional[int] = Field(default=None, ge=64, le=131072)
     container_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    healthcheck_protocol: Optional[str] = Field(default=None, pattern="^(tcp|http)$")
+    healthcheck_path: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    startup_timeout_seconds: Optional[int] = Field(default=None, ge=10, le=1800)
+    expose_strategy: Optional[str] = Field(default=None, pattern="^(nodeport|ingress)$")
+    run_as_non_root: Optional[bool] = None
+    read_only_root_filesystem: Optional[bool] = None
     command: Optional[str] = Field(default=None, max_length=2000)
     args: Optional[list[str]] = None
     env: Optional[dict[str, str]] = None
@@ -160,6 +172,12 @@ class ContainerTemplate(BaseModel):
     cpu_millicores: int
     memory_mb: int
     container_port: int = 80
+    healthcheck_protocol: str = "tcp"
+    healthcheck_path: str = "/"
+    startup_timeout_seconds: int = 300
+    expose_strategy: str = "nodeport"
+    run_as_non_root: bool = False
+    read_only_root_filesystem: bool = False
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)

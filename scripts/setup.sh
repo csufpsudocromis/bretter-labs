@@ -51,6 +51,12 @@ LINUX_MACHINE_TYPE="${LINUX_MACHINE_TYPE:-pc}"
 LINUX_EFI_ENABLED="${LINUX_EFI_ENABLED:-false}"
 LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
+CONTAINER_INGRESS_ENABLED="${CONTAINER_INGRESS_ENABLED:-0}"
+CONTAINER_INGRESS_CLASS="${CONTAINER_INGRESS_CLASS:-}"
+CONTAINER_INGRESS_BASE_DOMAIN="${CONTAINER_INGRESS_BASE_DOMAIN:-}"
+CONTAINER_INGRESS_ANNOTATIONS_JSON="${CONTAINER_INGRESS_ANNOTATIONS_JSON:-{}}"
+CONTAINER_IMAGE_PREPULL_ENABLED="${CONTAINER_IMAGE_PREPULL_ENABLED:-1}"
+CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS="${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS:-45}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 POSTGRES_DATA_HOSTPATH="${POSTGRES_DATA_HOSTPATH:-/var/lib/bretter-labs/postgres-data}"
@@ -206,6 +212,23 @@ validate_vm_network_config() {
     tap-nat|user) ;;
     *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
   esac
+}
+
+validate_container_runtime_config() {
+  case "$CONTAINER_INGRESS_ENABLED" in
+    0|1) ;;
+    *) fail "CONTAINER_INGRESS_ENABLED must be either 0 or 1." ;;
+  esac
+  case "$CONTAINER_IMAGE_PREPULL_ENABLED" in
+    0|1) ;;
+    *) fail "CONTAINER_IMAGE_PREPULL_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ "$CONTAINER_INGRESS_ENABLED" -eq 1 ] && [ -z "$CONTAINER_INGRESS_BASE_DOMAIN" ]; then
+    fail "CONTAINER_INGRESS_BASE_DOMAIN is required when CONTAINER_INGRESS_ENABLED=1."
+  fi
+  if ! is_uint "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS" || [ "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS" -lt 10 ]; then
+    fail "CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS must be an integer >= 10."
+  fi
 }
 
 validate_postgres_config() {
@@ -798,6 +821,62 @@ spec:
             severity: warning
           annotations:
             summary: Pod restart burst detected in namespace ${NAMESPACE}.
+        - alert: BretterContainerStartupSlow
+          expr: |
+            (
+              (time() - kube_pod_created{namespace="${NAMESPACE}",pod=~"ct-.*"}) / 60
+            ) > 5
+            and on(namespace, pod)
+            kube_pod_status_phase{namespace="${NAMESPACE}",phase=~"Pending|Running"} == 1
+            and on(namespace, pod)
+            kube_pod_status_ready{namespace="${NAMESPACE}",condition="true"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Container pod startup is taking longer than expected.
+        - alert: BretterContainerCrashLoop
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_waiting_reason{
+                namespace="${NAMESPACE}",
+                pod=~"ct-.*",
+                reason="CrashLoopBackOff"
+              } == 1
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Container pod is in CrashLoopBackOff.
+        - alert: BretterContainerImagePullBackOff
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_waiting_reason{
+                namespace="${NAMESPACE}",
+                pod=~"ct-.*",
+                reason=~"ImagePullBackOff|ErrImagePull"
+              } == 1
+            ) > 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: Container image pull is failing.
+        - alert: BretterContainerOOMKilled
+          expr: |
+            max by (namespace, pod, container) (
+              kube_pod_container_status_last_terminated_reason{
+                namespace="${NAMESPACE}",
+                pod=~"ct-.*",
+                reason="OOMKilled"
+              } == 1
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: Container was terminated due to OOMKilled.
         - alert: BretterWarmPoolDepleted
           expr: |
             (
@@ -993,6 +1072,8 @@ render_manifest_template() {
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath postgres_user postgres_password postgres_db cdi_upload_proxy_url
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend
+  local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
+  local container_image_prepull_enabled container_image_prepull_timeout_seconds
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
@@ -1010,6 +1091,12 @@ render_manifest_template() {
   linux_efi_enabled="$(escape_sed_replacement "$LINUX_EFI_ENABLED")"
   linux_cpu_model="$(escape_sed_replacement "$LINUX_CPU_MODEL")"
   vm_net_backend="$(escape_sed_replacement "$VM_NET_BACKEND")"
+  container_ingress_enabled="$(escape_sed_replacement "$CONTAINER_INGRESS_ENABLED")"
+  container_ingress_class="$(escape_sed_replacement "$CONTAINER_INGRESS_CLASS")"
+  container_ingress_base_domain="$(escape_sed_replacement "$CONTAINER_INGRESS_BASE_DOMAIN")"
+  container_ingress_annotations_json="$(escape_sed_replacement "$CONTAINER_INGRESS_ANNOTATIONS_JSON")"
+  container_image_prepull_enabled="$(escape_sed_replacement "$CONTAINER_IMAGE_PREPULL_ENABLED")"
+  container_image_prepull_timeout_seconds="$(escape_sed_replacement "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
   postgres_data_hostpath="$(escape_sed_replacement "$POSTGRES_DATA_HOSTPATH")"
@@ -1036,6 +1123,12 @@ render_manifest_template() {
     -e "s/__LINUX_EFI_ENABLED__/${linux_efi_enabled}/g" \
     -e "s/__LINUX_CPU_MODEL__/${linux_cpu_model}/g" \
     -e "s/__VM_NET_BACKEND__/${vm_net_backend}/g" \
+    -e "s/__CONTAINER_INGRESS_ENABLED__/${container_ingress_enabled}/g" \
+    -e "s/__CONTAINER_INGRESS_CLASS__/${container_ingress_class}/g" \
+    -e "s/__CONTAINER_INGRESS_BASE_DOMAIN__/${container_ingress_base_domain}/g" \
+    -e "s#__CONTAINER_INGRESS_ANNOTATIONS_JSON__#${container_ingress_annotations_json}#g" \
+    -e "s/__CONTAINER_IMAGE_PREPULL_ENABLED__/${container_image_prepull_enabled}/g" \
+    -e "s/__CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS__/${container_image_prepull_timeout_seconds}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     -e "s#__POSTGRES_DATA_HOSTPATH__#${postgres_data_hostpath}#g" \
@@ -1660,6 +1753,7 @@ main() {
   validate_autocleanup_config
   validate_storage_guard_config
   validate_vm_network_config
+  validate_container_runtime_config
   validate_postgres_config
   validate_cdi_upload_config
   validate_cpu_manager_config
@@ -1691,6 +1785,8 @@ main() {
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Using VM network backend: $VM_NET_BACKEND"
+  log "Container ingress enabled: $CONTAINER_INGRESS_ENABLED (base domain: ${CONTAINER_INGRESS_BASE_DOMAIN:-disabled}, class: ${CONTAINER_INGRESS_CLASS:-default})"
+  log "Container image pre-pull enabled: $CONTAINER_IMAGE_PREPULL_ENABLED (timeout: ${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS}s)"
   log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"

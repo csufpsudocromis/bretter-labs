@@ -8,6 +8,12 @@ const DEFAULT_FORM = {
   cpu_cores: 1,
   memory_mb: 512,
   container_port: 80,
+  healthcheck_protocol: 'tcp',
+  healthcheck_path: '/',
+  startup_timeout_seconds: 300,
+  expose_strategy: 'nodeport',
+  run_as_non_root: false,
+  read_only_root_filesystem: false,
   command: '',
   args_text: '',
   env_text: '',
@@ -82,6 +88,12 @@ const AdminContainerTemplates = () => {
     cpu_millicores: toMillicores(source.cpu_cores),
     memory_mb: Number(source.memory_mb) || 512,
     container_port: Math.max(1, Math.min(65535, Number(source.container_port) || 80)),
+    healthcheck_protocol: source.healthcheck_protocol === 'http' ? 'http' : 'tcp',
+    healthcheck_path: String(source.healthcheck_path || '/').trim() || '/',
+    startup_timeout_seconds: Math.max(10, Number(source.startup_timeout_seconds) || 300),
+    expose_strategy: source.expose_strategy === 'ingress' ? 'ingress' : 'nodeport',
+    run_as_non_root: Boolean(source.run_as_non_root),
+    read_only_root_filesystem: Boolean(source.read_only_root_filesystem),
     command: source.command || null,
     args: parseArgs(source.args_text),
     env: parseEnv(source.env_text),
@@ -132,6 +144,12 @@ const AdminContainerTemplates = () => {
       cpu_cores: toCpuCores(tmpl.cpu_millicores),
       memory_mb: tmpl.memory_mb || 512,
       container_port: tmpl.container_port || 80,
+      healthcheck_protocol: tmpl.healthcheck_protocol || 'tcp',
+      healthcheck_path: tmpl.healthcheck_path || '/',
+      startup_timeout_seconds: tmpl.startup_timeout_seconds || 300,
+      expose_strategy: tmpl.expose_strategy || 'nodeport',
+      run_as_non_root: Boolean(tmpl.run_as_non_root),
+      read_only_root_filesystem: Boolean(tmpl.read_only_root_filesystem),
       command: tmpl.command || '',
       args_text: formatArgs(tmpl.args || []),
       env_text: formatEnv(tmpl.env || {}),
@@ -227,6 +245,65 @@ const AdminContainerTemplates = () => {
               />
             </label>
             <label>
+              Access strategy
+              <select
+                value={form.expose_strategy}
+                onChange={(e) => setForm((prev) => ({ ...prev, expose_strategy: e.target.value }))}
+              >
+                <option value="nodeport">NodePort</option>
+                <option value="ingress">Ingress</option>
+              </select>
+            </label>
+            <label>
+              Healthcheck protocol
+              <select
+                value={form.healthcheck_protocol}
+                onChange={(e) => setForm((prev) => ({ ...prev, healthcheck_protocol: e.target.value }))}
+              >
+                <option value="tcp">TCP</option>
+                <option value="http">HTTP</option>
+              </select>
+            </label>
+            <label>
+              Healthcheck path
+              <input
+                value={form.healthcheck_path}
+                placeholder="/"
+                onChange={(e) => setForm((prev) => ({ ...prev, healthcheck_path: e.target.value }))}
+              />
+            </label>
+            <label>
+              Startup timeout (seconds)
+              <input
+                type="number"
+                min={10}
+                max={1800}
+                value={form.startup_timeout_seconds}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    startup_timeout_seconds: Math.max(10, Math.min(1800, parseInt(e.target.value, 10) || 300)),
+                  }))
+                }
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input
+                type="checkbox"
+                checked={form.run_as_non_root}
+                onChange={(e) => setForm((prev) => ({ ...prev, run_as_non_root: e.target.checked }))}
+              />
+              Run as non-root
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <input
+                type="checkbox"
+                checked={form.read_only_root_filesystem}
+                onChange={(e) => setForm((prev) => ({ ...prev, read_only_root_filesystem: e.target.checked }))}
+              />
+              Read-only root filesystem
+            </label>
+            <label>
               Command (optional)
               <input
                 value={form.command}
@@ -287,6 +364,14 @@ const AdminContainerTemplates = () => {
                   <span>{toCpuCores(tmpl.cpu_millicores)} CPU</span>
                   <span>{tmpl.memory_mb} MB RAM</span>
                   <span>Port {tmpl.container_port || 80}</span>
+                </div>
+                <div className="muted small">
+                  Access: {tmpl.expose_strategy || 'nodeport'} | Probe: {tmpl.healthcheck_protocol || 'tcp'}{' '}
+                  {(tmpl.healthcheck_path || '/')} | Startup timeout: {tmpl.startup_timeout_seconds || 300}s
+                </div>
+                <div className="muted small">
+                  Security: non-root {tmpl.run_as_non_root ? 'on' : 'off'}, read-only rootfs{' '}
+                  {tmpl.read_only_root_filesystem ? 'on' : 'off'}
                 </div>
                 {tmpl.description && <div className="muted small">{tmpl.description}</div>}
                 <div className="muted small">Image: {imageName(tmpl.container_image_id)}</div>
@@ -376,6 +461,66 @@ const AdminContainerTemplates = () => {
                       }))
                     }
                   />
+                </label>
+                <label>
+                  Access strategy
+                  <select
+                    value={editForm.expose_strategy}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, expose_strategy: e.target.value }))}
+                  >
+                    <option value="nodeport">NodePort</option>
+                    <option value="ingress">Ingress</option>
+                  </select>
+                </label>
+                <label>
+                  Healthcheck protocol
+                  <select
+                    value={editForm.healthcheck_protocol}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, healthcheck_protocol: e.target.value }))}
+                  >
+                    <option value="tcp">TCP</option>
+                    <option value="http">HTTP</option>
+                  </select>
+                </label>
+                <label>
+                  Healthcheck path
+                  <input
+                    value={editForm.healthcheck_path}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, healthcheck_path: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Startup timeout (seconds)
+                  <input
+                    type="number"
+                    min={10}
+                    max={1800}
+                    value={editForm.startup_timeout_seconds}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        startup_timeout_seconds: Math.max(10, Math.min(1800, parseInt(e.target.value, 10) || 300)),
+                      }))
+                    }
+                  />
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editForm.run_as_non_root)}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, run_as_non_root: e.target.checked }))}
+                  />
+                  Run as non-root
+                </label>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editForm.read_only_root_filesystem)}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({ ...prev, read_only_root_filesystem: e.target.checked }))
+                    }
+                  />
+                  Read-only root filesystem
                 </label>
                 <label>
                   Command (optional)
