@@ -1,4 +1,5 @@
 import json
+import socket
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -66,6 +67,20 @@ def _container_access_url(node_port: int | None) -> str | None:
         return None
     host = (settings.kube_node_external_host or "").strip() or "127.0.0.1"
     return f"http://{host}:{int(node_port)}/"
+
+
+def _container_service_host(instance_id: str) -> str:
+    return f"ctsvc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
+
+
+def _container_service_ready(instance_id: str, container_port: int) -> bool:
+    host = _container_service_host(instance_id)
+    port = max(1, min(65535, int(container_port or 80)))
+    try:
+        with socket.create_connection((host, port), timeout=1.2):
+            return True
+    except OSError:
+        return False
 
 
 def _parse_args(raw: str) -> list[str]:
@@ -173,7 +188,17 @@ def list_user_containers(
         if mapped in {"pending", "running"} and tmpl:
             try:
                 node_port = kube.ensure_container_service(record.id, record.owner, container_port)
-                access_map[record.id] = _container_access_url(node_port)
+                # Wait for the app port to accept connections before enabling "Connect".
+                if mapped == "running" and not _container_service_ready(record.id, container_port):
+                    feedback[record.id] = (
+                        "starting",
+                        "Container pod is running; waiting for application startup.",
+                    )
+                    access_map[record.id] = None
+                elif mapped == "running":
+                    access_map[record.id] = _container_access_url(node_port)
+                else:
+                    access_map[record.id] = None
             except ApiException as exc:
                 if exc.status != 404:
                     raise

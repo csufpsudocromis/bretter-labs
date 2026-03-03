@@ -113,26 +113,6 @@ const UserPanel = () => {
     }
   };
 
-  const stopContainer = async (instanceId) => {
-    try {
-      await api.post(`/user/containers/${instanceId}/stop`);
-      setMessage('');
-      refresh();
-    } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to stop container');
-    }
-  };
-
-  const restartContainer = async (instanceId) => {
-    try {
-      await api.post(`/user/containers/${instanceId}/start`);
-      setMessage('');
-      refresh();
-    } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to restart container');
-    }
-  };
-
   const removeContainer = async (instanceId) => {
     try {
       await api.delete(`/user/containers/${instanceId}`);
@@ -828,20 +808,11 @@ const UserPanel = () => {
                 {containerStatusReason(c) && <div className="muted small">{containerStatusReason(c)}</div>}
                 {c.access_url && <div className="muted small">URL: {c.access_url}</div>}
                 <div className="actions">
-                  <button onClick={() => openContainer(c)} disabled={!c.access_url || !isContainerRunning(c)}>
-                    Open
-                  </button>
-                  {isContainerRunning(c) ? (
-                    <button className="ghost" onClick={() => stopContainer(c.id)}>
-                      Stop
-                    </button>
-                  ) : (
-                    <button className="ghost" onClick={() => restartContainer(c.id)}>
-                      Start
-                    </button>
-                  )}
                   <button className="danger" onClick={() => removeContainer(c.id)}>
                     Delete
+                  </button>
+                  <button onClick={() => openContainer(c)} disabled={!c.access_url || !isContainerRunning(c)}>
+                    Connect
                   </button>
                 </div>
               </div>
