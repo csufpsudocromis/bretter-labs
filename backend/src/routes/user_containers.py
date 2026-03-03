@@ -83,6 +83,19 @@ def _container_service_ready(instance_id: str, container_port: int) -> bool:
         return False
 
 
+def _nodeport_ready(node_port: int | None) -> bool:
+    if not node_port:
+        return False
+    host = (settings.kube_node_external_host or "").strip()
+    if not host:
+        return True
+    try:
+        with socket.create_connection((host, int(node_port)), timeout=1.2):
+            return True
+    except OSError:
+        return False
+
+
 def _parse_args(raw: str) -> list[str]:
     try:
         data = json.loads(raw or "[]")
@@ -188,15 +201,18 @@ def list_user_containers(
         if mapped in {"pending", "running"} and tmpl:
             try:
                 node_port = kube.ensure_container_service(record.id, record.owner, container_port)
-                # Wait for the app port to accept connections before enabling "Connect".
-                if mapped == "running" and not _container_service_ready(record.id, container_port):
+                if mapped == "running" and _container_service_ready(record.id, container_port) and _nodeport_ready(
+                    node_port
+                ):
+                    access_map[record.id] = _container_access_url(node_port)
+                elif mapped == "running":
+                    # Keep stage as running for backward-compatible clients that showed a "Start"
+                    # action whenever status_stage was not "running".
                     feedback[record.id] = (
-                        "starting",
+                        "running",
                         "Container pod is running; waiting for application startup.",
                     )
                     access_map[record.id] = None
-                elif mapped == "running":
-                    access_map[record.id] = _container_access_url(node_port)
                 else:
                     access_map[record.id] = None
             except ApiException as exc:
