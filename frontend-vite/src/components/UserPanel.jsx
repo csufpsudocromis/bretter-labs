@@ -231,6 +231,7 @@ const UserPanel = () => {
     effectiveStatus(instance) === 'pending' ? 'waiting for available resources' : '';
   const isRunning = (instance) => effectiveStatus(instance) === 'running';
   const containerTemplateName = (templateId) => containerTemplates.find((t) => t.id === templateId)?.name || 'Container';
+  const containerCpuCores = (millicores) => Math.max(1, Math.round((Number(millicores) || 1000) / 1000));
   const effectiveContainerStatus = (instance) => instance?.status_stage || instance?.status || 'unknown';
   const containerStatusLabel = (instance) => {
     const status = effectiveContainerStatus(instance);
@@ -793,7 +794,7 @@ const UserPanel = () => {
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="specs">
-                  <span>{t.cpu_millicores}m CPU</span>
+                  <span>{containerCpuCores(t.cpu_millicores)} CPU</span>
                   <span>{t.memory_mb} MB RAM</span>
                 </div>
                 <div style={{ marginTop: '0.75rem' }}>

@@ -5,7 +5,7 @@ const DEFAULT_FORM = {
   name: '',
   description: '',
   container_image_id: '',
-  cpu_millicores: 500,
+  cpu_cores: 1,
   memory_mb: 512,
   command: '',
   args_text: '',
@@ -44,6 +44,8 @@ const formatEnv = (env) =>
     .join('\n');
 
 const formatArgs = (args) => (args || []).join(', ');
+const toCpuCores = (millicores) => Math.max(1, Math.round((Number(millicores) || 1000) / 1000));
+const toMillicores = (cores) => Math.max(1, parseInt(cores, 10) || 1) * 1000;
 
 const AdminContainerTemplates = () => {
   const [templates, setTemplates] = useState([]);
@@ -76,7 +78,7 @@ const AdminContainerTemplates = () => {
     name: source.name,
     description: source.description,
     container_image_id: source.container_image_id,
-    cpu_millicores: Number(source.cpu_millicores) || 500,
+    cpu_millicores: toMillicores(source.cpu_cores),
     memory_mb: Number(source.memory_mb) || 512,
     command: source.command || null,
     args: parseArgs(source.args_text),
@@ -125,7 +127,7 @@ const AdminContainerTemplates = () => {
       name: tmpl.name,
       description: tmpl.description || '',
       container_image_id: tmpl.container_image_id,
-      cpu_millicores: tmpl.cpu_millicores || 500,
+      cpu_cores: toCpuCores(tmpl.cpu_millicores),
       memory_mb: tmpl.memory_mb || 512,
       command: tmpl.command || '',
       args_text: formatArgs(tmpl.args || []),
@@ -187,13 +189,13 @@ const AdminContainerTemplates = () => {
               </select>
             </label>
             <label>
-              CPU (millicores)
+              CPU cores
               <input
                 type="number"
-                min={50}
-                max={16000}
-                value={form.cpu_millicores}
-                onChange={(e) => setForm((prev) => ({ ...prev, cpu_millicores: parseInt(e.target.value, 10) || 500 }))}
+                min={1}
+                max={32}
+                value={form.cpu_cores}
+                onChange={(e) => setForm((prev) => ({ ...prev, cpu_cores: parseInt(e.target.value, 10) || 1 }))}
               />
             </label>
             <label>
@@ -264,7 +266,7 @@ const AdminContainerTemplates = () => {
                   </span>
                 </div>
                 <div className="specs">
-                  <span>{tmpl.cpu_millicores}m CPU</span>
+                  <span>{toCpuCores(tmpl.cpu_millicores)} CPU</span>
                   <span>{tmpl.memory_mb} MB RAM</span>
                 </div>
                 {tmpl.description && <div className="muted small">{tmpl.description}</div>}
@@ -318,14 +320,14 @@ const AdminContainerTemplates = () => {
                   </select>
                 </label>
                 <label>
-                  CPU (millicores)
+                  CPU cores
                   <input
                     type="number"
-                    min={50}
-                    max={16000}
-                    value={editForm.cpu_millicores}
+                    min={1}
+                    max={32}
+                    value={editForm.cpu_cores}
                     onChange={(e) =>
-                      setEditForm((prev) => ({ ...prev, cpu_millicores: parseInt(e.target.value, 10) || 500 }))
+                      setEditForm((prev) => ({ ...prev, cpu_cores: parseInt(e.target.value, 10) || 1 }))
                     }
                   />
                 </label>
