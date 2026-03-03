@@ -2,7 +2,7 @@
 FROM node:20-slim AS build
 WORKDIR /app
 
-ARG VITE_API_BASE=https://127.0.0.1:30080
+ARG VITE_API_BASE=
 ENV VITE_API_BASE=${VITE_API_BASE}
 
 COPY frontend-vite/package*.json ./
