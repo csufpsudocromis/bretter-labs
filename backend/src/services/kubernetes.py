@@ -47,6 +47,7 @@ class ContainerPodRequest:
     image_ref: str
     cpu_millicores: int
     memory_mb: int
+    container_port: int = 80
     command: Optional[str] = None
     args: list[str] | None = None
     env: dict[str, str] | None = None
@@ -97,6 +98,9 @@ class KubernetesService:
 
     def container_pod_name(self, instance_id: str, owner: str) -> str:
         return self._container_pod_name(instance_id, owner)
+
+    def _container_service_name(self, instance_id: str) -> str:
+        return f"ctsvc-{instance_id[:8]}"
 
     def _instance_disk_pvc_name(self, instance_id: str, owner: str) -> str:
         safe_owner = self._safe_owner(owner)
@@ -301,6 +305,62 @@ class KubernetesService:
             # If already exists, fetch existing
             existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
             return existing.spec.ports[0].node_port
+
+    def ensure_container_service(self, instance_id: str, owner: str, container_port: int) -> int:
+        core = self._client()
+        pod_name = self._container_pod_name(instance_id, owner)
+        service_name = self._container_service_name(instance_id)
+        tcp_port = max(1, min(65535, int(container_port or 80)))
+        body = client.V1Service(
+            metadata=client.V1ObjectMeta(
+                name=service_name,
+                labels={
+                    "app.kubernetes.io/component": "container-runner",
+                    "app.kubernetes.io/part-of": "bretter-labs",
+                },
+            ),
+            spec=client.V1ServiceSpec(
+                selector={"app": pod_name},
+                type="NodePort",
+                ports=[
+                    client.V1ServicePort(
+                        name="http",
+                        port=tcp_port,
+                        target_port=tcp_port,
+                        protocol="TCP",
+                    )
+                ],
+            ),
+        )
+        try:
+            svc = core.create_namespaced_service(namespace=settings.kube_namespace, body=body)
+            return svc.spec.ports[0].node_port
+        except ApiException as exc:
+            if exc.status != 409:
+                logger.error("Failed to create container service %s: %s", service_name, exc)
+                raise
+            existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            existing_port = existing.spec.ports[0].port if existing.spec and existing.spec.ports else tcp_port
+            if int(existing_port or 0) != tcp_port:
+                patch = {
+                    "spec": {
+                        "selector": {"app": pod_name},
+                        "ports": [{"name": "http", "port": tcp_port, "targetPort": tcp_port, "protocol": "TCP"}],
+                    }
+                }
+                core.patch_namespaced_service(name=service_name, namespace=settings.kube_namespace, body=patch)
+                existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            return existing.spec.ports[0].node_port
+
+    def delete_container_service(self, instance_id: str) -> None:
+        core = self._client()
+        service_name = self._container_service_name(instance_id)
+        try:
+            core.delete_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.error("Failed to delete container service %s: %s", service_name, exc)
+                raise
 
     def _console_url(self, req: PodRequest) -> str:
         return ""
@@ -573,6 +633,7 @@ class KubernetesService:
             "image": req.image_ref,
             "resources": resources,
             "image_pull_policy": "IfNotPresent",
+            "ports": [client.V1ContainerPort(container_port=max(1, min(65535, int(req.container_port or 80))))],
         }
         args = [arg for arg in (req.args or []) if str(arg).strip()]
         if req.command:

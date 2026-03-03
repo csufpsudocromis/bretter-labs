@@ -143,6 +143,13 @@ const UserPanel = () => {
     }
   };
 
+  const openContainer = (instance) => {
+    if (!instance?.access_url) {
+      return;
+    }
+    window.open(instance.access_url, '_blank', 'noopener,noreferrer');
+  };
+
   const stopInstances = async (instanceIds) => {
     if (!instanceIds || instanceIds.length === 0) return;
     try {
@@ -796,6 +803,7 @@ const UserPanel = () => {
                 <div className="specs">
                   <span>{containerCpuCores(t.cpu_millicores)} CPU</span>
                   <span>{t.memory_mb} MB RAM</span>
+                  <span>Port {t.container_port || 80}</span>
                 </div>
                 <div style={{ marginTop: '0.75rem' }}>
                   <button onClick={() => startContainer(t.id)}>Start Container</button>
@@ -818,7 +826,11 @@ const UserPanel = () => {
                   <span>{c.pod_name || `ct-${c.owner}-${c.id.slice(0, 8)}`}</span>
                 </div>
                 {containerStatusReason(c) && <div className="muted small">{containerStatusReason(c)}</div>}
+                {c.access_url && <div className="muted small">URL: {c.access_url}</div>}
                 <div className="actions">
+                  <button onClick={() => openContainer(c)} disabled={!c.access_url || !isContainerRunning(c)}>
+                    Open
+                  </button>
                   {isContainerRunning(c) ? (
                     <button className="ghost" onClick={() => stopContainer(c.id)}>
                       Stop

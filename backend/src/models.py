@@ -130,6 +130,7 @@ class ContainerTemplateCreate(BaseModel):
     container_image_id: str
     cpu_millicores: int = Field(default=500, ge=50, le=16000)
     memory_mb: int = Field(default=512, ge=64, le=131072)
+    container_port: int = Field(default=80, ge=1, le=65535)
     command: Optional[str] = Field(default=None, max_length=2000)
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
@@ -143,6 +144,7 @@ class ContainerTemplateUpdate(BaseModel):
     container_image_id: Optional[str] = None
     cpu_millicores: Optional[int] = Field(default=None, ge=50, le=16000)
     memory_mb: Optional[int] = Field(default=None, ge=64, le=131072)
+    container_port: Optional[int] = Field(default=None, ge=1, le=65535)
     command: Optional[str] = Field(default=None, max_length=2000)
     args: Optional[list[str]] = None
     env: Optional[dict[str, str]] = None
@@ -157,6 +159,7 @@ class ContainerTemplate(BaseModel):
     container_image_id: str
     cpu_millicores: int
     memory_mb: int
+    container_port: int = 80
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
@@ -336,5 +339,7 @@ class ContainerInstance(BaseModel):
     status_stage: Optional[str] = None
     status_detail: Optional[str] = None
     pod_name: Optional[str] = None
+    access_url: Optional[str] = None
+    container_port: Optional[int] = None
     started_at: datetime
     last_active_at: datetime

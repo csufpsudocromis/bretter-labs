@@ -88,6 +88,7 @@ class ContainerTemplate(SQLModel, table=True):
     container_image_id: str = Field(foreign_key="containerimage.id")
     cpu_millicores: int = 500
     memory_mb: int = 512
+    container_port: int = 80
     command: Optional[str] = None
     args_json: str = "[]"
     env_json: str = "{}"

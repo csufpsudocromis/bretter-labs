@@ -89,6 +89,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         container_image_id=record.container_image_id,
         cpu_millicores=record.cpu_millicores,
         memory_mb=record.memory_mb,
+        container_port=max(1, int(getattr(record, "container_port", 80) or 80)),
         command=record.command,
         args=_parse_json_list(record.args_json),
         env=_parse_json_map(record.env_json),
@@ -195,6 +196,7 @@ def create_container_template(
         container_image_id=payload.container_image_id,
         cpu_millicores=payload.cpu_millicores,
         memory_mb=payload.memory_mb,
+        container_port=payload.container_port,
         command=(payload.command or "").strip() or None,
         args_json=json.dumps(args, separators=(",", ":")),
         env_json=json.dumps(env, separators=(",", ":")),
@@ -246,6 +248,8 @@ def update_container_template(
         record.cpu_millicores = int(updates.get("cpu_millicores") or record.cpu_millicores)
     if "memory_mb" in updates:
         record.memory_mb = int(updates.get("memory_mb") or record.memory_mb)
+    if "container_port" in updates:
+        record.container_port = max(1, int(updates.get("container_port") or record.container_port))
     if "command" in updates:
         record.command = (str(updates.get("command") or "").strip() or None)
     if "args" in updates:

@@ -7,6 +7,7 @@ const DEFAULT_FORM = {
   container_image_id: '',
   cpu_cores: 1,
   memory_mb: 512,
+  container_port: 80,
   command: '',
   args_text: '',
   env_text: '',
@@ -80,6 +81,7 @@ const AdminContainerTemplates = () => {
     container_image_id: source.container_image_id,
     cpu_millicores: toMillicores(source.cpu_cores),
     memory_mb: Number(source.memory_mb) || 512,
+    container_port: Math.max(1, Math.min(65535, Number(source.container_port) || 80)),
     command: source.command || null,
     args: parseArgs(source.args_text),
     env: parseEnv(source.env_text),
@@ -129,6 +131,7 @@ const AdminContainerTemplates = () => {
       container_image_id: tmpl.container_image_id,
       cpu_cores: toCpuCores(tmpl.cpu_millicores),
       memory_mb: tmpl.memory_mb || 512,
+      container_port: tmpl.container_port || 80,
       command: tmpl.command || '',
       args_text: formatArgs(tmpl.args || []),
       env_text: formatEnv(tmpl.env || {}),
@@ -209,6 +212,21 @@ const AdminContainerTemplates = () => {
               />
             </label>
             <label>
+              Container port
+              <input
+                type="number"
+                min={1}
+                max={65535}
+                value={form.container_port}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    container_port: Math.max(1, Math.min(65535, parseInt(e.target.value, 10) || 80)),
+                  }))
+                }
+              />
+            </label>
+            <label>
               Command (optional)
               <input
                 value={form.command}
@@ -268,6 +286,7 @@ const AdminContainerTemplates = () => {
                 <div className="specs">
                   <span>{toCpuCores(tmpl.cpu_millicores)} CPU</span>
                   <span>{tmpl.memory_mb} MB RAM</span>
+                  <span>Port {tmpl.container_port || 80}</span>
                 </div>
                 {tmpl.description && <div className="muted small">{tmpl.description}</div>}
                 <div className="muted small">Image: {imageName(tmpl.container_image_id)}</div>
@@ -340,6 +359,21 @@ const AdminContainerTemplates = () => {
                     value={editForm.memory_mb}
                     onChange={(e) =>
                       setEditForm((prev) => ({ ...prev, memory_mb: parseInt(e.target.value, 10) || 512 }))
+                    }
+                  />
+                </label>
+                <label>
+                  Container port
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={editForm.container_port}
+                    onChange={(e) =>
+                      setEditForm((prev) => ({
+                        ...prev,
+                        container_port: Math.max(1, Math.min(65535, parseInt(e.target.value, 10) || 80)),
+                      }))
                     }
                   />
                 </label>

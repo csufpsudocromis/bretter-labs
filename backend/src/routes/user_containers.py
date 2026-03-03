@@ -7,6 +7,7 @@ from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
 from ..auth import require_user
+from ..config import settings
 from ..db import get_session
 from ..models import ContainerInstance as ContainerInstanceView
 from ..models import ContainerTemplate as ContainerTemplateView
@@ -60,6 +61,13 @@ def _status_feedback(status_name: str, pod_status: PodStatus | None) -> tuple[st
     return "unknown", "Container status is unknown."
 
 
+def _container_access_url(node_port: int | None) -> str | None:
+    if not node_port:
+        return None
+    host = (settings.kube_node_external_host or "").strip() or "127.0.0.1"
+    return f"http://{host}:{int(node_port)}/"
+
+
 def _parse_args(raw: str) -> list[str]:
     try:
         data = json.loads(raw or "[]")
@@ -88,6 +96,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplateView:
         container_image_id=record.container_image_id,
         cpu_millicores=record.cpu_millicores,
         memory_mb=record.memory_mb,
+        container_port=max(1, int(getattr(record, "container_port", 80) or 80)),
         command=record.command,
         args=_parse_args(record.args_json),
         env=_parse_env(record.env_json),
@@ -102,6 +111,8 @@ def _instance_out(
     *,
     stage: str | None = None,
     detail: str | None = None,
+    access_url: str | None = None,
+    container_port: int | None = None,
 ) -> ContainerInstanceView:
     resolved_stage, resolved_detail = _status_feedback(record.status, None)
     return ContainerInstanceView(
@@ -112,6 +123,8 @@ def _instance_out(
         status_stage=stage or resolved_stage,
         status_detail=detail or resolved_detail,
         pod_name=record.pod_name,
+        access_url=access_url,
+        container_port=container_port,
         started_at=record.started_at,
         last_active_at=record.last_active_at,
     )
@@ -137,9 +150,14 @@ def list_user_containers(
     templates = {row.id: row for row in session.exec(select(ContainerTemplateTable)).all()}
     changed = False
     feedback: dict[str, tuple[str, str]] = {}
+    access_map: dict[str, str | None] = {}
+    port_map: dict[str, int | None] = {}
     to_delete: list[ContainerInstanceTable] = []
 
     for record in instances:
+        tmpl = templates.get(record.template_id)
+        container_port = max(1, int(getattr(tmpl, "container_port", 80) or 80)) if tmpl else 80
+        port_map[record.id] = container_port
         pod_status: PodStatus | None = None
         try:
             pod_status = kube.get_container_status(record.id, record.owner)
@@ -152,18 +170,33 @@ def list_user_containers(
 
         stage, detail = _status_feedback(mapped, pod_status)
         feedback[record.id] = (stage, detail)
+        if mapped in {"pending", "running"} and tmpl:
+            try:
+                node_port = kube.ensure_container_service(record.id, record.owner, container_port)
+                access_map[record.id] = _container_access_url(node_port)
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+                access_map[record.id] = None
+        else:
+            access_map[record.id] = None
+            try:
+                kube.delete_container_service(record.id)
+            except Exception:
+                pass
+
         if mapped != record.status:
             record.status = mapped
             record.last_active_at = datetime.utcnow()
             session.add(record)
             changed = True
 
-        tmpl = templates.get(record.template_id)
         if tmpl and record.status in {"stopped", "completed"}:
             cutoff = datetime.utcnow() - timedelta(minutes=max(1, int(tmpl.auto_delete_minutes or 60)))
             if record.last_active_at < cutoff:
                 try:
                     kube.delete_container_pod(record.id, record.owner)
+                    kube.delete_container_service(record.id)
                 except Exception:
                     pass
                 to_delete.append(record)
@@ -179,7 +212,15 @@ def list_user_containers(
     out: list[ContainerInstanceView] = []
     for row in instances:
         stage, detail = feedback.get(row.id, _status_feedback(row.status, None))
-        out.append(_instance_out(row, stage=stage, detail=detail))
+        out.append(
+            _instance_out(
+                row,
+                stage=stage,
+                detail=detail,
+                access_url=access_map.get(row.id),
+                container_port=port_map.get(row.id),
+            )
+        )
     return out
 
 
@@ -224,11 +265,22 @@ def start_container_template(
             image_ref=image.image_ref,
             cpu_millicores=template.cpu_millicores,
             memory_mb=template.memory_mb,
+            container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
             command=template.command,
             args=_parse_args(template.args_json),
             env=_parse_env(template.env_json),
         )
     )
+    container_port = max(1, int(getattr(template, "container_port", 80) or 80))
+    try:
+        node_port = kube.ensure_container_service(instance_id, user.username, container_port)
+    except Exception:
+        try:
+            kube.delete_container_pod(instance_id, user.username)
+        except Exception:
+            pass
+        raise
+    access_url = _container_access_url(node_port)
 
     now = datetime.utcnow()
     record = ContainerInstanceTable(
@@ -244,7 +296,7 @@ def start_container_template(
     session.commit()
     session.refresh(record)
     stage, detail = _status_feedback(record.status, pod_status)
-    return _instance_out(record, stage=stage, detail=detail)
+    return _instance_out(record, stage=stage, detail=detail, access_url=access_url, container_port=container_port)
 
 
 @router.post("/containers/{instance_id}/stop", response_model=ContainerInstanceView)
@@ -258,12 +310,18 @@ def stop_container(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
 
     kube.stop_container_pod(instance_id, user.username)
+    try:
+        kube.delete_container_service(instance_id)
+    except Exception:
+        pass
     record.status = "stopped"
     record.last_active_at = datetime.utcnow()
     session.add(record)
     session.commit()
     session.refresh(record)
-    return _instance_out(record)
+    template = session.get(ContainerTemplateTable, record.template_id)
+    container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else None
+    return _instance_out(record, container_port=container_port)
 
 
 @router.post("/containers/{instance_id}/start", response_model=ContainerInstanceView, status_code=status.HTTP_200_OK)
@@ -296,11 +354,15 @@ def restart_container(
             image_ref=image.image_ref,
             cpu_millicores=template.cpu_millicores,
             memory_mb=template.memory_mb,
+            container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
             command=template.command,
             args=_parse_args(template.args_json),
             env=_parse_env(template.env_json),
         )
     )
+    container_port = max(1, int(getattr(template, "container_port", 80) or 80))
+    node_port = kube.ensure_container_service(record.id, user.username, container_port)
+    access_url = _container_access_url(node_port)
 
     record.status = "pending"
     record.pod_name = kube.container_pod_name(instance_id=record.id, owner=user.username)
@@ -310,7 +372,7 @@ def restart_container(
     session.commit()
     session.refresh(record)
     stage, detail = _status_feedback(record.status, pod_status)
-    return _instance_out(record, stage=stage, detail=detail)
+    return _instance_out(record, stage=stage, detail=detail, access_url=access_url, container_port=container_port)
 
 
 @router.delete("/containers/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -324,5 +386,9 @@ def delete_container(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
 
     kube.delete_container_pod(instance_id, user.username)
+    try:
+        kube.delete_container_service(instance_id)
+    except Exception:
+        pass
     session.delete(record)
     session.commit()
