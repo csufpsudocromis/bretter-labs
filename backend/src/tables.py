@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Column
+from sqlalchemy import BigInteger, Column, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -78,11 +78,19 @@ class ContainerImage(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     image_ref: str
+    last_scan_at: Optional[datetime] = None
+    last_scan_status: str = "never"
+    last_scan_summary: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class ContainerTemplate(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("template_key", "version", name="uq_containertemplate_key_version"),)
+
     id: str = Field(primary_key=True, index=True)
+    template_key: str = Field(index=True)
+    version: int = 1
+    is_default: bool = True
     name: str
     description: str = ""
     container_image_id: str = Field(foreign_key="containerimage.id")
@@ -91,7 +99,10 @@ class ContainerTemplate(SQLModel, table=True):
     container_port: int = 80
     healthcheck_protocol: str = "tcp"
     healthcheck_path: str = "/"
+    readiness_http_status: int = 200
+    readiness_success_path: Optional[str] = None
     startup_timeout_seconds: int = 300
+    dependency_checks_json: str = "[]"
     expose_strategy: str = "nodeport"
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
@@ -109,6 +120,9 @@ class ContainerInstance(SQLModel, table=True):
     owner: str = Field(foreign_key="user.username")
     status: str = "pending"
     pod_name: Optional[str] = None
+    queue_attempts: int = 0
+    queue_not_before: Optional[datetime] = None
+    queue_reason: Optional[str] = None
     started_at: datetime = Field(default_factory=datetime.utcnow)
     last_active_at: datetime = Field(default_factory=datetime.utcnow)
 

@@ -1,10 +1,11 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from .auth import hash_password
 from .config import settings
@@ -12,7 +13,7 @@ from .db import engine, init_db
 from .logging_utils import configure_capped_error_file_logging
 from .routes import admin, admin_containers, auth, user, user_containers
 from .services.kubernetes import kube
-from .tables import Config, User
+from .tables import Config, ContainerImage, User
 
 configure_capped_error_file_logging(settings.error_log_file_path, settings.error_log_max_bytes)
 
@@ -64,9 +65,33 @@ async def reaper_loop() -> None:
         try:
             with Session(engine) as session:
                 kube.reaper_tick(session)
+                _scan_due_container_image(session)
         except Exception as exc:
             logger.warning("Reaper loop error: %s", exc)
         await asyncio.sleep(settings.reaper_interval_seconds)
+
+
+def _scan_due_container_image(session: Session) -> None:
+    if not settings.container_scan_enabled:
+        return
+    interval_minutes = max(15, int(settings.container_scan_interval_minutes or 360))
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    due_rows = session.exec(select(ContainerImage)).all()
+    due_rows.sort(key=lambda row: (row.last_scan_at or datetime.min, row.created_at))
+    for row in due_rows:
+        last_scan_at = row.last_scan_at
+        if last_scan_at and (now - last_scan_at).total_seconds() < interval_minutes * 60:
+            continue
+        status_text, summary_text = kube.scan_container_image(
+            image_ref=row.image_ref,
+            severity=settings.container_scan_severity,
+        )
+        row.last_scan_at = now
+        row.last_scan_status = status_text
+        row.last_scan_summary = summary_text[:512]
+        session.add(row)
+        session.commit()
+        return
 
 
 @app.on_event("startup")

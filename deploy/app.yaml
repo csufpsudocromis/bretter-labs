@@ -436,6 +436,24 @@ spec:
               value: "__CONTAINER_IMAGE_PREPULL_ENABLED__"
             - name: BLABS_CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS
               value: "__CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS__"
+            - name: BLABS_CONTAINER_ALLOWED_REGISTRIES
+              value: "__CONTAINER_ALLOWED_REGISTRIES__"
+            - name: BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED
+              value: "__CONTAINER_SIGNATURE_VERIFICATION_ENABLED__"
+            - name: BLABS_CONTAINER_SIGNATURE_KEY_REF
+              value: "__CONTAINER_SIGNATURE_KEY_REF__"
+            - name: BLABS_CONTAINER_SCAN_ENABLED
+              value: "__CONTAINER_SCAN_ENABLED__"
+            - name: BLABS_CONTAINER_SCAN_INTERVAL_MINUTES
+              value: "__CONTAINER_SCAN_INTERVAL_MINUTES__"
+            - name: BLABS_CONTAINER_SCAN_SEVERITY
+              value: "__CONTAINER_SCAN_SEVERITY__"
+            - name: BLABS_CONTAINER_START_QUEUE_ENABLED
+              value: "__CONTAINER_START_QUEUE_ENABLED__"
+            - name: BLABS_CONTAINER_START_QUEUE_BASE_DELAY_SECONDS
+              value: "__CONTAINER_START_QUEUE_BASE_DELAY_SECONDS__"
+            - name: BLABS_CONTAINER_START_QUEUE_MAX_DELAY_SECONDS
+              value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images

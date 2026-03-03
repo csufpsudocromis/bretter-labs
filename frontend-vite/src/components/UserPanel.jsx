@@ -222,6 +222,7 @@ const UserPanel = () => {
   const containerStatusLabel = (instance) => {
     const status = effectiveContainerStatus(instance);
     const labelMap = {
+      queued: 'Queued',
       pending: 'Pending',
       building: 'Building',
       starting: 'Starting',
@@ -233,8 +234,9 @@ const UserPanel = () => {
     };
     return labelMap[status] || 'Unknown';
   };
-  const containerStatusReason = (instance) =>
-    effectiveContainerStatus(instance) === 'pending' ? 'waiting for available resources' : '';
+  const containerStatusReason = (instance) => instance?.status_detail || '';
+  const containerDiagnostics = (instance) =>
+    Array.isArray(instance?.launch_diagnostics) ? instance.launch_diagnostics.slice(0, 5) : [];
   const isContainerRunning = (instance) => effectiveContainerStatus(instance) === 'running';
 
   const readStoredActivity = () => {
@@ -780,7 +782,7 @@ const UserPanel = () => {
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div style={{ marginTop: '0.75rem' }}>
-                  <button onClick={() => startContainer(t.id)}>Start Container</button>
+                  <button onClick={() => startContainer(t.id)}>Start Lab</button>
                 </div>
               </div>
             ))}
@@ -800,6 +802,11 @@ const UserPanel = () => {
                   <span>{c.pod_name || `ct-${c.owner}-${c.id.slice(0, 8)}`}</span>
                 </div>
                 {containerStatusReason(c) && <div className="muted small">{containerStatusReason(c)}</div>}
+                {containerDiagnostics(c).map((line, idx) => (
+                  <div key={`${c.id}-diag-${idx}`} className="muted small">
+                    {line}
+                  </div>
+                ))}
                 <div className="actions">
                   <button className="danger" onClick={() => removeContainer(c.id)}>
                     Delete

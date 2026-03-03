@@ -46,6 +46,15 @@ class Settings(BaseSettings):
     container_ingress_annotations_json: str = "{}"
     container_image_prepull_enabled: bool = True
     container_image_prepull_timeout_seconds: int = 45
+    container_allowed_registries: str = "docker.io,ghcr.io,quay.io,mcr.microsoft.com,gcr.io,registry.k8s.io,lscr.io"
+    container_signature_verification_enabled: bool = False
+    container_signature_key_ref: str = ""
+    container_scan_enabled: bool = True
+    container_scan_interval_minutes: int = 360
+    container_scan_severity: str = "HIGH,CRITICAL"
+    container_start_queue_enabled: bool = True
+    container_start_queue_base_delay_seconds: int = 20
+    container_start_queue_max_delay_seconds: int = 300
     warm_pool_autoscale_enabled: bool = True
     warm_pool_window_minutes: int = 15
     warm_pool_refill_minutes: int = 2

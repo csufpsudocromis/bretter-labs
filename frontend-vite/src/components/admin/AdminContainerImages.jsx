@@ -125,6 +125,17 @@ const AdminContainerImages = () => {
     }
   };
 
+  const scan = async (imageId) => {
+    try {
+      await api.post(`/admin/container-images/${imageId}/scan`);
+      setMessage('Scan triggered');
+      setError('');
+      load();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to scan image');
+    }
+  };
+
   const sourceImageRef = buildImageRef(form);
   const canCreate = Boolean(
     String(form.name || '').trim() ||
@@ -241,7 +252,15 @@ const AdminContainerImages = () => {
                 ) : (
                   <>
                     <div className="muted small">{img.image_ref}</div>
+                    <div className="muted small">
+                      Scan: {img.last_scan_status || 'never'}
+                      {img.last_scan_at ? ` (${new Date(img.last_scan_at).toLocaleString()})` : ''}
+                    </div>
+                    {img.last_scan_summary && <div className="muted small">{img.last_scan_summary}</div>}
                     <div className="actions">
+                      <button className="ghost" onClick={() => scan(img.id)}>
+                        Scan
+                      </button>
                       <button className="ghost" onClick={() => prepull(img.id)}>
                         Pre-pull
                       </button>

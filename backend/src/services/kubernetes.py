@@ -8,6 +8,7 @@ import logging
 import math
 import json
 import hashlib
+import subprocess
 import re
 import shlex
 import time
@@ -52,7 +53,10 @@ class ContainerPodRequest:
     container_port: int = 80
     healthcheck_protocol: str = "tcp"
     healthcheck_path: str = "/"
+    readiness_http_status: int = 200
+    readiness_success_path: Optional[str] = None
     startup_timeout_seconds: int = 300
+    dependency_checks: list[object] | None = None
     expose_strategy: str = "nodeport"
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
@@ -844,6 +848,23 @@ class KubernetesService:
             healthcheck_path = f"/{healthcheck_path}"
         startup_timeout = max(10, min(1800, int(req.startup_timeout_seconds or 300)))
         startup_failure_threshold = max(10, int(math.ceil(startup_timeout / 5)))
+        dependency_checks: list[tuple[str, int, int]] = []
+        for dep in req.dependency_checks or []:
+            host = ""
+            port_val = 0
+            timeout_val = 90
+            if isinstance(dep, dict):
+                host = str(dep.get("host") or "").strip()
+                port_val = int(dep.get("port") or 0)
+                timeout_val = int(dep.get("timeout_seconds") or 90)
+            else:
+                host = str(getattr(dep, "host", "") or "").strip()
+                port_val = int(getattr(dep, "port", 0) or 0)
+                timeout_val = int(getattr(dep, "timeout_seconds", 90) or 90)
+            if not host or port_val < 1 or port_val > 65535:
+                continue
+            timeout_val = max(5, min(600, timeout_val))
+            dependency_checks.append((host, port_val, timeout_val))
         resources = client.V1ResourceRequirements(
             limits={"cpu": f"{cpu_m}m", "memory": f"{mem_mb}Mi"},
             requests={"cpu": f"{cpu_m}m", "memory": f"{mem_mb}Mi"},
@@ -928,6 +949,43 @@ class KubernetesService:
                 ),
             ],
         }
+        if dependency_checks:
+            lines = ["set -eu"]
+            for host, dep_port, timeout_seconds in dependency_checks:
+                safe_host = shlex.quote(host)
+                lines.extend(
+                    [
+                        f'echo "Checking dependency {host}:{dep_port}"',
+                        f"deadline=$(( $(date +%s) + {timeout_seconds} ))",
+                        "while true; do",
+                        f"  if nslookup {safe_host} >/dev/null 2>&1 && nc -z -w 2 {safe_host} {dep_port} >/dev/null 2>&1; then",
+                        "    break",
+                        "  fi",
+                        "  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then",
+                        f'    echo \"Dependency {host}:{dep_port} not reachable before timeout\"',
+                        "    exit 1",
+                        "  fi",
+                        "  sleep 2",
+                        "done",
+                    ]
+                )
+            init_container = client.V1Container(
+                name="wait-dependencies",
+                image="busybox:1.36",
+                image_pull_policy="IfNotPresent",
+                command=["/bin/sh", "-c", "\n".join(lines)],
+                resources=client.V1ResourceRequirements(
+                    requests={"cpu": "50m", "memory": "64Mi"},
+                    limits={"cpu": "250m", "memory": "128Mi"},
+                ),
+                security_context=client.V1SecurityContext(
+                    allow_privilege_escalation=False,
+                    capabilities=client.V1Capabilities(drop=["ALL"]),
+                    read_only_root_filesystem=False,
+                    seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
+                ),
+            )
+            spec_kwargs["init_containers"] = [init_container]
         if settings.image_pull_secret:
             spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
         if settings.kube_runtime_class:
@@ -1077,6 +1135,115 @@ class KubernetesService:
         except ApiException as exc:
             logger.error("Failed to read container pod %s: %s", pod_name, exc)
             raise
+
+    def get_container_launch_diagnostics(self, instance_id: str, owner: str, max_items: int = 8) -> list[str]:
+        core = self._client()
+        pod_name = self._find_container_pod_name(instance_id, owner)
+        details: list[str] = []
+        try:
+            pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status == 404:
+                return ["Pod not found yet."]
+            raise
+
+        for cond in pod.status.conditions or []:
+            if cond.type == "PodScheduled" and cond.status == "False":
+                reason = cond.reason or "Unschedulable"
+                msg = cond.message or "Pod is waiting for scheduler placement."
+                details.append(f"{reason}: {msg}")
+                break
+        for status in list(pod.status.init_container_statuses or []) + list(pod.status.container_statuses or []):
+            state = status.state
+            if state and state.waiting:
+                reason = state.waiting.reason or "Waiting"
+                msg = state.waiting.message or ""
+                entry = f"{status.name}: {reason}"
+                if msg:
+                    entry = f"{entry} - {msg}"
+                details.append(entry)
+            if state and state.terminated:
+                reason = state.terminated.reason or "Terminated"
+                msg = state.terminated.message or ""
+                entry = f"{status.name}: {reason}"
+                if msg:
+                    entry = f"{entry} - {msg}"
+                details.append(entry)
+
+        try:
+            events = core.list_namespaced_event(
+                namespace=settings.kube_namespace,
+                field_selector=f"involvedObject.kind=Pod,involvedObject.name={pod_name}",
+            ).items
+        except ApiException:
+            events = []
+        events.sort(
+            key=lambda ev: (
+                ev.last_timestamp
+                or ev.event_time
+                or ev.first_timestamp
+                or (ev.metadata.creation_timestamp if ev.metadata else None)
+                or datetime.min
+            )
+        )
+        for event in events[-max_items:]:
+            reason = str(event.reason or "Event").strip()
+            message = str(event.message or "").strip()
+            if message:
+                details.append(f"{reason}: {message}")
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in details:
+            normalized = item.strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            deduped.append(normalized[:300])
+            if len(deduped) >= max_items:
+                break
+        return deduped
+
+    def scan_container_image(self, image_ref: str, severity: str = "HIGH,CRITICAL") -> tuple[str, str]:
+        cmd = [
+            "trivy",
+            "image",
+            "--quiet",
+            "--no-progress",
+            "--format",
+            "json",
+            "--severity",
+            severity or "HIGH,CRITICAL",
+            image_ref,
+        ]
+        try:
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=180)
+        except FileNotFoundError:
+            return "skipped", "trivy is not installed in backend runtime"
+        except subprocess.TimeoutExpired:
+            return "error", "scan timed out"
+        if result.returncode not in {0, 1}:
+            detail = (result.stderr or result.stdout or "scan command failed").strip()
+            return "error", detail[:512]
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except Exception:
+            return "error", "scan output could not be parsed"
+        critical = 0
+        high = 0
+        results = payload.get("Results") if isinstance(payload, dict) else None
+        for result_item in results or []:
+            vulns = (result_item or {}).get("Vulnerabilities") or []
+            for vuln in vulns:
+                sev = str((vuln or {}).get("Severity") or "").upper()
+                if sev == "CRITICAL":
+                    critical += 1
+                elif sev == "HIGH":
+                    high += 1
+        total = critical + high
+        if total == 0:
+            return "clean", "No HIGH/CRITICAL vulnerabilities detected"
+        return "vulnerable", f"HIGH={high}, CRITICAL={critical}"
 
     def get_status(self, instance_id: str, owner: str) -> PodStatus:
         core = self._client()

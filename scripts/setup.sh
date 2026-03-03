@@ -57,6 +57,15 @@ CONTAINER_INGRESS_BASE_DOMAIN="${CONTAINER_INGRESS_BASE_DOMAIN:-}"
 CONTAINER_INGRESS_ANNOTATIONS_JSON="${CONTAINER_INGRESS_ANNOTATIONS_JSON:-{}}"
 CONTAINER_IMAGE_PREPULL_ENABLED="${CONTAINER_IMAGE_PREPULL_ENABLED:-1}"
 CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS="${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS:-45}"
+CONTAINER_ALLOWED_REGISTRIES="${CONTAINER_ALLOWED_REGISTRIES:-docker.io,ghcr.io,quay.io,mcr.microsoft.com,gcr.io,registry.k8s.io,lscr.io}"
+CONTAINER_SIGNATURE_VERIFICATION_ENABLED="${CONTAINER_SIGNATURE_VERIFICATION_ENABLED:-0}"
+CONTAINER_SIGNATURE_KEY_REF="${CONTAINER_SIGNATURE_KEY_REF:-}"
+CONTAINER_SCAN_ENABLED="${CONTAINER_SCAN_ENABLED:-1}"
+CONTAINER_SCAN_INTERVAL_MINUTES="${CONTAINER_SCAN_INTERVAL_MINUTES:-360}"
+CONTAINER_SCAN_SEVERITY="${CONTAINER_SCAN_SEVERITY:-HIGH,CRITICAL}"
+CONTAINER_START_QUEUE_ENABLED="${CONTAINER_START_QUEUE_ENABLED:-1}"
+CONTAINER_START_QUEUE_BASE_DELAY_SECONDS="${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS:-20}"
+CONTAINER_START_QUEUE_MAX_DELAY_SECONDS="${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS:-300}"
 BACKEND_DATA_HOSTPATH="${BACKEND_DATA_HOSTPATH:-/var/lib/bretter-labs/backend-data}"
 GOLDEN_IMAGES_HOSTPATH="${GOLDEN_IMAGES_HOSTPATH:-/var/lib/bretter-labs/golden-images}"
 POSTGRES_DATA_HOSTPATH="${POSTGRES_DATA_HOSTPATH:-/var/lib/bretter-labs/postgres-data}"
@@ -228,6 +237,33 @@ validate_container_runtime_config() {
   fi
   if ! is_uint "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS" || [ "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS" -lt 10 ]; then
     fail "CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS must be an integer >= 10."
+  fi
+  case "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" in
+    0|1) ;;
+    *) fail "CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be either 0 or 1." ;;
+  esac
+  case "$CONTAINER_SCAN_ENABLED" in
+    0|1) ;;
+    *) fail "CONTAINER_SCAN_ENABLED must be either 0 or 1." ;;
+  esac
+  case "$CONTAINER_START_QUEUE_ENABLED" in
+    0|1) ;;
+    *) fail "CONTAINER_START_QUEUE_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ -z "$CONTAINER_ALLOWED_REGISTRIES" ]; then
+    fail "CONTAINER_ALLOWED_REGISTRIES cannot be empty."
+  fi
+  if ! is_uint "$CONTAINER_SCAN_INTERVAL_MINUTES" || [ "$CONTAINER_SCAN_INTERVAL_MINUTES" -lt 15 ]; then
+    fail "CONTAINER_SCAN_INTERVAL_MINUTES must be an integer >= 15."
+  fi
+  if [ -z "$CONTAINER_SCAN_SEVERITY" ]; then
+    fail "CONTAINER_SCAN_SEVERITY cannot be empty."
+  fi
+  if ! is_uint "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS" || [ "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS" -lt 5 ]; then
+    fail "CONTAINER_START_QUEUE_BASE_DELAY_SECONDS must be an integer >= 5."
+  fi
+  if ! is_uint "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS" || [ "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS" -lt "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS" ]; then
+    fail "CONTAINER_START_QUEUE_MAX_DELAY_SECONDS must be >= CONTAINER_START_QUEUE_BASE_DELAY_SECONDS."
   fi
 }
 
@@ -1074,6 +1110,9 @@ render_manifest_template() {
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
+  local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
+  local container_scan_enabled container_scan_interval_minutes container_scan_severity
+  local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
   ns="$(escape_sed_replacement "$NAMESPACE")"
   control_node="$(escape_sed_replacement "$CONTROL_NODE")"
   node_external_host="$(escape_sed_replacement "$NODE_EXTERNAL_HOST")"
@@ -1097,6 +1136,15 @@ render_manifest_template() {
   container_ingress_annotations_json="$(escape_sed_replacement "$CONTAINER_INGRESS_ANNOTATIONS_JSON")"
   container_image_prepull_enabled="$(escape_sed_replacement "$CONTAINER_IMAGE_PREPULL_ENABLED")"
   container_image_prepull_timeout_seconds="$(escape_sed_replacement "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS")"
+  container_allowed_registries="$(escape_sed_replacement "$CONTAINER_ALLOWED_REGISTRIES")"
+  container_signature_verification_enabled="$(escape_sed_replacement "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED")"
+  container_signature_key_ref="$(escape_sed_replacement "$CONTAINER_SIGNATURE_KEY_REF")"
+  container_scan_enabled="$(escape_sed_replacement "$CONTAINER_SCAN_ENABLED")"
+  container_scan_interval_minutes="$(escape_sed_replacement "$CONTAINER_SCAN_INTERVAL_MINUTES")"
+  container_scan_severity="$(escape_sed_replacement "$CONTAINER_SCAN_SEVERITY")"
+  container_start_queue_enabled="$(escape_sed_replacement "$CONTAINER_START_QUEUE_ENABLED")"
+  container_start_queue_base_delay_seconds="$(escape_sed_replacement "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS")"
+  container_start_queue_max_delay_seconds="$(escape_sed_replacement "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
   postgres_data_hostpath="$(escape_sed_replacement "$POSTGRES_DATA_HOSTPATH")"
@@ -1129,6 +1177,15 @@ render_manifest_template() {
     -e "s#__CONTAINER_INGRESS_ANNOTATIONS_JSON__#${container_ingress_annotations_json}#g" \
     -e "s/__CONTAINER_IMAGE_PREPULL_ENABLED__/${container_image_prepull_enabled}/g" \
     -e "s/__CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS__/${container_image_prepull_timeout_seconds}/g" \
+    -e "s/__CONTAINER_ALLOWED_REGISTRIES__/${container_allowed_registries}/g" \
+    -e "s/__CONTAINER_SIGNATURE_VERIFICATION_ENABLED__/${container_signature_verification_enabled}/g" \
+    -e "s#__CONTAINER_SIGNATURE_KEY_REF__#${container_signature_key_ref}#g" \
+    -e "s/__CONTAINER_SCAN_ENABLED__/${container_scan_enabled}/g" \
+    -e "s/__CONTAINER_SCAN_INTERVAL_MINUTES__/${container_scan_interval_minutes}/g" \
+    -e "s/__CONTAINER_SCAN_SEVERITY__/${container_scan_severity}/g" \
+    -e "s/__CONTAINER_START_QUEUE_ENABLED__/${container_start_queue_enabled}/g" \
+    -e "s/__CONTAINER_START_QUEUE_BASE_DELAY_SECONDS__/${container_start_queue_base_delay_seconds}/g" \
+    -e "s/__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__/${container_start_queue_max_delay_seconds}/g" \
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     -e "s#__POSTGRES_DATA_HOSTPATH__#${postgres_data_hostpath}#g" \
@@ -1787,6 +1844,10 @@ main() {
   log "Using VM network backend: $VM_NET_BACKEND"
   log "Container ingress enabled: $CONTAINER_INGRESS_ENABLED (base domain: ${CONTAINER_INGRESS_BASE_DOMAIN:-disabled}, class: ${CONTAINER_INGRESS_CLASS:-default})"
   log "Container image pre-pull enabled: $CONTAINER_IMAGE_PREPULL_ENABLED (timeout: ${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS}s)"
+  log "Container allowed registries: $CONTAINER_ALLOWED_REGISTRIES"
+  log "Container signature verification enabled: $CONTAINER_SIGNATURE_VERIFICATION_ENABLED (key: ${CONTAINER_SIGNATURE_KEY_REF:-keyless})"
+  log "Container scanning enabled: $CONTAINER_SCAN_ENABLED (interval: ${CONTAINER_SCAN_INTERVAL_MINUTES}m severity: ${CONTAINER_SCAN_SEVERITY})"
+  log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
   log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"

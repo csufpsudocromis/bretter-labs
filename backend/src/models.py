@@ -70,7 +70,17 @@ class ContainerImageMeta(BaseModel):
     id: str
     name: str
     image_ref: str
+    last_scan_at: Optional[datetime] = None
+    last_scan_status: str = "never"
+    last_scan_summary: str = ""
     created_at: datetime
+
+
+class ContainerDependencyCheck(BaseModel):
+    name: str = Field(default="", max_length=64)
+    host: str = Field(..., min_length=1, max_length=255)
+    port: int = Field(..., ge=1, le=65535)
+    timeout_seconds: int = Field(default=90, ge=5, le=600)
 
 
 class VMTemplateCreate(BaseModel):
@@ -125,6 +135,7 @@ class VMTemplate(BaseModel):
 
 
 class ContainerTemplateCreate(BaseModel):
+    template_key: Optional[str] = Field(default=None, min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=128)
     description: Optional[str] = ""
     container_image_id: str
@@ -133,7 +144,10 @@ class ContainerTemplateCreate(BaseModel):
     container_port: int = Field(default=80, ge=1, le=65535)
     healthcheck_protocol: str = Field(default="tcp", pattern="^(tcp|http)$")
     healthcheck_path: str = Field(default="/", min_length=1, max_length=256)
+    readiness_http_status: int = Field(default=200, ge=100, le=599)
+    readiness_success_path: Optional[str] = Field(default=None, max_length=256)
     startup_timeout_seconds: int = Field(default=300, ge=10, le=1800)
+    dependency_checks: list[ContainerDependencyCheck] = Field(default_factory=list)
     expose_strategy: str = Field(default="nodeport", pattern="^(nodeport|ingress)$")
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
@@ -145,6 +159,8 @@ class ContainerTemplateCreate(BaseModel):
 
 
 class ContainerTemplateUpdate(BaseModel):
+    template_key: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    is_default: Optional[bool] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     description: Optional[str] = None
     container_image_id: Optional[str] = None
@@ -153,7 +169,10 @@ class ContainerTemplateUpdate(BaseModel):
     container_port: Optional[int] = Field(default=None, ge=1, le=65535)
     healthcheck_protocol: Optional[str] = Field(default=None, pattern="^(tcp|http)$")
     healthcheck_path: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    readiness_http_status: Optional[int] = Field(default=None, ge=100, le=599)
+    readiness_success_path: Optional[str] = Field(default=None, max_length=256)
     startup_timeout_seconds: Optional[int] = Field(default=None, ge=10, le=1800)
+    dependency_checks: Optional[list[ContainerDependencyCheck]] = None
     expose_strategy: Optional[str] = Field(default=None, pattern="^(nodeport|ingress)$")
     run_as_non_root: Optional[bool] = None
     read_only_root_filesystem: Optional[bool] = None
@@ -166,6 +185,9 @@ class ContainerTemplateUpdate(BaseModel):
 
 class ContainerTemplate(BaseModel):
     id: str
+    template_key: str
+    version: int = 1
+    is_default: bool = True
     name: str
     description: Optional[str] = None
     container_image_id: str
@@ -174,7 +196,10 @@ class ContainerTemplate(BaseModel):
     container_port: int = 80
     healthcheck_protocol: str = "tcp"
     healthcheck_path: str = "/"
+    readiness_http_status: int = 200
+    readiness_success_path: Optional[str] = None
     startup_timeout_seconds: int = 300
+    dependency_checks: list[ContainerDependencyCheck] = Field(default_factory=list)
     expose_strategy: str = "nodeport"
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
@@ -353,11 +378,15 @@ class ContainerInstance(BaseModel):
     id: str
     template_id: str
     owner: str
-    status: Literal["pending", "running", "stopped", "completed", "failed", "unknown"]
+    status: Literal["queued", "pending", "running", "stopped", "completed", "failed", "unknown"]
     status_stage: Optional[str] = None
     status_detail: Optional[str] = None
     pod_name: Optional[str] = None
     access_url: Optional[str] = None
     container_port: Optional[int] = None
+    queue_attempts: int = 0
+    queue_not_before: Optional[datetime] = None
+    queue_reason: Optional[str] = None
+    launch_diagnostics: list[str] = Field(default_factory=list)
     started_at: datetime
     last_active_at: datetime
