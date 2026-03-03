@@ -8,6 +8,8 @@ import AdminDashboard from './components/admin/AdminDashboard.jsx';
 import AdminUsers from './components/admin/AdminUsers.jsx';
 import AdminTemplates from './components/admin/AdminTemplates.jsx';
 import AdminImages from './components/admin/AdminImages.jsx';
+import AdminContainerImages from './components/admin/AdminContainerImages.jsx';
+import AdminContainerTemplates from './components/admin/AdminContainerTemplates.jsx';
 import AdminPods from './components/admin/AdminPods.jsx';
 import AdminResources from './components/admin/AdminResources.jsx';
 import AdminAlertsErrors from './components/admin/AdminAlertsErrors.jsx';
@@ -241,6 +243,22 @@ const AppShell = () => {
                   element={
                     <section className="card">
                       <AdminImages />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/admin/container-images"
+                  element={
+                    <section className="card">
+                      <AdminContainerImages />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/admin/container-templates"
+                  element={
+                    <section className="card">
+                      <AdminContainerTemplates />
                     </section>
                   }
                 />

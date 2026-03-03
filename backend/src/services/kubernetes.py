@@ -7,6 +7,7 @@ Creates/stops/deletes VM pods, applies egress-only NetworkPolicies, and generate
 import logging
 import math
 import re
+import shlex
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -37,6 +38,18 @@ class PodRequest:
     owner: str
     network_mode: str = "default"
     instance_disk_pvc: Optional[str] = None
+
+
+@dataclass
+class ContainerPodRequest:
+    instance_id: str
+    owner: str
+    image_ref: str
+    cpu_millicores: int
+    memory_mb: int
+    command: Optional[str] = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
 
 
 @dataclass
@@ -72,13 +85,21 @@ class KubernetesService:
         self._client()
         return self._networking
 
+    def _safe_owner(self, owner: str) -> str:
+        safe_owner = re.sub(r"[^a-z0-9-]+", "-", (owner or "").lower()).strip("-")
+        return safe_owner or "user"
+
     def _pod_name(self, req: PodRequest) -> str:
-        return f"vm-{req.owner}-{req.instance_id[:8]}"
+        return f"vm-{self._safe_owner(req.owner)}-{req.instance_id[:8]}"
+
+    def _container_pod_name(self, instance_id: str, owner: str) -> str:
+        return f"ct-{self._safe_owner(owner)}-{instance_id[:8]}"
+
+    def container_pod_name(self, instance_id: str, owner: str) -> str:
+        return self._container_pod_name(instance_id, owner)
 
     def _instance_disk_pvc_name(self, instance_id: str, owner: str) -> str:
-        safe_owner = re.sub(r"[^a-z0-9-]+", "-", owner.lower()).strip("-")
-        if not safe_owner:
-            safe_owner = "user"
+        safe_owner = self._safe_owner(owner)
         return f"vm-disk-{safe_owner[:20]}-{instance_id[:8]}"
 
     def _instance_service_name(self, instance_id: str) -> str:
@@ -526,6 +547,88 @@ class KubernetesService:
             logger.error("Failed to create pod: %s", exc)
             raise
 
+    def create_container_pod(self, req: ContainerPodRequest) -> PodStatus:
+        core = self._client()
+        self.ensure_namespace(settings.kube_namespace)
+        pod_name = self._container_pod_name(req.instance_id, req.owner)
+
+        metadata = client.V1ObjectMeta(
+            name=pod_name,
+            labels={
+                "app": pod_name,
+                "owner": req.owner,
+                "instance": req.instance_id,
+                "app.kubernetes.io/component": "container-runner",
+                "app.kubernetes.io/part-of": "bretter-labs",
+            },
+        )
+        cpu_m = max(50, int(req.cpu_millicores))
+        mem_mb = max(64, int(req.memory_mb))
+        resources = client.V1ResourceRequirements(
+            limits={"cpu": f"{cpu_m}m", "memory": f"{mem_mb}Mi"},
+            requests={"cpu": f"{cpu_m}m", "memory": f"{mem_mb}Mi"},
+        )
+        container_kwargs: dict[str, object] = {
+            "name": "container-runner",
+            "image": req.image_ref,
+            "resources": resources,
+            "image_pull_policy": "IfNotPresent",
+        }
+        args = [arg for arg in (req.args or []) if str(arg).strip()]
+        if req.command:
+            shell_cmd = req.command
+            if args:
+                shell_cmd = f"{shell_cmd} {' '.join(shlex.quote(str(arg)) for arg in args)}"
+            container_kwargs["command"] = ["/bin/sh", "-lc", shell_cmd]
+        elif args:
+            container_kwargs["args"] = args
+        env_vars = []
+        for key, value in (req.env or {}).items():
+            k = str(key).strip()
+            if not k:
+                continue
+            env_vars.append(client.V1EnvVar(name=k, value=str(value)))
+        if env_vars:
+            container_kwargs["env"] = env_vars
+
+        container = client.V1Container(**container_kwargs)
+        spec_kwargs: dict[str, object] = {
+            "containers": [container],
+            "restart_policy": "Never",
+            "tolerations": [
+                client.V1Toleration(
+                    key="node-role.kubernetes.io/control-plane",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+                client.V1Toleration(
+                    key="node-role.kubernetes.io/master",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+                client.V1Toleration(
+                    key="node.kubernetes.io/disk-pressure",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+            ],
+        }
+        if settings.image_pull_secret:
+            spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
+        if settings.kube_runtime_class:
+            spec_kwargs["runtime_class_name"] = settings.kube_runtime_class
+        if settings.kube_node_selector_value:
+            spec_kwargs["node_selector"] = {settings.kube_node_selector_key: settings.kube_node_selector_value}
+
+        spec = client.V1PodSpec(**spec_kwargs)
+        body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=spec)
+        try:
+            core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
+            return PodStatus(instance_id=req.instance_id, phase="Pending", reason="Pending")
+        except ApiException as exc:
+            logger.error("Failed to create container pod: %s", exc)
+            raise
+
     def stop_pod(self, instance_id: str, owner: str) -> PodStatus:
         core = self._client()
         pod_name = self._find_pod_name(instance_id, owner)
@@ -591,6 +694,73 @@ class KubernetesService:
             if exc.status == 404:
                 return
             logger.error("Failed to delete instance PVC %s: %s", pvc_name, exc)
+            raise
+
+    def stop_container_pod(self, instance_id: str, owner: str) -> PodStatus:
+        core = self._client()
+        pod_name = self._find_container_pod_name(instance_id, owner)
+        try:
+            core.delete_namespaced_pod(name=pod_name, namespace=settings.kube_namespace, grace_period_seconds=10)
+        except ApiException as exc:
+            if exc.status == 404:
+                return PodStatus(instance_id=instance_id, phase="Succeeded")
+            logger.error("Failed to stop container pod %s: %s", pod_name, exc)
+            raise
+        return PodStatus(instance_id=instance_id, phase="Succeeded")
+
+    def delete_container_pod(self, instance_id: str, owner: str) -> None:
+        core = self._client()
+        pod_name = self._find_container_pod_name(instance_id, owner)
+        try:
+            core.delete_namespaced_pod(
+                name=pod_name,
+                namespace=settings.kube_namespace,
+                grace_period_seconds=0,
+                propagation_policy="Foreground",
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.error("Failed to delete container pod %s: %s", pod_name, exc)
+                raise
+
+    def get_container_status(self, instance_id: str, owner: str) -> PodStatus:
+        core = self._client()
+        pod_name = self._find_container_pod_name(instance_id, owner)
+        try:
+            pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+            phase = pod.status.phase or "Unknown"
+            node = pod.spec.node_name
+            message = pod.status.message
+            reason = pod.status.reason
+            waiting_reason = None
+            waiting_message = None
+            container_statuses = pod.status.container_statuses or []
+            init_statuses = pod.status.init_container_statuses or []
+            for status in [*init_statuses, *container_statuses]:
+                state = status.state
+                if state and state.waiting:
+                    waiting_reason = state.waiting.reason or waiting_reason
+                    waiting_message = state.waiting.message or waiting_message
+                    if waiting_reason or waiting_message:
+                        break
+            for cond in pod.status.conditions or []:
+                if cond.type == "PodScheduled" and cond.status == "False":
+                    reason = cond.reason or reason
+                    message = cond.message or message
+                    break
+            ready = bool(container_statuses) and all(bool(status.ready) for status in container_statuses)
+            return PodStatus(
+                instance_id=instance_id,
+                phase=phase,
+                node=node,
+                message=message,
+                reason=reason,
+                waiting_reason=waiting_reason,
+                waiting_message=waiting_message,
+                ready=ready,
+            )
+        except ApiException as exc:
+            logger.error("Failed to read container pod %s: %s", pod_name, exc)
             raise
 
     def get_status(self, instance_id: str, owner: str) -> PodStatus:
@@ -684,7 +854,10 @@ class KubernetesService:
 
     def _find_pod_name(self, instance_id: str, owner: str) -> str:
         # In this simplified mapping, pod name is derived deterministically from owner + instance id.
-        return f"vm-{owner}-{instance_id[:8]}"
+        return f"vm-{self._safe_owner(owner)}-{instance_id[:8]}"
+
+    def _find_container_pod_name(self, instance_id: str, owner: str) -> str:
+        return self._container_pod_name(instance_id, owner)
 
     def reaper_tick(self, session: Session) -> None:
         config_row = session.get(Config, 1) or Config()

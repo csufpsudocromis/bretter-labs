@@ -7,6 +7,9 @@ from sqlalchemy import Engine, inspect
 
 APP_TABLES: set[str] = {
     "config",
+    "containerimage",
+    "containerinstance",
+    "containertemplate",
     "image",
     "imageuploadtask",
     "instance",

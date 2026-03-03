@@ -74,6 +74,38 @@ class Instance(SQLModel, table=True):
     console_url: Optional[str] = None
 
 
+class ContainerImage(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    name: str
+    image_ref: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ContainerTemplate(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    name: str
+    description: str = ""
+    container_image_id: str = Field(foreign_key="containerimage.id")
+    cpu_millicores: int = 500
+    memory_mb: int = 512
+    command: Optional[str] = None
+    args_json: str = "[]"
+    env_json: str = "{}"
+    auto_delete_minutes: int = 60
+    enabled: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ContainerInstance(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    template_id: str = Field(foreign_key="containertemplate.id")
+    owner: str = Field(foreign_key="user.username")
+    status: str = "pending"
+    pod_name: Optional[str] = None
+    started_at: datetime = Field(default_factory=datetime.utcnow)
+    last_active_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class Config(SQLModel, table=True):
     id: int = Field(default=1, primary_key=True)
     max_concurrent_vms: int = 50

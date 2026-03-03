@@ -4,6 +4,8 @@ import { api } from '../api';
 const UserPanel = () => {
   const [templates, setTemplates] = useState([]);
   const [instances, setInstances] = useState([]);
+  const [containerTemplates, setContainerTemplates] = useState([]);
+  const [containerInstances, setContainerInstances] = useState([]);
   const [message, setMessage] = useState('');
   const [polling, setPolling] = useState(null);
   const [showIdlePrompt, setShowIdlePrompt] = useState(false);
@@ -29,9 +31,17 @@ const UserPanel = () => {
 
   const refresh = async () => {
     try {
-      const [tmplRes, podsRes] = await Promise.all([api.get('/user/templates'), api.get('/user/pods')]);
+      const [tmplRes, podsRes, ctTmplRes, ctInstRes] = await Promise.all([
+        api.get('/user/templates'),
+        api.get('/user/pods'),
+        api.get('/user/container-templates'),
+        api.get('/user/containers'),
+      ]);
       setTemplates(tmplRes.data);
       setInstances(podsRes.data);
+      setContainerTemplates(ctTmplRes.data || []);
+      setContainerInstances(ctInstRes.data || []);
+      setMessage('');
     } catch (err) {
       setMessage(err.response?.data?.detail || 'Failed to load data');
     }
@@ -90,6 +100,46 @@ const UserPanel = () => {
       refresh();
     } catch (err) {
       setMessage(err.response?.data?.detail || 'Failed to delete VM');
+    }
+  };
+
+  const startContainer = async (templateId) => {
+    try {
+      await api.post(`/user/container-templates/${templateId}/start`);
+      setMessage('');
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to start container');
+    }
+  };
+
+  const stopContainer = async (instanceId) => {
+    try {
+      await api.post(`/user/containers/${instanceId}/stop`);
+      setMessage('');
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to stop container');
+    }
+  };
+
+  const restartContainer = async (instanceId) => {
+    try {
+      await api.post(`/user/containers/${instanceId}/start`);
+      setMessage('');
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to restart container');
+    }
+  };
+
+  const removeContainer = async (instanceId) => {
+    try {
+      await api.delete(`/user/containers/${instanceId}`);
+      setMessage('');
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to delete container');
     }
   };
 
@@ -180,6 +230,25 @@ const UserPanel = () => {
   const statusReason = (instance) =>
     effectiveStatus(instance) === 'pending' ? 'waiting for available resources' : '';
   const isRunning = (instance) => effectiveStatus(instance) === 'running';
+  const containerTemplateName = (templateId) => containerTemplates.find((t) => t.id === templateId)?.name || 'Container';
+  const effectiveContainerStatus = (instance) => instance?.status_stage || instance?.status || 'unknown';
+  const containerStatusLabel = (instance) => {
+    const status = effectiveContainerStatus(instance);
+    const labelMap = {
+      pending: 'Pending',
+      building: 'Building',
+      starting: 'Starting',
+      running: 'Running',
+      stopped: 'Stopped',
+      completed: 'Completed',
+      failed: 'Failed',
+      unknown: 'Unknown',
+    };
+    return labelMap[status] || 'Unknown';
+  };
+  const containerStatusReason = (instance) =>
+    effectiveContainerStatus(instance) === 'pending' ? 'waiting for available resources' : '';
+  const isContainerRunning = (instance) => effectiveContainerStatus(instance) === 'running';
 
   const readStoredActivity = () => {
     try {
@@ -705,6 +774,61 @@ const UserPanel = () => {
                   </button>
                   <button onClick={() => connect(p)} disabled={!isRunning(p)}>
                     Connect
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div className="grid" style={{ marginTop: '1.25rem' }}>
+        <div>
+          <h3>Available Containers</h3>
+          <div className="tile-grid">
+            {containerTemplates.length === 0 && <div className="muted">No container templates available.</div>}
+            {containerTemplates.map((t) => (
+              <div key={t.id} className="tile template-tile">
+                <div className="tile-header">
+                  <h4>{t.name}</h4>
+                </div>
+                {t.description && <div className="muted small">{t.description}</div>}
+                <div className="specs">
+                  <span>{t.cpu_millicores}m CPU</span>
+                  <span>{t.memory_mb} MB RAM</span>
+                </div>
+                <div style={{ marginTop: '0.75rem' }}>
+                  <button onClick={() => startContainer(t.id)}>Start Container</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <h3>My Running Containers</h3>
+          <div className="tile-grid">
+            {containerInstances.length === 0 && <div className="muted">No containers yet.</div>}
+            {containerInstances.map((c) => (
+              <div key={c.id} className="tile pod-tile">
+                <div className="tile-header">
+                  <h4>{containerTemplateName(c.template_id)}</h4>
+                  <span className={`badge ${isContainerRunning(c) ? 'success' : 'warn'}`}>{containerStatusLabel(c)}</span>
+                </div>
+                <div className="specs">
+                  <span>{c.pod_name || `ct-${c.owner}-${c.id.slice(0, 8)}`}</span>
+                </div>
+                {containerStatusReason(c) && <div className="muted small">{containerStatusReason(c)}</div>}
+                <div className="actions">
+                  {isContainerRunning(c) ? (
+                    <button className="ghost" onClick={() => stopContainer(c.id)}>
+                      Stop
+                    </button>
+                  ) : (
+                    <button className="ghost" onClick={() => restartContainer(c.id)}>
+                      Start
+                    </button>
+                  )}
+                  <button className="danger" onClick={() => removeContainer(c.id)}>
+                    Delete
                   </button>
                 </div>
               </div>

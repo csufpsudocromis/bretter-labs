@@ -56,6 +56,23 @@ class ImageUploadTaskStatus(BaseModel):
     updated_at: datetime
 
 
+class ContainerImageCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    image_ref: str = Field(..., min_length=1, max_length=255)
+
+
+class ContainerImageUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    image_ref: Optional[str] = Field(default=None, min_length=1, max_length=255)
+
+
+class ContainerImageMeta(BaseModel):
+    id: str
+    name: str
+    image_ref: str
+    created_at: datetime
+
+
 class VMTemplateCreate(BaseModel):
     name: str
     description: Optional[str] = ""
@@ -104,6 +121,47 @@ class VMTemplate(BaseModel):
     preclone_pool_max: int = 0
     enabled: bool
     network_mode: str = "bridge"
+    created_at: datetime
+
+
+class ContainerTemplateCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: Optional[str] = ""
+    container_image_id: str
+    cpu_millicores: int = Field(default=500, ge=50, le=16000)
+    memory_mb: int = Field(default=512, ge=64, le=131072)
+    command: Optional[str] = Field(default=None, max_length=2000)
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    auto_delete_minutes: int = Field(default=60, ge=1, le=1440)
+    enabled: bool = False
+
+
+class ContainerTemplateUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    description: Optional[str] = None
+    container_image_id: Optional[str] = None
+    cpu_millicores: Optional[int] = Field(default=None, ge=50, le=16000)
+    memory_mb: Optional[int] = Field(default=None, ge=64, le=131072)
+    command: Optional[str] = Field(default=None, max_length=2000)
+    args: Optional[list[str]] = None
+    env: Optional[dict[str, str]] = None
+    auto_delete_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    enabled: Optional[bool] = None
+
+
+class ContainerTemplate(BaseModel):
+    id: str
+    name: str
+    description: Optional[str] = None
+    container_image_id: str
+    cpu_millicores: int
+    memory_mb: int
+    command: Optional[str] = None
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    auto_delete_minutes: int = 60
+    enabled: bool = False
     created_at: datetime
 
 
@@ -268,3 +326,15 @@ class VMInstance(BaseModel):
     started_at: datetime
     last_active_at: datetime
     console_url: Optional[str] = None
+
+
+class ContainerInstance(BaseModel):
+    id: str
+    template_id: str
+    owner: str
+    status: Literal["pending", "running", "stopped", "completed", "failed", "unknown"]
+    status_stage: Optional[str] = None
+    status_detail: Optional[str] = None
+    pod_name: Optional[str] = None
+    started_at: datetime
+    last_active_at: datetime

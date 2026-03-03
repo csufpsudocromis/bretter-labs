@@ -10,7 +10,7 @@ from .auth import hash_password
 from .config import settings
 from .db import engine, init_db
 from .logging_utils import configure_capped_error_file_logging
-from .routes import admin, auth, user
+from .routes import admin, admin_containers, auth, user, user_containers
 from .services.kubernetes import kube
 from .tables import Config, User
 
@@ -113,5 +113,7 @@ def healthcheck() -> dict[str, str]:
 
 
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
+app.include_router(admin_containers.router, prefix="/admin", tags=["admin"])
 app.include_router(user.router, prefix="/user", tags=["user"])
+app.include_router(user_containers.router, prefix="/user", tags=["user"])
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
