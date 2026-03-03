@@ -206,10 +206,8 @@ def list_user_containers(
                 ):
                     access_map[record.id] = _container_access_url(node_port)
                 elif mapped == "running":
-                    # Keep stage as running for backward-compatible clients that showed a "Start"
-                    # action whenever status_stage was not "running".
                     feedback[record.id] = (
-                        "running",
+                        "starting",
                         "Container pod is running; waiting for application startup.",
                     )
                     access_map[record.id] = None
