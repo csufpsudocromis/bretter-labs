@@ -24,7 +24,7 @@ from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
 from ..config import settings
-from ..tables import Config, Image, Instance, Template
+from ..tables import Config, ContainerInstance, ContainerTemplate, Image, Instance, Template
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class ContainerPodRequest:
     startup_timeout_seconds: int = 300
     dependency_checks: list[object] | None = None
     expose_strategy: str = "nodeport"
+    network_mode: str = "bridge"
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
     command: Optional[str] = None
@@ -116,6 +117,9 @@ class KubernetesService:
 
     def _container_ingress_name(self, instance_id: str) -> str:
         return f"cting-{instance_id[:8]}"
+
+    def _container_netpol_name(self, instance_id: str) -> str:
+        return f"ctnp-{instance_id[:8]}"
 
     def _instance_disk_pvc_name(self, instance_id: str, owner: str) -> str:
         safe_owner = self._safe_owner(owner)
@@ -457,11 +461,19 @@ class KubernetesService:
 
     def delete_container_service(self, instance_id: str) -> None:
         core = self._client()
+        networking = self._networking_client()
         service_name = self._container_service_name(instance_id)
+        netpol_name = self._container_netpol_name(instance_id)
         try:
             self.delete_container_ingress(instance_id)
         except ApiException:
             pass
+        try:
+            networking.delete_namespaced_network_policy(name=netpol_name, namespace=settings.kube_namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.error("Failed to delete container network policy %s: %s", netpol_name, exc)
+                raise
         try:
             core.delete_namespaced_service(name=service_name, namespace=settings.kube_namespace)
         except ApiException as exc:
@@ -874,6 +886,20 @@ class KubernetesService:
             probe_kwargs = {"http_get": client.V1HTTPGetAction(path=healthcheck_path, port=tcp_port, scheme="HTTP")}
         else:
             probe_kwargs = {"tcp_socket": client.V1TCPSocketAction(port=tcp_port)}
+        container_security_kwargs: dict[str, object] = {
+            "read_only_root_filesystem": bool(req.read_only_root_filesystem),
+        }
+        if req.run_as_non_root:
+            # Hardened profile for non-root workloads.
+            container_security_kwargs.update(
+                {
+                    "allow_privilege_escalation": False,
+                    "capabilities": client.V1Capabilities(drop=["ALL"]),
+                    "run_as_non_root": True,
+                    "seccomp_profile": client.V1SeccompProfile(type="RuntimeDefault"),
+                }
+            )
+
         container_kwargs: dict[str, object] = {
             "name": "container-runner",
             "image": req.image_ref,
@@ -899,13 +925,7 @@ class KubernetesService:
                 failure_threshold=3,
                 initial_delay_seconds=max(15, min(300, startup_timeout // 2)),
             ),
-            "security_context": client.V1SecurityContext(
-                allow_privilege_escalation=False,
-                capabilities=client.V1Capabilities(drop=["ALL"]),
-                read_only_root_filesystem=bool(req.read_only_root_filesystem),
-                run_as_non_root=True if req.run_as_non_root else None,
-                seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
-            ),
+            "security_context": client.V1SecurityContext(**container_security_kwargs),
         }
         args = [arg for arg in (req.args or []) if str(arg).strip()]
         if req.command:
@@ -997,6 +1017,7 @@ class KubernetesService:
         body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=spec)
         try:
             core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
+            self.apply_container_network_policy(req.instance_id, pod_name, tcp_port, mode=req.network_mode)
             return PodStatus(instance_id=req.instance_id, phase="Pending", reason="Pending")
         except ApiException as exc:
             logger.error("Failed to create container pod: %s", exc)
@@ -1334,6 +1355,80 @@ class KubernetesService:
             ),
         )
 
+    def apply_container_network_policy(self, instance_id: str, pod_name: str, app_port: int, mode: str = "bridge") -> None:
+        networking = self._networking_client()
+        normalized_mode = str(mode or "bridge").strip().lower()
+        policy_name = self._container_netpol_name(instance_id)
+        if normalized_mode in {"unrestricted", "host"}:
+            try:
+                networking.delete_namespaced_network_policy(name=policy_name, namespace=settings.kube_namespace)
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.error("Failed to delete container network policy for %s: %s", pod_name, exc)
+                    raise
+            return
+        policy = self.desired_container_network_policy(
+            instance_id,
+            pod_name,
+            settings.kube_namespace,
+            app_port,
+            mode=normalized_mode,
+        )
+        try:
+            networking.create_namespaced_network_policy(namespace=settings.kube_namespace, body=policy)
+        except ApiException as exc:
+            if exc.status == 409:
+                try:
+                    networking.patch_namespaced_network_policy(
+                        name=policy.metadata.name,
+                        namespace=settings.kube_namespace,
+                        body={"spec": policy.spec},
+                    )
+                except ApiException as patch_exc:
+                    logger.error("Failed to update container network policy for %s: %s", pod_name, patch_exc)
+                    raise
+            else:
+                logger.error("Failed to apply container network policy for %s: %s", pod_name, exc)
+                raise
+
+    def desired_container_network_policy(
+        self,
+        instance_id: str,
+        pod_name: str,
+        namespace: str,
+        app_port: int,
+        mode: str = "bridge",
+    ) -> client.V1NetworkPolicy:
+        normalized_mode = str(mode or "bridge").strip().lower()
+        ingress_rule = client.V1NetworkPolicyIngressRule(
+            ports=[
+                client.V1NetworkPolicyPort(
+                    protocol="TCP",
+                    port=max(1, min(65535, int(app_port))),
+                )
+            ],
+        )
+        egress_rules: list[client.V1NetworkPolicyEgressRule] = []
+        if normalized_mode not in {"isolated", "none"}:
+            egress_ports = [
+                client.V1NetworkPolicyPort(protocol="TCP", port=53),
+                client.V1NetworkPolicyPort(protocol="UDP", port=53),
+                client.V1NetworkPolicyPort(protocol="TCP", port=443),
+                client.V1NetworkPolicyPort(protocol="TCP", port=80),
+            ]
+            egress_rules = [client.V1NetworkPolicyEgressRule(ports=egress_ports)]
+        return client.V1NetworkPolicy(
+            api_version="networking.k8s.io/v1",
+            kind="NetworkPolicy",
+            metadata=client.V1ObjectMeta(name=self._container_netpol_name(instance_id), namespace=namespace),
+            spec=client.V1NetworkPolicySpec(
+                pod_selector=client.V1LabelSelector(match_labels={"app": pod_name}),
+                policy_types=["Ingress", "Egress"],
+                ingress=[ingress_rule],
+                egress=egress_rules,
+            ),
+        )
+
     def _find_pod_name(self, instance_id: str, owner: str) -> str:
         # In this simplified mapping, pod name is derived deterministically from owner + instance id.
         return f"vm-{self._safe_owner(owner)}-{instance_id[:8]}"
@@ -1344,9 +1439,11 @@ class KubernetesService:
     def reaper_tick(self, session: Session) -> None:
         config_row = session.get(Config, 1) or Config()
         templates = {t.id: t for t in session.exec(select(Template)).all()}
+        container_templates = {t.id: t for t in session.exec(select(ContainerTemplate)).all()}
         images = {img.id: img for img in session.exec(select(Image)).all()}
         now = datetime.utcnow()
         stale_instances: list[Instance] = []
+        stale_container_instances: list[ContainerInstance] = []
         for inst in session.exec(select(Instance).where(Instance.status == "running")).all():
             tmpl = templates.get(inst.template_id)
             timeout_minutes = (
@@ -1357,11 +1454,28 @@ class KubernetesService:
             cutoff = now - timedelta(minutes=timeout_minutes)
             if inst.last_active_at < cutoff:
                 stale_instances.append(inst)
+        for inst in session.exec(select(ContainerInstance).where(ContainerInstance.status == "running")).all():
+            tmpl = container_templates.get(inst.template_id)
+            timeout_minutes = (
+                getattr(tmpl, "idle_timeout_minutes", None)
+                or config_row.idle_timeout_minutes
+                or settings.idle_timeout_minutes
+            )
+            cutoff = now - timedelta(minutes=timeout_minutes)
+            if inst.last_active_at < cutoff:
+                stale_container_instances.append(inst)
         for inst in stale_instances:
             try:
                 self.delete_pod(inst.id, inst.owner, disk_pvc=inst.disk_pvc)
             except Exception:
                 logger.warning("Failed to delete pod for instance %s during reaper", inst.id)
+            session.delete(inst)
+        for inst in stale_container_instances:
+            try:
+                self.delete_container_pod(inst.id, inst.owner)
+                self.delete_container_service(inst.id)
+            except Exception:
+                logger.warning("Failed to delete container workload %s during reaper", inst.id, exc_info=True)
             session.delete(inst)
         recent_cutoff = now - timedelta(minutes=max(1, int(settings.warm_pool_window_minutes)))
         recent_launches: dict[str, int] = {}
@@ -1380,7 +1494,7 @@ class KubernetesService:
                 self.ensure_warm_pool(tmpl.id, image.source_pvc, desired)
             except Exception:
                 logger.warning("Failed to reconcile warm pool for template %s", tmpl.id, exc_info=True)
-        if stale_instances:
+        if stale_instances or stale_container_instances:
             session.commit()
 
     def ensure_namespace(self, namespace: str) -> None:

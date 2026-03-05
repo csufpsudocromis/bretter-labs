@@ -41,6 +41,7 @@ from ..models import (
     RuntimeHealthCheck,
     StorageSettingsRead,
     StorageSettingsUpdate,
+    SiteBackgroundAsset,
     StorageValidationCheck,
     RuntimeSettingsRead,
     SiteSettings,
@@ -66,6 +67,9 @@ RAW_CONVERSION_SUFFIXES = {".qcow", ".qcow2"}
 QCOW2_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".vdi"}
 MIN_FREE_UPLOAD_BYTES = 18 * 1024 * 1024 * 1024  # keep nodefs above kubelet disk-pressure headroom
 SOURCE_PVC_OVERHEAD_BYTES = 1024 * 1024 * 1024  # account for filesystem metadata/lost+found overhead
+SITE_BACKGROUND_MAX_BYTES = 20 * 1024 * 1024
+SITE_BACKGROUND_ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
+SITE_BACKGROUND_PUBLIC_PREFIX = "/user/site-assets/"
 
 # Reuse the runner image for helper pods so fresh/private clusters do not depend on Docker Hub pulls.
 PVC_HELPER_IMAGE = settings.runner_image or "alpine:3.19"
@@ -113,6 +117,39 @@ def _image_dir() -> Path:
     path = Path(settings.storage_root)
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def _site_assets_dir() -> Path:
+    path = Path(settings.site_assets_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _site_background_public_path(filename: str) -> str:
+    return f"{SITE_BACKGROUND_PUBLIC_PREFIX}{filename}"
+
+
+def _site_background_local_filename(public_path: str | None) -> str | None:
+    raw = str(public_path or "").strip()
+    if not raw.startswith(SITE_BACKGROUND_PUBLIC_PREFIX):
+        return None
+    relative = raw[len(SITE_BACKGROUND_PUBLIC_PREFIX) :]
+    safe_name = Path(relative).name
+    if not safe_name:
+        return None
+    return safe_name
+
+
+def _delete_local_site_background(public_path: str | None) -> None:
+    filename = _site_background_local_filename(public_path)
+    if not filename:
+        return
+    path = _site_assets_dir() / filename
+    try:
+        if path.exists():
+            path.unlink()
+    except Exception:
+        logger.warning("Failed to remove old site background %s", path, exc_info=True)
 
 
 def _to_str(value: object) -> str:
@@ -3905,6 +3942,71 @@ def update_runtime_storage_settings(
     return get_runtime_settings(session=session)
 
 
+@router.post("/settings/site/background", response_model=SiteBackgroundAsset, status_code=status.HTTP_201_CREATED)
+def upload_site_background(file: UploadFile = File(...), session: Session = Depends(get_session)) -> SiteBackgroundAsset:
+    original_name = Path(str(file.filename or "")).name
+    suffix = Path(original_name).suffix.lower()
+    if not suffix and file.content_type:
+        guessed = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/webp": ".webp",
+            "image/gif": ".gif",
+            "image/svg+xml": ".svg",
+        }.get(str(file.content_type).lower())
+        suffix = guessed or ""
+    if suffix not in SITE_BACKGROUND_ALLOWED_SUFFIXES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="unsupported background image type (allowed: png, jpg, jpeg, webp, gif, svg)",
+        )
+
+    filename = f"site-bg-{uuid4().hex[:24]}{suffix}"
+    target = _site_assets_dir() / filename
+    total = 0
+    try:
+        with target.open("wb") as out:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > SITE_BACKGROUND_MAX_BYTES:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="background image exceeds 20 MB limit",
+                    )
+                out.write(chunk)
+    except HTTPException:
+        if target.exists():
+            target.unlink()
+        raise
+    except Exception as exc:
+        if target.exists():
+            target.unlink()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"upload failed: {exc}") from exc
+    finally:
+        try:
+            file.file.close()
+        except Exception:
+            pass
+
+    if total <= 0:
+        if target.exists():
+            target.unlink()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
+
+    cfg = _get_or_create_config(session)
+    old_path = str(cfg.theme_bg_image or "").strip()
+    public_path = _site_background_public_path(filename)
+    cfg.theme_bg_image = public_path
+    session.add(cfg)
+    session.commit()
+    if old_path and old_path != public_path:
+        _delete_local_site_background(old_path)
+    return SiteBackgroundAsset(theme_bg_image=public_path, filename=filename, size_bytes=total)
+
+
 @router.get("/settings/site", response_model=SiteSettings)
 def get_site_settings(session: Session = Depends(get_session)) -> SiteSettings:
     cfg = session.get(Config, 1) or Config(id=1)
@@ -3937,13 +4039,17 @@ def get_site_settings(session: Session = Depends(get_session)) -> SiteSettings:
 @router.patch("/settings/site", response_model=SiteSettings)
 def update_site_settings(payload: SiteSettings, session: Session = Depends(get_session)) -> SiteSettings:
     cfg = session.get(Config, 1) or Config(id=1)
+    old_bg_image = str(cfg.theme_bg_image or "").strip()
     cfg.site_title = payload.site_title
     cfg.site_tagline = payload.site_tagline
     cfg.theme_bg_color = payload.theme_bg_color
     cfg.theme_text_color = payload.theme_text_color
     cfg.theme_button_color = payload.theme_button_color
     cfg.theme_button_text_color = payload.theme_button_text_color
-    cfg.theme_bg_image = payload.theme_bg_image
+    theme_bg_image = str(payload.theme_bg_image or "").strip()
+    if theme_bg_image and not theme_bg_image.startswith(SITE_BACKGROUND_PUBLIC_PREFIX):
+        theme_bg_image = ""
+    cfg.theme_bg_image = theme_bg_image
     cfg.theme_bg_image_overlay_opacity = payload.theme_bg_image_overlay_opacity
     cfg.theme_contrast_body = payload.theme_contrast_body
     cfg.theme_contrast_button = payload.theme_contrast_button
@@ -3960,6 +4066,8 @@ def update_site_settings(payload: SiteSettings, session: Session = Depends(get_s
     session.add(cfg)
     session.commit()
     session.refresh(cfg)
+    if old_bg_image and old_bg_image != cfg.theme_bg_image:
+        _delete_local_site_background(old_bg_image)
     return SiteSettings(
         site_title=cfg.site_title,
         site_tagline=cfg.site_tagline,

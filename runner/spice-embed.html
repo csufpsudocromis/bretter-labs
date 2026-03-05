@@ -124,7 +124,6 @@
       let idleSuspended = false;
       let presenceTimer = null;
       const PRESENCE_INTERVAL_MS = 2000;
-      let authToken = '';
       let apiBase = '';
       let lastHeartbeatAt = 0;
       const HEARTBEAT_INTERVAL_MS = 30000;
@@ -132,8 +131,6 @@
       const OPENER_WATCH_INTERVAL_MS = 2000;
       let backendHeartbeatTimer = null;
       const BACKEND_HEARTBEAT_TICK_MS = 10000;
-      const AUTH_STORAGE_TOKEN_KEY = 'blabs_vm_token';
-      const AUTH_STORAGE_API_KEY = 'blabs_vm_api_base';
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -152,7 +149,6 @@
         if (title) {
           document.title = title;
         }
-        loadStoredAuth();
         connect();
         startIdleTimer();
       });
@@ -176,28 +172,13 @@
       const textEl = document.getElementById('idle-text');
       const endedTextEl = document.getElementById('ended-text');
 
-      function loadStoredAuth() {
-        try {
-          const storedToken = sessionStorage.getItem(AUTH_STORAGE_TOKEN_KEY);
-          if (storedToken) {
-            authToken = storedToken;
-          }
-          const storedApi = sessionStorage.getItem(AUTH_STORAGE_API_KEY);
-          if (storedApi) {
-            apiBase = storedApi;
-          }
-        } catch (err) {
-          // ignore storage failures
-        }
-      }
-
       function apiBaseUrl() {
         const base = apiBase || `${window.location.protocol}//${window.location.hostname}:30080`;
         return base.replace(/\/$/, '');
       }
 
       function sendHeartbeat(timestamp) {
-        if (!instanceId || !authToken) {
+        if (!instanceId) {
           return;
         }
         const now = timestamp || Date.now();
@@ -209,7 +190,7 @@
         const url = `${base}/user/pods/${instanceId}/activity`;
         fetch(url, {
           method: 'POST',
-          headers: { Authorization: `Bearer ${authToken}` },
+          credentials: 'include',
           keepalive: true,
         }).catch(() => {});
       }
@@ -232,7 +213,7 @@
       }
 
       function requestStop(action = 'delete') {
-        if (!instanceId || !authToken) {
+        if (!instanceId) {
           return;
         }
         const base = apiBaseUrl();
@@ -240,7 +221,7 @@
           action === 'delete' ? `${base}/user/pods/${instanceId}` : `${base}/user/pods/${instanceId}/stop`;
         fetch(url, {
           method: action === 'delete' ? 'DELETE' : 'POST',
-          headers: { Authorization: `Bearer ${authToken}` },
+          credentials: 'include',
           keepalive: true,
         }).catch(() => {});
       }
@@ -532,21 +513,8 @@
             if (payload.instanceId && payload.instanceId !== instanceId) {
               return;
             }
-            if (payload.token) {
-              authToken = payload.token;
-              try {
-                sessionStorage.setItem(AUTH_STORAGE_TOKEN_KEY, authToken);
-              } catch (err) {
-                // ignore storage failures
-              }
-            }
             if (payload.apiBase) {
               apiBase = payload.apiBase;
-              try {
-                sessionStorage.setItem(AUTH_STORAGE_API_KEY, apiBase);
-              } catch (err) {
-                // ignore storage failures
-              }
             }
             startBackendHeartbeat();
             sendHeartbeat(Date.now());

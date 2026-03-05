@@ -1,20 +1,32 @@
+import asyncio
+import html
 import json
 import logging
 import socket
 from http.client import HTTPConnection
 from datetime import datetime, timedelta
+from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import requests
+import websockets
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
+from fastapi.responses import RedirectResponse
 from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
-from ..auth import require_user
+from ..auth import (
+    issue_connect_token,
+    require_user,
+    consume_connect_grant,
+    validate_connect_session,
+)
 from ..config import settings
 from ..db import get_session
 from ..models import ContainerInstance as ContainerInstanceView
 from ..models import ContainerDependencyCheck
 from ..models import ContainerTemplate as ContainerTemplateView
+from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
@@ -25,6 +37,20 @@ from ..tables import User
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+_PROXY_TIMEOUT_SECONDS = 45
+_CONNECT_GRANT_COOKIE_NAME = "blabs_connect_grant"
+_CONNECT_SESSION_COOKIE_NAME = "blabs_connect_session"
+SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
+_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+}
 
 
 def _phase_to_status(phase: str) -> str:
@@ -116,8 +142,8 @@ def _humanize_queue_reason(raw_reason: str | None) -> str:
 
 
 def _container_access_url_for_target(node_port: int | None, ingress_host: str | None) -> str | None:
+    scheme = (settings.public_scheme or "https").strip() or "https"
     if ingress_host:
-        scheme = (settings.public_scheme or "https").strip() or "https"
         return f"{scheme}://{ingress_host}/"
     if not node_port:
         return None
@@ -127,6 +153,370 @@ def _container_access_url_for_target(node_port: int | None, ingress_host: str | 
 
 def _container_service_host(instance_id: str) -> str:
     return f"ctsvc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
+
+
+def _extract_connect_grant_token(request: Request) -> str:
+    return str(request.cookies.get(_CONNECT_GRANT_COOKIE_NAME) or "").strip()
+
+
+def _extract_connect_session_token(request: Request) -> str:
+    return str(request.cookies.get(_CONNECT_SESSION_COOKIE_NAME) or "").strip()
+
+
+def _extract_connect_session_token_ws(websocket: WebSocket) -> str:
+    return str(websocket.cookies.get(_CONNECT_SESSION_COOKIE_NAME) or "").strip()
+
+
+def _connect_cookie_secure(request: Request) -> bool:
+    if request.url.scheme == "https":
+        return True
+    return bool(settings.connect_cookie_secure)
+
+
+def _connect_cookie_samesite() -> str:
+    normalized = str(settings.connect_cookie_samesite or "lax").strip().lower()
+    if normalized not in {"lax", "strict", "none"}:
+        normalized = "lax"
+    return normalized
+
+
+def _rewrite_upstream_location(instance_id: str, value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    base_path = f"/user/containers/{instance_id}/connect"
+    parsed = urlparse(raw)
+    if parsed.scheme or parsed.netloc:
+        return raw
+    if raw.startswith("/"):
+        return f"{base_path}{raw}"
+    return f"{base_path}/{raw}"
+
+
+def _normalized_upstream_path(proxy_path: str) -> str:
+    raw = str(proxy_path or "")
+    pieces = [piece for piece in raw.split("/") if piece]
+    if not pieces:
+        return "/"
+    path = "/" + "/".join(pieces)
+    if raw.endswith("/"):
+        path = f"{path}/"
+    return path
+
+
+def _container_idle_bridge_javascript(
+    *,
+    instance_id: str,
+    idle_minutes: int,
+) -> str:
+    return f"""
+(function () {{
+  if (window.__blabsContainerIdleBridgeInstalled) return;
+  window.__blabsContainerIdleBridgeInstalled = true;
+  const instanceId = {json.dumps(instance_id)};
+  const idleMinutes = Math.max(1, parseInt({int(max(1, idle_minutes))}, 10) || 30);
+  const countdownSeconds = 300;
+  const apiBaseDefault = `${{window.location.protocol}}//${{window.location.host}}`;
+  let apiBase = apiBaseDefault;
+  let promptActive = false;
+  let parentPromptActive = false;
+  let idleTimer = null;
+  let countdownTimer = null;
+  let countdownEndsAt = 0;
+  let nextIdleAt = 0;
+  let lastHeartbeatAt = 0;
+  let idleSuspended = false;
+
+  function openerPost(type, extra) {{
+    if (!window.opener) return;
+    try {{
+      if (window.opener.closed) return;
+      window.opener.postMessage({{
+        type,
+        source: 'container',
+        instanceId,
+        timestamp: Date.now(),
+        ...(extra || {{}})
+      }}, '*');
+    }} catch (err) {{}}
+  }}
+
+  function ensureOverlay() {{
+    if (document.getElementById('blabs-ct-idle-overlay')) return;
+    if (!document.getElementById('blabs-ct-idle-style')) {{
+      const style = document.createElement('style');
+      style.id = 'blabs-ct-idle-style';
+      style.textContent = `
+        #blabs-ct-idle-overlay, #blabs-ct-ended-overlay {{
+          position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+          color: #fff; display: none; align-items: center; justify-content: center;
+          z-index: 2147483647; font-family: Arial, sans-serif;
+        }}
+        #blabs-ct-idle-card {{
+          background: rgba(15,23,42,0.95); border: 1px solid #334155;
+          border-radius: 12px; padding: 1.2rem 1.4rem; width: min(420px, calc(100vw - 2rem));
+          box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        }}
+        #blabs-ct-idle-card h3 {{ margin: 0 0 0.5rem 0; font-size: 1.15rem; }}
+        #blabs-ct-idle-card p {{ margin: 0.35rem 0; color: #cbd5e1; }}
+        #blabs-ct-idle-actions {{ display: flex; gap: 0.5rem; margin-top: 0.75rem; }}
+        #blabs-ct-idle-actions button {{
+          flex: 1; padding: 0.58rem 0.75rem; border-radius: 10px; border: 1px solid #475569;
+          cursor: pointer; font-weight: 700;
+        }}
+        #blabs-ct-idle-continue {{ background: #0ea5e9; color: #0b1727; }}
+        #blabs-ct-idle-stop {{ background: transparent; color: #e2e8f0; }}
+      `;
+      document.head.appendChild(style);
+    }}
+
+    const idleOverlay = document.createElement('div');
+    idleOverlay.id = 'blabs-ct-idle-overlay';
+    idleOverlay.innerHTML = `
+      <div id="blabs-ct-idle-card">
+        <h3>Still using this lab?</h3>
+        <p id="blabs-ct-idle-text"></p>
+        <p id="blabs-ct-idle-countdown"></p>
+        <div id="blabs-ct-idle-actions">
+          <button id="blabs-ct-idle-stop">No, end lab</button>
+          <button id="blabs-ct-idle-continue">Yes, continue</button>
+        </div>
+      </div>
+    `;
+    const endedOverlay = document.createElement('div');
+    endedOverlay.id = 'blabs-ct-ended-overlay';
+    endedOverlay.innerHTML = `
+      <div id="blabs-ct-idle-card">
+        <h3>Session ended</h3>
+        <p id="blabs-ct-ended-text">Session ended due to inactivity.</p>
+      </div>
+    `;
+    document.body.appendChild(idleOverlay);
+    document.body.appendChild(endedOverlay);
+
+    const idleText = document.getElementById('blabs-ct-idle-text');
+    if (idleText) {{
+      idleText.textContent = `No activity detected for ${{idleMinutes}} minute${{idleMinutes === 1 ? '' : 's'}}.`;
+    }}
+
+    const continueBtn = document.getElementById('blabs-ct-idle-continue');
+    if (continueBtn) {{
+      continueBtn.addEventListener('click', function () {{
+        openerPost('idle-continue');
+        hidePrompt();
+        resetActivity(true, Date.now(), true);
+      }});
+    }}
+    const stopBtn = document.getElementById('blabs-ct-idle-stop');
+    if (stopBtn) {{
+      stopBtn.addEventListener('click', function () {{
+        endSession('user-end');
+      }});
+    }}
+  }}
+
+  function heartbeat(ts) {{
+    if (!instanceId) return;
+    const now = ts || Date.now();
+    if (now - lastHeartbeatAt < 30000) return;
+    lastHeartbeatAt = now;
+    fetch(`${{apiBase.replace(/\\/$/, '')}}/user/containers/${{instanceId}}/activity`, {{
+      method: 'POST',
+      credentials: 'include',
+      keepalive: true,
+    }}).catch(function () {{}});
+  }}
+
+  function hidePrompt() {{
+    const overlay = document.getElementById('blabs-ct-idle-overlay');
+    if (overlay) overlay.style.display = 'none';
+    promptActive = false;
+    parentPromptActive = false;
+    countdownEndsAt = 0;
+    if (countdownTimer) {{
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }}
+  }}
+
+  function showEnded(reason) {{
+    hidePrompt();
+    const ended = document.getElementById('blabs-ct-ended-overlay');
+    if (ended) ended.style.display = 'flex';
+    const endedText = document.getElementById('blabs-ct-ended-text');
+    if (endedText) {{
+      endedText.textContent = reason === 'idle-timeout' ? 'Session ended due to inactivity.' : 'Session ended.';
+    }}
+  }}
+
+  function requestDelete(reason) {{
+    if (instanceId) {{
+      fetch(`${{apiBase.replace(/\\/$/, '')}}/user/containers/${{instanceId}}`, {{
+        method: 'DELETE',
+        credentials: 'include',
+        keepalive: true,
+      }}).catch(function () {{}});
+    }}
+    openerPost('idle-stop', {{ reason: reason || 'idle-timeout', action: 'delete' }});
+  }}
+
+  function endSession(reason) {{
+    showEnded(reason || 'idle-timeout');
+    requestDelete(reason || 'idle-timeout');
+  }}
+
+  function updateCountdown() {{
+    if (!promptActive || !countdownEndsAt) return;
+    const remainingMs = countdownEndsAt - Date.now();
+    if (remainingMs <= 0) {{
+      endSession('idle-timeout');
+      return;
+    }}
+    const remainingSeconds = Math.ceil(remainingMs / 1000);
+    const mins = Math.floor(remainingSeconds / 60);
+    const secs = String(remainingSeconds % 60).padStart(2, '0');
+    const el = document.getElementById('blabs-ct-idle-countdown');
+    if (el) el.textContent = `Ending in ${{mins}}:${{secs}}`;
+  }}
+
+  function startPrompt(startedAt) {{
+    ensureOverlay();
+    const overlay = document.getElementById('blabs-ct-idle-overlay');
+    if (overlay) overlay.style.display = 'flex';
+    promptActive = true;
+    parentPromptActive = false;
+    const baseline = startedAt || Date.now();
+    countdownEndsAt = baseline + countdownSeconds * 1000;
+    if (countdownTimer) clearInterval(countdownTimer);
+    countdownTimer = setInterval(updateCountdown, 1000);
+    updateCountdown();
+  }}
+
+  function scheduleIdle() {{
+    if (idleTimer) {{
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }}
+    if (idleSuspended) return;
+    const delay = Math.max(0, nextIdleAt - Date.now());
+    idleTimer = setTimeout(function () {{
+      startPrompt(nextIdleAt);
+    }}, delay);
+  }}
+
+  function resetActivity(emit, ts, withHeartbeat) {{
+    const now = ts || Date.now();
+    if (idleSuspended) return;
+    if (promptActive && parentPromptActive) {{
+      if (emit !== false) openerPost('idle-activity');
+      if (withHeartbeat !== false) heartbeat(now);
+      return;
+    }}
+    if (promptActive) hidePrompt();
+    nextIdleAt = now + Math.max(1, idleMinutes) * 60 * 1000;
+    scheduleIdle();
+    if (emit !== false) openerPost('idle-activity');
+    if (withHeartbeat !== false) heartbeat(now);
+  }}
+
+  ensureOverlay();
+  resetActivity(false, Date.now(), true);
+
+  window.addEventListener('focus', function () {{
+    idleSuspended = false;
+    openerPost('idle-focus');
+    resetActivity(false, Date.now(), true);
+  }});
+  window.addEventListener('blur', function () {{
+    openerPost('idle-blur');
+  }});
+  document.addEventListener('visibilitychange', function () {{
+    openerPost(document.hidden ? 'idle-blur' : 'idle-focus');
+    if (!document.hidden) {{
+      idleSuspended = false;
+      resetActivity(false, Date.now(), true);
+    }}
+  }});
+
+  // Only count direct user interactions. High-frequency events like scroll/mousemove
+  // can fire continuously in some apps and prevent idle timeout from ever prompting.
+  const events = ['keydown', 'mousedown', 'touchstart', 'pointerdown'];
+  events.forEach(function (evt) {{
+    document.addEventListener(evt, function (event) {{
+      if (event && event.isTrusted === false) return;
+      resetActivity(true, Date.now(), true);
+    }}, {{ passive: true, capture: true }});
+  }});
+
+  // Keep backend activity fresh without generating synthetic user activity signals.
+  window.setInterval(function () {{
+    heartbeat(Date.now());
+  }}, 30000);
+
+  window.addEventListener('message', function (event) {{
+    const payload = event.data || {{}};
+    if (payload.source !== 'user') return;
+    if (payload.type === 'idle-auth') return;
+    if (payload.type === 'idle-parent-prompt') {{
+      if (payload.instanceId && payload.instanceId !== instanceId) return;
+      const endsAt = Number(payload.endsAt);
+      const targetEndsAt = Number.isFinite(endsAt) && endsAt > Date.now() ? endsAt : Date.now() + countdownSeconds * 1000;
+      ensureOverlay();
+      const overlay = document.getElementById('blabs-ct-idle-overlay');
+      if (overlay) overlay.style.display = 'flex';
+      promptActive = true;
+      parentPromptActive = true;
+      countdownEndsAt = targetEndsAt;
+      if (countdownTimer) clearInterval(countdownTimer);
+      countdownTimer = setInterval(updateCountdown, 1000);
+      updateCountdown();
+      return;
+    }}
+    if (payload.type === 'idle-parent-clear') {{
+      if (payload.instanceId && payload.instanceId !== instanceId) return;
+      parentPromptActive = false;
+      hidePrompt();
+      return;
+    }}
+    if (payload.type === 'idle-parent-ended') {{
+      if (payload.instanceId && payload.instanceId !== instanceId) return;
+      parentPromptActive = false;
+      showEnded(String(payload.reason || 'idle-timeout'));
+      return;
+    }}
+    if (payload.type === 'idle-focus' || payload.type === 'idle-blur' || payload.type === 'idle-activity') {{
+      idleSuspended = false;
+      const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+      resetActivity(false, ts, false);
+      return;
+    }}
+  }});
+}})();
+"""
+
+
+def _inject_container_idle_bridge_html(
+    html_body: bytes,
+    *,
+    script_url: str,
+) -> bytes:
+    try:
+        document = html_body.decode("utf-8")
+    except UnicodeDecodeError:
+        return html_body
+
+    marker = "blabs-container-idle-bridge"
+    if marker in document:
+        return html_body
+
+    script_tag = f'\n<script id="{marker}" src="{html.escape(script_url, quote=True)}" defer></script>\n'
+    lower_doc = document.lower()
+    body_idx = lower_doc.rfind("</body>")
+    if body_idx >= 0:
+        injected = document[:body_idx] + script_tag + document[body_idx:]
+    else:
+        injected = document + script_tag
+    return injected.encode("utf-8")
 
 
 def _container_service_ready(
@@ -244,12 +634,14 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplateView:
         startup_timeout_seconds=max(10, int(getattr(record, "startup_timeout_seconds", 300) or 300)),
         dependency_checks=_parse_dependency_checks(getattr(record, "dependency_checks_json", "[]")),
         expose_strategy=str(getattr(record, "expose_strategy", "nodeport") or "nodeport"),
+        network_mode=str(getattr(record, "network_mode", "bridge") or "bridge"),
         run_as_non_root=bool(getattr(record, "run_as_non_root", False)),
         read_only_root_filesystem=bool(getattr(record, "read_only_root_filesystem", False)),
         command=record.command,
         args=_parse_args(record.args_json),
         env=_parse_env(record.env_json),
         auto_delete_minutes=record.auto_delete_minutes,
+        idle_timeout_minutes=max(1, int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes)),
         enabled=record.enabled,
         created_at=record.created_at,
     )
@@ -305,6 +697,16 @@ def _mark_queued(record: ContainerInstanceTable, reason: str, *, increment_attem
     record.last_active_at = datetime.utcnow()
 
 
+def _normalized_template_command(value: object) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    # Guard against legacy rows accidentally storing Python None/null as text.
+    if raw.lower() in {"none", "null"}:
+        return None
+    return raw
+
+
 def _container_launch_request(instance_id: str, owner: str, template: ContainerTemplateTable, image_ref: str) -> ContainerPodRequest:
     return ContainerPodRequest(
         instance_id=instance_id,
@@ -320,12 +722,326 @@ def _container_launch_request(instance_id: str, owner: str, template: ContainerT
         startup_timeout_seconds=max(10, int(getattr(template, "startup_timeout_seconds", 300) or 300)),
         dependency_checks=_parse_dependency_checks(getattr(template, "dependency_checks_json", "[]")),
         expose_strategy=str(getattr(template, "expose_strategy", "nodeport") or "nodeport"),
+        network_mode=str(getattr(template, "network_mode", "bridge") or "bridge"),
         run_as_non_root=bool(getattr(template, "run_as_non_root", False)),
         read_only_root_filesystem=bool(getattr(template, "read_only_root_filesystem", False)),
-        command=template.command,
+        command=_normalized_template_command(template.command),
         args=_parse_args(template.args_json),
         env=_parse_env(template.env_json),
     )
+
+
+def _attach_connect_session_cookie(response: Response, request: Request, instance_id: str, token_value: str) -> None:
+    base_path = f"/user/containers/{instance_id}/connect/"
+    response.set_cookie(
+        key=_CONNECT_SESSION_COOKIE_NAME,
+        value=token_value,
+        max_age=max(60, int(settings.connect_session_ttl_seconds or 3600)),
+        httponly=True,
+        samesite=_connect_cookie_samesite(),
+        secure=_connect_cookie_secure(request),
+        path=base_path,
+    )
+    response.delete_cookie(
+        key=_CONNECT_GRANT_COOKIE_NAME,
+        path=base_path,
+        httponly=True,
+        samesite=_connect_cookie_samesite(),
+        secure=_connect_cookie_secure(request),
+    )
+
+
+@router.post("/containers/{instance_id}/connect-token")
+def issue_container_connect_token(
+    instance_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> Response:
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    if record.status not in {"pending", "running"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container is not running")
+    grant_token = issue_connect_token(
+        session,
+        username=user.username,
+        instance_id=instance_id,
+        resource_type="container",
+        token_type="grant",
+        ttl_seconds=max(15, int(settings.connect_grant_ttl_seconds or 120)),
+    )
+    connect_url = f"{str(request.base_url).rstrip('/')}/user/containers/{instance_id}/connect/"
+    response = Response(
+        content=json.dumps({"connect_url": connect_url}),
+        media_type="application/json",
+        status_code=status.HTTP_200_OK,
+    )
+    response.set_cookie(
+        key=_CONNECT_GRANT_COOKIE_NAME,
+        value=grant_token,
+        max_age=max(15, int(settings.connect_grant_ttl_seconds or 120)),
+        httponly=True,
+        samesite=_connect_cookie_samesite(),
+        secure=_connect_cookie_secure(request),
+        path=f"/user/containers/{instance_id}/connect/",
+    )
+    return response
+
+
+@router.get("/containers/{instance_id}/connect")
+@router.post("/containers/{instance_id}/connect")
+@router.put("/containers/{instance_id}/connect")
+@router.patch("/containers/{instance_id}/connect")
+@router.delete("/containers/{instance_id}/connect")
+@router.get("/containers/{instance_id}/connect/{proxy_path:path}")
+@router.post("/containers/{instance_id}/connect/{proxy_path:path}")
+@router.put("/containers/{instance_id}/connect/{proxy_path:path}")
+@router.patch("/containers/{instance_id}/connect/{proxy_path:path}")
+@router.delete("/containers/{instance_id}/connect/{proxy_path:path}")
+async def proxy_container_connect(
+    instance_id: str,
+    request: Request,
+    proxy_path: str = "",
+    session: Session = Depends(get_session),
+) -> Response:
+    base_path = f"/user/containers/{instance_id}/connect"
+    if request.url.path == base_path:
+        query = str(request.url.query or "").strip()
+        target = f"{base_path}/"
+        if query:
+            target = f"{target}?{query}"
+        return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+    issued_connect_session = ""
+    user: User | None = None
+    connect_session_token = _extract_connect_session_token(request)
+    if connect_session_token:
+        try:
+            user = validate_connect_session(
+                session,
+                token_value=connect_session_token,
+                instance_id=instance_id,
+                resource_type="container",
+            )
+        except HTTPException:
+            user = None
+    if user is None:
+        grant_token = _extract_connect_grant_token(request)
+        if not grant_token:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing connect token")
+        user = consume_connect_grant(
+            session,
+            token_value=grant_token,
+            instance_id=instance_id,
+            resource_type="container",
+        )
+        issued_connect_session = issue_connect_token(
+            session,
+            username=user.username,
+            instance_id=instance_id,
+            resource_type="container",
+            token_type="session",
+            ttl_seconds=max(60, int(settings.connect_session_ttl_seconds or 3600)),
+        )
+
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    if record.status not in {"pending", "running"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container is not running")
+    record.last_active_at = datetime.utcnow()
+    session.add(record)
+    session.commit()
+
+    template = session.get(ContainerTemplateTable, record.template_id)
+    container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
+    template_idle_minutes = max(
+        1,
+        int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
+    )
+
+    if proxy_path.strip("/") == "__blabs_idle_bridge.js":
+        bridge_script = _container_idle_bridge_javascript(
+            instance_id=record.id,
+            idle_minutes=template_idle_minutes,
+        )
+        response = Response(content=bridge_script, media_type="application/javascript")
+        response.headers["cache-control"] = "no-store, max-age=0"
+        if issued_connect_session:
+            _attach_connect_session_cookie(response, request, instance_id, issued_connect_session)
+        return response
+
+    upstream_host = _container_service_host(record.id)
+    upstream_path = _normalized_upstream_path(proxy_path)
+    query_items = [(key, value) for key, value in request.query_params.multi_items() if key != "ct"]
+    upstream_query = urlencode(query_items, doseq=True)
+    upstream_url = f"http://{upstream_host}:{container_port}{upstream_path}"
+    if upstream_query:
+        upstream_url = f"{upstream_url}?{upstream_query}"
+
+    forwarded_headers: dict[str, str] = {}
+    for key, value in request.headers.items():
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_HEADERS or lowered in {
+            "host",
+            "authorization",
+            "cookie",
+            "content-length",
+            "accept-encoding",
+        }:
+            continue
+        forwarded_headers[key] = value
+    forwarded_headers["X-Forwarded-Proto"] = "https"
+    forwarded_headers["X-Forwarded-Host"] = str(request.headers.get("host") or "")
+    forwarded_headers["X-Forwarded-Prefix"] = f"/user/containers/{instance_id}/connect"
+
+    body = await request.body()
+    try:
+        upstream = requests.request(
+            method=request.method,
+            url=upstream_url,
+            headers=forwarded_headers,
+            data=body if body else None,
+            cookies=request.cookies,
+            allow_redirects=False,
+            stream=False,
+            timeout=_PROXY_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"container connect proxy failed: {exc}",
+        ) from exc
+
+    response_headers: dict[str, str] = {}
+    for key, value in upstream.headers.items():
+        lowered = key.lower()
+        if lowered in _HOP_BY_HOP_HEADERS:
+            continue
+        if lowered == "location":
+            response_headers[key] = _rewrite_upstream_location(instance_id, value)
+            continue
+        if lowered in {"content-length", "content-encoding"}:
+            continue
+        response_headers[key] = value
+    response_content = upstream.content
+    content_type = str(upstream.headers.get("content-type") or "").lower()
+    if request.method.upper() != "HEAD" and "text/html" in content_type:
+        bridge_script_url = f"{base_path}/__blabs_idle_bridge.js"
+        response_content = _inject_container_idle_bridge_html(
+            response_content,
+            script_url=bridge_script_url,
+        )
+    response = Response(
+        content=response_content,
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=upstream.headers.get("content-type"),
+    )
+    if issued_connect_session:
+        _attach_connect_session_cookie(response, request, instance_id, issued_connect_session)
+    return response
+
+
+@router.websocket("/containers/{instance_id}/connect/{proxy_path:path}")
+async def proxy_container_connect_ws(
+    instance_id: str,
+    websocket: WebSocket,
+    proxy_path: str,
+    session: Session = Depends(get_session),
+) -> None:
+    token_value = _extract_connect_session_token_ws(websocket)
+    if not token_value:
+        await websocket.close(code=4401, reason="missing connect session")
+        return
+    try:
+        user = validate_connect_session(
+            session,
+            token_value=token_value,
+            instance_id=instance_id,
+            resource_type="container",
+        )
+    except HTTPException:
+        await websocket.close(code=4401, reason="invalid connect session")
+        return
+
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record or record.owner != user.username:
+        await websocket.close(code=4404, reason="container not found")
+        return
+    if record.status not in {"pending", "running"}:
+        await websocket.close(code=4409, reason="container not running")
+        return
+    record.last_active_at = datetime.utcnow()
+    session.add(record)
+    session.commit()
+
+    template = session.get(ContainerTemplateTable, record.template_id)
+    container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
+    upstream_host = _container_service_host(record.id)
+    upstream_path = _normalized_upstream_path(proxy_path)
+    query_items = [(key, value) for key, value in websocket.query_params.multi_items() if key != "ct"]
+    upstream_query = urlencode(query_items, doseq=True)
+    upstream_url = f"ws://{upstream_host}:{container_port}{upstream_path}"
+    if upstream_query:
+        upstream_url = f"{upstream_url}?{upstream_query}"
+
+    protocols = [part.strip() for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",") if part.strip()]
+
+    selected_subprotocol = protocols[0] if protocols else None
+    await websocket.accept(subprotocol=selected_subprotocol)
+
+    try:
+        async with websockets.connect(
+            upstream_url,
+            subprotocols=protocols or None,
+            open_timeout=15,
+            close_timeout=5,
+            max_size=None,
+        ) as upstream:
+            async def client_to_upstream() -> None:
+                while True:
+                    message = await websocket.receive()
+                    kind = message.get("type")
+                    if kind == "websocket.disconnect":
+                        await upstream.close()
+                        return
+                    payload_bytes = message.get("bytes")
+                    if payload_bytes is not None:
+                        await upstream.send(payload_bytes)
+                        continue
+                    payload_text = message.get("text")
+                    if payload_text is not None:
+                        await upstream.send(payload_text)
+
+            async def upstream_to_client() -> None:
+                while True:
+                    payload = await upstream.recv()
+                    if isinstance(payload, bytes):
+                        await websocket.send_bytes(payload)
+                    else:
+                        await websocket.send_text(payload)
+
+            task_client = asyncio.create_task(client_to_upstream())
+            task_upstream = asyncio.create_task(upstream_to_client())
+            done, pending = await asyncio.wait({task_client, task_upstream}, return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            await asyncio.gather(*done, return_exceptions=True)
+    except Exception:
+        logger.warning(
+            "Container websocket proxy failed for instance %s path %s upstream %s",
+            instance_id,
+            proxy_path,
+            upstream_url,
+            exc_info=True,
+        )
+        try:
+            await websocket.close(code=1011, reason="upstream websocket error")
+        except Exception:
+            pass
 
 
 def _create_container_runtime(
@@ -396,6 +1112,11 @@ def list_user_containers(
     to_delete: list[ContainerInstanceTable] = []
 
     for record in instances:
+        if record.status in {"running", "pending"}:
+            # Match VM behavior so active user polling keeps running labs from being reaped.
+            record.last_active_at = datetime.utcnow()
+            session.add(record)
+            changed = True
         tmpl = templates.get(record.template_id)
         container_port = max(1, int(getattr(tmpl, "container_port", 80) or 80)) if tmpl else 80
         healthcheck_protocol = str(getattr(tmpl, "healthcheck_protocol", "tcp") or "tcp") if tmpl else "tcp"
@@ -602,6 +1323,8 @@ def start_container_template(
     image = session.get(ContainerImageTable, template.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
+    if not lock_user_launch_slot(session, user.username):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
 
     config = session.get(Config, 1) or Config()
     user_vm_instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
@@ -612,7 +1335,7 @@ def start_container_template(
         if row.status not in {"stopped", "completed", "failed"}:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="You already have a workload running. Delete the current workload before starting a new one.",
+                detail=SINGLE_LAB_LIMIT_MESSAGE,
             )
 
     total_vm_active = session.exec(select(Instance).where(Instance.status.in_(["pending", "running"]))).all()
@@ -787,6 +1510,22 @@ def restart_container(
         container_port=container_port,
         launch_diagnostics=diagnostics,
     )
+
+
+@router.post("/containers/{instance_id}/activity", status_code=status.HTTP_204_NO_CONTENT)
+def record_container_activity(
+    instance_id: str,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> None:
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    if record.status not in {"pending", "running"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container is not running")
+    record.last_active_at = datetime.utcnow()
+    session.add(record)
+    session.commit()
 
 
 @router.delete("/containers/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)

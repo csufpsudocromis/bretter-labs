@@ -198,7 +198,7 @@ const AdminImages = () => {
               {uploadTaskId ? ` (task ${uploadTaskId.slice(0, 8)})` : ''}
             </p>
           )}
-          <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
+          <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW/QCOW2 are auto-converted to raw.</p>
         </div>
         <div>
           <h3>Golden Images</h3>

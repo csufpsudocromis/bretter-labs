@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import re
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -33,9 +32,9 @@ if settings.cors_allow_http:
             "http://127.0.0.1:5173",
         ]
     )
-origin_host = settings.kube_node_external_host or "127.0.0.1"
 origin_schemes = "https|http" if settings.cors_allow_http else "https"
-origin_regex = rf"^({origin_schemes})://{re.escape(origin_host)}:\d+$"
+# Allow any browser origin (http/https) so login/API calls are not tied to specific node IPs.
+origin_regex = rf"^({origin_schemes})://[^/]+$"
 
 app.add_middleware(
     CORSMiddleware,

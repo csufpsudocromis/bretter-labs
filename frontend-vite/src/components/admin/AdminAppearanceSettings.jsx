@@ -108,6 +108,18 @@ const colorWithAlpha = (hex, alpha, fallback = '#f8fafc') => {
   return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${clamped})`;
 };
 
+const resolveThemeImageUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:')) {
+    return raw;
+  }
+  const apiBase = String(api?.defaults?.baseURL || '').replace(/\/$/, '');
+  if (!apiBase) return raw;
+  if (raw.startsWith('/')) return `${apiBase}${raw}`;
+  return `${apiBase}/${raw}`;
+};
+
 const contrastChecks = (theme, targets) => {
   const thresholds = normalizeContrastTargets(targets);
   const checks = [
@@ -184,8 +196,9 @@ const applyThemeToRoot = (next) => {
   root.style.setProperty('--app-font-size-base', `${next.theme_font_size_base || DEFAULT_THEME.theme_font_size_base}px`);
   root.style.setProperty('--app-font-size-h1', `${next.theme_font_size_h1 || DEFAULT_THEME.theme_font_size_h1}px`);
   root.style.setProperty('--app-font-size-h2', `${next.theme_font_size_h2 || DEFAULT_THEME.theme_font_size_h2}px`);
-  if (next.theme_bg_image) {
-    root.style.setProperty('--bg-image', `url('${next.theme_bg_image}')`);
+  const resolvedImage = resolveThemeImageUrl(next.theme_bg_image);
+  if (resolvedImage) {
+    root.style.setProperty('--bg-image', `url('${resolvedImage}')`);
   } else {
     root.style.removeProperty('--bg-image');
   }
@@ -229,8 +242,10 @@ const AdminAppearanceSettings = () => {
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [uploadingBackground, setUploadingBackground] = useState(false);
   const [bgTestStatus, setBgTestStatus] = useState('');
   const fileRef = useRef(null);
+  const backgroundFileRef = useRef(null);
 
   const hasUnsaved = useMemo(() => {
     const themeDirty = JSON.stringify(normalizeTheme(site)) !== JSON.stringify(normalizeTheme(savedSite));
@@ -353,8 +368,36 @@ const AdminAppearanceSettings = () => {
     }
   };
 
+  const handleBackgroundUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setUploadingBackground(true);
+    setError('');
+    setMessage('');
+    setBgTestStatus('');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const res = await api.post('/admin/settings/site/background', form);
+      const uploadedPath = String(res.data?.theme_bg_image || '').trim();
+      if (!uploadedPath) {
+        throw new Error('background upload response missing theme_bg_image');
+      }
+      const nextSite = normalizeTheme({ ...site, theme_bg_image: uploadedPath });
+      setSite(nextSite);
+      setSavedSite((prev) => normalizeTheme({ ...prev, theme_bg_image: uploadedPath }));
+      setMessage(`Background uploaded: ${file.name}`);
+      applyThemeToRoot(nextSite);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Failed to upload background image');
+    } finally {
+      event.target.value = '';
+      setUploadingBackground(false);
+    }
+  };
+
   const testBackgroundImage = async () => {
-    const url = String(site.theme_bg_image || '').trim();
+    const url = resolveThemeImageUrl(site.theme_bg_image);
     if (!url) {
       setBgTestStatus('No background image URL set. Fallback color will be used.');
       return;
@@ -413,8 +456,9 @@ const AdminAppearanceSettings = () => {
   };
 
   const overlay = Math.min(0.85, Math.max(0, Number(site.theme_bg_image_overlay_opacity || 0)));
-  const previewBackground = site.theme_bg_image
-    ? `linear-gradient(rgba(0,0,0,${overlay}), rgba(0,0,0,${overlay})), url('${site.theme_bg_image}')`
+  const resolvedBackgroundUrl = resolveThemeImageUrl(site.theme_bg_image);
+  const previewBackground = resolvedBackgroundUrl
+    ? `linear-gradient(rgba(0,0,0,${overlay}), rgba(0,0,0,${overlay})), url('${resolvedBackgroundUrl}')`
     : `linear-gradient(rgba(0,0,0,${overlay}), rgba(0,0,0,${overlay}))`;
 
   return (
@@ -642,9 +686,34 @@ const AdminAppearanceSettings = () => {
             </div>
 
             <label>
-              Background Image URL (optional)
-              <input value={site.theme_bg_image} onChange={(e) => setTheme({ ...site, theme_bg_image: e.target.value })} />
+              Login Background (cluster-hosted)
+              <input value={site.theme_bg_image || ''} readOnly placeholder="No image uploaded" />
             </label>
+            <div className="actions" style={{ flexWrap: 'wrap' }}>
+              <button
+                className="ghost"
+                onClick={() => backgroundFileRef.current?.click()}
+                type="button"
+                disabled={loading || saving || uploadingBackground}
+              >
+                {uploadingBackground ? 'Uploading...' : 'Upload Background Image'}
+              </button>
+              <button
+                className="ghost"
+                onClick={() => setTheme({ ...site, theme_bg_image: '' })}
+                type="button"
+                disabled={loading || saving || uploadingBackground || !site.theme_bg_image}
+              >
+                Clear Background
+              </button>
+              <input
+                ref={backgroundFileRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+                style={{ display: 'none' }}
+                onChange={handleBackgroundUpload}
+              />
+            </div>
 
             <label>
               Background image dim overlay ({overlay.toFixed(2)})

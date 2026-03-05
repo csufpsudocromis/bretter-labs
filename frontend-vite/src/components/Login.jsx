@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 
 const Login = ({ onLogin, user }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [sso, setSso] = useState({ enabled: false, authorize_url: '' });
 
@@ -38,11 +38,11 @@ const Login = ({ onLogin, user }) => {
       <form onSubmit={handleSubmit} className="form">
         <label>
           Username
-          <input value={username} onChange={(e) => setUsername(e.target.value)} />
+          <input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} />
         </label>
         <label>
           Password
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+          <input autoComplete="current-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </label>
         <button type="submit">Sign In</button>
         {sso.enabled && (

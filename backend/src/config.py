@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     cdi_upload_source_filename: str = "disk.img"
     public_scheme: str = "https"
     cors_allow_http: bool = False
+    auth_cookie_name: str = "blabs_session"
+    auth_cookie_ttl_seconds: int = 86400
+    auth_cookie_secure: bool = True
+    auth_cookie_samesite: str = "lax"
+    connect_grant_ttl_seconds: int = 120
+    connect_session_ttl_seconds: int = 3600
+    connect_cookie_samesite: str = "lax"
+    connect_cookie_secure: bool = True
+    site_assets_dir: str = "/data/site-assets"
     alertmanager_api_url: str = "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
     alertmanager_timeout_seconds: int = 5
     error_log_file_path: str = "/data/error.log"

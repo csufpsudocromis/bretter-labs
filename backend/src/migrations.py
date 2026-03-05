@@ -7,6 +7,7 @@ from sqlalchemy import Engine, inspect
 
 APP_TABLES: set[str] = {
     "config",
+    "connecttoken",
     "containerimage",
     "containerinstance",
     "containertemplate",

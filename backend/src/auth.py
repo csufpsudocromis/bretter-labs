@@ -1,12 +1,14 @@
 import secrets
+from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 from passlib.hash import bcrypt
 from sqlmodel import Session, select
 
+from .config import settings
 from .db import get_session
-from .tables import Token, User
+from .tables import ConnectToken, Token, User
 
 
 def hash_password(password: str) -> str:
@@ -34,19 +36,143 @@ def revoke_tokens(session: Session, username: str) -> None:
     session.commit()
 
 
-def _extract_token(authorization: Optional[str]) -> str:
-    if not authorization:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing authorization header")
+def auth_cookie_name() -> str:
+    return str(settings.auth_cookie_name or "blabs_session")
+
+
+def _samesite_value(value: str, default: str = "lax") -> str:
+    normalized = str(value or default).strip().lower()
+    if normalized not in {"lax", "strict", "none"}:
+        normalized = default
+    return normalized
+
+
+def set_auth_cookie(response: Response, token_value: str) -> None:
+    response.set_cookie(
+        key=auth_cookie_name(),
+        value=token_value,
+        max_age=max(60, int(settings.auth_cookie_ttl_seconds or 86400)),
+        httponly=True,
+        samesite=_samesite_value(settings.auth_cookie_samesite, "lax"),
+        secure=bool(settings.auth_cookie_secure),
+        path="/",
+    )
+
+
+def clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=auth_cookie_name(),
+        path="/",
+        httponly=True,
+        samesite=_samesite_value(settings.auth_cookie_samesite, "lax"),
+        secure=bool(settings.auth_cookie_secure),
+    )
+
+
+def extract_auth_token(authorization: Optional[str], request: Request) -> str:
     prefix = "Bearer "
-    if authorization.startswith(prefix):
-        return authorization[len(prefix) :].strip()
-    return authorization.strip()
+    auth_header = str(authorization or "").strip()
+    if auth_header:
+        if auth_header.startswith(prefix):
+            token = auth_header[len(prefix) :].strip()
+        else:
+            token = auth_header
+        if token:
+            return token
+    cookie_token = str(request.cookies.get(auth_cookie_name()) or "").strip()
+    if cookie_token:
+        return cookie_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing authorization token")
+
+
+def revoke_token_value(session: Session, token_value: str) -> None:
+    token = session.get(Token, token_value)
+    if token:
+        session.delete(token)
+        session.commit()
+
+
+def issue_connect_token(
+    session: Session,
+    *,
+    username: str,
+    instance_id: str,
+    resource_type: str = "container",
+    token_type: str = "grant",
+    ttl_seconds: int = 120,
+) -> str:
+    token_value = secrets.token_urlsafe(48)
+    now = datetime.utcnow()
+    row = ConnectToken(
+        token=token_value,
+        username=username,
+        instance_id=instance_id,
+        resource_type=resource_type,
+        token_type=token_type,
+        issued_at=now,
+        expires_at=now + timedelta(seconds=max(15, int(ttl_seconds))),
+    )
+    session.add(row)
+    session.commit()
+    return token_value
+
+
+def consume_connect_grant(
+    session: Session,
+    *,
+    token_value: str,
+    instance_id: str,
+    resource_type: str = "container",
+) -> User:
+    row = session.get(ConnectToken, token_value)
+    now = datetime.utcnow()
+    if (
+        not row
+        or row.token_type != "grant"
+        or row.resource_type != resource_type
+        or row.instance_id != instance_id
+        or row.used_at is not None
+        or row.expires_at <= now
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid connect token")
+    user = session.get(User, row.username)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid connect token")
+    row.used_at = now
+    session.add(row)
+    session.commit()
+    return user
+
+
+def validate_connect_session(
+    session: Session,
+    *,
+    token_value: str,
+    instance_id: str,
+    resource_type: str = "container",
+) -> User:
+    row = session.get(ConnectToken, token_value)
+    now = datetime.utcnow()
+    if (
+        not row
+        or row.token_type != "session"
+        or row.resource_type != resource_type
+        or row.instance_id != instance_id
+        or row.expires_at <= now
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid connect session")
+    user = session.get(User, row.username)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid connect session")
+    return user
 
 
 def require_user(
-    authorization: Optional[str] = Header(default=None), session: Session = Depends(get_session)
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
 ) -> User:
-    token_value = _extract_token(authorization)
+    token_value = extract_auth_token(authorization, request)
     token = session.get(Token, token_value)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
@@ -57,9 +183,11 @@ def require_user(
 
 
 def require_admin(
-    authorization: Optional[str] = Header(default=None), session: Session = Depends(get_session)
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+    session: Session = Depends(get_session),
 ) -> User:
-    user = require_user(authorization, session)
+    user = require_user(request=request, authorization=authorization, session=session)
     if not user.is_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin required")
     return user

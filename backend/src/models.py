@@ -135,7 +135,6 @@ class VMTemplate(BaseModel):
 
 
 class ContainerTemplateCreate(BaseModel):
-    template_key: Optional[str] = Field(default=None, min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=128)
     description: Optional[str] = ""
     container_image_id: str
@@ -149,17 +148,18 @@ class ContainerTemplateCreate(BaseModel):
     startup_timeout_seconds: int = Field(default=300, ge=10, le=1800)
     dependency_checks: list[ContainerDependencyCheck] = Field(default_factory=list)
     expose_strategy: str = Field(default="nodeport", pattern="^(nodeport|ingress)$")
+    network_mode: str = Field(default="bridge", pattern="^(bridge|none|isolated|unrestricted)$")
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
     command: Optional[str] = Field(default=None, max_length=2000)
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     auto_delete_minutes: int = Field(default=60, ge=1, le=1440)
+    idle_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     enabled: bool = False
 
 
 class ContainerTemplateUpdate(BaseModel):
-    template_key: Optional[str] = Field(default=None, min_length=1, max_length=64)
     is_default: Optional[bool] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     description: Optional[str] = None
@@ -174,12 +174,14 @@ class ContainerTemplateUpdate(BaseModel):
     startup_timeout_seconds: Optional[int] = Field(default=None, ge=10, le=1800)
     dependency_checks: Optional[list[ContainerDependencyCheck]] = None
     expose_strategy: Optional[str] = Field(default=None, pattern="^(nodeport|ingress)$")
+    network_mode: Optional[str] = Field(default=None, pattern="^(bridge|none|isolated|unrestricted)$")
     run_as_non_root: Optional[bool] = None
     read_only_root_filesystem: Optional[bool] = None
     command: Optional[str] = Field(default=None, max_length=2000)
     args: Optional[list[str]] = None
     env: Optional[dict[str, str]] = None
     auto_delete_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    idle_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     enabled: Optional[bool] = None
 
 
@@ -201,12 +203,14 @@ class ContainerTemplate(BaseModel):
     startup_timeout_seconds: int = 300
     dependency_checks: list[ContainerDependencyCheck] = Field(default_factory=list)
     expose_strategy: str = "nodeport"
+    network_mode: str = "bridge"
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
     command: Optional[str] = None
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     auto_delete_minutes: int = 60
+    idle_timeout_minutes: int = 30
     enabled: bool = False
     created_at: datetime
 
@@ -340,6 +344,12 @@ class SiteSettings(BaseModel):
     theme_tile_border: str
     theme_tile_opacity: float
     theme_tile_border_opacity: float
+
+
+class SiteBackgroundAsset(BaseModel):
+    theme_bg_image: str
+    filename: str
+    size_bytes: int
 
 
 class SSOSettings(BaseModel):

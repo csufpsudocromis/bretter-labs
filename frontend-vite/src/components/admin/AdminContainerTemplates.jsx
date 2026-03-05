@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../../api';
 
 const DEFAULT_FORM = {
-  template_key: '',
   name: '',
   description: '',
   container_image_id: '',
@@ -16,12 +15,14 @@ const DEFAULT_FORM = {
   startup_timeout_seconds: 300,
   dependency_checks_text: '',
   expose_strategy: 'nodeport',
+  network_mode: 'bridge',
   run_as_non_root: false,
   read_only_root_filesystem: false,
   command: '',
   args_text: '',
   env_text: '',
   auto_delete_minutes: 60,
+  idle_timeout_minutes: 30,
   enabled: false,
 };
 
@@ -105,7 +106,6 @@ const AdminContainerTemplates = () => {
   }, []);
 
   const toPayload = (source) => ({
-    template_key: String(source.template_key || '').trim() || undefined,
     name: source.name,
     description: source.description,
     container_image_id: source.container_image_id,
@@ -119,14 +119,17 @@ const AdminContainerTemplates = () => {
     startup_timeout_seconds: Math.max(10, Number(source.startup_timeout_seconds) || 300),
     dependency_checks: parseDependencyChecks(source.dependency_checks_text),
     expose_strategy: source.expose_strategy === 'ingress' ? 'ingress' : 'nodeport',
+    network_mode: ['bridge', 'none', 'isolated', 'unrestricted'].includes(String(source.network_mode || 'bridge'))
+      ? String(source.network_mode || 'bridge')
+      : 'bridge',
     run_as_non_root: Boolean(source.run_as_non_root),
     read_only_root_filesystem: Boolean(source.read_only_root_filesystem),
     command: source.command || null,
     args: parseArgs(source.args_text),
     env: parseEnv(source.env_text),
     auto_delete_minutes: Number(source.auto_delete_minutes) || 60,
+    idle_timeout_minutes: Math.max(1, Number(source.idle_timeout_minutes) || 30),
     enabled: Boolean(source.enabled),
-    is_default: source.is_default === undefined ? true : Boolean(source.is_default),
   });
 
   const create = async () => {
@@ -166,7 +169,6 @@ const AdminContainerTemplates = () => {
   const startEdit = (tmpl) => {
     setEditingId(tmpl.id);
     setEditForm({
-      template_key: tmpl.template_key || '',
       name: tmpl.name,
       description: tmpl.description || '',
       container_image_id: tmpl.container_image_id,
@@ -180,14 +182,15 @@ const AdminContainerTemplates = () => {
       startup_timeout_seconds: tmpl.startup_timeout_seconds || 300,
       dependency_checks_text: formatDependencyChecks(tmpl.dependency_checks || []),
       expose_strategy: tmpl.expose_strategy || 'nodeport',
+      network_mode: tmpl.network_mode || 'bridge',
       run_as_non_root: Boolean(tmpl.run_as_non_root),
       read_only_root_filesystem: Boolean(tmpl.read_only_root_filesystem),
       command: tmpl.command || '',
       args_text: formatArgs(tmpl.args || []),
       env_text: formatEnv(tmpl.env || {}),
       auto_delete_minutes: tmpl.auto_delete_minutes || 60,
+      idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
       enabled: Boolean(tmpl.enabled),
-      is_default: Boolean(tmpl.is_default),
     });
   };
 
@@ -206,17 +209,6 @@ const AdminContainerTemplates = () => {
 
   const imageName = (imageId) => images.find((img) => img.id === imageId)?.name || 'Container image';
   const imageRef = (imageId) => images.find((img) => img.id === imageId)?.image_ref || '-';
-  const setDefault = async (templateId) => {
-    try {
-      await api.patch(`/admin/container-templates/${templateId}`, { is_default: true });
-      setMessage('Default version updated');
-      setError('');
-      load();
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to set default template version');
-    }
-  };
-
   return (
     <div>
       <h2>Container Templates</h2>
@@ -226,14 +218,6 @@ const AdminContainerTemplates = () => {
         <div>
           <h3>Create container template</h3>
           <div className="form">
-            <label>
-              Template key (optional)
-              <input
-                value={form.template_key}
-                placeholder="leave blank for new template family"
-                onChange={(e) => setForm((prev) => ({ ...prev, template_key: e.target.value }))}
-              />
-            </label>
             <label>
               Name
               <input value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} />
@@ -303,6 +287,18 @@ const AdminContainerTemplates = () => {
               >
                 <option value="nodeport">NodePort</option>
                 <option value="ingress">Ingress</option>
+              </select>
+            </label>
+            <label>
+              Network mode
+              <select
+                value={form.network_mode}
+                onChange={(e) => setForm((prev) => ({ ...prev, network_mode: e.target.value }))}
+              >
+                <option value="bridge">Bridge (DNS/HTTP/HTTPS egress)</option>
+                <option value="isolated">Isolated (deny egress)</option>
+                <option value="none">None (deny egress)</option>
+                <option value="unrestricted">Unrestricted (no policy)</option>
               </select>
             </label>
             <label>
@@ -412,16 +408,16 @@ const AdminContainerTemplates = () => {
               />
             </label>
             <label>
-              Auto-delete stopped/completed after (minutes)
+              Idle timeout (minutes)
               <input
                 type="number"
                 min={1}
                 max={1440}
-                value={form.auto_delete_minutes}
+                value={form.idle_timeout_minutes}
                 onChange={(e) =>
                   setForm((prev) => ({
                     ...prev,
-                    auto_delete_minutes: Math.max(1, parseInt(e.target.value, 10) || 60),
+                    idle_timeout_minutes: Math.max(1, parseInt(e.target.value, 10) || 30),
                   }))
                 }
               />
@@ -439,15 +435,9 @@ const AdminContainerTemplates = () => {
               <div key={tmpl.id} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{tmpl.name}</h4>
-                  <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
-                    <span className={`badge ${tmpl.enabled ? 'success' : 'warn'}`}>
-                      {tmpl.enabled ? 'enabled' : 'disabled'}
-                    </span>
-                    {tmpl.is_default ? <span className="badge success">default</span> : <span className="badge">version</span>}
-                  </div>
-                </div>
-                <div className="muted small">
-                  Key: {tmpl.template_key || '-'} | Version: v{tmpl.version || 1}
+                  <span className={`badge ${tmpl.enabled ? 'success' : 'warn'}`}>
+                    {tmpl.enabled ? 'enabled' : 'disabled'}
+                  </span>
                 </div>
                 <div className="specs">
                   <span>{toCpuCores(tmpl.cpu_millicores)} CPU</span>
@@ -458,10 +448,12 @@ const AdminContainerTemplates = () => {
                   Access: {tmpl.expose_strategy || 'nodeport'} | Probe: {tmpl.healthcheck_protocol || 'tcp'}{' '}
                   {(tmpl.healthcheck_path || '/')} | Expect: {tmpl.readiness_http_status || 200}
                 </div>
+                <div className="muted small">Network: {tmpl.network_mode || 'bridge'}</div>
                 {tmpl.readiness_success_path && (
                   <div className="muted small">Success path: {tmpl.readiness_success_path}</div>
                 )}
                 <div className="muted small">Startup timeout: {tmpl.startup_timeout_seconds || 300}s</div>
+                <div className="muted small">Idle timeout: {tmpl.idle_timeout_minutes || 30}m</div>
                 {Array.isArray(tmpl.dependency_checks) && tmpl.dependency_checks.length > 0 && (
                   <div className="muted small">
                     Dependencies:{' '}
@@ -476,11 +468,6 @@ const AdminContainerTemplates = () => {
                 <div className="muted small">Image: {imageName(tmpl.container_image_id)}</div>
                 <div className="muted small">Ref: {imageRef(tmpl.container_image_id)}</div>
                 <div className="actions">
-                  {!tmpl.is_default && (
-                    <button className="ghost" onClick={() => setDefault(tmpl.id)}>
-                      Set Default
-                    </button>
-                  )}
                   <button className="ghost" onClick={() => toggle(tmpl.id, !tmpl.enabled)}>
                     {tmpl.enabled ? 'Disable' : 'Enable'}
                   </button>
@@ -497,15 +484,7 @@ const AdminContainerTemplates = () => {
           {editingId && (
             <div className="card" style={{ marginTop: '1rem' }}>
               <h4>Edit container template</h4>
-              <p className="muted small">Saving creates a new immutable version for this template key.</p>
               <div className="form">
-                <label>
-                  Template key
-                  <input
-                    value={editForm.template_key}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, template_key: e.target.value }))}
-                  />
-                </label>
                 <label>
                   Name
                   <input
@@ -582,6 +561,18 @@ const AdminContainerTemplates = () => {
                   >
                     <option value="nodeport">NodePort</option>
                     <option value="ingress">Ingress</option>
+                  </select>
+                </label>
+                <label>
+                  Network mode
+                  <select
+                    value={editForm.network_mode}
+                    onChange={(e) => setEditForm((prev) => ({ ...prev, network_mode: e.target.value }))}
+                  >
+                    <option value="bridge">Bridge (DNS/HTTP/HTTPS egress)</option>
+                    <option value="isolated">Isolated (deny egress)</option>
+                    <option value="none">None (deny egress)</option>
+                    <option value="unrestricted">Unrestricted (no policy)</option>
                   </select>
                 </label>
                 <label>
@@ -687,29 +678,19 @@ const AdminContainerTemplates = () => {
                   />
                 </label>
                 <label>
-                  Auto-delete stopped/completed after (minutes)
+                  Idle timeout (minutes)
                   <input
                     type="number"
                     min={1}
                     max={1440}
-                    value={editForm.auto_delete_minutes}
+                    value={editForm.idle_timeout_minutes}
                     onChange={(e) =>
                       setEditForm((prev) => ({
                         ...prev,
-                        auto_delete_minutes: Math.max(1, parseInt(e.target.value, 10) || 60),
+                        idle_timeout_minutes: Math.max(1, parseInt(e.target.value, 10) || 30),
                       }))
                     }
                   />
-                </label>
-                <label>
-                  Set as default version
-                  <select
-                    value={editForm.is_default ? 'true' : 'false'}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, is_default: e.target.value === 'true' }))}
-                  >
-                    <option value="true">Yes</option>
-                    <option value="false">No</option>
-                  </select>
                 </label>
                 <label>
                   Enabled

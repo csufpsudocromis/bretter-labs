@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 
 const UserPanel = () => {
+  const SINGLE_LAB_LIMIT_MESSAGE = 'You already have a virtual lab running. Delete the current lab before starting a new one.';
   const [templates, setTemplates] = useState([]);
   const [instances, setInstances] = useState([]);
   const [containerTemplates, setContainerTemplates] = useState([]);
@@ -16,11 +17,14 @@ const UserPanel = () => {
   const idleStartsAtRef = useRef(null);
   const lastActivityAtRef = useRef(null);
   const consoleWindowsRef = useRef({});
+  const containerWindowIdsRef = useRef(new Set());
   const consoleHandshakeRef = useRef({});
   const idleSuspendedRef = useRef(false);
   const idleSuspendReasonRef = useRef(null);
   const vmPresenceAtRef = useRef(null);
-  const latestInstanceIdsRef = useRef([]);
+  const latestVmInstanceIdsRef = useRef([]);
+  const latestContainerInstanceIdsRef = useRef([]);
+  const stickyLimitMessageRef = useRef(false);
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
 
@@ -37,11 +41,25 @@ const UserPanel = () => {
         api.get('/user/container-templates'),
         api.get('/user/containers'),
       ]);
+      const nextVmInstances = podsRes.data || [];
+      const nextContainerInstances = ctInstRes.data || [];
       setTemplates(tmplRes.data);
-      setInstances(podsRes.data);
+      setInstances(nextVmInstances);
       setContainerTemplates(ctTmplRes.data || []);
-      setContainerInstances(ctInstRes.data || []);
-      setMessage('');
+      setContainerInstances(nextContainerInstances);
+
+      const hasActiveLab = [...nextVmInstances, ...nextContainerInstances].some((inst) => {
+        const statusText = String(inst?.status || '').toLowerCase();
+        return !['stopped', 'completed', 'failed'].includes(statusText);
+      });
+      if (!hasActiveLab) {
+        stickyLimitMessageRef.current = false;
+      }
+      if (stickyLimitMessageRef.current) {
+        setMessage(SINGLE_LAB_LIMIT_MESSAGE);
+      } else {
+        setMessage('');
+      }
     } catch (err) {
       setMessage(err.response?.data?.detail || 'Failed to load data');
     }
@@ -54,24 +72,42 @@ const UserPanel = () => {
     return () => clearInterval(handle);
   }, []);
 
-  const activeInstances = useMemo(
-    () => instances.filter((i) => i.status === 'running' || i.status === 'pending'),
+  const ACTIVE_WORKLOAD_STATUSES = new Set(['queued', 'pending', 'building', 'starting', 'running']);
+  const workloadStatus = (inst) => String(inst?.status_stage || inst?.status || 'unknown').toLowerCase();
+
+  const activeVmInstances = useMemo(
+    () => instances.filter((i) => ACTIVE_WORKLOAD_STATUSES.has(workloadStatus(i))),
     [instances],
   );
+  const activeContainerInstances = useMemo(
+    () => containerInstances.filter((i) => ACTIVE_WORKLOAD_STATUSES.has(workloadStatus(i))),
+    [containerInstances],
+  );
+  const activeWorkloadCount = activeVmInstances.length + activeContainerInstances.length;
 
   useEffect(() => {
-    latestInstanceIdsRef.current = activeInstances.map((inst) => inst.id);
-  }, [activeInstances]);
+    latestVmInstanceIdsRef.current = activeVmInstances.map((inst) => inst.id);
+  }, [activeVmInstances]);
+  useEffect(() => {
+    latestContainerInstanceIdsRef.current = activeContainerInstances.map((inst) => inst.id);
+  }, [activeContainerInstances]);
 
   const templateIdleMinutes = (templateId) => {
     const tmpl = templates.find((t) => t.id === templateId);
     return tmpl?.idle_timeout_minutes || DEFAULT_IDLE_MINUTES;
   };
+  const containerTemplateIdleMinutes = (templateId) => {
+    const tmpl = containerTemplates.find((t) => t.id === templateId);
+    return tmpl?.idle_timeout_minutes || DEFAULT_IDLE_MINUTES;
+  };
 
   const activeIdleMinutes = useMemo(() => {
-    if (activeInstances.length === 0) return null;
-    return Math.min(...activeInstances.map((inst) => templateIdleMinutes(inst.template_id)));
-  }, [activeInstances, templates]);
+    const vmIdleMinutes = activeVmInstances.map((inst) => templateIdleMinutes(inst.template_id));
+    const containerIdleMinutes = activeContainerInstances.map((inst) => containerTemplateIdleMinutes(inst.template_id));
+    const allIdleMinutes = [...vmIdleMinutes, ...containerIdleMinutes];
+    if (allIdleMinutes.length === 0) return null;
+    return Math.min(...allIdleMinutes);
+  }, [activeVmInstances, activeContainerInstances, templates, containerTemplates]);
 
   const start = async (templateId) => {
     try {
@@ -79,7 +115,11 @@ const UserPanel = () => {
       setMessage('');
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to start VM');
+      const detail = err.response?.data?.detail || 'Failed to start VM';
+      if (detail === SINGLE_LAB_LIMIT_MESSAGE) {
+        stickyLimitMessageRef.current = true;
+      }
+      setMessage(detail);
     }
   };
 
@@ -109,7 +149,11 @@ const UserPanel = () => {
       setMessage('');
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to start container');
+      const detail = err.response?.data?.detail || 'Failed to start container';
+      if (detail === SINGLE_LAB_LIMIT_MESSAGE) {
+        stickyLimitMessageRef.current = true;
+      }
+      setMessage(detail);
     }
   };
 
@@ -123,11 +167,23 @@ const UserPanel = () => {
     }
   };
 
-  const openContainer = (instance) => {
-    if (!instance?.access_url) {
-      return;
+  const openContainer = async (instance) => {
+    if (!instance?.id) return;
+    try {
+      const res = await api.post(`/user/containers/${instance.id}/connect-token`);
+      const connectUrl = String(res?.data?.connect_url || '').trim();
+      const win = window.open(connectUrl || instance.access_url || '', '_blank');
+      if (win) {
+        consoleWindowsRef.current[instance.id] = win;
+        containerWindowIdsRef.current.add(instance.id);
+        if (showIdlePrompt) {
+          // Child app boot can be delayed; rebroadcast prompt shortly after open.
+          window.setTimeout(() => broadcastIdlePromptToConsoles(true), 1200);
+        }
+      }
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to open container');
     }
-    window.open(instance.access_url, '_blank', 'noopener,noreferrer');
   };
 
   const stopInstances = async (instanceIds) => {
@@ -175,11 +231,41 @@ const UserPanel = () => {
     }
   };
 
+  const deleteContainerInstances = async (instanceIds, reason, keepMessage = false) => {
+    if (!instanceIds || instanceIds.length === 0) return;
+    try {
+      const results = await Promise.all(instanceIds.map((id) => api.delete(`/user/containers/${id}`).catch((err) => err)));
+      const failures = results.filter((result) => {
+        if (result?.status && result.status < 400) {
+          return false;
+        }
+        const status = result?.response?.status;
+        if (status === 404) {
+          return false;
+        }
+        return true;
+      });
+      if (failures.length) {
+        setMessage('Some idle containers failed to delete; please check the labs list.');
+      } else if (!keepMessage) {
+        if (reason === 'idle-timeout') {
+          setMessage('Session ended due to inactivity.');
+        } else {
+          setMessage('');
+        }
+      }
+      refresh();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to delete idle container');
+    }
+  };
+
   const connect = (instance) => {
     if (instance?.console_url) {
       const win = window.open(instance.console_url, '_blank');
       if (win && instance?.id) {
         consoleWindowsRef.current[instance.id] = win;
+        containerWindowIdsRef.current.delete(instance.id);
         startConsoleHandshake(instance.id, win);
         if (document.hasFocus()) {
           try {
@@ -237,6 +323,18 @@ const UserPanel = () => {
   const containerStatusReason = (instance) => instance?.status_detail || '';
   const containerDiagnostics = (instance) =>
     Array.isArray(instance?.launch_diagnostics) ? instance.launch_diagnostics.slice(0, 5) : [];
+  const hasContainerStartupError = (instance) => {
+    const status = effectiveContainerStatus(instance);
+    if (status === 'failed') {
+      return true;
+    }
+    const errorPattern = /(error|failed|back-?off|imagepull|errimagepull|invalid|crashloop)/i;
+    const detail = String(instance?.status_detail || '');
+    if (errorPattern.test(detail)) {
+      return true;
+    }
+    return containerDiagnostics(instance).some((line) => errorPattern.test(String(line || '')));
+  };
   const isContainerRunning = (instance) => effectiveContainerStatus(instance) === 'running';
 
   const readStoredActivity = () => {
@@ -274,13 +372,12 @@ const UserPanel = () => {
   };
 
   const sendAuthToConsole = (instanceId, win) => {
-    const token = localStorage.getItem('blabs_token');
-    if (!token || !instanceId || !win || win.closed) {
+    if (!instanceId || !win || win.closed) {
       return;
     }
     const apiBase = api?.defaults?.baseURL || '';
     try {
-      win.postMessage({ type: 'idle-auth', source: 'user', instanceId, token, apiBase }, '*');
+      win.postMessage({ type: 'idle-auth', source: 'user', instanceId, apiBase }, '*');
     } catch (err) {
       // ignore postMessage failures
     }
@@ -315,7 +412,11 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
+        return;
+      }
+      if (containerWindowIdsRef.current.has(id)) {
         return;
       }
       open = true;
@@ -328,7 +429,11 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
+        return;
+      }
+      if (containerWindowIdsRef.current.has(id)) {
         return;
       }
       try {
@@ -345,7 +450,11 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
+        return;
+      }
+      if (containerWindowIdsRef.current.has(id)) {
         return;
       }
       try {
@@ -353,6 +462,48 @@ const UserPanel = () => {
           { type: focused ? 'idle-focus' : 'idle-blur', source: 'user', instanceId: id, timestamp },
           '*',
         );
+      } catch (err) {
+        // ignore postMessage failures
+      }
+    });
+  };
+
+  const broadcastIdlePromptToConsoles = (showPrompt) => {
+    const windows = consoleWindowsRef.current;
+    const endsAt = countdownEndsAtRef.current || Date.now() + PROMPT_COUNTDOWN_SECONDS * 1000;
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        containerWindowIdsRef.current.delete(id);
+        stopConsoleHandshake(id);
+        return;
+      }
+      if (!containerWindowIdsRef.current.has(id)) {
+        return;
+      }
+      try {
+        if (showPrompt) {
+          win.postMessage(
+            {
+              type: 'idle-parent-prompt',
+              source: 'user',
+              instanceId: id,
+              endsAt,
+              timestamp: Date.now(),
+            },
+            '*',
+          );
+        } else {
+          win.postMessage(
+            {
+              type: 'idle-parent-clear',
+              source: 'user',
+              instanceId: id,
+              timestamp: Date.now(),
+            },
+            '*',
+          );
+        }
       } catch (err) {
         // ignore postMessage failures
       }
@@ -411,11 +562,10 @@ const UserPanel = () => {
     }
   };
 
-  const startIdleCountdown = (startedAt, instanceIds = latestInstanceIdsRef.current) => {
-    if (!instanceIds || instanceIds.length === 0) {
+  const startIdleCountdown = (startedAt) => {
+    if (!latestVmInstanceIdsRef.current.length && !latestContainerInstanceIdsRef.current.length) {
       return;
     }
-    latestInstanceIdsRef.current = instanceIds;
     idlePromptRef.current = true;
     setShowIdlePrompt(true);
     setSessionEnded(false);
@@ -457,7 +607,7 @@ const UserPanel = () => {
     if (idlePromptRef.current) {
       return;
     }
-    if (!activeInstances.length || !activeIdleMinutes) {
+    if (activeWorkloadCount === 0 || !activeIdleMinutes) {
       return;
     }
     const now = timestamp || Date.now();
@@ -475,7 +625,7 @@ const UserPanel = () => {
   };
 
   const handleExternalActivity = (timestamp) => {
-    if (!activeInstances.length || !activeIdleMinutes) {
+    if (activeWorkloadCount === 0 || !activeIdleMinutes) {
       return;
     }
     const now = timestamp || Date.now();
@@ -499,7 +649,7 @@ const UserPanel = () => {
   const resumeIdle = (timestamp) => {
     idleSuspendedRef.current = false;
     idleSuspendReasonRef.current = null;
-    if (!activeInstances.length || !activeIdleMinutes) {
+    if (activeWorkloadCount === 0 || !activeIdleMinutes) {
       return;
     }
     const now = timestamp || Date.now();
@@ -519,7 +669,7 @@ const UserPanel = () => {
       updateCountdown();
       return;
     }
-    if (!activeInstances.length || !activeIdleMinutes) {
+    if (activeWorkloadCount === 0 || !activeIdleMinutes) {
       clearIdleTimers();
       clearIdlePrompt();
       idleStartsAtRef.current = null;
@@ -542,7 +692,25 @@ const UserPanel = () => {
   useEffect(() => {
     syncIdleState();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, activeInstances.length]);
+  }, [activeIdleMinutes, activeWorkloadCount]);
+
+  useEffect(() => {
+    broadcastIdlePromptToConsoles(showIdlePrompt);
+    if (!showIdlePrompt) {
+      return undefined;
+    }
+    // Child apps can attach message listeners late; retry for a short window.
+    let attempts = 0;
+    const retry = window.setInterval(() => {
+      attempts += 1;
+      broadcastIdlePromptToConsoles(true);
+      if (attempts >= 20) {
+        window.clearInterval(retry);
+      }
+    }, 1500);
+    return () => window.clearInterval(retry);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showIdlePrompt]);
 
   useEffect(() => () => clearIdleTimers(), []);
 
@@ -565,14 +733,14 @@ const UserPanel = () => {
     }, 1000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, activeInstances.length]);
+  }, [activeIdleMinutes, activeWorkloadCount]);
 
   useEffect(() => {
     const onActivity = () => {
       if (document.hidden) {
         return;
       }
-      if (!activeInstances.length || !activeIdleMinutes) {
+      if (activeWorkloadCount === 0 || !activeIdleMinutes) {
         return;
       }
       const now = Date.now();
@@ -625,26 +793,36 @@ const UserPanel = () => {
       document.removeEventListener('visibilitychange', onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIdleMinutes, activeInstances.length]);
+  }, [activeIdleMinutes, activeWorkloadCount]);
 
   useEffect(() => {
     const handleMessage = (event) => {
       const payload = event.data || {};
-      if (payload.type === 'idle-focus' && payload.source === 'vm') {
+      const isVmSource = payload.source === 'vm';
+      const isContainerSource = payload.source === 'container';
+      if (payload.type === 'idle-focus' && isVmSource) {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
         noteVmPresence(ts);
         suspendIdle(ts, 'vm');
         return;
       }
-      if (payload.type === 'idle-blur' && payload.source === 'vm') {
+      if (payload.type === 'idle-blur' && isVmSource) {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
         vmPresenceAtRef.current = null;
         resumeIdle(ts);
         return;
       }
-      if (payload.type === 'idle-activity' && payload.source === 'vm') {
+      if (payload.type === 'idle-activity' && isVmSource) {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
         handleExternalActivity(ts);
+        return;
+      }
+      if ((payload.type === 'idle-focus' || payload.type === 'idle-activity') && isContainerSource) {
+        const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
+        recordActivity({ emit: false, timestamp: ts });
+        return;
+      }
+      if (payload.type === 'idle-blur' && isContainerSource) {
         return;
       }
       if (payload.type === 'idle-handshake-ack' && payload.source === 'vm' && payload.instanceId) {
@@ -656,11 +834,25 @@ const UserPanel = () => {
         return;
       }
       if (payload.type === 'idle-stop' && payload.instanceId) {
+        const isContainerSource = payload.source === 'container';
+        delete consoleWindowsRef.current[payload.instanceId];
+        containerWindowIdsRef.current.delete(payload.instanceId);
+        stopConsoleHandshake(payload.instanceId);
         if (payload.action === 'delete') {
-          deleteInstances([payload.instanceId], payload.reason);
+          if (isContainerSource) {
+            deleteContainerInstances([payload.instanceId], payload.reason);
+          } else {
+            deleteInstances([payload.instanceId], payload.reason);
+          }
         } else {
-          stopInstances([payload.instanceId]);
+          if (!isContainerSource) {
+            stopInstances([payload.instanceId]);
+          }
         }
+        return;
+      }
+      if (payload.type === 'idle-continue' && (payload.source === 'vm' || payload.source === 'container')) {
+        continueSession();
       }
     };
     window.addEventListener('message', handleMessage);
@@ -682,7 +874,9 @@ const UserPanel = () => {
     clearIdlePrompt();
     setSessionEnded(true);
     setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
-    deleteInstances(latestInstanceIdsRef.current, auto ? 'idle-timeout' : 'user-end', true);
+    const reason = auto ? 'idle-timeout' : 'user-end';
+    deleteInstances(latestVmInstanceIdsRef.current, reason, true);
+    deleteContainerInstances(latestContainerInstanceIdsRef.current, reason, true);
   };
 
   const formatCountdown = (seconds) => {
@@ -729,7 +923,9 @@ const UserPanel = () => {
         <div>
           <h3>Available Virtual Labs</h3>
           <div className="tile-grid">
-            {templates.length === 0 && <div className="muted">No templates available.</div>}
+            {templates.length === 0 && containerTemplates.length === 0 && (
+              <div className="muted">No templates available.</div>
+            )}
             {templates.map((t) => (
               <div key={t.id} className="tile template-tile">
                 <div className="tile-header">
@@ -741,42 +937,8 @@ const UserPanel = () => {
                 </div>
               </div>
             ))}
-          </div>
-        </div>
-        <div>
-          <h3>My Running Labs</h3>
-          <div className="tile-grid">
-            {instances.length === 0 && <div className="muted">No labs yet. Start a lab to see it here.</div>}
-            {instances.map((p) => (
-              <div key={p.id} className="tile pod-tile">
-                <div className="tile-header">
-                  <h4>{templateName(p.template_id)}</h4>
-                  <span className={`badge ${isRunning(p) ? 'success' : 'warn'}`}>{statusLabel(p)}</span>
-                </div>
-                <div className="specs">
-                  <span>{podName(p)}</span>
-                </div>
-                {statusReason(p) && <div className="muted small">{statusReason(p)}</div>}
-                <div className="actions">
-                  <button className="ghost" onClick={() => remove(p.id)}>
-                    Delete
-                  </button>
-                  <button onClick={() => connect(p)} disabled={!isRunning(p)}>
-                    Connect
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="grid" style={{ marginTop: '1.25rem' }}>
-        <div>
-          <h3>Available Containers</h3>
-          <div className="tile-grid">
-            {containerTemplates.length === 0 && <div className="muted">No container templates available.</div>}
             {containerTemplates.map((t) => (
-              <div key={t.id} className="tile template-tile">
+              <div key={`ct-${t.id}`} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{t.name}</h4>
                 </div>
@@ -789,11 +951,33 @@ const UserPanel = () => {
           </div>
         </div>
         <div>
-          <h3>My Running Containers</h3>
+          <h3>My Running Labs</h3>
           <div className="tile-grid">
-            {containerInstances.length === 0 && <div className="muted">No containers yet.</div>}
+            {instances.length === 0 && containerInstances.length === 0 && (
+              <div className="muted">No labs yet. Start a lab to see it here.</div>
+            )}
+            {instances.map((p) => (
+              <div key={p.id} className="tile pod-tile">
+                <div className="tile-header">
+                  <h4>{templateName(p.template_id)}</h4>
+                  <span className={`badge ${isRunning(p) ? 'success' : 'warn'}`}>{statusLabel(p)}</span>
+                </div>
+                <div className="specs">
+                  <span>{podName(p)}</span>
+                </div>
+                {statusReason(p) && <div className="muted small">{statusReason(p)}</div>}
+                <div className="actions">
+                  <button className="danger" onClick={() => remove(p.id)}>
+                    Delete
+                  </button>
+                  <button onClick={() => connect(p)} disabled={!isRunning(p)}>
+                    Connect
+                  </button>
+                </div>
+              </div>
+            ))}
             {containerInstances.map((c) => (
-              <div key={c.id} className="tile pod-tile">
+              <div key={`ci-${c.id}`} className="tile pod-tile">
                 <div className="tile-header">
                   <h4>{containerTemplateName(c.template_id)}</h4>
                   <span className={`badge ${isContainerRunning(c) ? 'success' : 'warn'}`}>{containerStatusLabel(c)}</span>
@@ -801,12 +985,15 @@ const UserPanel = () => {
                 <div className="specs">
                   <span>{c.pod_name || `ct-${c.owner}-${c.id.slice(0, 8)}`}</span>
                 </div>
-                {containerStatusReason(c) && <div className="muted small">{containerStatusReason(c)}</div>}
-                {containerDiagnostics(c).map((line, idx) => (
-                  <div key={`${c.id}-diag-${idx}`} className="muted small">
-                    {line}
-                  </div>
-                ))}
+                {hasContainerStartupError(c) && containerStatusReason(c) && (
+                  <div className="muted small">{containerStatusReason(c)}</div>
+                )}
+                {hasContainerStartupError(c) &&
+                  containerDiagnostics(c).map((line, idx) => (
+                    <div key={`${c.id}-diag-${idx}`} className="muted small">
+                      {line}
+                    </div>
+                  ))}
                 <div className="actions">
                   <button className="danger" onClick={() => removeContainer(c.id)}>
                     Delete

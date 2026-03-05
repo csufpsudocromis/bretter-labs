@@ -5,16 +5,17 @@ import subprocess
 from datetime import datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlmodel import Session, select
 
 from ..auth import require_admin
 from ..config import settings
-from ..db import get_session
+from ..db import get_session, session_scope
 from ..models import (
     ContainerDependencyCheck,
     ContainerImageCreate,
     ContainerImageMeta,
+    ContainerInstance as ContainerInstanceView,
     ContainerImageUpdate,
     ContainerTemplate,
     ContainerTemplateCreate,
@@ -131,6 +132,13 @@ def _normalize_template_key(value: str) -> str:
     return key
 
 
+def _normalize_container_network_mode(value: object) -> str:
+    mode = str(value or "bridge").strip().lower()
+    if mode in {"none", "isolated", "unrestricted"}:
+        return mode
+    return "bridge"
+
+
 def _normalize_http_path(value: str | None, *, allow_blank: bool = False) -> str | None:
     raw = str(value or "").strip()
     if not raw:
@@ -138,6 +146,13 @@ def _normalize_http_path(value: str | None, *, allow_blank: bool = False) -> str
     if not raw.startswith("/"):
         raw = f"/{raw}"
     return raw
+
+
+def _normalize_optional_command(value: object) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    return raw or None
 
 
 def _parse_dependency_checks(raw: str) -> list[ContainerDependencyCheck]:
@@ -186,6 +201,24 @@ def _trigger_image_scan(session: Session, record: ContainerImageTable) -> None:
     session.add(record)
     session.commit()
     session.refresh(record)
+
+
+def _run_image_scan_for_id(image_id: str) -> None:
+    try:
+        with session_scope() as session:
+            record = session.get(ContainerImageTable, image_id)
+            if not record:
+                return
+            _trigger_image_scan(session, record)
+    except Exception:
+        logger.warning("Container image background scan failed for %s", image_id, exc_info=True)
+
+
+def _run_image_prepull(image_ref: str) -> None:
+    try:
+        kube.prepull_container_image(image_ref)
+    except Exception:
+        logger.warning("Container image pre-pull failed for %s", image_ref, exc_info=True)
 
 
 def _image_out(record: ContainerImageTable) -> ContainerImageMeta:
@@ -239,15 +272,81 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         startup_timeout_seconds=max(10, int(getattr(record, "startup_timeout_seconds", 300) or 300)),
         dependency_checks=_parse_dependency_checks(getattr(record, "dependency_checks_json", "[]")),
         expose_strategy=str(getattr(record, "expose_strategy", "nodeport") or "nodeport"),
+        network_mode=str(getattr(record, "network_mode", "bridge") or "bridge"),
         run_as_non_root=bool(getattr(record, "run_as_non_root", False)),
         read_only_root_filesystem=bool(getattr(record, "read_only_root_filesystem", False)),
         command=record.command,
         args=_parse_json_list(record.args_json),
         env=_parse_json_map(record.env_json),
         auto_delete_minutes=record.auto_delete_minutes,
+        idle_timeout_minutes=max(1, int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes)),
         enabled=record.enabled,
         created_at=record.created_at,
     )
+
+
+def _instance_out(record: ContainerInstanceTable) -> ContainerInstanceView:
+    return ContainerInstanceView(
+        id=record.id,
+        template_id=record.template_id,
+        owner=record.owner,
+        status=str(record.status or "unknown"),
+        status_stage=None,
+        status_detail=None,
+        pod_name=record.pod_name,
+        access_url=None,
+        container_port=None,
+        queue_attempts=max(0, int(getattr(record, "queue_attempts", 0) or 0)),
+        queue_not_before=getattr(record, "queue_not_before", None),
+        queue_reason=getattr(record, "queue_reason", None),
+        launch_diagnostics=[],
+        started_at=record.started_at,
+        last_active_at=record.last_active_at,
+    )
+
+
+@router.get("/containers", response_model=list[ContainerInstanceView])
+def list_container_instances(session: Session = Depends(get_session)) -> list[ContainerInstanceView]:
+    rows = session.exec(select(ContainerInstanceTable)).all()
+    rows.sort(key=lambda item: item.started_at, reverse=True)
+    return [_instance_out(row) for row in rows]
+
+
+@router.post("/containers/{instance_id}/stop", response_model=ContainerInstanceView)
+def stop_container_instance(instance_id: str, session: Session = Depends(get_session)) -> ContainerInstanceView:
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+
+    if record.status != "queued":
+        kube.stop_container_pod(record.id, record.owner)
+        try:
+            kube.delete_container_service(record.id)
+        except Exception:
+            pass
+    record.status = "stopped"
+    record.queue_not_before = None
+    record.queue_reason = None
+    record.last_active_at = datetime.utcnow()
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    return _instance_out(record)
+
+
+@router.delete("/containers/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_container_instance(instance_id: str, session: Session = Depends(get_session)) -> None:
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+
+    kube.delete_container_pod(record.id, record.owner)
+    try:
+        kube.delete_container_service(record.id)
+    except Exception:
+        pass
+    session.delete(record)
+    session.commit()
 
 
 @router.post("/container-images", response_model=ContainerImageMeta, status_code=status.HTTP_201_CREATED)
@@ -331,40 +430,71 @@ def delete_container_image(image_id: str, session: Session = Depends(get_session
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
 
-    template_ref = session.exec(
+    template_refs = session.exec(
         select(ContainerTemplateTable).where(ContainerTemplateTable.container_image_id == image_id)
-    ).first()
-    if template_ref:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="container image is still used by one or more container templates",
-        )
+    ).all()
+    if template_refs:
+        template_ids = [row.id for row in template_refs]
+        active_instance = session.exec(
+            select(ContainerInstanceTable)
+            .where(ContainerInstanceTable.template_id.in_(template_ids))
+            .where(ContainerInstanceTable.status.in_(["queued", "pending", "running"]))
+        ).first()
+        if active_instance:
+            names = sorted({(row.name or row.id).strip() for row in template_refs})
+            sample = ", ".join(names[:3])
+            if len(names) > 3:
+                sample = f"{sample}, +{len(names) - 3} more"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"container image is still used by active container templates: {sample}",
+            )
+
+        for instance in session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.template_id.in_(template_ids))).all():
+            session.delete(instance)
+        for template in template_refs:
+            session.delete(template)
 
     session.delete(record)
     session.commit()
 
 
 @router.post("/container-images/{image_id}/prepull", status_code=status.HTTP_202_ACCEPTED)
-def prepull_container_image(image_id: str, session: Session = Depends(get_session)) -> dict[str, str]:
+def prepull_container_image(
+    image_id: str,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> dict[str, str]:
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
-    kube.prepull_container_image(record.image_ref)
-    return {"detail": f"Pre-pull triggered for {record.image_ref}"}
+    background_tasks.add_task(_run_image_prepull, record.image_ref)
+    return {"detail": f"Pre-pull queued for {record.image_ref}"}
 
 
 @router.post("/container-images/{image_id}/scan", response_model=ContainerImageMeta)
-def scan_container_image(image_id: str, session: Session = Depends(get_session)) -> ContainerImageMeta:
+def scan_container_image(
+    image_id: str,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> ContainerImageMeta:
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
-    _trigger_image_scan(session, record)
+    record.last_scan_at = datetime.utcnow()
+    record.last_scan_status = "queued"
+    record.last_scan_summary = "scan queued"
+    session.add(record)
+    session.commit()
+    session.refresh(record)
+    background_tasks.add_task(_run_image_scan_for_id, image_id)
     return _image_out(record)
 
 
 @router.post("/container-templates", response_model=ContainerTemplate, status_code=status.HTTP_201_CREATED)
 def create_container_template(
     payload: ContainerTemplateCreate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> ContainerTemplate:
     image = session.get(ContainerImageTable, payload.container_image_id)
@@ -376,20 +506,12 @@ def create_container_template(
     healthcheck_path = _normalize_http_path(payload.healthcheck_path) or "/"
     readiness_success_path = _normalize_http_path(payload.readiness_success_path, allow_blank=True)
     dependency_checks = [ContainerDependencyCheck.model_validate(item) for item in (payload.dependency_checks or [])]
-
-    if payload.template_key:
-        template_key = _normalize_template_key(payload.template_key)
-    else:
-        template_key = _normalize_template_key(f"ct-{uuid4().hex[:12]}")
-    existing_versions = session.exec(
-        select(ContainerTemplateTable).where(ContainerTemplateTable.template_key == template_key)
-    ).all()
-    next_version = max([max(1, int(getattr(row, "version", 1) or 1)) for row in existing_versions], default=0) + 1
+    template_key = _normalize_template_key(f"ct-{uuid4().hex[:12]}")
 
     record = ContainerTemplateTable(
         id=str(uuid4()),
         template_key=template_key,
-        version=next_version,
+        version=1,
         is_default=True,
         name=(payload.name or "").strip(),
         description=(payload.description or "").strip(),
@@ -404,41 +526,29 @@ def create_container_template(
         startup_timeout_seconds=max(10, int(payload.startup_timeout_seconds or 300)),
         dependency_checks_json=_serialize_dependency_checks(dependency_checks),
         expose_strategy=(payload.expose_strategy or "nodeport").lower(),
+        network_mode=_normalize_container_network_mode(payload.network_mode),
         run_as_non_root=bool(payload.run_as_non_root),
         read_only_root_filesystem=bool(payload.read_only_root_filesystem),
-        command=(payload.command or "").strip() or None,
+        command=_normalize_optional_command(payload.command),
         args_json=json.dumps(args, separators=(",", ":")),
         env_json=json.dumps(env, separators=(",", ":")),
         auto_delete_minutes=payload.auto_delete_minutes,
+        idle_timeout_minutes=max(1, int(payload.idle_timeout_minutes or settings.idle_timeout_minutes)),
         enabled=payload.enabled,
         created_at=datetime.utcnow(),
     )
-    for row in existing_versions:
-        if bool(getattr(row, "is_default", False)):
-            row.is_default = False
-            session.add(row)
     session.add(record)
     session.commit()
     session.refresh(record)
     if record.enabled:
-        try:
-            kube.prepull_container_image(image.image_ref)
-        except Exception:
-            logger.warning("Container image pre-pull failed for %s", image.image_ref, exc_info=True)
+        background_tasks.add_task(_run_image_prepull, image.image_ref)
     return _template_out(record)
 
 
 @router.get("/container-templates", response_model=list[ContainerTemplate])
 def list_container_templates(session: Session = Depends(get_session)) -> list[ContainerTemplate]:
-    rows = session.exec(select(ContainerTemplateTable)).all()
-    rows.sort(
-        key=lambda item: (
-            str(getattr(item, "template_key", item.id)),
-            -max(1, int(getattr(item, "version", 1) or 1)),
-            item.created_at,
-        ),
-        reverse=False,
-    )
+    rows = session.exec(select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)).all()  # noqa: E712
+    rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
 
 
@@ -446,6 +556,7 @@ def list_container_templates(session: Session = Depends(get_session)) -> list[Co
 def update_container_template(
     template_id: str,
     payload: ContainerTemplateUpdate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> ContainerTemplate:
     record = session.get(ContainerTemplateTable, template_id)
@@ -456,141 +567,79 @@ def update_container_template(
     if not updates:
         return _template_out(record)
 
-    mutable_fields = {
-        "template_key",
-        "name",
-        "description",
-        "container_image_id",
-        "cpu_millicores",
-        "memory_mb",
-        "container_port",
-        "healthcheck_protocol",
-        "healthcheck_path",
-        "readiness_http_status",
-        "readiness_success_path",
-        "startup_timeout_seconds",
-        "dependency_checks",
-        "expose_strategy",
-        "run_as_non_root",
-        "read_only_root_filesystem",
-        "command",
-        "args",
-        "env",
-        "auto_delete_minutes",
-    }
-    metadata_only = set(updates).issubset({"enabled", "is_default"})
-    if not metadata_only and set(updates).intersection(mutable_fields):
-        image_id = str(updates.get("container_image_id") or record.container_image_id).strip()
-        if not image_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="container_image_id is required")
+    was_enabled = bool(record.enabled)
+    previous_image_id = str(record.container_image_id or "").strip()
+    image_id = str(updates.get("container_image_id") or previous_image_id).strip()
+    if not image_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="container_image_id is required")
+    image_changed = "container_image_id" in updates and image_id != previous_image_id
+    image = None
+    if image_changed:
         image = session.get(ContainerImageTable, image_id)
         if not image:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
         _enforce_registry_policy(image.image_ref)
         _verify_image_signature(image.image_ref)
 
-        template_key = _normalize_template_key(str(updates.get("template_key") or record.template_key or record.id))
-        same_key_rows = session.exec(
-            select(ContainerTemplateTable).where(ContainerTemplateTable.template_key == template_key)
-        ).all()
-        next_version = max([max(1, int(getattr(row, "version", 1) or 1)) for row in same_key_rows], default=0) + 1
-
-        args = (
-            [str(item).strip() for item in (updates.get("args") or []) if str(item).strip()]
-            if "args" in updates
-            else _parse_json_list(record.args_json)
-        )
-        env = _validate_env(updates.get("env") or {}) if "env" in updates else _parse_json_map(record.env_json)
-        dependency_checks = (
-            [ContainerDependencyCheck.model_validate(item) for item in (updates.get("dependency_checks") or [])]
-            if "dependency_checks" in updates
-            else _parse_dependency_checks(getattr(record, "dependency_checks_json", "[]"))
-        )
-        healthcheck_path = (
-            _normalize_http_path(str(updates.get("healthcheck_path") or "/")) if "healthcheck_path" in updates else record.healthcheck_path
-        ) or "/"
-        readiness_success_path = (
-            _normalize_http_path(updates.get("readiness_success_path"), allow_blank=True)
-            if "readiness_success_path" in updates
-            else _normalize_http_path(getattr(record, "readiness_success_path", None), allow_blank=True)
-        )
-        new_is_default = bool(updates.get("is_default", True))
-        new_record = ContainerTemplateTable(
-            id=str(uuid4()),
-            template_key=template_key,
-            version=next_version,
-            is_default=new_is_default,
-            name=str(updates.get("name") or record.name).strip(),
-            description=str(updates.get("description") if "description" in updates else record.description or "").strip(),
-            container_image_id=image_id,
-            cpu_millicores=max(50, int(updates.get("cpu_millicores") or record.cpu_millicores)),
-            memory_mb=max(64, int(updates.get("memory_mb") or record.memory_mb)),
-            container_port=max(1, int(updates.get("container_port") or record.container_port)),
-            healthcheck_protocol=str(updates.get("healthcheck_protocol") or record.healthcheck_protocol or "tcp").strip().lower(),
-            healthcheck_path=healthcheck_path,
-            readiness_http_status=max(100, min(599, int(updates.get("readiness_http_status") or getattr(record, "readiness_http_status", 200) or 200))),
-            readiness_success_path=readiness_success_path,
-            startup_timeout_seconds=max(10, int(updates.get("startup_timeout_seconds") or record.startup_timeout_seconds or 300)),
-            dependency_checks_json=_serialize_dependency_checks(dependency_checks),
-            expose_strategy=str(updates.get("expose_strategy") or record.expose_strategy or "nodeport").strip().lower(),
-            run_as_non_root=bool(updates.get("run_as_non_root", record.run_as_non_root)),
-            read_only_root_filesystem=bool(updates.get("read_only_root_filesystem", record.read_only_root_filesystem)),
-            command=(str(updates.get("command")) if "command" in updates else (record.command or "")).strip() or None,
-            args_json=json.dumps(args, separators=(",", ":")),
-            env_json=json.dumps(env, separators=(",", ":")),
-            auto_delete_minutes=max(1, int(updates.get("auto_delete_minutes") or record.auto_delete_minutes)),
-            enabled=bool(updates.get("enabled", record.enabled)),
-            created_at=datetime.utcnow(),
-        )
-        if new_is_default:
-            for row in same_key_rows:
-                if bool(getattr(row, "is_default", False)):
-                    row.is_default = False
-                    session.add(row)
-        session.add(new_record)
-        session.commit()
-        session.refresh(new_record)
-        if new_record.enabled:
-            try:
-                kube.prepull_container_image(image.image_ref)
-            except Exception:
-                logger.warning("Container image pre-pull failed for %s", image.image_ref, exc_info=True)
-        return _template_out(new_record)
-
+    if "name" in updates:
+        record.name = str(updates.get("name") or "").strip()
+    if "description" in updates:
+        record.description = str(updates.get("description") or "").strip()
+    if "container_image_id" in updates:
+        record.container_image_id = image_id
+    if "cpu_millicores" in updates:
+        record.cpu_millicores = max(50, int(updates.get("cpu_millicores") or 0))
+    if "memory_mb" in updates:
+        record.memory_mb = max(64, int(updates.get("memory_mb") or 0))
+    if "container_port" in updates:
+        record.container_port = max(1, int(updates.get("container_port") or 0))
+    if "healthcheck_protocol" in updates:
+        record.healthcheck_protocol = str(updates.get("healthcheck_protocol") or "tcp").strip().lower()
+    if "healthcheck_path" in updates:
+        record.healthcheck_path = _normalize_http_path(str(updates.get("healthcheck_path") or "/")) or "/"
+    if "readiness_http_status" in updates:
+        record.readiness_http_status = max(100, min(599, int(updates.get("readiness_http_status") or 200)))
+    if "readiness_success_path" in updates:
+        record.readiness_success_path = _normalize_http_path(updates.get("readiness_success_path"), allow_blank=True)
+    if "startup_timeout_seconds" in updates:
+        record.startup_timeout_seconds = max(10, int(updates.get("startup_timeout_seconds") or 300))
+    if "dependency_checks" in updates:
+        dependency_checks = [ContainerDependencyCheck.model_validate(item) for item in (updates.get("dependency_checks") or [])]
+        record.dependency_checks_json = _serialize_dependency_checks(dependency_checks)
+    if "expose_strategy" in updates:
+        record.expose_strategy = str(updates.get("expose_strategy") or "nodeport").strip().lower()
+    if "network_mode" in updates:
+        record.network_mode = _normalize_container_network_mode(updates.get("network_mode"))
+    if "run_as_non_root" in updates:
+        record.run_as_non_root = bool(updates.get("run_as_non_root"))
+    if "read_only_root_filesystem" in updates:
+        record.read_only_root_filesystem = bool(updates.get("read_only_root_filesystem"))
+    if "command" in updates:
+        record.command = _normalize_optional_command(updates.get("command"))
+    if "args" in updates:
+        args = [str(item).strip() for item in (updates.get("args") or []) if str(item).strip()]
+        record.args_json = json.dumps(args, separators=(",", ":"))
+    if "env" in updates:
+        record.env_json = json.dumps(_validate_env(updates.get("env") or {}), separators=(",", ":"))
+    if "auto_delete_minutes" in updates:
+        record.auto_delete_minutes = max(1, int(updates.get("auto_delete_minutes") or 60))
+    if "idle_timeout_minutes" in updates:
+        record.idle_timeout_minutes = max(1, int(updates.get("idle_timeout_minutes") or settings.idle_timeout_minutes))
     if "enabled" in updates:
         record.enabled = bool(updates.get("enabled"))
     if "is_default" in updates:
-        desired_default = bool(updates.get("is_default"))
-        if desired_default:
-            siblings = session.exec(
-                select(ContainerTemplateTable).where(ContainerTemplateTable.template_key == record.template_key)
-            ).all()
-            for row in siblings:
-                row.is_default = (row.id == record.id)
-                session.add(row)
-        else:
-            sibling_default = session.exec(
-                select(ContainerTemplateTable)
-                .where(ContainerTemplateTable.template_key == record.template_key)
-                .where(ContainerTemplateTable.id != record.id)
-                .where(ContainerTemplateTable.is_default == True)  # noqa: E712
-            ).first()
-            if not sibling_default:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="cannot unset default without promoting another version first",
-                )
-            record.is_default = False
+        # Versioning is disabled; keep this as an accepted no-op for old clients.
+        record.is_default = True
+
     session.add(record)
     session.commit()
     session.refresh(record)
-    if record.enabled:
-        image = session.get(ContainerImageTable, record.container_image_id)
+    should_prepull = bool(record.enabled) and (image_changed or not was_enabled)
+    if should_prepull:
+        if image is None:
+            image = session.get(ContainerImageTable, record.container_image_id)
         if image:
-            try:
-                kube.prepull_container_image(image.image_ref)
-            except Exception:
-                logger.warning("Container image pre-pull failed for %s", image.image_ref, exc_info=True)
+            background_tasks.add_task(_run_image_prepull, image.image_ref)
     return _template_out(record)
 
 
@@ -600,9 +649,18 @@ def delete_container_template(template_id: str, session: Session = Depends(get_s
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
 
+    template_key = str(getattr(record, "template_key", "") or "").strip()
+    if template_key:
+        template_rows = session.exec(
+            select(ContainerTemplateTable).where(ContainerTemplateTable.template_key == template_key)
+        ).all()
+    else:
+        template_rows = [record]
+    template_ids = [row.id for row in template_rows]
+
     active_instance = session.exec(
         select(ContainerInstanceTable)
-        .where(ContainerInstanceTable.template_id == template_id)
+        .where(ContainerInstanceTable.template_id.in_(template_ids))
         .where(ContainerInstanceTable.status.in_(["queued", "pending", "running"]))
     ).first()
     if active_instance:
@@ -611,19 +669,8 @@ def delete_container_template(template_id: str, session: Session = Depends(get_s
             detail="container template has active container instances",
         )
 
-    template_key = str(getattr(record, "template_key", "") or "")
-    was_default = bool(getattr(record, "is_default", False))
-    for instance in session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.template_id == template_id)).all():
+    for instance in session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.template_id.in_(template_ids))).all():
         session.delete(instance)
-    session.delete(record)
+    for row in template_rows:
+        session.delete(row)
     session.commit()
-    if template_key and was_default:
-        replacement = session.exec(
-            select(ContainerTemplateTable)
-            .where(ContainerTemplateTable.template_key == template_key)
-            .order_by(ContainerTemplateTable.version.desc(), ContainerTemplateTable.created_at.desc())
-        ).first()
-        if replacement:
-            replacement.is_default = True
-            session.add(replacement)
-            session.commit()

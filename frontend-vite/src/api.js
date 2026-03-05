@@ -9,16 +9,7 @@ export const AUTH_INVALID_EVENT = 'blabs-auth-invalid';
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || defaultApiBase,
-});
-
-api.interceptors.request.use((config) => {
-  // Inject bearer token from localStorage if present.
-  const token = localStorage.getItem('blabs_token');
-  if (token) {
-    config.headers = config.headers || {};
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
+  withCredentials: true,
 });
 
 api.interceptors.response.use(
@@ -30,16 +21,13 @@ api.interceptors.response.use(
     const isLoginCall = url.includes('/auth/login');
     const tokenError =
       detail.includes('invalid token') ||
+      detail.includes('invalid connect token') ||
+      detail.includes('invalid connect session') ||
+      detail.includes('missing authorization token') ||
       detail.includes('missing authorization header') ||
       detail.includes('invalid authorization header');
 
     if (!isLoginCall && status === 401 && tokenError && typeof window !== 'undefined') {
-      try {
-        localStorage.removeItem('blabs_token');
-        localStorage.removeItem('blabs_user');
-      } catch (e) {
-        // ignore storage errors
-      }
       window.dispatchEvent(
         new CustomEvent(AUTH_INVALID_EVENT, {
           detail: { message: 'Session expired. Please sign in again.' },

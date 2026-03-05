@@ -4,6 +4,7 @@ from uuid import uuid4
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
@@ -11,10 +12,12 @@ from ..auth import require_user
 from ..config import settings
 from ..db import get_session
 from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
+from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import PodRequest, PodStatus, kube
-from ..tables import Config, Image, Instance, Template, User
+from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
 
 router = APIRouter()
+SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
 
 
 def _public_scheme() -> str:
@@ -229,6 +232,20 @@ def site_settings(session: Session = Depends(get_session)) -> SiteSettings:
     )
 
 
+@router.get("/site-assets/{filename}")
+def get_site_asset(filename: str) -> FileResponse:
+    safe_name = Path(filename).name
+    if safe_name != filename:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    asset_path = Path(settings.site_assets_dir) / safe_name
+    if not asset_path.exists() or not asset_path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="asset not found")
+    return FileResponse(
+        path=asset_path,
+        headers={"cache-control": "public, max-age=300"},
+    )
+
+
 @router.get("/settings/sso", response_model=SSOSettings)
 def sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
@@ -257,21 +274,28 @@ def start_vm(
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
     _require_clone_ready(image)
+    if not lock_user_launch_slot(session, user.username):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
 
     config = session.get(Config, 1) or Config()
     total_running = session.exec(select(Instance).where(Instance.status == "running")).all()
-    user_instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
+    user_vm_instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
+    user_container_instances = session.exec(
+        select(ContainerInstanceTable).where(ContainerInstanceTable.owner == user.username)
+    ).all()
     # Block if any of the user's labs are not stopped/completed/failed.
-    for inst in user_instances:
+    for inst in [*user_vm_instances, *user_container_instances]:
         if inst.status not in {"stopped", "completed", "failed"}:
             raise HTTPException(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="You already have a virtual lab running. Delete the current lab before starting a new one.",
+                detail=SINGLE_LAB_LIMIT_MESSAGE,
             )
     if len(total_running) >= config.max_concurrent_vms:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
     # Enforce per-user limit against any non-stopped labs.
-    active_count = sum(1 for inst in user_instances if inst.status not in {"stopped", "completed", "failed"})
+    active_count = sum(
+        1 for inst in [*user_vm_instances, *user_container_instances] if inst.status not in {"stopped", "completed", "failed"}
+    )
     if active_count >= config.per_user_vm_limit:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="per-user concurrency limit reached")
 

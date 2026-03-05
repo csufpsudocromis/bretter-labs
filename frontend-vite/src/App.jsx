@@ -38,28 +38,41 @@ const DEFAULT_SITE = {
   theme_font_size_h2: 24,
 };
 
+const resolveThemeImageUrl = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:')) {
+    return raw;
+  }
+  const apiBase = String(api?.defaults?.baseURL || '').replace(/\/$/, '');
+  if (!apiBase) return raw;
+  if (raw.startsWith('/')) return `${apiBase}${raw}`;
+  return `${apiBase}/${raw}`;
+};
+
 const AppShell = () => {
-  const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
   const [error, setError] = useState(null);
   const [site, setSite] = useState({ ...DEFAULT_SITE });
   const navigate = useNavigate();
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('blabs_token');
-    const savedUser = localStorage.getItem('blabs_user');
-    if (savedToken) setToken(savedToken);
-    if (savedUser) setUser(JSON.parse(savedUser));
+    const loadCurrentUser = async () => {
+      try {
+        const res = await api.get('/auth/me');
+        setUser(res.data);
+      } catch (err) {
+        setUser(null);
+      }
+    };
+    loadCurrentUser();
   }, []);
 
   useEffect(() => {
     const handleAuthInvalid = (event) => {
       const msg = event?.detail?.message || 'Session expired. Please sign in again.';
-      setToken(null);
       setUser(null);
       setError(msg);
-      localStorage.removeItem('blabs_token');
-      localStorage.removeItem('blabs_user');
       navigate('/');
     };
     window.addEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
@@ -69,23 +82,16 @@ const AppShell = () => {
   const onLogin = async (username, password) => {
     try {
       const res = await api.post('/auth/login', { username, password });
-      setToken(res.data.token);
       setUser(res.data.user);
-      localStorage.setItem('blabs_token', res.data.token);
-      localStorage.setItem('blabs_user', JSON.stringify(res.data.user));
       setError(null);
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.detail || 'Login failed');
-      setToken(null);
       setUser(null);
-      localStorage.removeItem('blabs_token');
-      localStorage.removeItem('blabs_user');
     }
   };
 
   useEffect(() => {
-    api.defaults.headers.common['Authorization'] = token ? `Bearer ${token}` : '';
     const loadSite = async () => {
       try {
         const res = await api.get('/user/settings/site');
@@ -96,7 +102,7 @@ const AppShell = () => {
           theme_text_color: res.data.theme_text_color,
           theme_button_color: res.data.theme_button_color,
           theme_button_text_color: res.data.theme_button_text_color,
-          theme_bg_image: res.data.theme_bg_image,
+          theme_bg_image: resolveThemeImageUrl(res.data.theme_bg_image),
           theme_bg_image_overlay_opacity: Number(res.data.theme_bg_image_overlay_opacity || 0),
           theme_tile_bg: res.data.theme_tile_bg,
           theme_tile_border: res.data.theme_tile_border,
@@ -111,10 +117,8 @@ const AppShell = () => {
         setSite({ ...DEFAULT_SITE });
       }
     };
-    if (token) {
-      loadSite();
-    }
-  }, [token]);
+    loadSite();
+  }, [user]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -161,15 +165,17 @@ const AppShell = () => {
     }
   }, [site]);
 
-  const logout = () => {
-    setToken(null);
+  const logout = async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch (err) {
+      // Ignore logout transport issues and clear local state anyway.
+    }
     setUser(null);
-    localStorage.removeItem('blabs_token');
-    localStorage.removeItem('blabs_user');
     navigate('/');
   };
 
-  const authed = Boolean(token && user);
+  const authed = Boolean(user);
 
   return (
     <div className="page">

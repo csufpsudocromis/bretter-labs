@@ -18,6 +18,17 @@ class Token(SQLModel, table=True):
     issued_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class ConnectToken(SQLModel, table=True):
+    token: str = Field(primary_key=True, index=True)
+    username: str = Field(foreign_key="user.username", index=True)
+    instance_id: str = Field(index=True)
+    resource_type: str = "container"
+    token_type: str = "grant"
+    issued_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: datetime = Field(default_factory=datetime.utcnow)
+    used_at: Optional[datetime] = None
+
+
 class Image(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
@@ -104,12 +115,14 @@ class ContainerTemplate(SQLModel, table=True):
     startup_timeout_seconds: int = 300
     dependency_checks_json: str = "[]"
     expose_strategy: str = "nodeport"
+    network_mode: str = "bridge"
     run_as_non_root: bool = False
     read_only_root_filesystem: bool = False
     command: Optional[str] = None
     args_json: str = "[]"
     env_json: str = "{}"
     auto_delete_minutes: int = 60
+    idle_timeout_minutes: int = 30
     enabled: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
