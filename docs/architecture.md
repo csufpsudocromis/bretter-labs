@@ -1,37 +1,78 @@
-# Bretter Labs – Architecture
+# Bretter Labs - Architecture
 
 ## Overview
-Bretter Labs is a FastAPI + React (Vite) platform that provisions per-user lab VMs as Kubernetes pods and exposes them through a browser-based SPICE console.
+
+Bretter Labs is a FastAPI + React (Vite) platform that provisions per-user VM and container labs on Kubernetes and exposes browser-based connect flows.
 
 ## Core components
-- **Frontend (`frontend-vite`)**: React UI for login, admin, and user workflows. Loads site appearance/SSO settings, starts labs, opens console URLs, and drives idle prompts in the main UI.
-- **Backend (`backend/src`)**: FastAPI API for users, templates, images, and VM instances. Uses SQLModel + SQLite for persistence and runs a background reaper to clean up idle labs.
-- **VM runner (`runner`)**: Debian-based container running QEMU + SPICE with websockify and the spice-html5 assets. Each VM pod runs this image.
-- **Kubernetes control plane**: Backend uses the Kubernetes Python client to create pods, per-VM NodePort services, and NetworkPolicies. Helper pods + `kubectl` are used to copy/validate images on the PVC.
-- **Storage**: `golden-images` PVC stores uploaded VM images; per-VM ephemeral disks live on `emptyDir`. Backend state uses a PVC-backed SQLite DB.
 
-## Request flow
-1. Admin uploads an image; backend writes it into the image PVC and stores metadata/checksum in SQLite.
-2. Admin creates a template with CPU/RAM, network mode, auto-delete, and idle timeout.
-3. User starts a template; backend creates a VM pod (init container copies the image to `emptyDir`), then creates a NodePort service to expose SPICE/websockify.
-4. Backend returns a console URL built from `BLABS_KUBE_NODE_EXTERNAL_HOST` and the NodePort; the UI opens it in a new tab.
+- **Frontend (`frontend-vite`)**  
+  User/admin UI for login, template/image management, launch/connect flows, runtime status, and platform settings.
 
-## Idle handling and cleanup
-- User UI polls `/user/pods`, which refreshes `last_active_at` for running labs.
-- Both the main UI and the console tab show idle prompts; timeouts trigger VM deletion via the API.
-- A backend reaper loop runs on startup and deletes instances whose `last_active_at` exceeds the template or global timeout.
-- Stopped/completed instances are auto-deleted after `auto_delete_minutes`.
+- **Backend (`backend/src`)**  
+  FastAPI service that handles auth, RBAC-style admin/user API routes, template/image lifecycle, launch orchestration, idle reaping, and health/alert surfaces.
 
-## Networking and isolation
-- Default `bridge` mode applies NetworkPolicies allowing DNS + 80/443 egress and SPICE ingress.
-- `isolated`/`none` block egress; `host`/`unrestricted` skip NetworkPolicy and may use host networking.
+- **Runner (`runner`)**  
+  VM runtime image (QEMU + SPICE/websockify) used by VM lab pods.
 
-## Auth and settings
-- Local username/password auth with bcrypt hashing; bearer tokens are issued from `/auth/login`.
-- Default admin is created on first startup and forced to change password.
-- Runtime settings are configured via `BLABS_*` env vars (namespace, runtime class, KVM, node selector, image pull secret, node external host, etc.).
-- Appearance and SSO settings are stored in the config table; SSO is currently config-only (no backend SSO flow yet).
+- **Kubernetes orchestration layer**  
+  Backend creates and manages workloads/services/network policies and uses storage-aware workflows for image uploads, conversions, cloning, and warm-pool behaviors.
 
-## Deployment notes
-- `scripts/setup.sh` installs prerequisites on Ubuntu/Debian, updates the SPICE embed ConfigMap, and applies `deploy/app.yaml`.
-- The manifest creates NodePort services for backend/frontend and grants the backend RBAC to manage pods/services/network policies.
+- **Storage and database**  
+  Golden image PVC + clone storage classes for lab disks. Database is SQLModel with Alembic migrations and supports Postgres-backed deployments.
+
+## High-level request flow
+
+1. Admin uploads VM image or registers container image.
+2. Admin publishes VM/container template.
+3. User starts a lab; backend enforces single active lab limit and acquires launch lock.
+4. Backend provisions per-instance Kubernetes resources.
+5. UI shows staged state (`queued/pending/building/starting/running`).
+6. User connects through secure connect flow.
+
+## VM pipeline
+
+1. Uploaded VM disk is validated and normalized as needed.
+2. Template defines resources, firmware/machine defaults, network mode, and idle timeout.
+3. Start request creates instance resources and service endpoints.
+4. User opens browser connect tab for interactive VM session.
+
+## Container pipeline
+
+1. Admin registers container image and creates container template.
+2. Template includes port/connect checks, runtime/network options, and idle timeout.
+3. Start request creates isolated per-instance container workload.
+4. Connect flow returns browser URL only once readiness criteria are met.
+
+## Auth/session model
+
+- Username/password login issues secure HttpOnly session cookies.
+- Connect flow uses short-lived one-time grant/session token cookies (not URL bearer tokens).
+- Configurable cookie `secure` and `samesite` behavior via `BLABS_*` settings.
+
+## Runtime cleanup and lifecycle controls
+
+- Idle timers are enforced by backend reaper logic with UI prompt integration.
+- User and connect-tab activity can refresh `last_active_at`.
+- Stopped/failed/completed resources are eligible for cleanup automation.
+- Launch queue/backoff behavior handles transient resource pressure.
+
+## Networking model
+
+- Runtime networking mode is template-driven (for VM and container templates).
+- Policies and exposure behavior are applied per instance.
+- Public access uses `PUBLIC_SCHEME` and configured external host.
+
+## Observability and operations
+
+- Admin pages expose runtime/storage/pod state and alert/error views.
+- Error log storage is capped to prevent unbounded growth.
+- Alertmanager integration is supported for surfaced active alerts.
+
+## Deployment model
+
+- `scripts/setup.sh` renders manifests and applies cluster/runtime/storage defaults.
+- Deployments include backend/frontend and supporting Kubernetes resources.
+- Cluster-facing endpoints:
+  - UI: `https://<host>:30073`
+  - API: `https://<host>:30080`

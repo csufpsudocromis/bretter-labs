@@ -3,76 +3,89 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-required-326CE5.svg)](https://kubernetes.io/)
 
-Bretter Labs is a Kubernetes-native virtual lab platform.
-It lets admins upload VM images and publish templates, then lets users launch browser-accessible Windows/Linux labs with staged runtime feedback.
+Bretter Labs is a Kubernetes-native virtual lab platform for browser-based VM and container labs.
 
-For deeper docs, operational playbooks, and full configuration matrices, use the project wiki:
-
-- https://github.com/csufpsudocromis/bretter-labs/wiki
+Admins manage images, templates, users, runtime/storage settings, and platform health.  
+Users launch labs with staged status feedback and connect in the browser.
 
 ## Table of Contents
 
-- [Features](#features)
+- [What You Get](#what-you-get)
+- [Supported VM Image Types](#supported-vm-image-types)
 - [Architecture](#architecture)
-- [Quick Start (Kubernetes)](#quick-start-kubernetes)
-- [Common Setup Options](#common-setup-options)
-- [Usage](#usage)
+- [Quick Start](#quick-start)
+- [Key Setup Variables](#key-setup-variables)
+- [Admin and User Workflows](#admin-and-user-workflows)
 - [Local Development](#local-development)
-- [Operations and Troubleshooting](#operations-and-troubleshooting)
+- [Operations](#operations)
+- [Documentation and Wiki](#documentation-and-wiki)
 - [Project Structure](#project-structure)
 - [Contributing](#contributing)
 - [License](#license)
 
-## Features
+## What You Get
 
-### Admin capabilities
+### Admin features
 
-- Upload and normalize VM disk images
-- Template management (CPU, RAM, idle timeout, pool tuning, network mode)
-- User administration
-- Resource/health pages for runtime and storage visibility
-- Appearance settings (theme, typography, contrast targets)
+- VM image upload and normalization
+- VM templates and container templates
+- Container image registry management
+- Runtime, storage, appearance, and alert/error settings
+- Resource, pod, and health visibility in admin pages
 
-### User capabilities
+### User features
 
-- One-click lab start from enabled templates
-- Browser-based SPICE console access
-- Runtime stage feedback (for example: Pending, Building, Starting, Running)
-- Idle handling and auto-stop/cleanup behavior
+- Launch labs from enabled templates
+- Staged runtime feedback (for example: Pending, Building, Starting, Running)
+- Browser connect for VM and container labs
+- Idle timeout behavior and cleanup automation
+- Single active lab enforcement per user
 
-### Platform capabilities
+### Platform features
 
 - FastAPI backend + React (Vite) frontend
-- VM runner pods scheduled on Kubernetes nodes
-- Clone-based VM disks via StorageClass/PVC workflows
-- CDI-backed image upload/finalization flow
-- Postgres-backed control-plane state
-- Optional monitoring/alerting and proactive cleanup automation
+- Kubernetes-native VM/container lifecycle orchestration
+- Clone-based VM storage workflows
+- CDI direct upload/finalization support
+- Postgres-ready DB stack with Alembic migrations
+- Monitoring hooks, alert ingestion, and capped error logs
+
+## Supported VM Image Types
+
+Allowed upload formats:
+
+- `.vhd`
+- `.vhdx`
+- `.qcow`
+- `.qcow2`
+- `.vdi`
+
+QCOW uploads are normalized to raw during finalization.
 
 ## Architecture
 
 Core components:
 
-- `frontend-vite/`: React UI for user/admin workflows
-- `backend/`: FastAPI API, auth, settings, template/image/instance orchestration
-- `runner/`: QEMU + SPICE VM runtime container image
-- `deploy/`: Kubernetes manifests rendered by setup
-- `scripts/setup.sh`: cluster bootstrap and deployment automation
+- `frontend-vite/`: UI for admin and user workflows
+- `backend/`: API, auth/session, orchestration, migrations
+- `runner/`: VM runtime image (QEMU/SPICE)
+- `deploy/`: Kubernetes manifests used by setup
+- `scripts/setup.sh`: bootstrap, deploy, and tuning automation
 
 High-level flow:
 
-1. Admin uploads image and creates a template.
-2. User starts a lab from template.
-3. Backend creates per-instance VM resources in Kubernetes.
-4. User connects via browser console URL exposed from the runner service.
+1. Admin uploads image(s) and publishes template(s).
+2. User starts a VM or container lab.
+3. Backend provisions per-instance Kubernetes resources.
+4. User connects from browser through the platform connect flow.
 
-## Quick Start (Kubernetes)
+## Quick Start
 
 ### Prerequisites
 
-- Access to a Kubernetes cluster
-- `kubectl` configured for that cluster
-- Linux host with Bash (setup script is designed for Ubuntu/Debian)
+- Kubernetes cluster access
+- `kubectl` configured for target cluster
+- Linux host with Bash (Ubuntu/Debian recommended)
 
 ### Deploy
 
@@ -82,43 +95,31 @@ cd bretter-labs
 ./scripts/setup.sh
 ```
 
-The setup script handles:
-
-- environment validation
-- manifest rendering
-- app deployment
-- optional image build/push/import flows
-- optional monitoring/cleanup integrations
-
-### Access after setup
+### Access
 
 - UI: `https://<NODE_EXTERNAL_HOST>:30073`
 - API: `https://<NODE_EXTERNAL_HOST>:30080`
 
-Default admin bootstrap account:
+Default admin account:
 
 - username: `admin`
 - password: `admin`
 
 Password change is required on first login.
 
-## Common Setup Options
-
-Use environment variables to tune installation behavior.
-For the full list and recommended profiles, see the wiki.
+## Key Setup Variables
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `NAMESPACE` | `labs` | Target namespace |
-| `CONTROL_NODE` | auto | Node for control-plane pinned workloads |
-| `NODE_EXTERNAL_HOST` | auto | External host used in UI/API/console URLs |
-| `PUBLIC_SCHEME` | `https` | Public URL scheme (`https` or `http`) |
+| `CONTROL_NODE` | auto | Preferred control node for pinned workloads |
+| `NODE_EXTERNAL_HOST` | auto | Public host/IP used in generated URLs |
+| `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
-| `VM_STORAGE_CLASS` | auto with Longhorn tune | StorageClass used for VM clone disks |
-| `RUNNER_NODE_SELECTOR_VALUE` | empty | Pin runner pods to a specific node |
-| `APPLY_GOLDEN_HOSTPATH` | `1` | Use hostPath golden-images PVC path |
-| `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` (shared/RWX scenarios) |
-| `LOAD_LOCAL_IMAGES` | `1` | Build local images and import into cluster runtime |
+| `VM_STORAGE_CLASS` | auto | StorageClass for VM clone disks |
+| `APPLY_GOLDEN_HOSTPATH` | `1` | HostPath-backed golden image PVC |
+| `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` instead |
+| `LOAD_LOCAL_IMAGES` | `1` | Build/import local images into cluster runtime |
 | `PUSH_IMAGES` | `0` | Build and push images to registry |
 | `CREATE_PULL_SECRET` | `0` | Create/update `ghcr-creds` pull secret |
 
@@ -132,23 +133,23 @@ VM_STORAGE_CLASS=longhorn-r1 \
 ./scripts/setup.sh
 ```
 
-## Usage
+## Admin and User Workflows
 
-### Admin workflow
+### Admin
 
 1. Log in as admin.
-2. Upload image(s).
-3. Create template(s) from uploaded images.
-4. Enable templates for users.
-5. Monitor runtime/storage/alerts from admin pages.
+2. Upload VM images and register container images.
+3. Create and enable VM/container templates.
+4. Configure runtime/storage/appearance as needed.
+5. Monitor resources, alerts, and logs from admin pages.
 
-### User workflow
+### User
 
-1. Log in as a standard user.
-2. Start a lab from the available template list.
-3. Watch stage status update until running.
-4. Connect to the lab console.
-5. Stop/delete when finished (or allow configured cleanup automation).
+1. Log in.
+2. Start a lab from available templates.
+3. Wait for staged status to reach running.
+4. Connect in browser.
+5. Delete lab when done.
 
 ## Local Development
 
@@ -169,11 +170,11 @@ npm install
 npm run dev -- --host --port 5173
 ```
 
-Set `VITE_API_BASE` if you need to target a non-default backend URL.
+Set `VITE_API_BASE` to target a non-default API endpoint.
 
-## Operations and Troubleshooting
+## Operations
 
-### Quick health checks
+Quick health checks:
 
 ```bash
 kubectl -n labs get pods
@@ -181,35 +182,36 @@ kubectl -n labs get deploy bretter-backend bretter-frontend
 kubectl -n labs logs deploy/bretter-backend --tail=200
 ```
 
-### Common issues
+Common issues:
 
-- VM stays in Pending: cluster is waiting on schedulable CPU/memory/storage.
-- Image upload problems: verify storage capacity and CDI/uploadproxy health.
-- TLS/browser warnings: expected with self-signed certs unless custom certs are installed.
+- Pending labs: cluster waiting on available CPU/memory/storage.
+- Upload finalize failures: check PVC/node disk usage and CDI/upload path health.
+- TLS warnings: expected with self-signed certificates unless custom certs are installed.
 
-For runbooks and detailed diagnostics, use the wiki:
+## Documentation and Wiki
 
-- https://github.com/csufpsudocromis/bretter-labs/wiki
+- GitHub wiki: https://github.com/csufpsudocromis/bretter-labs/wiki
+- Repository wiki source pages: `docs/wiki/`
+- Architecture deep dive: `docs/architecture.md`
 
 ## Project Structure
 
 ```text
-backend/         FastAPI app, models, routes, migrations
+backend/         FastAPI app, models, routes, migrations, services
 frontend-vite/   React app (Vite)
 runner/          VM runner image (QEMU/SPICE)
 scripts/         Setup/bootstrap automation
 deploy/          Kubernetes manifests/templates
-docs/            Supplemental project docs
-images/          README screenshots/assets
+docs/            Architecture and wiki source docs
+images/          README/wiki assets
 ```
 
 ## Contributing
 
-1. Create a feature branch.
-2. Make focused changes with tests/validation.
-3. Open a pull request with clear scope and rollout notes.
-
-If your change affects setup variables or operational behavior, also update the wiki page for that area.
+1. Create a focused branch.
+2. Add/update tests for behavior changes.
+3. Validate rollout/health for runtime-impacting changes.
+4. Update README and `docs/wiki/` when behavior or config changes.
 
 ## License
 
