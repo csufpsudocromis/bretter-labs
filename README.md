@@ -8,6 +8,9 @@ Bretter Labs is a Kubernetes-native virtual lab platform for browser-based VM an
 Admins manage images, templates, users, runtime/storage settings, and platform health.  
 Users launch labs with staged status feedback and connect in the browser.
 
+![Bretter Labs screenshot](images/thumbnail.png)
+![Bretter Labs screenshot 2](images/thumbnail1.png)
+
 ## Table of Contents
 
 - [What You Get](#what-you-get)
@@ -21,7 +24,6 @@ Users launch labs with staged status feedback and connect in the browser.
 - [Operations](#operations)
 - [Documentation and Wiki](#documentation-and-wiki)
 - [Project Structure](#project-structure)
-- [Contributing](#contributing)
 - [License](#license)
 
 ## What You Get
@@ -218,12 +220,6 @@ docs/            Architecture and wiki source docs
 images/          README/wiki assets
 ```
 
-## Contributing
-
-1. Create a focused branch.
-2. Add/update tests for behavior changes.
-3. Validate rollout/health for runtime-impacting changes.
-4. Update README and `docs/wiki/` when behavior or config changes.
 
 ## License
 
