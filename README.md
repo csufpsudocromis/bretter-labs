@@ -193,11 +193,6 @@ Common issues:
 - GitHub wiki: https://github.com/csufpsudocromis/bretter-labs/wiki
 - Repository wiki source pages: `docs/wiki/`
 - Architecture deep dive: `docs/architecture.md`
-- Mirror repository wiki source to GitHub wiki:
-
-```bash
-GITHUB_PAT=<github_pat_with_repo_write> ./scripts/sync-wiki.sh
-```
 
 ## Project Structure
 
