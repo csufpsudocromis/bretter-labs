@@ -15,6 +15,7 @@ Users launch labs with staged status feedback and connect in the browser.
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Key Setup Variables](#key-setup-variables)
+- [Security and Session Model](#security-and-session-model)
 - [Admin and User Workflows](#admin-and-user-workflows)
 - [Local Development](#local-development)
 - [Operations](#operations)
@@ -35,11 +36,12 @@ Users launch labs with staged status feedback and connect in the browser.
 
 ### User features
 
-- Launch labs from enabled templates
+- Launch labs from enabled VM and container templates
 - Staged runtime feedback (for example: Pending, Building, Starting, Running)
 - Browser connect for VM and container labs
 - Idle timeout behavior and cleanup automation
 - Single active lab enforcement per user
+- Clear start-limit feedback when a lab is already active
 
 ### Platform features
 
@@ -47,8 +49,9 @@ Users launch labs with staged status feedback and connect in the browser.
 - Kubernetes-native VM/container lifecycle orchestration
 - Clone-based VM storage workflows
 - CDI direct upload/finalization support
-- Postgres-ready DB stack with Alembic migrations
+- Postgres-backed DB stack with Alembic migrations
 - Monitoring hooks, alert ingestion, and capped error logs
+- Secure session cookie auth with short-lived connect access flow
 
 ## Supported VM Image Types
 
@@ -133,6 +136,14 @@ VM_STORAGE_CLASS=longhorn-r1 \
 ./scripts/setup.sh
 ```
 
+## Security and Session Model
+
+- Login uses secure HTTP-only session cookies (not browser localStorage tokens).
+- VM/container connect uses short-lived access tokens for connect windows.
+- Server-side launch locking enforces one active lab per user, even under concurrent requests.
+- If a user tries to start another lab, the UI keeps this message visible until cleanup:
+  - `You already have a virtual lab running. Delete the current lab before starting a new one.`
+
 ## Admin and User Workflows
 
 ### Admin
@@ -180,6 +191,7 @@ Quick health checks:
 kubectl -n labs get pods
 kubectl -n labs get deploy bretter-backend bretter-frontend
 kubectl -n labs logs deploy/bretter-backend --tail=200
+kubectl -n labs get pods | rg '^ct-|^vm-|^virt-launcher-'
 ```
 
 Common issues:
