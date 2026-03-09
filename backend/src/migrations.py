@@ -14,6 +14,7 @@ APP_TABLES: set[str] = {
     "image",
     "imageuploadtask",
     "instance",
+    "oidcloginstate",
     "template",
     "token",
     "user",

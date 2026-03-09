@@ -32,6 +32,15 @@ class ConnectToken(SQLModel, table=True):
     used_at: Optional[datetime] = None
 
 
+class OIDCLoginState(SQLModel, table=True):
+    state: str = Field(primary_key=True, index=True)
+    code_verifier: str
+    nonce: str
+    return_to: str
+    created_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime = Field(default_factory=utc_now)
+
+
 class Image(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str

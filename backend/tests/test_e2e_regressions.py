@@ -1,4 +1,5 @@
 from datetime import timedelta
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session
@@ -6,7 +7,7 @@ from sqlmodel import Session
 from src.auth import hash_password
 from src.db import engine
 from src.rbac import Role
-from src.tables import ContainerImage, ContainerTemplate, Image, Template, Token, User
+from src.tables import Config, ContainerImage, ContainerTemplate, Image, Template, Token, User
 from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
@@ -136,6 +137,68 @@ def test_rbac_rejects_invalid_role_on_user_create(login_admin: TestClient):
     )
     assert bad_create.status_code == 422
     assert "invalid role" in bad_create.json()["detail"]
+
+
+def test_oidc_start_and_callback_issue_session_cookie(client: TestClient, monkeypatch):
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        cfg.sso_enabled = True
+        cfg.sso_client_id = "oidc-client"
+        cfg.sso_client_secret = "oidc-secret"
+        cfg.sso_authorize_url = "https://idp.example.com/oauth2/v2/auth"
+        cfg.sso_token_url = "https://idp.example.com/oauth2/v2/token"
+        cfg.sso_userinfo_url = "https://idp.example.com/oauth2/v2/userinfo"
+        cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
+        session.add(cfg)
+        session.commit()
+
+    class _FakeResponse:
+        def __init__(self, payload: dict, status_code: int = 200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def _fake_post(url, data, headers, timeout):
+        assert "token" in url
+        assert data["code"] == "test-code"
+        assert data["code_verifier"]
+        return _FakeResponse({"access_token": "access-123"})
+
+    def _fake_get(url, headers, timeout):
+        assert "userinfo" in url
+        assert headers["Authorization"] == "Bearer access-123"
+        return _FakeResponse({"preferred_username": "oidcuser"})
+
+    monkeypatch.setattr("src.routes.auth.requests.post", _fake_post)
+    monkeypatch.setattr("src.routes.auth.requests.get", _fake_get)
+
+    start = client.get(
+        "/auth/sso/start",
+        params={"return_to": "https://10.68.49.250:30073/"},
+        headers={"origin": "https://10.68.49.250:30073"},
+    )
+    assert start.status_code == 200, start.text
+    authorize_url = start.json()["authorize_url"]
+    parsed = urlparse(authorize_url)
+    params = parse_qs(parsed.query)
+    state = params["state"][0]
+    assert params["code_challenge_method"][0] == "S256"
+
+    callback = client.get(
+        "/auth/sso/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code in {302, 307}
+    assert callback.headers["location"] == "https://10.68.49.250:30073/"
+
+    me = client.get("/auth/me")
+    assert me.status_code == 200, me.text
+    assert me.json()["username"] == "oidcuser"
 
 
 def test_cookie_auth_session_ttl_is_enforced(client: TestClient, monkeypatch):

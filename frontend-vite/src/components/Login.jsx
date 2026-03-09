@@ -27,6 +27,22 @@ const Login = ({ onLogin, user }) => {
     onLogin(username, password);
   };
 
+  const startSso = async () => {
+    try {
+      const returnTo =
+        typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '/';
+      const res = await api.get('/auth/sso/start', { params: { return_to: returnTo } });
+      const authorizeUrl = String(res?.data?.authorize_url || '').trim();
+      if (!authorizeUrl) {
+        setError('SSO authorize URL is missing.');
+        return;
+      }
+      window.location.href = authorizeUrl;
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to start SSO login.');
+    }
+  };
+
   return (
     <div>
       <h2>Login</h2>
@@ -50,13 +66,7 @@ const Login = ({ onLogin, user }) => {
           <button
             type="button"
             className="ghost"
-            onClick={() => {
-              if (sso.authorize_url) {
-                window.location.href = sso.authorize_url;
-              } else {
-                setError('SSO is enabled but not configured.');
-              }
-            }}
+            onClick={startSso}
           >
             Sign in with SSO
           </button>

@@ -32,6 +32,7 @@ from src.tables import (  # noqa: E402
     ContainerTemplate,
     Image,
     Instance,
+    OIDCLoginState,
     Template,
     Token,
     User,
@@ -81,6 +82,7 @@ def reset_db():
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         for model in [
+            OIDCLoginState,
             ConnectToken,
             Token,
             Instance,
