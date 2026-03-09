@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     vm_net_backend: str = "tap-nat"
     vm_vhost_net_enabled: bool = True
     vm_net_multiqueue_enabled: bool = True
+    vm_console_external_traffic_policy: str = "Local"
+    vm_console_source_cidrs: str = ""
+    vm_console_ticket_length: int = 24
     vm_qos_guaranteed: bool = True
     vm_memory_overhead_mb: int = 1024
     vm_runner_topology_spread_enabled: bool = True

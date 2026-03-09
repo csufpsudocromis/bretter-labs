@@ -11,6 +11,8 @@ CPU_MODEL="${CPU_MODEL:-host}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
 VM_VHOST_NET_ENABLED="${VM_VHOST_NET_ENABLED:-true}"
 VM_NET_MULTIQUEUE_ENABLED="${VM_NET_MULTIQUEUE_ENABLED:-true}"
+SPICE_TICKETING="${SPICE_TICKETING:-true}"
+SPICE_PASSWORD="${SPICE_PASSWORD:-}"
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
@@ -105,12 +107,27 @@ if [[ -n "${TLS_CERT_FILE:-}" && -n "${TLS_KEY_FILE:-}" && -f "${TLS_CERT_FILE}"
 fi
 websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$SPICE_PORT" --daemon
 
+SPICE_ARGS="port=${SPICE_PORT},addr=0.0.0.0"
+if [[ "${SPICE_TICKETING,,}" == "true" ]]; then
+  if [[ -z "$SPICE_PASSWORD" ]]; then
+    SPICE_PASSWORD="$(python3 - <<'PY'
+import secrets
+alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+print("".join(secrets.choice(alphabet) for _ in range(24)))
+PY
+)"
+  fi
+  SPICE_ARGS="${SPICE_ARGS},disable-ticketing=off,password=${SPICE_PASSWORD}"
+else
+  SPICE_ARGS="${SPICE_ARGS},disable-ticketing=on"
+fi
+
 QEMU_ARGS=(
   -m "${RAM_MB}"
   -smp "${CPU_CORES}"
   -boot c
   -display none
-  -spice "port=${SPICE_PORT},addr=0.0.0.0,disable-ticketing=on"
+  -spice "${SPICE_ARGS}"
   -device virtio-serial
   -chardev spicevmc,id=vdagent,debug=0,name=vdagent
   -device virtserialport,chardev=vdagent,name=com.redhat.spice.0

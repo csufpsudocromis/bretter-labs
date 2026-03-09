@@ -107,10 +107,11 @@
       import * as SpiceHtml5 from './main.js';
 
       const params = new URLSearchParams(window.location.search);
+      const hashParams = new URLSearchParams((window.location.hash || '').replace(/^#/, ''));
       const host = params.get('host') || window.location.hostname;
       const port = params.get('port') || window.location.port || '6080';
       const secure = params.get('secure') === '1' || window.location.protocol === 'https:';
-      const password = params.get('password') || '';
+      const password = hashParams.get('password') || params.get('password') || '';
       const title = params.get('title') || '';
       const instanceId = params.get('instance_id') || '';
       const idleMinutes = parseInt(params.get('idle_minutes') || '30', 10);

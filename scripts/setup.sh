@@ -51,6 +51,9 @@ LINUX_MACHINE_TYPE="${LINUX_MACHINE_TYPE:-pc}"
 LINUX_EFI_ENABLED="${LINUX_EFI_ENABLED:-false}"
 LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
+VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY="${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY:-Local}"
+VM_CONSOLE_SOURCE_CIDRS="${VM_CONSOLE_SOURCE_CIDRS:-}"
+VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
 CONTAINER_INGRESS_ENABLED="${CONTAINER_INGRESS_ENABLED:-0}"
 CONTAINER_INGRESS_CLASS="${CONTAINER_INGRESS_CLASS:-}"
 CONTAINER_INGRESS_BASE_DOMAIN="${CONTAINER_INGRESS_BASE_DOMAIN:-}"
@@ -221,6 +224,13 @@ validate_vm_network_config() {
     tap-nat|user) ;;
     *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
   esac
+  case "${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY}" in
+    Local|Cluster|local|cluster) ;;
+    *) fail "VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY must be Local or Cluster." ;;
+  esac
+  if ! is_uint "$VM_CONSOLE_TICKET_LENGTH" || [ "$VM_CONSOLE_TICKET_LENGTH" -lt 12 ] || [ "$VM_CONSOLE_TICKET_LENGTH" -gt 64 ]; then
+    fail "VM_CONSOLE_TICKET_LENGTH must be an integer between 12 and 64."
+  fi
 }
 
 validate_container_runtime_config() {
@@ -1108,6 +1118,7 @@ render_manifest_template() {
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath postgres_user postgres_password postgres_db cdi_upload_proxy_url
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend
+  local vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
@@ -1130,6 +1141,9 @@ render_manifest_template() {
   linux_efi_enabled="$(escape_sed_replacement "$LINUX_EFI_ENABLED")"
   linux_cpu_model="$(escape_sed_replacement "$LINUX_CPU_MODEL")"
   vm_net_backend="$(escape_sed_replacement "$VM_NET_BACKEND")"
+  vm_console_external_traffic_policy="$(escape_sed_replacement "$VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY")"
+  vm_console_source_cidrs="$(escape_sed_replacement "$VM_CONSOLE_SOURCE_CIDRS")"
+  vm_console_ticket_length="$(escape_sed_replacement "$VM_CONSOLE_TICKET_LENGTH")"
   container_ingress_enabled="$(escape_sed_replacement "$CONTAINER_INGRESS_ENABLED")"
   container_ingress_class="$(escape_sed_replacement "$CONTAINER_INGRESS_CLASS")"
   container_ingress_base_domain="$(escape_sed_replacement "$CONTAINER_INGRESS_BASE_DOMAIN")"
@@ -1171,6 +1185,9 @@ render_manifest_template() {
     -e "s/__LINUX_EFI_ENABLED__/${linux_efi_enabled}/g" \
     -e "s/__LINUX_CPU_MODEL__/${linux_cpu_model}/g" \
     -e "s/__VM_NET_BACKEND__/${vm_net_backend}/g" \
+    -e "s/__VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY__/${vm_console_external_traffic_policy}/g" \
+    -e "s#__VM_CONSOLE_SOURCE_CIDRS__#${vm_console_source_cidrs}#g" \
+    -e "s/__VM_CONSOLE_TICKET_LENGTH__/${vm_console_ticket_length}/g" \
     -e "s/__CONTAINER_INGRESS_ENABLED__/${container_ingress_enabled}/g" \
     -e "s/__CONTAINER_INGRESS_CLASS__/${container_ingress_class}/g" \
     -e "s/__CONTAINER_INGRESS_BASE_DOMAIN__/${container_ingress_base_domain}/g" \
@@ -1842,6 +1859,9 @@ main() {
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Using VM network backend: $VM_NET_BACKEND"
+  log "VM console external traffic policy: $VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY"
+  log "VM console source CIDRs: ${VM_CONSOLE_SOURCE_CIDRS:-unrestricted}"
+  log "VM console ticket length: $VM_CONSOLE_TICKET_LENGTH"
   log "Container ingress enabled: $CONTAINER_INGRESS_ENABLED (base domain: ${CONTAINER_INGRESS_BASE_DOMAIN:-disabled}, class: ${CONTAINER_INGRESS_CLASS:-default})"
   log "Container image pre-pull enabled: $CONTAINER_IMAGE_PREPULL_ENABLED (timeout: ${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS}s)"
   log "Container allowed registries: $CONTAINER_ALLOWED_REGISTRIES"

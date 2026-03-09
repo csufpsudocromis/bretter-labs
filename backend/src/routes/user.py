@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from pathlib import Path
+import secrets
 from uuid import uuid4
 from urllib.parse import quote
 
@@ -23,6 +24,12 @@ SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the c
 def _public_scheme() -> str:
     scheme = (settings.public_scheme or "https").strip().lower()
     return scheme if scheme in {"http", "https"} else "https"
+
+
+def _generate_spice_password() -> str:
+    length = max(12, min(64, int(getattr(settings, "vm_console_ticket_length", 24) or 24)))
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def _phase_to_instance_status(phase: str) -> str:
@@ -304,6 +311,7 @@ def start_vm(
         warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, instance_id, user.username)
     except Exception:
         warm_pool_pvc = None
+    spice_password = _generate_spice_password()
     pod_request = PodRequest(
         instance_id=instance_id,
         template_id=template.id,
@@ -315,6 +323,7 @@ def start_vm(
         owner=user.username,
         network_mode=getattr(template, "network_mode", "bridge"),
         instance_disk_pvc=warm_pool_pvc,
+        spice_password=spice_password,
     )
     try:
         pod_status = kube.create_pod(pod_request)
@@ -342,6 +351,7 @@ def start_vm(
         f"{public_scheme}://{external_host}:{node_port}/{embed_page}"
         f"?host={external_host}&port={node_port}&secure={secure_param}&title={console_title}"
         f"&instance_id={instance_id}&idle_minutes={idle_minutes}"
+        f"#password={quote(spice_password, safe='')}"
     )
 
     instance = Instance(
@@ -420,6 +430,7 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
         warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, record.id, user.username)
     except Exception:
         warm_pool_pvc = None
+    spice_password = _generate_spice_password()
     pod_request = PodRequest(
         instance_id=record.id,
         template_id=template.id,
@@ -431,6 +442,7 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
         owner=user.username,
         network_mode=getattr(template, "network_mode", "bridge"),
         instance_disk_pvc=warm_pool_pvc,
+        spice_password=spice_password,
     )
     try:
         pod_status = kube.create_pod(pod_request)
@@ -456,6 +468,7 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
         f"{public_scheme}://{external_host}:{node_port}/{embed_page}"
         f"?host={external_host}&port={node_port}&secure={secure_param}&title={console_title}"
         f"&instance_id={record.id}&idle_minutes={idle_minutes}"
+        f"#password={quote(spice_password, safe='')}"
     )
 
     record.status = "pending"

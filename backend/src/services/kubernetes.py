@@ -8,6 +8,7 @@ import logging
 import math
 import json
 import hashlib
+import ipaddress
 import subprocess
 import re
 import shlex
@@ -41,6 +42,7 @@ class PodRequest:
     owner: str
     network_mode: str = "default"
     instance_disk_pvc: Optional[str] = None
+    spice_password: Optional[str] = None
 
 
 @dataclass
@@ -305,11 +307,13 @@ class KubernetesService:
 
     def create_service_for_pod(self, pod_name: str, service_name: str) -> int:
         core = self._client()
+        external_traffic_policy = self._vm_console_external_traffic_policy()
         body = client.V1Service(
             metadata=client.V1ObjectMeta(name=service_name, labels={"app": pod_name}),
             spec=client.V1ServiceSpec(
                 selector={"app": pod_name},
                 type="NodePort",
+                external_traffic_policy=external_traffic_policy,
                 ports=[client.V1ServicePort(port=6080, target_port=6080, protocol="TCP")],
             ),
         )
@@ -323,6 +327,14 @@ class KubernetesService:
                 raise
             # If already exists, fetch existing
             existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            existing_spec = existing.spec or client.V1ServiceSpec()
+            if str(existing_spec.external_traffic_policy or "") != external_traffic_policy:
+                core.patch_namespaced_service(
+                    name=service_name,
+                    namespace=settings.kube_namespace,
+                    body={"spec": {"externalTrafficPolicy": external_traffic_policy}},
+                )
+                existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
             return existing.spec.ports[0].node_port
 
     def ensure_container_service(
@@ -709,7 +721,10 @@ class KubernetesService:
             client.V1EnvVar(name="VM_VHOST_NET_ENABLED", value=str(settings.vm_vhost_net_enabled).lower()),
             client.V1EnvVar(name="VM_NET_MULTIQUEUE_ENABLED", value=str(settings.vm_net_multiqueue_enabled).lower()),
             client.V1EnvVar(name="VM_NET_QUEUES", value=str(max(1, int(req.cpu_cores)))),
+            client.V1EnvVar(name="SPICE_TICKETING", value="true"),
         ]
+        if req.spice_password:
+            env_vars.append(client.V1EnvVar(name="SPICE_PASSWORD", value=req.spice_password))
         if tls_secret_name:
             env_vars.extend(
                 [
@@ -1338,10 +1353,12 @@ class KubernetesService:
                 client.V1NetworkPolicyPort(protocol="TCP", port=80),
             ]
             egress_rules = [client.V1NetworkPolicyEgressRule(ports=egress_ports)]
+        ingress_peers = self._vm_console_ingress_peers()
         ingress_rule = client.V1NetworkPolicyIngressRule(
             ports=[
                 client.V1NetworkPolicyPort(protocol="TCP", port=6080),
             ],
+            _from=ingress_peers,
         )
         return client.V1NetworkPolicy(
             api_version="networking.k8s.io/v1",
@@ -1354,6 +1371,29 @@ class KubernetesService:
                 egress=egress_rules,
             ),
         )
+
+    def _vm_console_external_traffic_policy(self) -> str:
+        raw = str(getattr(settings, "vm_console_external_traffic_policy", "Local") or "Local").strip().lower()
+        if raw not in {"cluster", "local"}:
+            return "Local"
+        return "Cluster" if raw == "cluster" else "Local"
+
+    def _vm_console_ingress_peers(self) -> list[client.V1NetworkPolicyPeer] | None:
+        raw = str(getattr(settings, "vm_console_source_cidrs", "") or "").strip()
+        if not raw:
+            return None
+        peers: list[client.V1NetworkPolicyPeer] = []
+        for entry in raw.split(","):
+            cidr = entry.strip()
+            if not cidr:
+                continue
+            try:
+                normalized = str(ipaddress.ip_network(cidr, strict=False))
+            except ValueError:
+                logger.warning("Ignoring invalid BLABS_VM_CONSOLE_SOURCE_CIDRS entry: %s", cidr)
+                continue
+            peers.append(client.V1NetworkPolicyPeer(ip_block=client.V1IPBlock(cidr=normalized)))
+        return peers or None
 
     def apply_container_network_policy(self, instance_id: str, pod_name: str, app_port: int, mode: str = "bridge") -> None:
         networking = self._networking_client()

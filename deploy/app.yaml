@@ -412,6 +412,12 @@ spec:
               value: __LINUX_CPU_MODEL__
             - name: BLABS_VM_NET_BACKEND
               value: __VM_NET_BACKEND__
+            - name: BLABS_VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY
+              value: "__VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY__"
+            - name: BLABS_VM_CONSOLE_SOURCE_CIDRS
+              value: "__VM_CONSOLE_SOURCE_CIDRS__"
+            - name: BLABS_VM_CONSOLE_TICKET_LENGTH
+              value: "__VM_CONSOLE_TICKET_LENGTH__"
             - name: BLABS_VM_VHOST_NET_ENABLED
               value: "true"
             - name: BLABS_VM_NET_MULTIQUEUE_ENABLED
