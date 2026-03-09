@@ -5,17 +5,6 @@ metadata:
   namespace: __NAMESPACE__
 ---
 apiVersion: v1
-kind: Secret
-metadata:
-  name: bretter-postgres
-  namespace: __NAMESPACE__
-type: Opaque
-stringData:
-  POSTGRES_USER: "__POSTGRES_USER__"
-  POSTGRES_PASSWORD: "__POSTGRES_PASSWORD__"
-  POSTGRES_DB: "__POSTGRES_DB__"
----
-apiVersion: v1
 kind: LimitRange
 metadata:
   name: bretter-default-container-limits
@@ -345,8 +334,18 @@ spec:
           command:
             - /bin/sh
             - -c
-            - until pg_isready -h bretter-postgres.__NAMESPACE__.svc.cluster.local -p 5432 -U __POSTGRES_USER__ -d __POSTGRES_DB__; do sleep 2; done
+            - until pg_isready -h bretter-postgres.__NAMESPACE__.svc.cluster.local -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
           env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_DB
             - name: PGPASSWORD
               valueFrom:
                 secretKeyRef:
@@ -405,7 +404,10 @@ spec:
             - name: BLABS_DATABASE_PATH
               value: /data/app.db
             - name: BLABS_DATABASE_URL
-              value: postgresql://__POSTGRES_USER__:__POSTGRES_PASSWORD__@bretter-postgres.__NAMESPACE__.svc.cluster.local:5432/__POSTGRES_DB__
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: BLABS_DATABASE_URL
             - name: BLABS_ERROR_LOG_FILE_PATH
               value: /data/error.log
             - name: BLABS_ERROR_LOG_MAX_BYTES

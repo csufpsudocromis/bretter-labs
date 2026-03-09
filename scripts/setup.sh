@@ -76,6 +76,27 @@ POSTGRES_DATA_HOSTPATH="${POSTGRES_DATA_HOSTPATH:-/var/lib/bretter-labs/postgres
 POSTGRES_USER="${POSTGRES_USER:-bretter}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-bretterpass}"
 POSTGRES_DB="${POSTGRES_DB:-bretterlabs}"
+USE_EXTERNAL_SECRETS="${USE_EXTERNAL_SECRETS:-0}"
+INSTALL_EXTERNAL_SECRETS_OPERATOR="${INSTALL_EXTERNAL_SECRETS_OPERATOR:-1}"
+EXTERNAL_SECRETS_NAMESPACE="${EXTERNAL_SECRETS_NAMESPACE:-external-secrets}"
+EXTERNAL_SECRETS_RELEASE_NAME="${EXTERNAL_SECRETS_RELEASE_NAME:-external-secrets}"
+EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-}"
+EXTERNAL_SECRETS_STORE_NAME="${EXTERNAL_SECRETS_STORE_NAME:-corp-secrets}"
+CREATE_VAULT_CLUSTER_SECRET_STORE="${CREATE_VAULT_CLUSTER_SECRET_STORE:-0}"
+VAULT_ADDR="${VAULT_ADDR:-}"
+VAULT_K8S_AUTH_PATH="${VAULT_K8S_AUTH_PATH:-kubernetes}"
+VAULT_K8S_ROLE="${VAULT_K8S_ROLE:-external-secrets}"
+VAULT_KV_MOUNT="${VAULT_KV_MOUNT:-secret}"
+VAULT_KV_VERSION="${VAULT_KV_VERSION:-v2}"
+EXTERNAL_SECRETS_CONTROLLER_SERVICEACCOUNT_NAME="${EXTERNAL_SECRETS_CONTROLLER_SERVICEACCOUNT_NAME:-$EXTERNAL_SECRETS_RELEASE_NAME}"
+EXTERNAL_POSTGRES_REMOTE_KEY="${EXTERNAL_POSTGRES_REMOTE_KEY:-bretter-labs/postgres}"
+EXTERNAL_POSTGRES_USER_PROPERTY="${EXTERNAL_POSTGRES_USER_PROPERTY:-POSTGRES_USER}"
+EXTERNAL_POSTGRES_PASSWORD_PROPERTY="${EXTERNAL_POSTGRES_PASSWORD_PROPERTY:-POSTGRES_PASSWORD}"
+EXTERNAL_POSTGRES_DB_PROPERTY="${EXTERNAL_POSTGRES_DB_PROPERTY:-POSTGRES_DB}"
+EXTERNAL_PULL_SECRET_ENABLED="${EXTERNAL_PULL_SECRET_ENABLED:-0}"
+EXTERNAL_PULL_SECRET_REMOTE_KEY="${EXTERNAL_PULL_SECRET_REMOTE_KEY:-bretter-labs/registry}"
+EXTERNAL_PULL_SECRET_PROPERTY="${EXTERNAL_PULL_SECRET_PROPERTY:-.dockerconfigjson}"
+EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS="${EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS:-180}"
 CDI_NAMESPACE="${CDI_NAMESPACE:-cdi}"
 INSTALL_CDI="${INSTALL_CDI:-1}"
 CDI_VERSION="${CDI_VERSION:-v1.61.0}"
@@ -288,9 +309,52 @@ validate_container_runtime_config() {
 }
 
 validate_postgres_config() {
+  case "$USE_EXTERNAL_SECRETS" in
+    0|1) ;;
+    *) fail "USE_EXTERNAL_SECRETS must be either 0 or 1." ;;
+  esac
   [ -n "$POSTGRES_USER" ] || fail "POSTGRES_USER cannot be empty."
   [ -n "$POSTGRES_PASSWORD" ] || fail "POSTGRES_PASSWORD cannot be empty."
   [ -n "$POSTGRES_DB" ] || fail "POSTGRES_DB cannot be empty."
+}
+
+validate_external_secrets_config() {
+  case "$INSTALL_EXTERNAL_SECRETS_OPERATOR" in
+    0|1) ;;
+    *) fail "INSTALL_EXTERNAL_SECRETS_OPERATOR must be either 0 or 1." ;;
+  esac
+  case "$CREATE_VAULT_CLUSTER_SECRET_STORE" in
+    0|1) ;;
+    *) fail "CREATE_VAULT_CLUSTER_SECRET_STORE must be either 0 or 1." ;;
+  esac
+  case "$EXTERNAL_PULL_SECRET_ENABLED" in
+    0|1) ;;
+    *) fail "EXTERNAL_PULL_SECRET_ENABLED must be either 0 or 1." ;;
+  esac
+  if ! is_uint "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS" || [ "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS" -lt 30 ]; then
+    fail "EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS must be an integer >= 30."
+  fi
+  if [ "$USE_EXTERNAL_SECRETS" -ne 1 ]; then
+    return
+  fi
+  [ -n "$EXTERNAL_SECRETS_STORE_NAME" ] || fail "EXTERNAL_SECRETS_STORE_NAME cannot be empty when USE_EXTERNAL_SECRETS=1."
+  [ -n "$EXTERNAL_POSTGRES_REMOTE_KEY" ] || fail "EXTERNAL_POSTGRES_REMOTE_KEY cannot be empty when USE_EXTERNAL_SECRETS=1."
+  [ -n "$EXTERNAL_POSTGRES_USER_PROPERTY" ] || fail "EXTERNAL_POSTGRES_USER_PROPERTY cannot be empty when USE_EXTERNAL_SECRETS=1."
+  [ -n "$EXTERNAL_POSTGRES_PASSWORD_PROPERTY" ] || fail "EXTERNAL_POSTGRES_PASSWORD_PROPERTY cannot be empty when USE_EXTERNAL_SECRETS=1."
+  [ -n "$EXTERNAL_POSTGRES_DB_PROPERTY" ] || fail "EXTERNAL_POSTGRES_DB_PROPERTY cannot be empty when USE_EXTERNAL_SECRETS=1."
+  if [ "$EXTERNAL_PULL_SECRET_ENABLED" -eq 1 ] && [ -z "$EXTERNAL_PULL_SECRET_REMOTE_KEY" ]; then
+    fail "EXTERNAL_PULL_SECRET_REMOTE_KEY cannot be empty when EXTERNAL_PULL_SECRET_ENABLED=1."
+  fi
+  if [ "$CREATE_VAULT_CLUSTER_SECRET_STORE" -eq 1 ]; then
+    [ -n "$VAULT_ADDR" ] || fail "VAULT_ADDR cannot be empty when CREATE_VAULT_CLUSTER_SECRET_STORE=1."
+    [ -n "$VAULT_K8S_AUTH_PATH" ] || fail "VAULT_K8S_AUTH_PATH cannot be empty when CREATE_VAULT_CLUSTER_SECRET_STORE=1."
+    [ -n "$VAULT_K8S_ROLE" ] || fail "VAULT_K8S_ROLE cannot be empty when CREATE_VAULT_CLUSTER_SECRET_STORE=1."
+    [ -n "$VAULT_KV_MOUNT" ] || fail "VAULT_KV_MOUNT cannot be empty when CREATE_VAULT_CLUSTER_SECRET_STORE=1."
+    case "$VAULT_KV_VERSION" in
+      v1|v2) ;;
+      *) fail "VAULT_KV_VERSION must be v1 or v2." ;;
+    esac
+  fi
 }
 
 validate_cdi_upload_config() {
@@ -1216,7 +1280,7 @@ render_manifest_template() {
 
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local runner_node_selector_value
-  local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath postgres_user postgres_password postgres_db cdi_upload_proxy_url
+  local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend vm_runner_privileged
   local vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
@@ -1263,9 +1327,6 @@ render_manifest_template() {
   backend_data_hostpath="$(escape_sed_replacement "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(escape_sed_replacement "$GOLDEN_IMAGES_HOSTPATH")"
   postgres_data_hostpath="$(escape_sed_replacement "$POSTGRES_DATA_HOSTPATH")"
-  postgres_user="$(escape_sed_replacement "$POSTGRES_USER")"
-  postgres_password="$(escape_sed_replacement "$POSTGRES_PASSWORD")"
-  postgres_db="$(escape_sed_replacement "$POSTGRES_DB")"
   cdi_upload_proxy_url="$(escape_sed_replacement "$CDI_UPLOAD_PROXY_URL")"
 
   sed \
@@ -1308,9 +1369,6 @@ render_manifest_template() {
     -e "s#__BACKEND_DATA_HOSTPATH__#${backend_data_hostpath}#g" \
     -e "s#__GOLDEN_IMAGES_HOSTPATH__#${golden_images_hostpath}#g" \
     -e "s#__POSTGRES_DATA_HOSTPATH__#${postgres_data_hostpath}#g" \
-    -e "s/__POSTGRES_USER__/${postgres_user}/g" \
-    -e "s/__POSTGRES_PASSWORD__/${postgres_password}/g" \
-    -e "s/__POSTGRES_DB__/${postgres_db}/g" \
     -e "s#__CDI_UPLOAD_PROXY_URL__#${cdi_upload_proxy_url}#g" \
     "$input" >"$output"
 }
@@ -1582,7 +1640,199 @@ reconcile_postgres_data_pv() {
   kubectl delete pv backend-postgres-pv --ignore-not-found=true >/dev/null 2>&1 || true
 }
 
+postgres_database_url() {
+  python3 - <<PY
+import urllib.parse
+user = urllib.parse.quote("${POSTGRES_USER}", safe="")
+password = urllib.parse.quote("${POSTGRES_PASSWORD}", safe="")
+db = urllib.parse.quote("${POSTGRES_DB}", safe="")
+print(f"postgresql://{user}:{password}@bretter-postgres.${NAMESPACE}.svc.cluster.local:5432/{db}")
+PY
+}
+
+ensure_postgres_secret() {
+  if [ "$USE_EXTERNAL_SECRETS" -eq 1 ]; then
+    log "Skipping local postgres secret creation (USE_EXTERNAL_SECRETS=1)."
+    return
+  fi
+  log "Applying postgres app secret bretter-postgres"
+  local database_url
+  database_url="$(postgres_database_url)"
+  kubectl -n "$NAMESPACE" create secret generic bretter-postgres \
+    --from-literal=POSTGRES_USER="$POSTGRES_USER" \
+    --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+    --from-literal=POSTGRES_DB="$POSTGRES_DB" \
+    --from-literal=BLABS_DATABASE_URL="$database_url" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+install_external_secrets_operator() {
+  if [ "$USE_EXTERNAL_SECRETS" -ne 1 ]; then
+    return
+  fi
+  if [ "$INSTALL_EXTERNAL_SECRETS_OPERATOR" -ne 1 ]; then
+    log "Skipping External Secrets Operator install (INSTALL_EXTERNAL_SECRETS_OPERATOR=0)."
+    return
+  fi
+
+  install_helm
+  log "Installing External Secrets Operator in namespace ${EXTERNAL_SECRETS_NAMESPACE}..."
+  helm repo add external-secrets https://charts.external-secrets.io >/dev/null 2>&1 || true
+  helm repo update >/dev/null
+
+  local helm_cmd=(upgrade --install "$EXTERNAL_SECRETS_RELEASE_NAME" external-secrets/external-secrets --namespace "$EXTERNAL_SECRETS_NAMESPACE" --create-namespace)
+  if [ -n "$EXTERNAL_SECRETS_CHART_VERSION" ]; then
+    helm_cmd+=(--version "${EXTERNAL_SECRETS_CHART_VERSION#v}")
+  fi
+  helm "${helm_cmd[@]}"
+
+  local deploy
+  while IFS= read -r deploy; do
+    [ -n "$deploy" ] || continue
+    kubectl -n "$EXTERNAL_SECRETS_NAMESPACE" rollout status "$deploy" --timeout=600s
+  done < <(kubectl -n "$EXTERNAL_SECRETS_NAMESPACE" get deployment -l app.kubernetes.io/instance="$EXTERNAL_SECRETS_RELEASE_NAME" -o name)
+}
+
+apply_vault_cluster_secret_store() {
+  if [ "$USE_EXTERNAL_SECRETS" -ne 1 ] || [ "$CREATE_VAULT_CLUSTER_SECRET_STORE" -ne 1 ]; then
+    return
+  fi
+  log "Applying ClusterSecretStore ${EXTERNAL_SECRETS_STORE_NAME} (Vault)"
+  kubectl apply -f - <<EOF
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
+metadata:
+  name: ${EXTERNAL_SECRETS_STORE_NAME}
+spec:
+  provider:
+    vault:
+      server: ${VAULT_ADDR}
+      path: ${VAULT_KV_MOUNT}
+      version: ${VAULT_KV_VERSION}
+      auth:
+        kubernetes:
+          mountPath: ${VAULT_K8S_AUTH_PATH}
+          role: ${VAULT_K8S_ROLE}
+          serviceAccountRef:
+            name: ${EXTERNAL_SECRETS_CONTROLLER_SERVICEACCOUNT_NAME}
+            namespace: ${EXTERNAL_SECRETS_NAMESPACE}
+EOF
+}
+
+wait_for_secret_ready() {
+  local secret_name="$1"
+  local timeout_seconds="$2"
+  local waited=0
+  while ! kubectl -n "$NAMESPACE" get secret "$secret_name" >/dev/null 2>&1; do
+    if [ "$waited" -ge "$timeout_seconds" ]; then
+      fail "Timed out waiting for secret ${secret_name} in namespace ${NAMESPACE}."
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+}
+
+apply_external_secrets_bindings() {
+  if [ "$USE_EXTERNAL_SECRETS" -ne 1 ]; then
+    return
+  fi
+  log "Applying ExternalSecret for postgres credentials"
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: bretter-postgres
+  namespace: ${NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ${EXTERNAL_SECRETS_STORE_NAME}
+    kind: ClusterSecretStore
+  target:
+    name: bretter-postgres
+    creationPolicy: Owner
+    template:
+      engineVersion: v2
+      type: Opaque
+      data:
+        BLABS_DATABASE_URL: postgresql://{{ .POSTGRES_USER }}:{{ .POSTGRES_PASSWORD }}@bretter-postgres.${NAMESPACE}.svc.cluster.local:5432/{{ .POSTGRES_DB }}
+  data:
+    - secretKey: POSTGRES_USER
+      remoteRef:
+        key: ${EXTERNAL_POSTGRES_REMOTE_KEY}
+        property: ${EXTERNAL_POSTGRES_USER_PROPERTY}
+    - secretKey: POSTGRES_PASSWORD
+      remoteRef:
+        key: ${EXTERNAL_POSTGRES_REMOTE_KEY}
+        property: ${EXTERNAL_POSTGRES_PASSWORD_PROPERTY}
+    - secretKey: POSTGRES_DB
+      remoteRef:
+        key: ${EXTERNAL_POSTGRES_REMOTE_KEY}
+        property: ${EXTERNAL_POSTGRES_DB_PROPERTY}
+EOF
+
+  if [ "$EXTERNAL_PULL_SECRET_ENABLED" -eq 1 ]; then
+    log "Applying ExternalSecret for image pull secret ghcr-creds"
+    if [ -n "$EXTERNAL_PULL_SECRET_PROPERTY" ]; then
+      kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: ghcr-creds
+  namespace: ${NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ${EXTERNAL_SECRETS_STORE_NAME}
+    kind: ClusterSecretStore
+  target:
+    name: ghcr-creds
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+  data:
+    - secretKey: .dockerconfigjson
+      remoteRef:
+        key: ${EXTERNAL_PULL_SECRET_REMOTE_KEY}
+        property: ${EXTERNAL_PULL_SECRET_PROPERTY}
+EOF
+    else
+      kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: ghcr-creds
+  namespace: ${NAMESPACE}
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: ${EXTERNAL_SECRETS_STORE_NAME}
+    kind: ClusterSecretStore
+  target:
+    name: ghcr-creds
+    creationPolicy: Owner
+    template:
+      type: kubernetes.io/dockerconfigjson
+  data:
+    - secretKey: .dockerconfigjson
+      remoteRef:
+        key: ${EXTERNAL_PULL_SECRET_REMOTE_KEY}
+EOF
+    fi
+  fi
+
+  log "Waiting for ExternalSecret-backed secrets to sync..."
+  wait_for_secret_ready bretter-postgres "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS"
+  if [ "$EXTERNAL_PULL_SECRET_ENABLED" -eq 1 ]; then
+    wait_for_secret_ready ghcr-creds "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS"
+  fi
+}
+
 ensure_pull_secret() {
+  if [ "$USE_EXTERNAL_SECRETS" -eq 1 ] && [ "$EXTERNAL_PULL_SECRET_ENABLED" -eq 1 ]; then
+    log "Skipping local pull secret creation (managed by ExternalSecret)."
+    return
+  fi
   if [ "$CREATE_PULL_SECRET" -eq 1 ]; then
     log "Updating ghcr-creds secret"
     if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
@@ -1902,7 +2152,10 @@ apply_manifests() {
   ensure_golden_images_claim
   reconcile_backend_data_pv
   reconcile_postgres_data_pv
+  ensure_postgres_secret
   ensure_pull_secret
+  apply_vault_cluster_secret_store
+  apply_external_secrets_bindings
   apply_cleanup_automation
 
   if [ -f "$ROOT_DIR/runner/spice-embed.html" ]; then
@@ -2147,6 +2400,7 @@ main() {
   validate_vm_network_config
   validate_container_runtime_config
   validate_postgres_config
+  validate_external_secrets_config
   validate_cdi_upload_config
   validate_cpu_manager_config
   validate_monitoring_config
@@ -2162,6 +2416,7 @@ main() {
   enable_cpu_manager_static_all_nodes
   ensure_cdi_installed
   configure_cdi_upload_proxy_url
+  install_external_secrets_operator
   prepare_rendered_manifests
 
   log "Using control node: $CONTROL_NODE"
@@ -2176,6 +2431,12 @@ main() {
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
+  log "External Secrets enabled: $USE_EXTERNAL_SECRETS (store: $EXTERNAL_SECRETS_STORE_NAME)"
+  if [ "$USE_EXTERNAL_SECRETS" -eq 1 ]; then
+    log "External Secrets operator install: $INSTALL_EXTERNAL_SECRETS_OPERATOR (namespace: $EXTERNAL_SECRETS_NAMESPACE release: $EXTERNAL_SECRETS_RELEASE_NAME)"
+    log "Vault ClusterSecretStore auto-create: $CREATE_VAULT_CLUSTER_SECRET_STORE"
+    log "External pull secret management: $EXTERNAL_PULL_SECRET_ENABLED"
+  fi
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"
