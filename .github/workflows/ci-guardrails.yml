@@ -29,7 +29,8 @@ jobs:
       - name: Install backend dependencies
         run: |
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r backend/requirements.txt pytest
+          .venv/bin/pip install -r backend/requirements.txt pytest httpx
+          .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 
       - name: Run release/version guardrail
         run: .venv/bin/python scripts/check_release_discipline.py
