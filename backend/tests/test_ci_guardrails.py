@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 from sqlalchemy import create_engine, inspect
@@ -43,3 +45,22 @@ def test_alembic_upgrade_head_on_clean_db(tmp_path: Path) -> None:
     assert "template" in table_names
     assert "containertemplate" in table_names
     assert "connecttoken" in table_names
+
+
+def test_release_version_files_are_consistent() -> None:
+    root = Path(__file__).resolve().parents[2]
+    semver_pattern = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
+    assert semver_pattern.match(version), f"VERSION is not valid semantic version: {version}"
+
+    frontend_package = json.loads((root / "frontend-vite" / "package.json").read_text(encoding="utf-8"))
+    assert str(frontend_package.get("version") or "").strip() == version
+
+    frontend_lock = json.loads((root / "frontend-vite" / "package-lock.json").read_text(encoding="utf-8"))
+    assert str(frontend_lock.get("version") or "").strip() == version
+    assert str(frontend_lock.get("packages", {}).get("", {}).get("version") or "").strip() == version
+
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "## [Unreleased]" in changelog
+    assert f"## [{version}]" in changelog

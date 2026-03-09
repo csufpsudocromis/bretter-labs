@@ -21,6 +21,7 @@ Users launch labs with staged status feedback and connect in the browser.
 - [Security and Session Model](#security-and-session-model)
 - [Admin and User Workflows](#admin-and-user-workflows)
 - [Local Development](#local-development)
+- [Release and Versioning](#release-and-versioning)
 - [Operations](#operations)
 - [Documentation and Wiki](#documentation-and-wiki)
 - [Project Structure](#project-structure)
@@ -184,6 +185,26 @@ npm run dev -- --host --port 5173
 ```
 
 Set `VITE_API_BASE` to target a non-default API endpoint.
+
+## Release and Versioning
+
+- Canonical release version is stored in `VERSION` (Semantic Versioning).
+- `CHANGELOG.md` follows Keep a Changelog with `Unreleased` + released versions.
+- Frontend package versions are kept in lockstep with `VERSION`.
+
+Version bump helper:
+
+```bash
+python3 scripts/bump_version.py patch
+# or: major / minor / X.Y.Z
+```
+
+Release guardrail check:
+
+```bash
+python3 scripts/check_release_discipline.py
+./scripts/ci_guardrails.sh
+```
 
 ## Operations
 

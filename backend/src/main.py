@@ -17,6 +17,7 @@ from .routes import admin, admin_containers, auth, user, user_containers
 from .services.kubernetes import kube
 from .tables import Config, ContainerImage, User
 from .time_utils import utc_now
+from .version import APP_VERSION
 
 configure_capped_error_file_logging(settings.error_log_file_path, settings.error_log_max_bytes)
 
@@ -170,7 +171,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Bretter Labs API",
-    version="0.3.0",
+    version=APP_VERSION,
     lifespan=lifespan,
     openapi_url="/openapi.json" if settings.api_docs_enabled else None,
     docs_url="/docs" if settings.api_docs_enabled else None,

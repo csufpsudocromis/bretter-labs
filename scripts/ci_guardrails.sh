@@ -9,6 +9,8 @@ fi
 
 cd "$ROOT_DIR/backend"
 
+"$PYTHON_BIN" "$ROOT_DIR/scripts/check_release_discipline.py"
+
 PYTHONPATH="$PWD" "$PYTHON_BIN" -m pytest -q \
   tests/test_ci_guardrails.py \
   tests/test_e2e_regressions.py

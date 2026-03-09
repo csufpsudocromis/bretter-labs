@@ -1,0 +1,38 @@
+name: CI Guardrails
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  guardrails:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install backend dependencies
+        run: |
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r backend/requirements.txt pytest
+
+      - name: Run release/version guardrail
+        run: .venv/bin/python scripts/check_release_discipline.py
+
+      - name: Run CI guardrails
+        run: ./scripts/ci_guardrails.sh
