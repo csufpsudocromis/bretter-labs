@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     database_path: str = "backend/data/app.db"
     database_url: str = ""
     kube_namespace: str = "labs"
+    kube_auto_create_namespace: bool = False
     kube_image_pvc: str = "golden-images"
     kube_runtime_class: str = ""  # set to your RuntimeClass name if needed
     reaper_interval_seconds: int = 60
@@ -33,7 +34,8 @@ class Settings(BaseSettings):
     linux_efi_enabled: bool = False
     linux_machine_type: str = "pc"
     linux_cpu_model: str = "host"
-    vm_net_backend: str = "tap-nat"
+    vm_net_backend: str = "user"
+    vm_runner_privileged: bool = False
     vm_vhost_net_enabled: bool = True
     vm_net_multiqueue_enabled: bool = True
     vm_console_external_traffic_policy: str = "Local"

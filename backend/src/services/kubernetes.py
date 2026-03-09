@@ -764,7 +764,7 @@ class KubernetesService:
                 failure_threshold=3,
             ),
             security_context=client.V1SecurityContext(
-                privileged=(settings.kube_use_kvm or settings.vm_net_backend == "tap-nat")
+                privileged=(settings.vm_runner_privileged or settings.kube_use_kvm or settings.vm_net_backend == "tap-nat")
             ),
         )
         if settings.kube_spice_embed_configmap:
@@ -1546,10 +1546,14 @@ class KubernetesService:
             core.read_namespace(name=namespace)
         except ApiException as exc:
             if exc.status == 404:
-                ns_body = client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace))
-                core.create_namespace(body=ns_body)
-            else:
-                raise
+                if settings.kube_auto_create_namespace:
+                    ns_body = client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace))
+                    core.create_namespace(body=ns_body)
+                    return
+                raise RuntimeError(
+                    f"Kubernetes namespace {namespace} not found. Create it first or set BLABS_KUBE_AUTO_CREATE_NAMESPACE=true."
+                )
+            raise
 
 
 kube = KubernetesService()

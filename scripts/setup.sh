@@ -50,7 +50,8 @@ WINDOWS_CPU_MODEL="${WINDOWS_CPU_MODEL:-host}"
 LINUX_MACHINE_TYPE="${LINUX_MACHINE_TYPE:-pc}"
 LINUX_EFI_ENABLED="${LINUX_EFI_ENABLED:-false}"
 LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
-VM_NET_BACKEND="${VM_NET_BACKEND:-tap-nat}"
+VM_NET_BACKEND="${VM_NET_BACKEND:-user}"
+VM_RUNNER_PRIVILEGED="${VM_RUNNER_PRIVILEGED:-0}"
 VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY="${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY:-Local}"
 VM_CONSOLE_SOURCE_CIDRS="${VM_CONSOLE_SOURCE_CIDRS:-}"
 VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
@@ -228,6 +229,10 @@ validate_vm_network_config() {
   case "$VM_NET_BACKEND" in
     tap-nat|user) ;;
     *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
+  esac
+  case "$VM_RUNNER_PRIVILEGED" in
+    0|1) ;;
+    *) fail "VM_RUNNER_PRIVILEGED must be either 0 or 1." ;;
   esac
   case "${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY}" in
     Local|Cluster|local|cluster) ;;
@@ -1212,7 +1217,7 @@ render_manifest_template() {
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath postgres_user postgres_password postgres_db cdi_upload_proxy_url
-  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend
+  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend vm_runner_privileged
   local vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
@@ -1236,6 +1241,7 @@ render_manifest_template() {
   linux_efi_enabled="$(escape_sed_replacement "$LINUX_EFI_ENABLED")"
   linux_cpu_model="$(escape_sed_replacement "$LINUX_CPU_MODEL")"
   vm_net_backend="$(escape_sed_replacement "$VM_NET_BACKEND")"
+  vm_runner_privileged="$(escape_sed_replacement "$VM_RUNNER_PRIVILEGED")"
   vm_console_external_traffic_policy="$(escape_sed_replacement "$VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY")"
   vm_console_source_cidrs="$(escape_sed_replacement "$VM_CONSOLE_SOURCE_CIDRS")"
   vm_console_ticket_length="$(escape_sed_replacement "$VM_CONSOLE_TICKET_LENGTH")"
@@ -1280,6 +1286,7 @@ render_manifest_template() {
     -e "s/__LINUX_EFI_ENABLED__/${linux_efi_enabled}/g" \
     -e "s/__LINUX_CPU_MODEL__/${linux_cpu_model}/g" \
     -e "s/__VM_NET_BACKEND__/${vm_net_backend}/g" \
+    -e "s/__VM_RUNNER_PRIVILEGED__/${vm_runner_privileged}/g" \
     -e "s/__VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY__/${vm_console_external_traffic_policy}/g" \
     -e "s#__VM_CONSOLE_SOURCE_CIDRS__#${vm_console_source_cidrs}#g" \
     -e "s/__VM_CONSOLE_TICKET_LENGTH__/${vm_console_ticket_length}/g" \
@@ -2171,6 +2178,7 @@ main() {
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Using VM network backend: $VM_NET_BACKEND"
+  log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"
   log "VM console external traffic policy: $VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY"
   log "VM console source CIDRs: ${VM_CONSOLE_SOURCE_CIDRS:-unrestricted}"
   log "VM console ticket length: $VM_CONSOLE_TICKET_LENGTH"
