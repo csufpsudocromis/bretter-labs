@@ -1,62 +1,90 @@
 # Security and Auth
 
-Last reviewed: March 6, 2026.
+Last reviewed: March 9, 2026.
 
 ## Authentication model
 
-- Login uses secure session cookies (`HttpOnly`) rather than storing auth tokens in browser localStorage.
+- Login uses secure session cookies (`HttpOnly`) instead of localStorage tokens.
 - `/auth/login` sets auth cookie and returns user profile metadata.
 - `/auth/logout` revokes server token and clears auth cookie.
 
 Default cookie names:
 
 - Auth session: `blabs_session`
-- Container connect grant: `blabs_connect_grant`
-- Container connect session: `blabs_connect_session`
+- Connect grant: `blabs_connect_grant`
+- Connect session: `blabs_connect_session`
 
-## Connect token flow (container connect)
+## Connect token flow (VM + container)
 
 Connect flow is short-lived and split in two stages:
 
-1. UI calls `/user/containers/{id}/connect-token`.
-2. Backend issues one-time grant token cookie.
-3. Connect endpoint consumes grant token and mints session token cookie.
-4. Web and websocket proxy calls require valid connect session cookie.
+1. UI requests `/user/.../connect-token`.
+2. Backend issues one-time connect grant cookie.
+3. Connect endpoint consumes grant and mints connect session cookie.
+4. Proxy/websocket calls require valid connect session cookie.
 
 Security properties:
 
 - Grant token is one-time use.
-- Grant/session cookies are scoped to connect path.
-- Session TTL is short-lived and configurable.
+- Grant/session cookies are path-scoped to connect routes.
+- Session TTL is server-enforced.
 
-## Relevant backend settings
+## RBAC model
 
-Environment prefix: `BLABS_`
+Roles:
 
-- `AUTH_COOKIE_NAME`
-- `AUTH_COOKIE_TTL_SECONDS`
-- `AUTH_COOKIE_SECURE`
-- `AUTH_COOKIE_SAMESITE`
-- `CONNECT_GRANT_TTL_SECONDS`
-- `CONNECT_SESSION_TTL_SECONDS`
-- `CONNECT_COOKIE_SECURE`
-- `CONNECT_COOKIE_SAMESITE`
+- `user`
+- `viewer`
+- `image_manager`
+- `template_manager`
+- `lab_operator`
+- `platform_admin`
 
-## Login page background asset behavior
+Permissions are enforced on admin/API routes (read/write split for users, templates, images, operations, settings).
 
-- Background image can be uploaded in admin appearance settings.
-- Asset is stored locally and served via `/user/site-assets/<filename>`.
-- This avoids external dependency failures on login page render.
+## OIDC SSO
 
-## Operational recommendations
+OIDC is optional and uses authorization code + PKCE.
 
-- Keep TLS enabled for all public access.
-- Keep cookie `secure=true` in production.
-- Rotate/revoke leaked GitHub PATs immediately.
-- Review admin actions and access regularly.
+Required SSO config fields:
+
+- `sso_client_id`
+- `sso_authorize_url`
+- `sso_token_url`
+- `sso_userinfo_url`
+- `sso_redirect_url`
+
+Behavior:
+
+- Login state is stored server-side with short TTL.
+- Callback exchanges code and creates/updates local user.
+- Session cookie is then issued using the normal auth flow.
+
+## CORS and login origin policy
+
+If login/API calls must work from LAN IPs and campus domains, set explicit allowed UI origins.
+
+Examples:
+
+```bash
+BLABS_CORS_ALLOWED_ORIGINS="https://10.68.49.250:30073,https://labs.fullerton.edu"
+BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\\.)?fullerton\\.edu(:[0-9]+)?$"
+```
+
+Notes:
+
+- Include the **frontend origin** (for example `:30073`), not only API origin (`:30080`).
+- Keep `BLABS_AUTH_COOKIE_SECURE=1` and `BLABS_CONNECT_COOKIE_SECURE=1` when using HTTPS.
+
+## API docs exposure
+
+OpenAPI/docs endpoints are disabled in non-dev by default.
+
+- `BLABS_API_DOCS_ENABLED=0` (recommended for production)
 
 ## Related pages
 
 - [Operations Runbook](Operations-Runbook.md)
+- [Scaling and Quotas](Scaling-and-Quotas.md)
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
 - [Setup and Configuration](Setup-and-Configuration.md)

@@ -1,6 +1,6 @@
 # VM Image Formats
 
-Last reviewed: March 6, 2026.
+Last reviewed: March 9, 2026.
 
 ## Allowed upload formats
 
@@ -47,12 +47,12 @@ qemu-img convert -p -f qcow2 -O raw normalized.qcow2 disk.raw
 
 ### `failed to normalize image format`
 
-- Unsupported or invalid extension/format content mismatch.
+- Unsupported extension or content mismatch.
 - Re-export from source hypervisor and re-upload.
 
 ### Upload reaches 100% then pauses
 
-- Usually cluster finalization still running.
+- Usually cluster finalization is still running.
 - Check backend logs for upload task progress/errors.
 - Confirm storage pressure is not blocking conversion jobs.
 

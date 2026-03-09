@@ -1,6 +1,6 @@
 # Setup and Configuration
 
-Last reviewed: March 6, 2026.
+Last reviewed: March 9, 2026.
 
 ## Quick install
 
@@ -12,15 +12,15 @@ cd bretter-labs
 
 ## High-value setup variables
 
-All values are read from environment variables by `scripts/setup.sh`.
+All values are read by `scripts/setup.sh` and/or backend env.
 
 Core:
 
 - `NAMESPACE` (default `labs`)
+- `CONTROL_NODE`
 - `NODE_EXTERNAL_HOST`
 - `PUBLIC_SCHEME` (`https` recommended)
-- `TLS_ENABLED`
-- `TLS_SECRET_NAME`
+- `TLS_ENABLED`, `TLS_SECRET_NAME`
 
 Storage:
 
@@ -28,6 +28,20 @@ Storage:
 - `GOLDEN_IMAGES_HOSTPATH`
 - `BACKEND_DATA_HOSTPATH`
 - `POSTGRES_DATA_HOSTPATH`
+
+Auth/session/cors:
+
+- `BLABS_AUTH_COOKIE_TTL_SECONDS`
+- `BLABS_CONNECT_GRANT_TTL_SECONDS`
+- `BLABS_CONNECT_SESSION_TTL_SECONDS`
+- `BLABS_AUTH_COOKIE_SECURE`, `BLABS_CONNECT_COOKIE_SECURE`
+- `BLABS_CORS_ALLOWED_ORIGINS`
+- `BLABS_CORS_ALLOWED_ORIGIN_REGEX`
+
+OIDC/SSO:
+
+- `BLABS_API_DOCS_ENABLED` (keep `0` in production)
+- SSO settings are configured in `/admin/settings/sso` and stored in app config.
 
 Container runtime:
 
@@ -52,6 +66,13 @@ Monitoring/ops:
 - `AUTOCLEANUP_PVC_WARN_PCT`, `AUTOCLEANUP_PVC_CRITICAL_PCT`, `AUTOCLEANUP_PVC_EMERGENCY_PCT`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
 
+External secrets (optional):
+
+- `USE_EXTERNAL_SECRETS`
+- `EXTERNAL_SECRETS_NAMESPACE`, `EXTERNAL_SECRETS_RELEASE_NAME`
+- `EXTERNAL_SECRETS_STORE_NAME`
+- Vault settings (`VAULT_ADDR`, `VAULT_K8S_ROLE`, `VAULT_KV_MOUNT`, secret keys)
+
 ## Example
 
 ```bash
@@ -60,6 +81,7 @@ NODE_EXTERNAL_HOST=10.68.49.250 \
 PUBLIC_SCHEME=https \
 TLS_ENABLED=1 \
 VM_STORAGE_CLASS=longhorn-r1 \
+BLABS_CORS_ALLOWED_ORIGINS="https://10.68.49.250:30073,https://labs.fullerton.edu" \
 ENABLE_MONITORING=1 \
 ./scripts/setup.sh
 ```
@@ -70,14 +92,16 @@ ENABLE_MONITORING=1 \
 - `/admin/settings/runtime`: read-only runtime/env/drift visibility
 - `/admin/settings/appearance`: theme, contrast targets, background upload, font sizing
 - `/admin/settings/sso`: SSO provider config
+- `/admin/scaling-quotas`: namespace quota controls for lab count/cpu/ram/storage/idle cap
 
 ## Notes
 
 - Runtime settings page is read-only by design.
 - Storage settings page supports clearing overrides back to env defaults.
-- Login/background asset should be locally hosted for reliability.
+- Login background should be hosted locally (`/user/site-assets/...`) for reliability.
 
 ## Related pages
 
 - [Operations Runbook](Operations-Runbook.md)
+- [Scaling and Quotas](Scaling-and-Quotas.md)
 - [Security and Auth](Security-and-Auth.md)

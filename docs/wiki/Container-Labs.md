@@ -1,23 +1,28 @@
 # Container Labs
 
-Last reviewed: March 6, 2026.
+Last reviewed: March 9, 2026.
 
 ## Overview
 
-Container labs are launched from admin-managed container templates and run as isolated per-instance pods.
+Container labs are launched from admin-managed templates and run as isolated per-instance pods.
 
 User flow:
 
 1. User clicks `Start Lab`.
 2. Status progresses through runtime stages.
-3. `Connect` enables only when app readiness is satisfied.
+3. `Connect` enables only when readiness is satisfied.
 4. User deletes lab when done.
+
+Container labs are shown alongside VMs in unified user sections:
+
+- `Available Virtual Labs`
+- `My Running Labs`
 
 ## Admin workflow
 
 ### 1) Register container images (`/admin/container-images`)
 
-- Supports Docker Hub, other OCI registries, or direct image refs.
+- Supports Docker Hub and other OCI registry references.
 - Optional actions per image:
   - `Scan` (queues image scan)
   - `Pre-pull` (warms image on cluster nodes)
@@ -55,8 +60,8 @@ Common stage labels shown to users:
 Notes:
 
 - `Connect` is disabled until status is `Running`.
-- Pending may include reason such as waiting for available resources.
-- Startup errors show status detail and launch diagnostics.
+- Pending may include a reason such as waiting for available resources.
+- Status details above action buttons are hidden during normal startup and shown on error.
 
 ## One active lab rule
 
@@ -93,4 +98,5 @@ kubectl -n labs get svc,endpoints | rg '<ct-pod-name-prefix>'
 ## Related pages
 
 - [Operations Runbook](Operations-Runbook.md)
+- [Scaling and Quotas](Scaling-and-Quotas.md)
 - [Security and Auth](Security-and-Auth.md)

@@ -1,6 +1,6 @@
 # Operations Runbook
 
-Last reviewed: March 6, 2026.
+Last reviewed: March 9, 2026.
 
 ## Baseline checks
 
@@ -14,7 +14,7 @@ kubectl get ns labs
 Core platform checks:
 
 ```bash
-kubectl -n labs get deploy bretter-backend bretter-frontend
+kubectl -n labs get deploy bretter-backend bretter-frontend bretter-postgres
 kubectl -n labs get pods -o wide
 kubectl -n labs logs deploy/bretter-backend --tail=200
 kubectl -n labs logs deploy/bretter-frontend --tail=200
@@ -60,6 +60,20 @@ kubectl -n labs get pods -o wide | rg 'vm-|virt-launcher|ct-'
 7. Confirm idle prompt appears on both user page and connect tab.
 8. Confirm deleting the running lab clears single-lab-limit message.
 
+## Quotas and scaling checks
+
+```bash
+kubectl -n labs get resourcequota bretter-runtime-quota -o yaml
+kubectl -n labs describe resourcequota bretter-runtime-quota
+kubectl -n labs get limitrange bretter-default-container-limits -o yaml
+```
+
+Admin UI checks:
+
+- `/admin/scaling-quotas` should load available namespaces.
+- Quota changes should apply to both VM and container starts.
+- When hit, users should receive quota detail (HTTP 429) or queued reason.
+
 ## Common incidents and triage
 
 ### Labs stuck in pending/queued
@@ -76,11 +90,11 @@ Typical causes:
 
 - Node resource pressure (CPU/memory/disk)
 - PVC/storage class scheduling failure
-- Template/cluster concurrency guardrails
+- Namespace/team quota limits
 
 ### Upload appears stuck at 100%
 
-Usually this means browser upload is done and cluster finalization is still running.
+Usually browser upload is done and cluster finalization is still running.
 
 Checks:
 
@@ -102,7 +116,7 @@ kubectl -n labs get endpoints | rg 'ct-|vm-'
 
 Common causes:
 
-- App not ready yet (`Starting` state)
+- App/VM not ready yet (`Starting`)
 - Connect session cookie missing/expired
 - Backend cannot reach container service/pod endpoint
 
@@ -127,7 +141,7 @@ If alerts indicate sustained high usage, clean stale labs/uploads and expand nod
 - Error log is capped at 10MB.
 - Oldest log lines are dropped when cap is reached.
 - UI shows 50 log entries per page with page navigation.
-- "Clear Error Log" truncates backend error logs.
+- `Clear Error Log` truncates backend error logs.
 
 ## Single active lab enforcement
 
