@@ -307,22 +307,26 @@ class KubernetesService:
                 if exc.status != 409:
                     raise
 
-    def create_service_for_pod(self, pod_name: str, service_name: str) -> int:
+    def create_service_for_pod(self, pod_name: str, service_name: str, service_type: str = "NodePort") -> int | None:
         core = self._client()
+        normalized_service_type = "ClusterIP" if str(service_type).lower() == "clusterip" else "NodePort"
         external_traffic_policy = self._vm_console_external_traffic_policy()
+        spec_kwargs: dict[str, object] = {
+            "selector": {"app": pod_name},
+            "type": normalized_service_type,
+            "ports": [client.V1ServicePort(port=6080, target_port=6080, protocol="TCP")],
+        }
+        if normalized_service_type == "NodePort":
+            spec_kwargs["external_traffic_policy"] = external_traffic_policy
         body = client.V1Service(
             metadata=client.V1ObjectMeta(name=service_name, labels={"app": pod_name}),
-            spec=client.V1ServiceSpec(
-                selector={"app": pod_name},
-                type="NodePort",
-                external_traffic_policy=external_traffic_policy,
-                ports=[client.V1ServicePort(port=6080, target_port=6080, protocol="TCP")],
-            ),
+            spec=client.V1ServiceSpec(**spec_kwargs),
         )
         try:
             svc = core.create_namespaced_service(namespace=settings.kube_namespace, body=body)
-            # Fetch assigned nodePort
-            return svc.spec.ports[0].node_port
+            if normalized_service_type == "NodePort":
+                return svc.spec.ports[0].node_port
+            return None
         except ApiException as exc:
             if exc.status != 409:
                 logger.error("Failed to create service %s: %s", service_name, exc)
@@ -330,14 +334,18 @@ class KubernetesService:
             # If already exists, fetch existing
             existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
             existing_spec = existing.spec or client.V1ServiceSpec()
-            if str(existing_spec.external_traffic_policy or "") != external_traffic_policy:
-                core.patch_namespaced_service(
-                    name=service_name,
-                    namespace=settings.kube_namespace,
-                    body={"spec": {"externalTrafficPolicy": external_traffic_policy}},
-                )
+            desired_patch: dict[str, object] = {"selector": {"app": pod_name}, "type": normalized_service_type}
+            needs_patch = str(existing_spec.type or "") != normalized_service_type
+            if normalized_service_type == "NodePort":
+                desired_patch["externalTrafficPolicy"] = external_traffic_policy
+                if str(existing_spec.external_traffic_policy or "") != external_traffic_policy:
+                    needs_patch = True
+            if needs_patch:
+                core.patch_namespaced_service(name=service_name, namespace=settings.kube_namespace, body={"spec": desired_patch})
                 existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
-            return existing.spec.ports[0].node_port
+            if normalized_service_type == "NodePort":
+                return existing.spec.ports[0].node_port
+            return None
 
     def ensure_container_service(
         self,
@@ -1479,6 +1487,32 @@ class KubernetesService:
     def _find_container_pod_name(self, instance_id: str, owner: str) -> str:
         return self._container_pod_name(instance_id, owner)
 
+    def _cleanup_orphan_container_services(self, session: Session) -> None:
+        core = self._client()
+        active_ids = session.exec(
+            select(ContainerInstance.id).where(ContainerInstance.status.in_(["pending", "running"]))
+        ).all()
+        active_service_names = {self._container_service_name(instance_id) for instance_id in active_ids}
+        try:
+            services = core.list_namespaced_service(namespace=settings.kube_namespace).items
+        except Exception:
+            logger.warning("Failed to list services during orphan ctsvc cleanup", exc_info=True)
+            return
+        for svc in services:
+            name = str(getattr(getattr(svc, "metadata", None), "name", "") or "")
+            if not name.startswith("ctsvc-"):
+                continue
+            if name in active_service_names:
+                continue
+            try:
+                core.delete_namespaced_service(name=name, namespace=settings.kube_namespace)
+                logger.info("Deleted orphaned container service %s", name)
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.warning("Failed deleting orphaned container service %s: %s", name, exc)
+            except Exception:
+                logger.warning("Failed deleting orphaned container service %s", name, exc_info=True)
+
     def reaper_tick(self, session: Session) -> None:
         config_row = session.get(Config, 1) or Config()
         templates = {t.id: t for t in session.exec(select(Template)).all()}
@@ -1520,6 +1554,7 @@ class KubernetesService:
             except Exception:
                 logger.warning("Failed to delete container workload %s during reaper", inst.id, exc_info=True)
             session.delete(inst)
+        self._cleanup_orphan_container_services(session)
         recent_cutoff = now - timedelta(minutes=max(1, int(settings.warm_pool_window_minutes)))
         recent_launches: dict[str, int] = {}
         for template_id in session.exec(select(Instance.template_id).where(Instance.started_at >= recent_cutoff)).all():

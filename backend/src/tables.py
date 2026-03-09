@@ -11,6 +11,7 @@ class User(SQLModel, table=True):
     username: str = Field(primary_key=True, index=True)
     password_hash: str
     role: str = Field(default="user", index=True)
+    team: str = Field(default="default", index=True)
     is_admin: bool = False
     force_password_change: bool = False
 
@@ -190,3 +191,19 @@ class Config(SQLModel, table=True):
     sso_token_url: str = ""
     sso_userinfo_url: str = ""
     sso_redirect_url: str = ""
+
+
+class TeamQuota(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("team", "namespace", name="uq_teamquota_team_namespace"),)
+
+    id: str = Field(primary_key=True, index=True)
+    team: str = Field(index=True)
+    namespace: str = Field(index=True)
+    max_concurrent_labs: Optional[int] = None
+    max_cpu_millicores: Optional[int] = None
+    max_memory_mb: Optional[int] = None
+    max_storage_gib: Optional[int] = None
+    idle_timeout_minutes_cap: Optional[int] = None
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

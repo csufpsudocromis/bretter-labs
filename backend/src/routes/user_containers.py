@@ -33,6 +33,7 @@ from ..models import ContainerTemplate as ContainerTemplateView
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
 from ..services.resource_guard import check_launch_headroom
+from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
@@ -780,7 +781,13 @@ def _parse_env(raw: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in data.items()}
 
 
-def _template_out(record: ContainerTemplateTable) -> ContainerTemplateView:
+def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | None = None) -> ContainerTemplateView:
+    template_idle = max(
+        1,
+        int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
+    )
+    if idle_timeout_cap is not None:
+        template_idle = min(template_idle, max(1, int(idle_timeout_cap)))
     return ContainerTemplateView(
         id=record.id,
         template_key=str(getattr(record, "template_key", record.id) or record.id),
@@ -806,7 +813,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplateView:
         args=_parse_args(record.args_json),
         env=_parse_env(record.env_json),
         auto_delete_minutes=record.auto_delete_minutes,
-        idle_timeout_minutes=max(1, int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes)),
+        idle_timeout_minutes=template_idle,
         enabled=record.enabled,
         created_at=record.created_at,
     )
@@ -1055,10 +1062,13 @@ async def proxy_container_connect(
     template = session.get(ContainerTemplateTable, record.template_id)
     is_kasm = _is_kasm_template(session, template)
     container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
+    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
     template_idle_minutes = max(
         1,
         int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
     )
+    if idle_cap is not None:
+        template_idle_minutes = min(template_idle_minutes, max(1, int(idle_cap)))
 
     if proxy_path.strip("/") == "__blabs_idle_bridge.js":
         bridge_script = _container_idle_bridge_javascript(
@@ -1332,14 +1342,14 @@ def list_user_container_templates(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerTemplateView]:
-    _ = user
+    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
     rows = session.exec(
         select(ContainerTemplateTable)
         .where(ContainerTemplateTable.enabled == True)  # noqa: E712
         .where(ContainerTemplateTable.is_default == True)  # noqa: E712
     ).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
-    return [_template_out(row) for row in rows]
+    return [_template_out(row, idle_timeout_cap=team_idle_cap) for row in rows]
 
 
 @router.get("/containers", response_model=list[ContainerInstanceView])
@@ -1623,12 +1633,26 @@ def start_container_template(
     template_active_count = _active_container_template_count(session, template.id)
     template_limit_reached = template_limit and template_active_count >= template_limit
     headroom_error = _container_headroom_error(template)
+    quota_check = enforce_team_quota(
+        session,
+        team=getattr(user, "team", None),
+        namespace=settings.kube_namespace,
+        requested_labs=1,
+        requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
+        requested_memory_mb=max(1, int(getattr(template, "memory_mb", 512) or 512)),
+        requested_storage_gib=max(1, int(getattr(template, "storage_gib", 1) or 1)),
+        requested_idle_timeout_minutes=int(
+            getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
+        ),
+    )
 
     instance_id = str(uuid4())
     now = utc_now()
     queue_reason: str | None = None
     if template_limit_reached:
         queue_reason = f"Template concurrency limit reached ({template_limit})."
+    elif quota_check.error_detail:
+        queue_reason = quota_check.error_detail
     elif headroom_error:
         queue_reason = headroom_error
     elif cluster_full:
@@ -1663,6 +1687,8 @@ def start_container_template(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"template concurrency limit reached ({template_limit})",
         )
+    if quota_check.error_detail:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=quota_check.error_detail)
     if headroom_error:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
     if cluster_full:
@@ -1806,6 +1832,38 @@ def restart_container(
         )
     if cluster_full:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
+    quota_check = enforce_team_quota(
+        session,
+        team=getattr(user, "team", None),
+        namespace=settings.kube_namespace,
+        requested_labs=1,
+        requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
+        requested_memory_mb=max(1, int(getattr(template, "memory_mb", 512) or 512)),
+        requested_storage_gib=max(1, int(getattr(template, "storage_gib", 1) or 1)),
+        requested_idle_timeout_minutes=int(
+            getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
+        ),
+        exclude_container_instance_id=record.id,
+    )
+    if quota_check.error_detail and settings.container_start_queue_enabled:
+        record.status = "queued"
+        record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
+        record.queue_reason = quota_check.error_detail[:255]
+        record.queue_not_before = utc_now() + timedelta(seconds=_queue_backoff_seconds(record.queue_attempts))
+        record.last_active_at = utc_now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return _instance_out(
+            record,
+            stage="queued",
+            detail=record.queue_reason,
+            access_url=None,
+            container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
+            launch_diagnostics=[],
+        )
+    if quota_check.error_detail:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=quota_check.error_detail)
     headroom_error = _container_headroom_error(template)
     if headroom_error and settings.container_start_queue_enabled:
         record.status = "queued"

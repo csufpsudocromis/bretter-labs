@@ -23,6 +23,7 @@ from ..auth import (
 from ..db import get_session
 from ..models import Credentials, UserOut
 from ..rbac import Role, can_access_admin, list_permissions_for_role, role_for_user
+from ..services.team_quotas import normalize_team
 from ..tables import Config, OIDCLoginState, User
 from ..time_utils import utc_now
 
@@ -38,6 +39,7 @@ def _user_out(user: User) -> UserOut:
     return UserOut(
         username=user.username,
         role=role,
+        team=normalize_team(getattr(user, "team", None)),
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),
@@ -299,6 +301,7 @@ def sso_callback(
             username=username,
             password_hash=hash_password(secrets.token_urlsafe(32)),
             role=Role.USER,
+            team=normalize_team(None),
             is_admin=False,
             force_password_change=False,
         )

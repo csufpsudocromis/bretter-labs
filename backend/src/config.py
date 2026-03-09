@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     alertmanager_timeout_seconds: int = 5
     error_log_file_path: str = "/data/error.log"
     error_log_max_bytes: int = 10 * 1024 * 1024
+    api_docs_enabled: bool = False
 
     model_config = {"env_prefix": "BLABS_"}
 

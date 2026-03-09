@@ -6,6 +6,7 @@ import Login from './components/Login.jsx';
 import UserPanel from './components/UserPanel.jsx';
 import AdminDashboard from './components/admin/AdminDashboard.jsx';
 import AdminUsers from './components/admin/AdminUsers.jsx';
+import AdminTeamQuotas from './components/admin/AdminTeamQuotas.jsx';
 import AdminTemplates from './components/admin/AdminTemplates.jsx';
 import AdminImages from './components/admin/AdminImages.jsx';
 import AdminContainerImages from './components/admin/AdminContainerImages.jsx';
@@ -240,6 +241,22 @@ const AppShell = () => {
                   element={
                     <section className="card">
                       <AdminUsers />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/admin/scaling-quotas"
+                  element={
+                    <section className="card">
+                      <AdminTeamQuotas />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/admin/team-quotas"
+                  element={
+                    <section className="card">
+                      <AdminTeamQuotas />
                     </section>
                   }
                 />

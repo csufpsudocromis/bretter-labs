@@ -33,6 +33,7 @@ from src.tables import (  # noqa: E402
     Image,
     Instance,
     OIDCLoginState,
+    TeamQuota,
     Template,
     Token,
     User,
@@ -92,6 +93,7 @@ def reset_db():
             Image,
             ContainerImage,
             Config,
+            TeamQuota,
             User,
         ]:
             session.exec(delete(model))

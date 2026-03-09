@@ -168,7 +168,14 @@ async def lifespan(_: FastAPI):
             _reaper_task = None
 
 
-app = FastAPI(title="Bretter Labs API", version="0.3.0", lifespan=lifespan)
+app = FastAPI(
+    title="Bretter Labs API",
+    version="0.3.0",
+    lifespan=lifespan,
+    openapi_url="/openapi.json" if settings.api_docs_enabled else None,
+    docs_url="/docs" if settings.api_docs_enabled else None,
+    redoc_url="/redoc" if settings.api_docs_enabled else None,
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,

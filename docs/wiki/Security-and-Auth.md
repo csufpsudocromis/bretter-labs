@@ -58,4 +58,5 @@ Environment prefix: `BLABS_`
 ## Related pages
 
 - [Operations Runbook](Operations-Runbook.md)
+- [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
 - [Setup and Configuration](Setup-and-Configuration.md)

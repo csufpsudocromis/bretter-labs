@@ -7,7 +7,7 @@ from sqlmodel import Session
 from src.auth import hash_password
 from src.db import engine
 from src.rbac import Role
-from src.tables import Config, ContainerImage, ContainerTemplate, Image, Template, Token, User
+from src.tables import Config, ContainerImage, ContainerTemplate, Image, TeamQuota, Template, Token, User
 from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
@@ -257,6 +257,38 @@ def test_vm_and_container_lifecycle_with_single_active_lab_enforced(login_user: 
     assert container_restart.status_code == 200
     container_delete = login_user.delete(f"/user/containers/{container_id}")
     assert container_delete.status_code == 204
+
+
+def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):
+    _seed_vm_template()
+    _seed_container_template()
+
+    with Session(engine) as session:
+        session.add(
+            TeamQuota(
+                id="quota-alpha-labs",
+                team="default",
+                namespace="labs",
+                max_cpu_millicores=1500,
+                idle_timeout_minutes_cap=5,
+                enabled=True,
+                created_at=utc_now(),
+                updated_at=utc_now(),
+            )
+        )
+        session.commit()
+
+    vm_templates = login_user.get("/user/templates")
+    assert vm_templates.status_code == 200, vm_templates.text
+    assert vm_templates.json()[0]["idle_timeout_minutes"] == 5
+
+    container_templates = login_user.get("/user/container-templates")
+    assert container_templates.status_code == 200, container_templates.text
+    assert container_templates.json()[0]["idle_timeout_minutes"] == 5
+
+    blocked_vm = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert blocked_vm.status_code == 429, blocked_vm.text
+    assert "CPU cap" in blocked_vm.json()["detail"]
 
 
 def test_container_connect_tokens_are_one_time_and_not_url_based(login_user: TestClient):

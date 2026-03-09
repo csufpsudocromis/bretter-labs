@@ -3,6 +3,11 @@ import { Link } from 'react-router-dom';
 
 const tiles = [
   { title: 'Users', description: 'Add/remove users, reset passwords', to: '/admin/users' },
+  {
+    title: 'Scaling & Quotas',
+    description: 'Set namespace limits for max labs, CPU/RAM, and storage',
+    to: '/admin/scaling-quotas',
+  },
   { title: 'VM Templates', description: 'Create and enable VM templates', to: '/admin/templates' },
   { title: 'VM Images', description: 'Upload and manage VM images', to: '/admin/images' },
   { title: 'Container Images', description: 'Register container images', to: '/admin/container-images' },

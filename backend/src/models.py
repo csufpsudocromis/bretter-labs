@@ -13,6 +13,7 @@ class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
     role: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    team: str = Field(default="default", min_length=1, max_length=64)
     is_admin: bool = False
 
 
@@ -24,16 +25,59 @@ class UserUpdate(BaseModel):
     username: Optional[str] = Field(default=None, min_length=3, max_length=64)
     password: Optional[str] = None
     role: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    team: Optional[str] = Field(default=None, min_length=1, max_length=64)
     is_admin: Optional[bool] = None
 
 
 class UserOut(BaseModel):
     username: str
     role: str
+    team: str
     is_admin: bool
     force_password_change: bool
     permissions: list[str] = Field(default_factory=list)
     can_access_admin: bool = False
+
+
+class TeamQuotaCreate(BaseModel):
+    team: str = Field(..., min_length=1, max_length=64)
+    namespace: str = Field(..., min_length=1, max_length=63)
+    max_concurrent_labs: Optional[int] = Field(default=None, ge=1, le=5000)
+    max_cpu_millicores: Optional[int] = Field(default=None, ge=100, le=1_000_000)
+    max_memory_mb: Optional[int] = Field(default=None, ge=128, le=8_388_608)
+    max_storage_gib: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    idle_timeout_minutes_cap: Optional[int] = Field(default=None, ge=1, le=1440)
+    enabled: bool = True
+
+
+class TeamQuotaUpdate(BaseModel):
+    team: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    max_concurrent_labs: Optional[int] = Field(default=None, ge=1, le=5000)
+    max_cpu_millicores: Optional[int] = Field(default=None, ge=100, le=1_000_000)
+    max_memory_mb: Optional[int] = Field(default=None, ge=128, le=8_388_608)
+    max_storage_gib: Optional[int] = Field(default=None, ge=1, le=1_000_000)
+    idle_timeout_minutes_cap: Optional[int] = Field(default=None, ge=1, le=1440)
+    enabled: Optional[bool] = None
+    clear_max_concurrent_labs: bool = False
+    clear_max_cpu_millicores: bool = False
+    clear_max_memory_mb: bool = False
+    clear_max_storage_gib: bool = False
+    clear_idle_timeout_minutes_cap: bool = False
+
+
+class TeamQuotaOut(BaseModel):
+    id: str
+    team: str
+    namespace: str
+    max_concurrent_labs: Optional[int] = None
+    max_cpu_millicores: Optional[int] = None
+    max_memory_mb: Optional[int] = None
+    max_storage_gib: Optional[int] = None
+    idle_timeout_minutes_cap: Optional[int] = None
+    enabled: bool = True
+    created_at: datetime
+    updated_at: datetime
 
 
 class ImageMeta(BaseModel):

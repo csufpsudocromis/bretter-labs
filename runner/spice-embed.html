@@ -116,8 +116,10 @@
       const instanceId = params.get('instance_id') || '';
       const idleMinutes = parseInt(params.get('idle_minutes') || '30', 10);
       const countdownSeconds = parseInt(params.get('countdown_seconds') || '300', 10);
+      const wsPathRaw = params.get('ws_path') || '';
+      const wsPath = wsPathRaw ? (wsPathRaw.startsWith('/') ? wsPathRaw : `/${wsPathRaw}`) : '';
       const scheme = secure ? 'wss://' : 'ws://';
-      const uri = scheme + host + ':' + port;
+      const uri = scheme + host + ':' + port + wsPath;
 
       let sc;
       let openerRef = null;

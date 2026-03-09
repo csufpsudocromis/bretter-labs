@@ -15,6 +15,7 @@ Last reviewed: March 6, 2026.
 - [VM Image Formats](VM-Image-Formats.md)
 - [Container Labs](Container-Labs.md)
 - [Security and Auth](Security-and-Auth.md)
+- [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
 - [Setup and Configuration](Setup-and-Configuration.md)
 
 ## Current platform snapshot

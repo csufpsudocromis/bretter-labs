@@ -46,6 +46,9 @@ from ..models import (
     RuntimeSettingsRead,
     SiteSettings,
     SSOSettings,
+    TeamQuotaCreate,
+    TeamQuotaOut,
+    TeamQuotaUpdate,
     TemplateToggle,
     UserCreate,
     UserOut,
@@ -67,7 +70,8 @@ from ..rbac import (
     role_for_user,
 )
 from ..services.kubernetes import kube
-from ..tables import Config, Image, ImageUploadTask, Instance, Template, User
+from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
+from ..tables import Config, Image, ImageUploadTask, Instance, TeamQuota, Template, User
 from ..time_utils import utc_now
 
 router = APIRouter(dependencies=[Depends(require_permission(Permission.ADMIN_ACCESS))])
@@ -2730,11 +2734,52 @@ def _user_out(user: User) -> UserOut:
     return UserOut(
         username=user.username,
         role=role,
+        team=normalize_team(getattr(user, "team", None)),
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),
         can_access_admin=can_access_admin(role),
     )
+
+
+def _team_quota_out(record: TeamQuota) -> TeamQuotaOut:
+    return TeamQuotaOut(
+        id=record.id,
+        team=normalize_team(record.team),
+        namespace=normalize_namespace(record.namespace),
+        max_concurrent_labs=normalize_optional_limit(getattr(record, "max_concurrent_labs", None)),
+        max_cpu_millicores=normalize_optional_limit(getattr(record, "max_cpu_millicores", None)),
+        max_memory_mb=normalize_optional_limit(getattr(record, "max_memory_mb", None)),
+        max_storage_gib=normalize_optional_limit(getattr(record, "max_storage_gib", None)),
+        idle_timeout_minutes_cap=normalize_optional_limit(getattr(record, "idle_timeout_minutes_cap", None)),
+        enabled=bool(getattr(record, "enabled", True)),
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+@router.get(
+    "/quota-namespaces",
+    response_model=list[str],
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def list_quota_namespaces(session: Session = Depends(get_session)) -> list[str]:
+    available: set[str] = set()
+    configured = normalize_namespace(settings.kube_namespace)
+    if configured:
+        available.add(configured)
+    rows = session.exec(select(TeamQuota.namespace)).all()
+    for row in rows:
+        available.add(normalize_namespace(row))
+    try:
+        core = kube._client()
+        for ns in core.list_namespace().items:
+            name = normalize_namespace(getattr(ns.metadata, "name", None))
+            if name:
+                available.add(name)
+    except Exception as exc:
+        logger.warning("Failed to list namespaces for quota selector: %s", exc)
+    return sorted(available)
 
 
 @router.post(
@@ -2755,6 +2800,7 @@ def add_user(payload: UserCreate, session: Session = Depends(get_session)) -> Us
         username=payload.username,
         password_hash=hash_password(payload.password),
         role=role,
+        team=normalize_team(payload.team),
         is_admin=can_access_admin(role),
         force_password_change=False,
     )
@@ -2770,6 +2816,11 @@ def list_users(session: Session = Depends(get_session)) -> list[UserOut]:
     mutated = False
     for user in users:
         if ensure_user_role_fields(user):
+            session.add(user)
+            mutated = True
+        normalized_team = normalize_team(getattr(user, "team", None))
+        if getattr(user, "team", None) != normalized_team:
+            user.team = normalized_team
             session.add(user)
             mutated = True
     if mutated:
@@ -2807,6 +2858,8 @@ def update_user(username: str, payload: UserUpdate, session: Session = Depends(g
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         user.role = role
         user.is_admin = can_access_admin(role)
+    if payload.team is not None:
+        user.team = normalize_team(payload.team)
     user.username = new_username
     session.add(user)
     session.commit()
@@ -2823,6 +2876,128 @@ def remove_user(username: str, session: Session = Depends(get_session)) -> None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot delete default admin")
     revoke_tokens(session, username)
     session.delete(user)
+    session.commit()
+
+
+@router.get(
+    "/team-quotas",
+    response_model=list[TeamQuotaOut],
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def list_team_quotas(session: Session = Depends(get_session)) -> list[TeamQuotaOut]:
+    rows = session.exec(select(TeamQuota)).all()
+    rows.sort(key=lambda row: (normalize_namespace(row.namespace), normalize_team(row.team)))
+    return [_team_quota_out(row) for row in rows]
+
+
+@router.post(
+    "/team-quotas",
+    response_model=TeamQuotaOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def create_team_quota(payload: TeamQuotaCreate, session: Session = Depends(get_session)) -> TeamQuotaOut:
+    team = normalize_team(payload.team)
+    namespace = normalize_namespace(payload.namespace)
+    existing = session.exec(
+        select(TeamQuota).where(TeamQuota.team == team).where(TeamQuota.namespace == namespace)
+    ).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"quota already exists for team '{team}' in namespace '{namespace}'",
+        )
+    now = utc_now()
+    row = TeamQuota(
+        id=str(uuid4()),
+        team=team,
+        namespace=namespace,
+        max_concurrent_labs=normalize_optional_limit(payload.max_concurrent_labs),
+        max_cpu_millicores=normalize_optional_limit(payload.max_cpu_millicores),
+        max_memory_mb=normalize_optional_limit(payload.max_memory_mb),
+        max_storage_gib=normalize_optional_limit(payload.max_storage_gib),
+        idle_timeout_minutes_cap=normalize_optional_limit(payload.idle_timeout_minutes_cap),
+        enabled=bool(payload.enabled),
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return _team_quota_out(row)
+
+
+@router.patch(
+    "/team-quotas/{quota_id}",
+    response_model=TeamQuotaOut,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def update_team_quota(quota_id: str, payload: TeamQuotaUpdate, session: Session = Depends(get_session)) -> TeamQuotaOut:
+    row = session.get(TeamQuota, quota_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+
+    team = normalize_team(payload.team) if payload.team is not None else normalize_team(row.team)
+    namespace = normalize_namespace(payload.namespace) if payload.namespace is not None else normalize_namespace(row.namespace)
+    conflict = session.exec(
+        select(TeamQuota)
+        .where(TeamQuota.team == team)
+        .where(TeamQuota.namespace == namespace)
+        .where(TeamQuota.id != row.id)
+    ).first()
+    if conflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"quota already exists for team '{team}' in namespace '{namespace}'",
+        )
+
+    row.team = team
+    row.namespace = namespace
+    if payload.clear_max_concurrent_labs:
+        row.max_concurrent_labs = None
+    elif payload.max_concurrent_labs is not None:
+        row.max_concurrent_labs = normalize_optional_limit(payload.max_concurrent_labs)
+
+    if payload.clear_max_cpu_millicores:
+        row.max_cpu_millicores = None
+    elif payload.max_cpu_millicores is not None:
+        row.max_cpu_millicores = normalize_optional_limit(payload.max_cpu_millicores)
+
+    if payload.clear_max_memory_mb:
+        row.max_memory_mb = None
+    elif payload.max_memory_mb is not None:
+        row.max_memory_mb = normalize_optional_limit(payload.max_memory_mb)
+
+    if payload.clear_max_storage_gib:
+        row.max_storage_gib = None
+    elif payload.max_storage_gib is not None:
+        row.max_storage_gib = normalize_optional_limit(payload.max_storage_gib)
+
+    if payload.clear_idle_timeout_minutes_cap:
+        row.idle_timeout_minutes_cap = None
+    elif payload.idle_timeout_minutes_cap is not None:
+        row.idle_timeout_minutes_cap = normalize_optional_limit(payload.idle_timeout_minutes_cap)
+
+    if payload.enabled is not None:
+        row.enabled = bool(payload.enabled)
+
+    row.updated_at = utc_now()
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return _team_quota_out(row)
+
+
+@router.delete(
+    "/team-quotas/{quota_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def delete_team_quota(quota_id: str, session: Session = Depends(get_session)) -> None:
+    row = session.get(TeamQuota, quota_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+    session.delete(row)
     session.commit()
 
 

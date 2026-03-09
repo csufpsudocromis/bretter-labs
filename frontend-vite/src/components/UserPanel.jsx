@@ -293,11 +293,21 @@ const UserPanel = () => {
     }
   };
 
-  const connect = (instance) => {
-    if (instance?.console_url) {
-      const win = window.open(instance.console_url, '_blank');
-      if (win && instance?.id) {
-        const origin = rememberAllowedOrigin(instance.console_url);
+  const connect = async (instance) => {
+    if (!instance?.id) {
+      setMessage('Console URL not available yet');
+      return;
+    }
+    try {
+      const res = await api.post(`/user/pods/${instance.id}/connect-token`);
+      const connectUrl = String(res?.data?.connect_url || '').trim() || String(instance.console_url || '').trim();
+      if (!connectUrl) {
+        setMessage('Console URL not available yet');
+        return;
+      }
+      const win = window.open(connectUrl, '_blank');
+      if (win) {
+        const origin = rememberAllowedOrigin(connectUrl);
         if (origin) {
           consoleWindowOriginsRef.current[instance.id] = origin;
         }
@@ -313,8 +323,8 @@ const UserPanel = () => {
           });
         }
       }
-    } else {
-      setMessage('Console URL not available yet');
+    } catch (err) {
+      setMessage(err.response?.data?.detail || 'Failed to open console');
     }
   };
 

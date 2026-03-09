@@ -16,6 +16,7 @@ APP_TABLES: set[str] = {
     "instance",
     "oidcloginstate",
     "template",
+    "teamquota",
     "token",
     "user",
 }
