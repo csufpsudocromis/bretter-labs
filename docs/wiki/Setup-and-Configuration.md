@@ -10,6 +10,8 @@ cd bretter-labs
 ./scripts/setup.sh
 ```
 
+`setup.sh` deploys base application resources through Helm (`helm upgrade --install`) and keeps cleanup/monitoring/operator wiring in scripted steps.
+
 ## High-value setup variables
 
 All values are read by `scripts/setup.sh` and/or backend env.
@@ -17,6 +19,8 @@ All values are read by `scripts/setup.sh` and/or backend env.
 Core:
 
 - `NAMESPACE` (default `labs`)
+- `HELM_RELEASE_NAME` (default `bretter-labs`)
+- `HELM_CHART_DIR` (default `deploy/helm`)
 - `CONTROL_NODE`
 - `NODE_EXTERNAL_HOST`
 - `PUBLIC_SCHEME` (`https` recommended)

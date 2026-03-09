@@ -1,0 +1,7 @@
+apiVersion: v2
+name: bretter-labs
+description: Bretter Labs base platform resources
+kubeVersion: ">=1.26.0-0"
+type: application
+version: 0.1.0
+appVersion: "0.3.1"

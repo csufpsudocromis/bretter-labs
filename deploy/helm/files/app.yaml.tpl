@@ -1,0 +1,718 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: bretter-default-container-limits
+  namespace: __NAMESPACE__
+spec:
+  limits:
+    - type: Container
+      min:
+        cpu: 50m
+        memory: 64Mi
+      defaultRequest:
+        cpu: 250m
+        memory: 256Mi
+      default:
+        cpu: "2"
+        memory: 2Gi
+      max:
+        cpu: "8"
+        memory: 16Gi
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: bretter-runtime-quota
+  namespace: __NAMESPACE__
+spec:
+  hard:
+    pods: "400"
+    services: "200"
+    services.nodeports: "120"
+    persistentvolumeclaims: "400"
+    requests.cpu: "32"
+    requests.memory: 64Gi
+    limits.cpu: "64"
+    limits.memory: 128Gi
+    requests.storage: 10Ti
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "pods/exec", "services", "persistentvolumeclaims", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["upload.cdi.kubevirt.io"]
+    resources: ["uploadtokenrequests"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bretter-backend
+subjects:
+  - kind: ServiceAccount
+    name: bretter-backend
+    namespace: __NAMESPACE__
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bretter-backend
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["longhorn.io"]
+    resources: ["nodes", "volumes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bretter-backend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bretter-backend
+subjects:
+  - kind: ServiceAccount
+    name: bretter-backend
+    namespace: __NAMESPACE__
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: backend-postgres-pv
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-postgres-sc
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  hostPath:
+    path: __POSTGRES_DATA_HOSTPATH__
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - __CONTROL_NODE__
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-postgres-data
+  namespace: __NAMESPACE__
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-postgres-sc
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-postgres
+  namespace: __NAMESPACE__
+spec:
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bretter-postgres
+  template:
+    metadata:
+      labels:
+        app: bretter-postgres
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: __CONTROL_NODE__
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_DB
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: backend-postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-postgres
+  namespace: __NAMESPACE__
+spec:
+  type: ClusterIP
+  selector:
+    app: bretter-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: backend-data-pv
+spec:
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-data-sc
+  persistentVolumeReclaimPolicy: Retain
+  volumeMode: Filesystem
+  hostPath:
+    path: __BACKEND_DATA_HOSTPATH__
+    type: DirectoryOrCreate
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - __CONTROL_NODE__
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-data
+  namespace: __NAMESPACE__
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: backend-data-sc
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bretter-backend
+  template:
+    metadata:
+      labels:
+        app: bretter-backend
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: bretter-backend
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: bretter-backend
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      serviceAccountName: bretter-backend
+      imagePullSecrets:
+        - name: ghcr-creds
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/sh
+            - -c
+            - until pg_isready -h bretter-postgres.__NAMESPACE__.svc.cluster.local -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_DB
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_PASSWORD
+      containers:
+        - name: backend
+          image: __BACKEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+            limits:
+              cpu: "1"
+              memory: 2Gi
+              ephemeral-storage: 4Gi
+          startupProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          env:
+            - name: BLABS_KUBE_NAMESPACE
+              value: __NAMESPACE__
+            - name: BLABS_KUBE_IMAGE_PVC
+              value: golden-images
+            - name: BLABS_KUBE_VM_STORAGE_CLASS
+              value: "__VM_STORAGE_CLASS__"
+            - name: BLABS_KUBE_UPLOAD_USE_CDI
+              value: "true"
+            - name: BLABS_CDI_DIRECT_UPLOAD_ENABLED
+              value: "true"
+            - name: BLABS_CDI_UPLOAD_PROXY_URL
+              value: "__CDI_UPLOAD_PROXY_URL__"
+            - name: BLABS_CDI_UPLOAD_SOURCE_FILENAME
+              value: "disk.img"
+            - name: BLABS_STORAGE_ROOT
+              value: /mnt/lab-images
+            - name: BLABS_DATABASE_PATH
+              value: /data/app.db
+            - name: BLABS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: BLABS_DATABASE_URL
+            - name: BLABS_ERROR_LOG_FILE_PATH
+              value: /data/error.log
+            - name: BLABS_ERROR_LOG_MAX_BYTES
+              value: "10485760"
+            - name: BLABS_API_DOCS_ENABLED
+              value: "false"
+            - name: BLABS_KUBE_NODE_EXTERNAL_HOST
+              value: __NODE_EXTERNAL_HOST__
+            - name: BLABS_PUBLIC_SCHEME
+              value: __PUBLIC_SCHEME__
+            - name: BLABS_KUBE_TLS_SECRET
+              value: __TLS_SECRET_NAME__
+            - name: BLABS_KUBE_NODE_SELECTOR_VALUE
+              value: "__RUNNER_NODE_SELECTOR_VALUE__"
+            - name: BLABS_RUNNER_IMAGE
+              value: __RUNNER_IMAGE__
+            - name: BLABS_IMAGE_PULL_SECRET
+              value: ghcr-creds
+            - name: BLABS_WINDOWS_MACHINE_TYPE
+              value: __WINDOWS_MACHINE_TYPE__
+            - name: BLABS_WINDOWS_EFI_ENABLED
+              value: "__WINDOWS_EFI_ENABLED__"
+            - name: BLABS_WINDOWS_CPU_MODEL
+              value: __WINDOWS_CPU_MODEL__
+            - name: BLABS_LINUX_MACHINE_TYPE
+              value: __LINUX_MACHINE_TYPE__
+            - name: BLABS_LINUX_EFI_ENABLED
+              value: "__LINUX_EFI_ENABLED__"
+            - name: BLABS_LINUX_CPU_MODEL
+              value: __LINUX_CPU_MODEL__
+            - name: BLABS_VM_NET_BACKEND
+              value: __VM_NET_BACKEND__
+            - name: BLABS_VM_RUNNER_PRIVILEGED
+              value: "__VM_RUNNER_PRIVILEGED__"
+            - name: BLABS_VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY
+              value: "__VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY__"
+            - name: BLABS_VM_CONSOLE_SOURCE_CIDRS
+              value: "__VM_CONSOLE_SOURCE_CIDRS__"
+            - name: BLABS_VM_CONSOLE_TICKET_LENGTH
+              value: "__VM_CONSOLE_TICKET_LENGTH__"
+            - name: BLABS_VM_VHOST_NET_ENABLED
+              value: "true"
+            - name: BLABS_VM_NET_MULTIQUEUE_ENABLED
+              value: "true"
+            - name: BLABS_VM_QOS_GUARANTEED
+              value: "true"
+            - name: BLABS_VM_MEMORY_OVERHEAD_MB
+              value: "1024"
+            - name: BLABS_VM_RUNNER_TOPOLOGY_SPREAD_ENABLED
+              value: "true"
+            - name: BLABS_VM_RUNNER_ANTI_AFFINITY_ENABLED
+              value: "true"
+            - name: BLABS_CONTAINER_INGRESS_ENABLED
+              value: "__CONTAINER_INGRESS_ENABLED__"
+            - name: BLABS_CONTAINER_INGRESS_CLASS
+              value: "__CONTAINER_INGRESS_CLASS__"
+            - name: BLABS_CONTAINER_INGRESS_BASE_DOMAIN
+              value: "__CONTAINER_INGRESS_BASE_DOMAIN__"
+            - name: BLABS_CONTAINER_INGRESS_ANNOTATIONS_JSON
+              value: "__CONTAINER_INGRESS_ANNOTATIONS_JSON__"
+            - name: BLABS_CONTAINER_IMAGE_PREPULL_ENABLED
+              value: "__CONTAINER_IMAGE_PREPULL_ENABLED__"
+            - name: BLABS_CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS
+              value: "__CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS__"
+            - name: BLABS_CONTAINER_ALLOWED_REGISTRIES
+              value: "__CONTAINER_ALLOWED_REGISTRIES__"
+            - name: BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED
+              value: "__CONTAINER_SIGNATURE_VERIFICATION_ENABLED__"
+            - name: BLABS_CONTAINER_SIGNATURE_KEY_REF
+              value: "__CONTAINER_SIGNATURE_KEY_REF__"
+            - name: BLABS_CONTAINER_SCAN_ENABLED
+              value: "__CONTAINER_SCAN_ENABLED__"
+            - name: BLABS_CONTAINER_SCAN_INTERVAL_MINUTES
+              value: "__CONTAINER_SCAN_INTERVAL_MINUTES__"
+            - name: BLABS_CONTAINER_SCAN_SEVERITY
+              value: "__CONTAINER_SCAN_SEVERITY__"
+            - name: BLABS_CONTAINER_START_QUEUE_ENABLED
+              value: "__CONTAINER_START_QUEUE_ENABLED__"
+            - name: BLABS_CONTAINER_START_QUEUE_BASE_DELAY_SECONDS
+              value: "__CONTAINER_START_QUEUE_BASE_DELAY_SECONDS__"
+            - name: BLABS_CONTAINER_START_QUEUE_MAX_DELAY_SECONDS
+              value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
+          volumeMounts:
+            - name: images
+              mountPath: /mnt/lab-images
+            - name: data
+              mountPath: /data
+            - name: tls-cert
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: images
+          persistentVolumeClaim:
+            claimName: golden-images
+        - name: data
+          emptyDir: {}
+        - name: tls-cert
+          secret:
+            secretName: __TLS_SECRET_NAME__
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+spec:
+  type: NodePort
+  selector:
+    app: bretter-backend
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-frontend
+  namespace: __NAMESPACE__
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bretter-frontend
+  template:
+    metadata:
+      labels:
+        app: bretter-frontend
+    spec:
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app: bretter-frontend
+              topologyKey: kubernetes.io/hostname
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: bretter-frontend
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: frontend
+          image: __FRONTEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 443
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+          startupProbe:
+            tcpSocket:
+              port: 443
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            tcpSocket:
+              port: 443
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket:
+              port: 443
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          volumeMounts:
+            - name: tls-cert
+              mountPath: /tls
+              readOnly: true
+      volumes:
+        - name: tls-cert
+          secret:
+            secretName: __TLS_SECRET_NAME__
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-frontend
+  namespace: __NAMESPACE__
+spec:
+  type: NodePort
+  selector:
+    app: bretter-frontend
+  ports:
+    - port: 443
+      targetPort: 443
+      nodePort: 30073
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bretter-default-deny-ingress
+  namespace: __NAMESPACE__
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress: []
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bretter-backend-allow-ingress
+  namespace: __NAMESPACE__
+spec:
+  podSelector:
+    matchLabels:
+      app: bretter-backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bretter-frontend-allow-ingress
+  namespace: __NAMESPACE__
+spec:
+  podSelector:
+    matchLabels:
+      app: bretter-frontend
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bretter-postgres-allow-backend
+  namespace: __NAMESPACE__
+spec:
+  podSelector:
+    matchLabels:
+      app: bretter-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: bretter-backend
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bretter-backend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bretter-frontend
+  namespace: __NAMESPACE__
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bretter-frontend

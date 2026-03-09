@@ -1,0 +1,11 @@
+{{- $manifest := .Files.Get "files/app.yaml.tpl" -}}
+{{- $manifest = replace "__NAMESPACE__" (toString .Release.Namespace) $manifest -}}
+{{- range $key, $value := .Values.appTemplateValues }}
+{{- if ne $key "NAMESPACE" }}
+{{- $manifest = replace (printf "__%s__" $key) (toString $value) $manifest -}}
+{{- end }}
+{{- end }}
+{{- if regexMatch "__[A-Z0-9_]+__" $manifest -}}
+{{- fail "unresolved placeholder detected in deploy/helm/files/app.yaml.tpl" -}}
+{{- end -}}
+{{- $manifest -}}

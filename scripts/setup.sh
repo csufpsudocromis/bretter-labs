@@ -111,6 +111,8 @@ MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
 MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
 MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
+HELM_RELEASE_NAME="${HELM_RELEASE_NAME:-bretter-labs}"
+HELM_CHART_DIR="${HELM_CHART_DIR:-$ROOT_DIR/deploy/helm}"
 ENABLE_METRICS_SERVER="${ENABLE_METRICS_SERVER:-1}"
 METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml}"
 RUN_POST_DEPLOY_SYNTHETIC_CHECK="${RUN_POST_DEPLOY_SYNTHETIC_CHECK:-1}"
@@ -119,9 +121,9 @@ SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-admin}"
 SYNTHETIC_CHECK_TIMEOUT_SECONDS="${SYNTHETIC_CHECK_TIMEOUT_SECONDS:-420}"
 SYNTHETIC_CHECK_REQUIRE_TEMPLATES="${SYNTHETIC_CHECK_REQUIRE_TEMPLATES:-0}"
 
-RENDERED_APP_MANIFEST=""
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
 RENDERED_GOLDEN_PVC_MANIFEST=""
+RENDERED_HELM_VALUES=""
 
 log() {
   echo "==> $*"
@@ -435,6 +437,14 @@ validate_synthetic_check_config() {
   fi
 }
 
+validate_helm_deploy_config() {
+  [ -n "$HELM_RELEASE_NAME" ] || fail "HELM_RELEASE_NAME cannot be empty."
+  [ -n "$HELM_CHART_DIR" ] || fail "HELM_CHART_DIR cannot be empty."
+  [ -d "$HELM_CHART_DIR" ] || fail "HELM_CHART_DIR does not exist: $HELM_CHART_DIR"
+  [ -f "$HELM_CHART_DIR/Chart.yaml" ] || fail "Helm chart is missing Chart.yaml under $HELM_CHART_DIR"
+  [ -n "$HELM_VERSION" ] || fail "HELM_VERSION cannot be empty."
+}
+
 sudo_cmd() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -451,9 +461,9 @@ require_apt() {
 
 cleanup() {
   rm -f \
-    "${RENDERED_APP_MANIFEST:-}" \
     "${RENDERED_GOLDEN_HOSTPATH_MANIFEST:-}" \
-    "${RENDERED_GOLDEN_PVC_MANIFEST:-}"
+    "${RENDERED_GOLDEN_PVC_MANIFEST:-}" \
+    "${RENDERED_HELM_VALUES:-}"
 }
 
 trap cleanup EXIT
@@ -1274,6 +1284,10 @@ escape_sed_replacement() {
   printf '%s' "$1" | sed -e 's/[\/&]/\\&/g'
 }
 
+yaml_escape() {
+  printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
 render_manifest_template() {
   local input="$1"
   local output="$2"
@@ -1374,13 +1388,168 @@ render_manifest_template() {
 }
 
 prepare_rendered_manifests() {
-  RENDERED_APP_MANIFEST="$(mktemp /tmp/bretter-app.XXXXXX.yaml)"
   RENDERED_GOLDEN_HOSTPATH_MANIFEST="$(mktemp /tmp/bretter-golden-hostpath.XXXXXX.yaml)"
   RENDERED_GOLDEN_PVC_MANIFEST="$(mktemp /tmp/bretter-golden-pvc.XXXXXX.yaml)"
 
-  render_manifest_template "$ROOT_DIR/deploy/app.yaml" "$RENDERED_APP_MANIFEST"
   render_manifest_template "$ROOT_DIR/deploy/golden-hostpath.yaml" "$RENDERED_GOLDEN_HOSTPATH_MANIFEST"
   render_manifest_template "$ROOT_DIR/deploy/golden-pvc.yaml" "$RENDERED_GOLDEN_PVC_MANIFEST"
+}
+
+render_helm_values_override() {
+  local output_file="$1"
+  local control_node node_external_host runner_node_selector_value vm_storage_class
+  local backend_image frontend_image runner_image public_scheme tls_secret_name
+  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
+  local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
+  local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
+  local container_image_prepull_enabled container_image_prepull_timeout_seconds
+  local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
+  local container_scan_enabled container_scan_interval_minutes container_scan_severity
+  local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
+  local backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
+
+  control_node="$(yaml_escape "$CONTROL_NODE")"
+  node_external_host="$(yaml_escape "$NODE_EXTERNAL_HOST")"
+  runner_node_selector_value="$(yaml_escape "$RUNNER_NODE_SELECTOR_VALUE")"
+  vm_storage_class="$(yaml_escape "$VM_STORAGE_CLASS")"
+  backend_image="$(yaml_escape "$BACKEND_IMAGE")"
+  frontend_image="$(yaml_escape "$FRONTEND_IMAGE")"
+  runner_image="$(yaml_escape "$RUNNER_IMAGE")"
+  public_scheme="$(yaml_escape "$PUBLIC_SCHEME")"
+  tls_secret_name="$(yaml_escape "$TLS_SECRET_NAME")"
+  windows_machine_type="$(yaml_escape "$WINDOWS_MACHINE_TYPE")"
+  windows_efi_enabled="$(yaml_escape "$WINDOWS_EFI_ENABLED")"
+  windows_cpu_model="$(yaml_escape "$WINDOWS_CPU_MODEL")"
+  linux_machine_type="$(yaml_escape "$LINUX_MACHINE_TYPE")"
+  linux_efi_enabled="$(yaml_escape "$LINUX_EFI_ENABLED")"
+  linux_cpu_model="$(yaml_escape "$LINUX_CPU_MODEL")"
+  vm_net_backend="$(yaml_escape "$VM_NET_BACKEND")"
+  vm_runner_privileged="$(yaml_escape "$VM_RUNNER_PRIVILEGED")"
+  vm_console_external_traffic_policy="$(yaml_escape "$VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY")"
+  vm_console_source_cidrs="$(yaml_escape "$VM_CONSOLE_SOURCE_CIDRS")"
+  vm_console_ticket_length="$(yaml_escape "$VM_CONSOLE_TICKET_LENGTH")"
+  container_ingress_enabled="$(yaml_escape "$CONTAINER_INGRESS_ENABLED")"
+  container_ingress_class="$(yaml_escape "$CONTAINER_INGRESS_CLASS")"
+  container_ingress_base_domain="$(yaml_escape "$CONTAINER_INGRESS_BASE_DOMAIN")"
+  container_ingress_annotations_json="$(yaml_escape "$CONTAINER_INGRESS_ANNOTATIONS_JSON")"
+  container_image_prepull_enabled="$(yaml_escape "$CONTAINER_IMAGE_PREPULL_ENABLED")"
+  container_image_prepull_timeout_seconds="$(yaml_escape "$CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS")"
+  container_allowed_registries="$(yaml_escape "$CONTAINER_ALLOWED_REGISTRIES")"
+  container_signature_verification_enabled="$(yaml_escape "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED")"
+  container_signature_key_ref="$(yaml_escape "$CONTAINER_SIGNATURE_KEY_REF")"
+  container_scan_enabled="$(yaml_escape "$CONTAINER_SCAN_ENABLED")"
+  container_scan_interval_minutes="$(yaml_escape "$CONTAINER_SCAN_INTERVAL_MINUTES")"
+  container_scan_severity="$(yaml_escape "$CONTAINER_SCAN_SEVERITY")"
+  container_start_queue_enabled="$(yaml_escape "$CONTAINER_START_QUEUE_ENABLED")"
+  container_start_queue_base_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS")"
+  container_start_queue_max_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
+  backend_data_hostpath="$(yaml_escape "$BACKEND_DATA_HOSTPATH")"
+  golden_images_hostpath="$(yaml_escape "$GOLDEN_IMAGES_HOSTPATH")"
+  postgres_data_hostpath="$(yaml_escape "$POSTGRES_DATA_HOSTPATH")"
+  cdi_upload_proxy_url="$(yaml_escape "$CDI_UPLOAD_PROXY_URL")"
+
+  cat >"$output_file" <<EOF
+appTemplateValues:
+  CONTROL_NODE: "${control_node}"
+  NODE_EXTERNAL_HOST: "${node_external_host}"
+  RUNNER_NODE_SELECTOR_VALUE: "${runner_node_selector_value}"
+  VM_STORAGE_CLASS: "${vm_storage_class}"
+  BACKEND_IMAGE: "${backend_image}"
+  FRONTEND_IMAGE: "${frontend_image}"
+  RUNNER_IMAGE: "${runner_image}"
+  PUBLIC_SCHEME: "${public_scheme}"
+  TLS_SECRET_NAME: "${tls_secret_name}"
+  WINDOWS_MACHINE_TYPE: "${windows_machine_type}"
+  WINDOWS_EFI_ENABLED: "${windows_efi_enabled}"
+  WINDOWS_CPU_MODEL: "${windows_cpu_model}"
+  LINUX_MACHINE_TYPE: "${linux_machine_type}"
+  LINUX_EFI_ENABLED: "${linux_efi_enabled}"
+  LINUX_CPU_MODEL: "${linux_cpu_model}"
+  VM_NET_BACKEND: "${vm_net_backend}"
+  VM_RUNNER_PRIVILEGED: "${vm_runner_privileged}"
+  VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY: "${vm_console_external_traffic_policy}"
+  VM_CONSOLE_SOURCE_CIDRS: "${vm_console_source_cidrs}"
+  VM_CONSOLE_TICKET_LENGTH: "${vm_console_ticket_length}"
+  CONTAINER_INGRESS_ENABLED: "${container_ingress_enabled}"
+  CONTAINER_INGRESS_CLASS: "${container_ingress_class}"
+  CONTAINER_INGRESS_BASE_DOMAIN: "${container_ingress_base_domain}"
+  CONTAINER_INGRESS_ANNOTATIONS_JSON: "${container_ingress_annotations_json}"
+  CONTAINER_IMAGE_PREPULL_ENABLED: "${container_image_prepull_enabled}"
+  CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS: "${container_image_prepull_timeout_seconds}"
+  CONTAINER_ALLOWED_REGISTRIES: "${container_allowed_registries}"
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED: "${container_signature_verification_enabled}"
+  CONTAINER_SIGNATURE_KEY_REF: "${container_signature_key_ref}"
+  CONTAINER_SCAN_ENABLED: "${container_scan_enabled}"
+  CONTAINER_SCAN_INTERVAL_MINUTES: "${container_scan_interval_minutes}"
+  CONTAINER_SCAN_SEVERITY: "${container_scan_severity}"
+  CONTAINER_START_QUEUE_ENABLED: "${container_start_queue_enabled}"
+  CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "${container_start_queue_base_delay_seconds}"
+  CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "${container_start_queue_max_delay_seconds}"
+  BACKEND_DATA_HOSTPATH: "${backend_data_hostpath}"
+  GOLDEN_IMAGES_HOSTPATH: "${golden_images_hostpath}"
+  POSTGRES_DATA_HOSTPATH: "${postgres_data_hostpath}"
+  CDI_UPLOAD_PROXY_URL: "${cdi_upload_proxy_url}"
+EOF
+}
+
+apply_base_release_with_helm() {
+  adopt_resource_for_helm() {
+    local namespace="$1"
+    local kind="$2"
+    local name="$3"
+    local ref="${kind}/${name}"
+    local scope_args=()
+    if [ -n "$namespace" ]; then
+      scope_args=(-n "$namespace")
+    fi
+    if ! kubectl "${scope_args[@]}" get "$kind" "$name" >/dev/null 2>&1; then
+      return
+    fi
+    kubectl "${scope_args[@]}" annotate "$ref" --overwrite \
+      "meta.helm.sh/release-name=$HELM_RELEASE_NAME" \
+      "meta.helm.sh/release-namespace=$NAMESPACE" >/dev/null
+    kubectl "${scope_args[@]}" label "$ref" --overwrite \
+      "app.kubernetes.io/managed-by=Helm" >/dev/null
+  }
+
+  adopt_existing_resources_for_helm() {
+    # One-time migration helper: adopt existing kubectl-managed resources before Helm takes over.
+    adopt_resource_for_helm "$NAMESPACE" serviceaccount bretter-backend
+    adopt_resource_for_helm "$NAMESPACE" limitrange bretter-default-container-limits
+    adopt_resource_for_helm "$NAMESPACE" resourcequota bretter-runtime-quota
+    adopt_resource_for_helm "$NAMESPACE" role bretter-backend
+    adopt_resource_for_helm "$NAMESPACE" rolebinding bretter-backend
+    adopt_resource_for_helm "$NAMESPACE" persistentvolumeclaim backend-postgres-data
+    adopt_resource_for_helm "$NAMESPACE" deployment bretter-postgres
+    adopt_resource_for_helm "$NAMESPACE" service bretter-postgres
+    adopt_resource_for_helm "$NAMESPACE" persistentvolumeclaim backend-data
+    adopt_resource_for_helm "$NAMESPACE" deployment bretter-backend
+    adopt_resource_for_helm "$NAMESPACE" service bretter-backend
+    adopt_resource_for_helm "$NAMESPACE" deployment bretter-frontend
+    adopt_resource_for_helm "$NAMESPACE" service bretter-frontend
+    adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-default-deny-ingress
+    adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-backend-allow-ingress
+    adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-frontend-allow-ingress
+    adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-postgres-allow-backend
+    adopt_resource_for_helm "$NAMESPACE" poddisruptionbudget bretter-backend
+    adopt_resource_for_helm "$NAMESPACE" poddisruptionbudget bretter-frontend
+    adopt_resource_for_helm "" clusterrole bretter-backend
+    adopt_resource_for_helm "" clusterrolebinding bretter-backend
+    adopt_resource_for_helm "" persistentvolume backend-postgres-pv
+    adopt_resource_for_helm "" persistentvolume backend-data-pv
+  }
+
+  install_helm
+  RENDERED_HELM_VALUES="$(mktemp /tmp/bretter-helm-values.XXXXXX.yaml)"
+  render_helm_values_override "$RENDERED_HELM_VALUES"
+  adopt_existing_resources_for_helm
+
+  log "Applying base release via Helm (release: $HELM_RELEASE_NAME chart: $HELM_CHART_DIR)"
+  helm upgrade --install "$HELM_RELEASE_NAME" "$HELM_CHART_DIR" \
+    --namespace "$NAMESPACE" \
+    --create-namespace \
+    -f "$HELM_CHART_DIR/values.yaml" \
+    -f "$RENDERED_HELM_VALUES"
 }
 
 ensure_ghcr_login() {
@@ -2165,8 +2334,7 @@ apply_manifests() {
       --dry-run=client -o yaml | kubectl apply -f -
   fi
 
-  log "Applying base manifests"
-  kubectl apply -f "$RENDERED_APP_MANIFEST"
+  apply_base_release_with_helm
 
   log "Waiting for rollout"
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-postgres --timeout=300s
@@ -2406,6 +2574,7 @@ main() {
   validate_monitoring_config
   validate_metrics_server_config
   validate_synthetic_check_config
+  validate_helm_deploy_config
   require_apt
   install_base_packages
   install_kubectl
@@ -2428,6 +2597,7 @@ main() {
   fi
   log "Using public scheme: $PUBLIC_SCHEME"
   log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
+  log "Using Helm release: $HELM_RELEASE_NAME (chart: $HELM_CHART_DIR)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"

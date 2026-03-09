@@ -2,6 +2,47 @@
 # This file is a baseline for Helm-managed deployments.
 # Adjust hostnames, storage classes, and secret references for each environment.
 
+appTemplateValues:
+  CONTROL_NODE: cbekube1
+  NODE_EXTERNAL_HOST: 10.68.49.250
+  RUNNER_NODE_SELECTOR_VALUE: ""
+  VM_STORAGE_CLASS: longhorn-r1
+  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend:latest
+  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:latest
+  RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:latest
+  PUBLIC_SCHEME: https
+  TLS_SECRET_NAME: bretter-tls
+  WINDOWS_MACHINE_TYPE: q35
+  WINDOWS_EFI_ENABLED: "true"
+  WINDOWS_CPU_MODEL: host
+  LINUX_MACHINE_TYPE: pc
+  LINUX_EFI_ENABLED: "false"
+  LINUX_CPU_MODEL: host
+  VM_NET_BACKEND: user
+  VM_RUNNER_PRIVILEGED: "0"
+  VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY: Local
+  VM_CONSOLE_SOURCE_CIDRS: ""
+  VM_CONSOLE_TICKET_LENGTH: "24"
+  CONTAINER_INGRESS_ENABLED: "0"
+  CONTAINER_INGRESS_CLASS: ""
+  CONTAINER_INGRESS_BASE_DOMAIN: ""
+  CONTAINER_INGRESS_ANNOTATIONS_JSON: "{}"
+  CONTAINER_IMAGE_PREPULL_ENABLED: "1"
+  CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS: "45"
+  CONTAINER_ALLOWED_REGISTRIES: docker.io,ghcr.io,quay.io,mcr.microsoft.com,gcr.io,registry.k8s.io,lscr.io
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED: "0"
+  CONTAINER_SIGNATURE_KEY_REF: ""
+  CONTAINER_SCAN_ENABLED: "1"
+  CONTAINER_SCAN_INTERVAL_MINUTES: "360"
+  CONTAINER_SCAN_SEVERITY: HIGH,CRITICAL
+  CONTAINER_START_QUEUE_ENABLED: "1"
+  CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "20"
+  CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "300"
+  BACKEND_DATA_HOSTPATH: /var/lib/bretter-labs/backend-data
+  GOLDEN_IMAGES_HOSTPATH: /var/lib/bretter-labs/golden-images
+  POSTGRES_DATA_HOSTPATH: /var/lib/bretter-labs/postgres-data
+  CDI_UPLOAD_PROXY_URL: ""
+
 global:
   namespace: labs
   appVersion: "0.3.1"

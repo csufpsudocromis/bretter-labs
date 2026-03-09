@@ -75,8 +75,8 @@ Core components:
 - `frontend-vite/`: UI for admin and user workflows
 - `backend/`: API, auth/session, orchestration, migrations
 - `runner/`: VM runtime image (QEMU/SPICE)
-- `deploy/`: Kubernetes manifests used by setup
-- `scripts/setup.sh`: bootstrap, deploy, and tuning automation
+- `deploy/helm/`: Helm chart and production values used by setup
+- `scripts/setup.sh`: bootstrap, deploy (Helm), and tuning automation
 
 High-level flow:
 
@@ -123,6 +123,8 @@ Password change is required on first login.
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
 | `VM_STORAGE_CLASS` | auto | StorageClass for VM clone disks |
+| `HELM_RELEASE_NAME` | `bretter-labs` | Helm release name for base app deploy |
+| `HELM_CHART_DIR` | `deploy/helm` | Chart path used by setup for base deploy |
 | `APPLY_GOLDEN_HOSTPATH` | `1` | HostPath-backed golden image PVC |
 | `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` instead |
 | `LOAD_LOCAL_IMAGES` | `1` | Build/import local images into cluster runtime |

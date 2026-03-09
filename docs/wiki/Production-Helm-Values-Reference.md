@@ -10,6 +10,11 @@ Use that file as the baseline and override per environment.
 
 ## Required overrides before production use
 
+- `appTemplateValues.CONTROL_NODE`
+- `appTemplateValues.NODE_EXTERNAL_HOST`
+- `appTemplateValues.VM_STORAGE_CLASS`
+- `appTemplateValues.PUBLIC_SCHEME`
+- `appTemplateValues.TLS_SECRET_NAME`
 - `ingress.host`
 - `ingress.tls.secretName`
 - `cors.allowedOrigins`
