@@ -36,7 +36,7 @@ def upgrade() -> None:
     cols = _column_names("config")
     with op.batch_alter_table("config") as batch_op:
         if "ldap_enabled" not in cols:
-            batch_op.add_column(sa.Column("ldap_enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+            batch_op.add_column(sa.Column("ldap_enabled", sa.Boolean(), nullable=False, server_default=sa.false()))
         if "ldap_server_uri" not in cols:
             batch_op.add_column(sa.Column("ldap_server_uri", sa.String(), nullable=False, server_default=""))
         if "ldap_bind_dn" not in cols:
@@ -50,16 +50,16 @@ def upgrade() -> None:
                 sa.Column("ldap_user_filter", sa.String(), nullable=False, server_default="(uid={username})")
             )
         if "ldap_start_tls" not in cols:
-            batch_op.add_column(sa.Column("ldap_start_tls", sa.Boolean(), nullable=False, server_default=sa.text("0")))
+            batch_op.add_column(sa.Column("ldap_start_tls", sa.Boolean(), nullable=False, server_default=sa.false()))
         if "ldap_insecure_skip_verify" not in cols:
             batch_op.add_column(
-                sa.Column("ldap_insecure_skip_verify", sa.Boolean(), nullable=False, server_default=sa.text("0"))
+                sa.Column("ldap_insecure_skip_verify", sa.Boolean(), nullable=False, server_default=sa.false())
             )
         if "ldap_timeout_seconds" not in cols:
             batch_op.add_column(sa.Column("ldap_timeout_seconds", sa.Integer(), nullable=False, server_default="10"))
         if "ldap_auto_create_users" not in cols:
             batch_op.add_column(
-                sa.Column("ldap_auto_create_users", sa.Boolean(), nullable=False, server_default=sa.text("1"))
+                sa.Column("ldap_auto_create_users", sa.Boolean(), nullable=False, server_default=sa.true())
             )
 
 
