@@ -295,6 +295,13 @@
         endedOverlay.style.display = 'flex';
         promptActive = false;
         stopBackendHeartbeat();
+        postToOpener({
+          type: 'idle-parent-ended',
+          source: 'vm',
+          instanceId,
+          reason,
+          timestamp: Date.now(),
+        });
         if (endedTextEl) {
           endedTextEl.textContent =
             reason === 'idle-timeout' ? 'Session timed out due to inactivity.' : 'Session ended.';
@@ -310,6 +317,12 @@
         overlay.style.display = 'none';
         promptActive = false;
         countdownEndsAt = null;
+        postToOpener({
+          type: 'idle-parent-clear',
+          source: 'vm',
+          instanceId,
+          timestamp: Date.now(),
+        });
       }
 
       function endSession(reason = 'idle-timeout') {
@@ -351,6 +364,13 @@
             updateCountdown();
           }, 1000);
         }
+        postToOpener({
+          type: 'idle-parent-prompt',
+          source: 'vm',
+          instanceId,
+          endsAt: countdownEndsAt,
+          timestamp: Date.now(),
+        });
       }
 
       function scheduleIdleTimer() {
