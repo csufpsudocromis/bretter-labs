@@ -145,6 +145,7 @@ VM_STORAGE_CLASS=longhorn-r1 \
 
 - Login uses secure HTTP-only session cookies (not browser localStorage tokens).
 - VM/container connect uses short-lived access tokens for connect windows.
+- Optional LDAP login support can be enabled under `/admin/settings/ldap`.
 - Server-side launch locking enforces one active lab per user, even under concurrent requests.
 - If a user tries to start another lab, the UI keeps this message visible until cleanup:
   - `You already have a virtual lab running. Delete the current lab before starting a new one.`

@@ -130,6 +130,79 @@ def test_rbac_viewer_has_read_only_admin_access(client: TestClient):
     assert "missing permission" in blocked_write.json()["detail"]
 
 
+def test_admin_can_read_and_update_ldap_settings(login_admin: TestClient):
+    read = login_admin.get("/admin/settings/ldap")
+    assert read.status_code == 200, read.text
+    assert read.json()["ldap_enabled"] is False
+
+    payload = {
+        "ldap_enabled": True,
+        "ldap_server_uri": "ldaps://ldap.example.edu:636",
+        "ldap_bind_dn": "cn=svc,dc=example,dc=edu",
+        "ldap_bind_password": "secret",
+        "ldap_user_base_dn": "ou=users,dc=example,dc=edu",
+        "ldap_user_filter": "(uid={username})",
+        "ldap_start_tls": False,
+        "ldap_insecure_skip_verify": False,
+        "ldap_timeout_seconds": 12,
+        "ldap_auto_create_users": True,
+    }
+    write = login_admin.patch("/admin/settings/ldap", json=payload)
+    assert write.status_code == 200, write.text
+    body = write.json()
+    assert body["ldap_enabled"] is True
+    assert body["ldap_server_uri"] == payload["ldap_server_uri"]
+    assert body["ldap_timeout_seconds"] == 12
+
+    bad_filter = dict(payload)
+    bad_filter["ldap_user_filter"] = "(uid=test)"
+    reject = login_admin.patch("/admin/settings/ldap", json=bad_filter)
+    assert reject.status_code == 422
+
+
+def test_ldap_login_auto_provisions_user(client: TestClient, monkeypatch):
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        cfg.ldap_enabled = True
+        cfg.ldap_server_uri = "ldaps://ldap.example.edu:636"
+        cfg.ldap_user_base_dn = "ou=users,dc=example,dc=edu"
+        cfg.ldap_user_filter = "(uid={username})"
+        cfg.ldap_auto_create_users = True
+        session.add(cfg)
+        session.commit()
+
+    monkeypatch.setattr("src.routes.auth.ldap_authenticate", lambda username, password, cfg: (True, "dn"))
+
+    login = client.post("/auth/login", json={"username": "ldapuser", "password": "ldap-pass"})
+    assert login.status_code == 200, login.text
+    assert login.json()["user"]["username"] == "ldapuser"
+    assert login.json()["user"]["role"] == Role.USER
+
+    with Session(engine) as session:
+        created = session.get(User, "ldapuser")
+        assert created is not None
+        assert created.role == Role.USER
+
+
+def test_ldap_login_requires_existing_local_user_when_auto_create_disabled(client: TestClient, monkeypatch):
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        cfg.ldap_enabled = True
+        cfg.ldap_server_uri = "ldaps://ldap.example.edu:636"
+        cfg.ldap_user_base_dn = "ou=users,dc=example,dc=edu"
+        cfg.ldap_user_filter = "(uid={username})"
+        cfg.ldap_auto_create_users = False
+        session.add(cfg)
+        session.commit()
+
+    monkeypatch.setattr("src.routes.auth.ldap_authenticate", lambda username, password, cfg: (True, "dn"))
+
+    login = client.post("/auth/login", json={"username": "new-ldap-user", "password": "ldap-pass"})
+    assert login.status_code == 403, login.text
+
+
 def test_rbac_rejects_invalid_role_on_user_create(login_admin: TestClient):
     bad_create = login_admin.post(
         "/admin/users",

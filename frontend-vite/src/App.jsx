@@ -19,6 +19,7 @@ import AdminAppearanceSettings from './components/admin/AdminAppearanceSettings.
 import AdminRuntimeSettings from './components/admin/AdminRuntimeSettings.jsx';
 import AdminSSOSettings from './components/admin/AdminSSOSettings.jsx';
 import AdminStorageSettings from './components/admin/AdminStorageSettings.jsx';
+import AdminLDAPSettings from './components/admin/AdminLDAPSettings.jsx';
 
 const DEFAULT_SITE = {
   title: 'Bretter Labs',
@@ -353,6 +354,14 @@ const AppShell = () => {
                   element={
                     <section className="card">
                       <AdminSSOSettings />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/admin/settings/ldap"
+                  element={
+                    <section className="card">
+                      <AdminLDAPSettings />
                     </section>
                   }
                 />

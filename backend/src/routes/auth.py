@@ -23,6 +23,7 @@ from ..auth import (
 from ..db import get_session
 from ..models import Credentials, UserOut
 from ..rbac import Role, can_access_admin, list_permissions_for_role, role_for_user
+from ..services.ldap_auth import LDAPRuntimeConfig, authenticate as ldap_authenticate, missing_required_fields as ldap_missing_required_fields
 from ..services.team_quotas import normalize_team
 from ..tables import Config, OIDCLoginState, User
 from ..time_utils import utc_now
@@ -201,10 +202,66 @@ def _redirect_with_auth_error(target: str, message: str) -> RedirectResponse:
 
 @router.post("/login")
 def login(credentials: Credentials, response: Response, session: Session = Depends(get_session)) -> dict:
-    user = session.get(User, credentials.username)
-    if not user or not verify_password(credentials.password, user.password_hash):
+    username = str(credentials.username or "").strip()
+    password = str(credentials.password or "")
+    user = session.get(User, username)
+    if user and verify_password(password, user.password_hash):
+        token = issue_token(session, user.username)
+        set_auth_cookie(response, token)
+        return {"user": _user_out(user)}
+
+    cfg = session.get(Config, 1) or Config(id=1)
+    session.add(cfg)
+    session.commit()
+    if not bool(cfg.ldap_enabled):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
-    token = issue_token(session, credentials.username)
+
+    ldap_cfg = LDAPRuntimeConfig(
+        enabled=bool(cfg.ldap_enabled),
+        server_uri=str(cfg.ldap_server_uri or "").strip(),
+        bind_dn=str(cfg.ldap_bind_dn or "").strip(),
+        bind_password=str(cfg.ldap_bind_password or ""),
+        user_base_dn=str(cfg.ldap_user_base_dn or "").strip(),
+        user_filter=str(cfg.ldap_user_filter or "").strip() or "(uid={username})",
+        start_tls=bool(cfg.ldap_start_tls),
+        insecure_skip_verify=bool(cfg.ldap_insecure_skip_verify),
+        timeout_seconds=max(3, min(60, int(cfg.ldap_timeout_seconds or 10))),
+    )
+    missing = ldap_missing_required_fields(ldap_cfg)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"LDAP authentication is enabled but not fully configured: {', '.join(missing)}",
+        )
+
+    try:
+        ldap_ok, _ = ldap_authenticate(username, password, ldap_cfg)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"LDAP configuration error: {exc}") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LDAP authentication backend error: {exc}") from exc
+    if not ldap_ok:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+
+    if not user:
+        if not bool(cfg.ldap_auto_create_users):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="LDAP account is not provisioned. Contact an administrator.",
+            )
+        user = User(
+            username=username,
+            password_hash=hash_password(secrets.token_urlsafe(32)),
+            role=Role.USER,
+            team=normalize_team(None),
+            is_admin=False,
+            force_password_change=False,
+        )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+
+    token = issue_token(session, user.username)
     set_auth_cookie(response, token)
     return {"user": _user_out(user)}
 

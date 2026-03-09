@@ -418,6 +418,19 @@ class SSOSettings(BaseModel):
     sso_redirect_url: str
 
 
+class LDAPSettings(BaseModel):
+    ldap_enabled: bool
+    ldap_server_uri: str
+    ldap_bind_dn: str
+    ldap_bind_password: str
+    ldap_user_base_dn: str
+    ldap_user_filter: str = Field(default="(uid={username})", min_length=1, max_length=512)
+    ldap_start_tls: bool = False
+    ldap_insecure_skip_verify: bool = False
+    ldap_timeout_seconds: int = Field(default=10, ge=3, le=60)
+    ldap_auto_create_users: bool = True
+
+
 class ConcurrencySettings(BaseModel):
     max_concurrent_vms: int = Field(..., ge=1, le=5000)
     per_user_vm_limit: int = Field(..., ge=1, le=100)

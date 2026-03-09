@@ -191,6 +191,16 @@ class Config(SQLModel, table=True):
     sso_token_url: str = ""
     sso_userinfo_url: str = ""
     sso_redirect_url: str = ""
+    ldap_enabled: bool = False
+    ldap_server_uri: str = ""
+    ldap_bind_dn: str = ""
+    ldap_bind_password: str = ""
+    ldap_user_base_dn: str = ""
+    ldap_user_filter: str = "(uid={username})"
+    ldap_start_tls: bool = False
+    ldap_insecure_skip_verify: bool = False
+    ldap_timeout_seconds: int = 10
+    ldap_auto_create_users: bool = True
 
 
 class TeamQuota(SQLModel, table=True):

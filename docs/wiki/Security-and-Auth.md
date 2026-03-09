@@ -7,6 +7,7 @@ Last reviewed: March 9, 2026.
 - Login uses secure session cookies (`HttpOnly`) instead of localStorage tokens.
 - `/auth/login` sets auth cookie and returns user profile metadata.
 - `/auth/logout` revokes server token and clears auth cookie.
+- Optional LDAP authentication can be configured in `/admin/settings/ldap` (local auth attempted first, then LDAP).
 
 Default cookie names:
 

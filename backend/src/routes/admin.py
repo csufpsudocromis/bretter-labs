@@ -37,6 +37,7 @@ from ..models import (
     ImageCreateResponse,
     ImageMeta,
     ImageUploadTaskStatus,
+    LDAPSettings,
     RuntimeDriftItem,
     RuntimeHealthCheck,
     StorageSettingsRead,
@@ -1148,6 +1149,26 @@ def _ensure_config_columns() -> None:
             to_add.append("ALTER TABLE config ADD COLUMN sso_userinfo_url TEXT DEFAULT ''")
         if "sso_redirect_url" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN sso_redirect_url TEXT DEFAULT ''")
+        if "ldap_enabled" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_enabled BOOLEAN DEFAULT 0")
+        if "ldap_server_uri" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_server_uri TEXT DEFAULT ''")
+        if "ldap_bind_dn" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_bind_dn TEXT DEFAULT ''")
+        if "ldap_bind_password" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_bind_password TEXT DEFAULT ''")
+        if "ldap_user_base_dn" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_user_base_dn TEXT DEFAULT ''")
+        if "ldap_user_filter" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_user_filter TEXT DEFAULT '(uid={username})'")
+        if "ldap_start_tls" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_start_tls BOOLEAN DEFAULT 0")
+        if "ldap_insecure_skip_verify" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_insecure_skip_verify BOOLEAN DEFAULT 0")
+        if "ldap_timeout_seconds" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_timeout_seconds INTEGER DEFAULT 10")
+        if "ldap_auto_create_users" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN ldap_auto_create_users BOOLEAN DEFAULT 1")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -4456,6 +4477,69 @@ def update_sso_settings(payload: SSOSettings, session: Session = Depends(get_ses
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,
         sso_redirect_url=cfg.sso_redirect_url,
+    )
+
+
+@router.get(
+    "/settings/ldap",
+    response_model=LDAPSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def get_ldap_settings(session: Session = Depends(get_session)) -> LDAPSettings:
+    cfg = session.get(Config, 1) or Config(id=1)
+    session.add(cfg)
+    session.commit()
+    return LDAPSettings(
+        ldap_enabled=cfg.ldap_enabled,
+        ldap_server_uri=cfg.ldap_server_uri,
+        ldap_bind_dn=cfg.ldap_bind_dn,
+        ldap_bind_password=cfg.ldap_bind_password,
+        ldap_user_base_dn=cfg.ldap_user_base_dn,
+        ldap_user_filter=cfg.ldap_user_filter,
+        ldap_start_tls=cfg.ldap_start_tls,
+        ldap_insecure_skip_verify=cfg.ldap_insecure_skip_verify,
+        ldap_timeout_seconds=max(3, min(60, int(cfg.ldap_timeout_seconds or 10))),
+        ldap_auto_create_users=cfg.ldap_auto_create_users,
+    )
+
+
+@router.patch(
+    "/settings/ldap",
+    response_model=LDAPSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def update_ldap_settings(payload: LDAPSettings, session: Session = Depends(get_session)) -> LDAPSettings:
+    user_filter = str(payload.ldap_user_filter or "").strip() or "(uid={username})"
+    if "{username}" not in user_filter:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="ldap_user_filter must include {username} placeholder.",
+        )
+    cfg = session.get(Config, 1) or Config(id=1)
+    cfg.ldap_enabled = bool(payload.ldap_enabled)
+    cfg.ldap_server_uri = str(payload.ldap_server_uri or "").strip()
+    cfg.ldap_bind_dn = str(payload.ldap_bind_dn or "").strip()
+    cfg.ldap_bind_password = str(payload.ldap_bind_password or "")
+    cfg.ldap_user_base_dn = str(payload.ldap_user_base_dn or "").strip()
+    cfg.ldap_user_filter = user_filter
+    cfg.ldap_start_tls = bool(payload.ldap_start_tls)
+    cfg.ldap_insecure_skip_verify = bool(payload.ldap_insecure_skip_verify)
+    cfg.ldap_timeout_seconds = max(3, min(60, int(payload.ldap_timeout_seconds or 10)))
+    cfg.ldap_auto_create_users = bool(payload.ldap_auto_create_users)
+    session.add(cfg)
+    session.commit()
+    session.refresh(cfg)
+    return LDAPSettings(
+        ldap_enabled=cfg.ldap_enabled,
+        ldap_server_uri=cfg.ldap_server_uri,
+        ldap_bind_dn=cfg.ldap_bind_dn,
+        ldap_bind_password=cfg.ldap_bind_password,
+        ldap_user_base_dn=cfg.ldap_user_base_dn,
+        ldap_user_filter=cfg.ldap_user_filter,
+        ldap_start_tls=cfg.ldap_start_tls,
+        ldap_insecure_skip_verify=cfg.ldap_insecure_skip_verify,
+        ldap_timeout_seconds=max(3, min(60, int(cfg.ldap_timeout_seconds or 10))),
+        ldap_auto_create_users=cfg.ldap_auto_create_users,
     )
 
 
