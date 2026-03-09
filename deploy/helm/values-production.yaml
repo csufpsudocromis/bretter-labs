@@ -1,0 +1,165 @@
+# Bretter Labs production reference values.
+# This file is a baseline for Helm-managed deployments.
+# Adjust hostnames, storage classes, and secret references for each environment.
+
+global:
+  namespace: labs
+  appVersion: "0.3.1"
+  publicScheme: https
+
+ingress:
+  enabled: true
+  className: nginx
+  host: labs.fullerton.edu
+  tls:
+    enabled: true
+    secretName: bretter-tls
+  websocket:
+    readTimeoutSeconds: 3600
+    sendTimeoutSeconds: 3600
+  mtls:
+    enabled: false
+    clientCaSecretName: ""
+
+cors:
+  allowedOrigins:
+    - "https://labs.fullerton.edu"
+    - "https://10.68.49.250:30073"
+  allowedOriginRegex: "^https://([A-Za-z0-9-]+\\.)*fullerton\\.edu(:[0-9]+)?$"
+
+auth:
+  cookie:
+    secure: true
+    sameSite: lax
+    ttlSeconds: 86400
+  connect:
+    grantTtlSeconds: 120
+    sessionTtlSeconds: 3600
+
+frontend:
+  replicas: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+
+backend:
+  replicas: 2
+  serviceAccount:
+    create: true
+    name: bretter-backend
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+  probes:
+    startup:
+      enabled: true
+    readiness:
+      enabled: true
+    liveness:
+      enabled: true
+  env:
+    BLABS_API_DOCS_ENABLED: "0"
+    BLABS_AUTH_COOKIE_SECURE: "1"
+    BLABS_CONNECT_COOKIE_SECURE: "1"
+    BLABS_PUBLIC_SCHEME: "https"
+    BLABS_KUBE_NAMESPACE: "labs"
+    BLABS_KUBE_VM_STORAGE_CLASS: "longhorn-r1"
+
+runner:
+  nodeSelector:
+    nodepool: vm-runners
+  tolerations:
+    - key: "nodepool"
+      operator: "Equal"
+      value: "vm-runners"
+      effect: "NoSchedule"
+  privileged: false
+  vmNetBackend: user
+  podSecurityContext:
+    runAsNonRoot: false
+  securityContext:
+    allowPrivilegeEscalation: false
+
+networkPolicy:
+  enabled: true
+  defaultDeny:
+    ingress: true
+    egress: true
+  allow:
+    frontendToBackend: true
+    backendToDb: true
+    backendToKubeApi: true
+    dnsEgress: true
+  vmConsoleSourceCidrs: []
+
+database:
+  postgres:
+    replicas: 1
+    storageClass: backend-postgres-sc
+    size: 50Gi
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+  migration:
+    autoUpgrade: true
+
+secrets:
+  provider: external-secrets
+  externalSecrets:
+    enabled: true
+    clusterSecretStore: corp-secrets
+    postgresSecretName: bretter-postgres
+    pullSecretName: ghcr-creds
+
+quotas:
+  namespace:
+    pods: 400
+    requestsCpu: "32"
+    requestsMemory: 64Gi
+    limitsCpu: "64"
+    limitsMemory: 128Gi
+    requestsStorage: 10Ti
+
+backup:
+  postgres:
+    enabled: true
+    schedule: "15 2 * * *"
+    retentionDays: 14
+  restoreValidation:
+    enabled: true
+    schedule: "30 2 * * 0"
+
+observability:
+  monitoring:
+    enabled: true
+  syntheticChecks:
+    enabled: true
+    afterDeploy: true

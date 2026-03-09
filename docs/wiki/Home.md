@@ -12,13 +12,23 @@ Last reviewed: March 9, 2026.
 
 - Admin setup: [Setup and Configuration](Setup-and-Configuration.md)
 - Operations/SRE: [Operations Runbook](Operations-Runbook.md)
-- Troubleshooting: [Operations Runbook](Operations-Runbook.md) + [VM Image Formats](VM-Image-Formats.md)
-- Security: [Security and Auth](Security-and-Auth.md) + [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
+- Troubleshooting: [Error Catalog](Error-Catalog.md) + [Operations Runbook](Operations-Runbook.md)
+- Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive.md) + [Template Best Practices](Template-Best-Practices.md)
+- Security: [Security and Auth](Security-and-Auth.md) + [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
 
 ## Core pages
 
 - [Architecture](../architecture.md)
+- [Production Architecture](Production-Architecture.md)
+- [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
+- [Production Helm Values Reference](Production-Helm-Values-Reference.md)
 - [Operations Runbook](Operations-Runbook.md)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
+- [Error Catalog](Error-Catalog.md)
+- [Network Modes Reference](Network-Modes-Reference.md)
+- [Storage Capacity Playbook](Storage-Capacity-Playbook.md)
+- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive.md)
+- [Template Best Practices](Template-Best-Practices.md)
 - [VM Image Formats](VM-Image-Formats.md)
 - [Container Labs](Container-Labs.md)
 - [Scaling and Quotas](Scaling-and-Quotas.md)
