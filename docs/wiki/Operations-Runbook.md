@@ -76,6 +76,24 @@ Admin UI checks:
 
 ## Common incidents and triage
 
+### CI guardrail run fails with missing `httpx`
+
+Symptom:
+
+- GitHub Actions guardrail job fails while loading `fastapi.testclient` with:
+  - `RuntimeError: ... requires the httpx package to be installed`
+
+Actions:
+
+1. Confirm the run is for latest `main`, not a historical commit.
+2. Re-trigger CI from current `main` head.
+3. Validate install/import step in workflow:
+
+```bash
+.venv/bin/pip install -r backend/requirements.txt pytest httpx
+.venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
+```
+
 ### Labs stuck in pending/queued
 
 Check scheduler pressure and events:
@@ -159,3 +177,4 @@ If this persists unexpectedly, verify the user has no active VM/container instan
 - [Error Catalog](Error-Catalog.md)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook.md)
 - [Network Modes Reference](Network-Modes-Reference.md)
+- [LDAP Authentication](LDAP-Authentication.md)

@@ -96,6 +96,7 @@ ENABLE_MONITORING=1 \
 - `/admin/settings/runtime`: read-only runtime/env/drift visibility
 - `/admin/settings/appearance`: theme, contrast targets, background upload, font sizing
 - `/admin/settings/sso`: SSO provider config
+- `/admin/settings/ldap`: LDAP bind/search settings
 - `/admin/scaling-quotas`: namespace quota controls for lab count/cpu/ram/storage/idle cap
 
 ## Notes
@@ -103,6 +104,7 @@ ENABLE_MONITORING=1 \
 - Runtime settings page is read-only by design.
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.
+- LDAP requires backend schema migration `0018` and current frontend bundle to render settings tile.
 
 ## Related pages
 
@@ -112,3 +114,4 @@ ENABLE_MONITORING=1 \
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
 - [Scaling and Quotas](Scaling-and-Quotas.md)
 - [Security and Auth](Security-and-Auth.md)
+- [LDAP Authentication](LDAP-Authentication.md)

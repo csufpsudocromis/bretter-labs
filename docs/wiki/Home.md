@@ -14,7 +14,7 @@ Last reviewed: March 9, 2026.
 - Operations/SRE: [Operations Runbook](Operations-Runbook.md)
 - Troubleshooting: [Error Catalog](Error-Catalog.md) + [Operations Runbook](Operations-Runbook.md)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive.md) + [Template Best Practices](Template-Best-Practices.md)
-- Security: [Security and Auth](Security-and-Auth.md) + [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
+- Security: [Security and Auth](Security-and-Auth.md) + [LDAP Authentication](LDAP-Authentication.md) + [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
 
 ## Core pages
 
@@ -33,6 +33,7 @@ Last reviewed: March 9, 2026.
 - [Container Labs](Container-Labs.md)
 - [Scaling and Quotas](Scaling-and-Quotas.md)
 - [Security and Auth](Security-and-Auth.md)
+- [LDAP Authentication](LDAP-Authentication.md)
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
 - [Setup and Configuration](Setup-and-Configuration.md)
 
@@ -42,6 +43,7 @@ Last reviewed: March 9, 2026.
 - Cookie-based auth, short-lived connect grant/session cookies, and enforced session TTL
 - RBAC roles and permissions for admin/API paths
 - Optional OIDC SSO login flow (authorization code + PKCE)
+- Optional LDAP auth fallback configured in `/admin/settings/ldap`
 - One active lab per user enforced server-side (VM + container)
 - Namespace-based scaling and quota controls in `/admin/scaling-quotas`
 - Default ingress NetworkPolicies with explicit app allow rules

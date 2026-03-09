@@ -61,6 +61,21 @@ Behavior:
 - Callback exchanges code and creates/updates local user.
 - Session cookie is then issued using the normal auth flow.
 
+## LDAP auth
+
+LDAP is optional and runs only if local auth fails.
+
+Settings page:
+
+- `/admin/settings/ldap`
+
+Notes:
+
+- `ldap_user_filter` must include `{username}`.
+- Use `ldaps://` in production where possible.
+- Keep skip-verify disabled unless troubleshooting non-production cert issues.
+- LDAP settings changes are dynamic in DB config; backend restart is not required after save.
+
 ## CORS and login origin policy
 
 If login/API calls must work from LAN IPs and campus domains, set explicit allowed UI origins.
@@ -92,3 +107,4 @@ OpenAPI/docs endpoints are disabled in non-dev by default.
 - [Scaling and Quotas](Scaling-and-Quotas.md)
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
 - [Setup and Configuration](Setup-and-Configuration.md)
+- [LDAP Authentication](LDAP-Authentication.md)

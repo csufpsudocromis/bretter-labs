@@ -168,6 +168,28 @@ Fix:
 
 - Set unique `operation_id` values per route and add CI check.
 
+## CI/automation
+
+### `starlette.testclient module requires the httpx package to be installed`
+
+Meaning:
+
+- Test environment did not install `httpx` in the virtual environment used by `scripts/ci_guardrails.sh`.
+
+Fix:
+
+- Ensure CI install step includes `httpx` explicitly.
+- Confirm with:
+
+```bash
+.venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
+```
+
+Operational note:
+
+- Re-running a failed historical workflow run may still fail because it executes the old commit.
+- Trigger a fresh run from latest `main`.
+
 ## Quick triage bundle
 
 ```bash

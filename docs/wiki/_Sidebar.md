@@ -13,6 +13,7 @@
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
 - [Template Best Practices](Template-Best-Practices)
 - [Security and Auth](Security-and-Auth)
+- [LDAP Authentication](LDAP-Authentication)
 - [Scaling and Quotas](Scaling-and-Quotas)
 - [Container Labs](Container-Labs)
 - [VM Image Formats](VM-Image-Formats)
