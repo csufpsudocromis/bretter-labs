@@ -12,9 +12,22 @@ from ..auth import (
 )
 from ..db import get_session
 from ..models import Credentials, UserOut
+from ..rbac import can_access_admin, list_permissions_for_role, role_for_user
 from ..tables import User
 
 router = APIRouter()
+
+
+def _user_out(user: User) -> UserOut:
+    role = role_for_user(user)
+    return UserOut(
+        username=user.username,
+        role=role,
+        is_admin=can_access_admin(role),
+        force_password_change=user.force_password_change,
+        permissions=list_permissions_for_role(role),
+        can_access_admin=can_access_admin(role),
+    )
 
 
 @router.post("/login")
@@ -24,14 +37,12 @@ def login(credentials: Credentials, response: Response, session: Session = Depen
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
     token = issue_token(session, credentials.username)
     set_auth_cookie(response, token)
-    return {
-        "user": UserOut(username=user.username, is_admin=user.is_admin, force_password_change=user.force_password_change),
-    }
+    return {"user": _user_out(user)}
 
 
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(require_user)) -> UserOut:
-    return UserOut(username=user.username, is_admin=user.is_admin, force_password_change=user.force_password_change)
+    return _user_out(user)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

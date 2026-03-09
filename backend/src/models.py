@@ -12,6 +12,7 @@ class Credentials(BaseModel):
 class UserCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
+    role: Optional[str] = Field(default=None, min_length=1, max_length=64)
     is_admin: bool = False
 
 
@@ -22,13 +23,17 @@ class UserPasswordUpdate(BaseModel):
 class UserUpdate(BaseModel):
     username: Optional[str] = Field(default=None, min_length=3, max_length=64)
     password: Optional[str] = None
+    role: Optional[str] = Field(default=None, min_length=1, max_length=64)
     is_admin: Optional[bool] = None
 
 
 class UserOut(BaseModel):
     username: str
+    role: str
     is_admin: bool
     force_password_change: bool
+    permissions: list[str] = Field(default_factory=list)
+    can_access_admin: bool = False
 
 
 class ImageMeta(BaseModel):

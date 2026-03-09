@@ -1,6 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api';
 
+const ROLE_OPTIONS = [
+  { value: 'user', label: 'User' },
+  { value: 'viewer', label: 'Viewer (read-only)' },
+  { value: 'image_manager', label: 'Image Manager' },
+  { value: 'template_manager', label: 'Template Manager' },
+  { value: 'lab_operator', label: 'Lab Operator' },
+  { value: 'platform_admin', label: 'Platform Admin' },
+];
+
+const roleLabel = (value) => ROLE_OPTIONS.find((item) => item.value === value)?.label || value;
+
 const AdminUsers = () => {
   const [users, setUsers] = useState([]);
   const [username, setUsername] = useState('');
@@ -27,7 +38,12 @@ const AdminUsers = () => {
 
   const create = async () => {
     try {
-      await api.post('/admin/users', { username, password, is_admin: role === 'admin' });
+      await api.post('/admin/users', {
+        username,
+        password,
+        role,
+        is_admin: role !== 'user',
+      });
       setUsername('');
       setPassword('');
       setRole('user');
@@ -42,7 +58,7 @@ const AdminUsers = () => {
     setEditingUser(user.username);
     setEditUsername(user.username);
     setEditPassword('');
-    setEditRole(user.is_admin ? 'admin' : 'user');
+    setEditRole(user.role || (user.is_admin ? 'platform_admin' : 'user'));
     setMessage('');
   };
 
@@ -51,7 +67,8 @@ const AdminUsers = () => {
       await api.patch(`/admin/users/${editingUser}`, {
         username: editUsername,
         password: editPassword || undefined,
-        is_admin: editRole === 'admin',
+        role: editRole,
+        is_admin: editRole !== 'user',
       });
       setMessage('User updated');
       setEditingUser(null);
@@ -77,8 +94,11 @@ const AdminUsers = () => {
             <label>
               Role
               <select value={role} onChange={(e) => setRole(e.target.value)}>
-                <option value="user">User</option>
-                <option value="admin">Admin</option>
+                {ROLE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -98,7 +118,7 @@ const AdminUsers = () => {
               <button type="button" key={u.username} className="tile tile-button" onClick={() => selectUser(u)}>
                 <div className="tile-header">
                   <h4>{u.username}</h4>
-                  {u.is_admin && <span className="badge">admin</span>}
+                  <span className="badge">{roleLabel(u.role || (u.is_admin ? 'platform_admin' : 'user'))}</span>
                 </div>
               </button>
             ))}
@@ -114,8 +134,11 @@ const AdminUsers = () => {
                 <label>
                   Role
                   <select value={editRole} onChange={(e) => setEditRole(e.target.value)}>
-                    <option value="user">User</option>
-                    <option value="admin">Admin</option>
+                    {ROLE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label>

@@ -1,6 +1,6 @@
 import secrets
 from datetime import timedelta
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from passlib.hash import bcrypt
@@ -8,6 +8,7 @@ from sqlmodel import Session, select
 
 from .config import settings
 from .db import get_session
+from .rbac import Permission, ensure_user_role_fields, has_permission
 from .tables import ConnectToken, Token, User
 from .time_utils import utc_now
 
@@ -193,6 +194,10 @@ def require_user(
         session.delete(token)
         session.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+    if ensure_user_role_fields(user):
+        session.add(user)
+        session.commit()
+        session.refresh(user)
     return user
 
 
@@ -202,6 +207,18 @@ def require_admin(
     session: Session = Depends(get_session),
 ) -> User:
     user = require_user(request=request, authorization=authorization, session=session)
-    if not user.is_admin:
+    if not has_permission(user, Permission.ADMIN_ACCESS):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin required")
     return user
+
+
+def require_permission(permission: str) -> Callable[[User], User]:
+    def _require_permission(user: User = Depends(require_user)) -> User:
+        if has_permission(user, permission):
+            return user
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"missing permission: {permission}",
+        )
+
+    return _require_permission

@@ -12,6 +12,7 @@ from .auth import hash_password
 from .config import settings
 from .db import engine, init_db
 from .logging_utils import configure_capped_error_file_logging
+from .rbac import Role
 from .routes import admin, admin_containers, auth, user, user_containers
 from .services.kubernetes import kube
 from .tables import Config, ContainerImage, User
@@ -147,6 +148,7 @@ async def lifespan(_: FastAPI):
                 User(
                     username=settings.admin_default_username,
                     password_hash=hash_password(settings.admin_default_password),
+                    role=Role.PLATFORM_ADMIN,
                     is_admin=True,
                     force_password_change=True,
                 )

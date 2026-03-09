@@ -32,7 +32,8 @@ const Login = ({ onLogin, user }) => {
       <h2>Login</h2>
       {user && (
         <p>
-          Logged in as <strong>{user.username}</strong> {user.is_admin ? '(admin)' : ''}
+          Logged in as <strong>{user.username}</strong>{' '}
+          {Boolean(user?.can_access_admin ?? user?.is_admin) ? `(${String(user.role || 'admin').replace(/_/g, ' ')})` : ''}
         </p>
       )}
       <form onSubmit={handleSubmit} className="form">

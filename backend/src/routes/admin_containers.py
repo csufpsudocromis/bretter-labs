@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlmodel import Session, select
 
-from ..auth import require_admin
+from ..auth import require_permission
 from ..config import settings
 from ..db import get_session, session_scope
 from ..models import (
@@ -25,8 +25,9 @@ from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
 from ..services.kubernetes import kube
 from ..time_utils import utc_now
+from ..rbac import Permission
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_permission(Permission.ADMIN_ACCESS))])
 logger = logging.getLogger(__name__)
 
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -306,14 +307,22 @@ def _instance_out(record: ContainerInstanceTable) -> ContainerInstanceView:
     )
 
 
-@router.get("/containers", response_model=list[ContainerInstanceView])
+@router.get(
+    "/containers",
+    response_model=list[ContainerInstanceView],
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
 def list_container_instances(session: Session = Depends(get_session)) -> list[ContainerInstanceView]:
     rows = session.exec(select(ContainerInstanceTable)).all()
     rows.sort(key=lambda item: item.started_at, reverse=True)
     return [_instance_out(row) for row in rows]
 
 
-@router.post("/containers/{instance_id}/stop", response_model=ContainerInstanceView)
+@router.post(
+    "/containers/{instance_id}/stop",
+    response_model=ContainerInstanceView,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
 def stop_container_instance(instance_id: str, session: Session = Depends(get_session)) -> ContainerInstanceView:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record:
@@ -335,7 +344,11 @@ def stop_container_instance(instance_id: str, session: Session = Depends(get_ses
     return _instance_out(record)
 
 
-@router.delete("/containers/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/containers/{instance_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
 def delete_container_instance(instance_id: str, session: Session = Depends(get_session)) -> None:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record:
@@ -350,7 +363,12 @@ def delete_container_instance(instance_id: str, session: Session = Depends(get_s
     session.commit()
 
 
-@router.post("/container-images", response_model=ContainerImageMeta, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/container-images",
+    response_model=ContainerImageMeta,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def create_container_image(
     payload: ContainerImageCreate,
     background_tasks: BackgroundTasks,
@@ -383,14 +401,22 @@ def create_container_image(
     return _image_out(record)
 
 
-@router.get("/container-images", response_model=list[ContainerImageMeta])
+@router.get(
+    "/container-images",
+    response_model=list[ContainerImageMeta],
+    dependencies=[Depends(require_permission(Permission.IMAGES_READ))],
+)
 def list_container_images(session: Session = Depends(get_session)) -> list[ContainerImageMeta]:
     rows = session.exec(select(ContainerImageTable)).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_image_out(row) for row in rows]
 
 
-@router.patch("/container-images/{image_id}", response_model=ContainerImageMeta)
+@router.patch(
+    "/container-images/{image_id}",
+    response_model=ContainerImageMeta,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def update_container_image(
     image_id: str,
     payload: ContainerImageUpdate,
@@ -435,7 +461,11 @@ def update_container_image(
     return _image_out(record)
 
 
-@router.delete("/container-images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/container-images/{image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def delete_container_image(image_id: str, session: Session = Depends(get_session)) -> None:
     record = session.get(ContainerImageTable, image_id)
     if not record:
@@ -470,7 +500,11 @@ def delete_container_image(image_id: str, session: Session = Depends(get_session
     session.commit()
 
 
-@router.post("/container-images/{image_id}/prepull", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/container-images/{image_id}/prepull",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def prepull_container_image(
     image_id: str,
     background_tasks: BackgroundTasks,
@@ -483,7 +517,11 @@ def prepull_container_image(
     return {"detail": f"Pre-pull queued for {record.image_ref}"}
 
 
-@router.post("/container-images/{image_id}/scan", response_model=ContainerImageMeta)
+@router.post(
+    "/container-images/{image_id}/scan",
+    response_model=ContainerImageMeta,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def scan_container_image(
     image_id: str,
     background_tasks: BackgroundTasks,
@@ -502,7 +540,12 @@ def scan_container_image(
     return _image_out(record)
 
 
-@router.post("/container-templates", response_model=ContainerTemplate, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/container-templates",
+    response_model=ContainerTemplate,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
+)
 def create_container_template(
     payload: ContainerTemplateCreate,
     background_tasks: BackgroundTasks,
@@ -557,14 +600,22 @@ def create_container_template(
     return _template_out(record)
 
 
-@router.get("/container-templates", response_model=list[ContainerTemplate])
+@router.get(
+    "/container-templates",
+    response_model=list[ContainerTemplate],
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
+)
 def list_container_templates(session: Session = Depends(get_session)) -> list[ContainerTemplate]:
     rows = session.exec(select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)).all()  # noqa: E712
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
 
 
-@router.patch("/container-templates/{template_id}", response_model=ContainerTemplate)
+@router.patch(
+    "/container-templates/{template_id}",
+    response_model=ContainerTemplate,
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
+)
 def update_container_template(
     template_id: str,
     payload: ContainerTemplateUpdate,
@@ -657,7 +708,11 @@ def update_container_template(
     return _template_out(record)
 
 
-@router.delete("/container-templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/container-templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
+)
 def delete_container_template(template_id: str, session: Session = Depends(get_session)) -> None:
     record = session.get(ContainerTemplateTable, template_id)
     if not record:

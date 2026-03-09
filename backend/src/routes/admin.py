@@ -24,7 +24,7 @@ from kubernetes.client import ApiException
 from kubernetes.stream import stream
 from kubernetes.utils import parse_quantity
 
-from ..auth import hash_password, require_admin, revoke_tokens
+from ..auth import hash_password, require_permission, revoke_tokens
 from ..config import settings
 from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
@@ -57,11 +57,20 @@ from ..models import (
     VMTemplateUpdate,
 )
 from ..network_modes import normalize_vm_network_mode
+from ..rbac import (
+    Permission,
+    Role,
+    can_access_admin,
+    ensure_user_role_fields,
+    list_permissions_for_role,
+    normalize_requested_role,
+    role_for_user,
+)
 from ..services.kubernetes import kube
 from ..tables import Config, Image, ImageUploadTask, Instance, Template, User
 from ..time_utils import utc_now
 
-router = APIRouter(dependencies=[Depends(require_admin)])
+router = APIRouter(dependencies=[Depends(require_permission(Permission.ADMIN_ACCESS))])
 logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024 * 1024  # 60 GB
 ALLOWED_SUFFIXES = {".vhd", ".vhdx", ".qcow", ".qcow2", ".vdi"}
@@ -2717,18 +2726,36 @@ class DirectUploadSession(BaseModel):
 
 
 def _user_out(user: User) -> UserOut:
-    return UserOut(username=user.username, is_admin=user.is_admin, force_password_change=user.force_password_change)
+    role = role_for_user(user)
+    return UserOut(
+        username=user.username,
+        role=role,
+        is_admin=can_access_admin(role),
+        force_password_change=user.force_password_change,
+        permissions=list_permissions_for_role(role),
+        can_access_admin=can_access_admin(role),
+    )
 
 
-@router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users",
+    response_model=UserOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
+)
 def add_user(payload: UserCreate, session: Session = Depends(get_session)) -> UserOut:
     existing = session.get(User, payload.username)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="user exists")
+    try:
+        role = normalize_requested_role(payload.role, payload.is_admin)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
-        is_admin=payload.is_admin,
+        role=role,
+        is_admin=can_access_admin(role),
         force_password_change=False,
     )
     session.add(user)
@@ -2737,13 +2764,22 @@ def add_user(payload: UserCreate, session: Session = Depends(get_session)) -> Us
     return _user_out(user)
 
 
-@router.get("/users", response_model=list[UserOut])
+@router.get("/users", response_model=list[UserOut], dependencies=[Depends(require_permission(Permission.USERS_READ))])
 def list_users(session: Session = Depends(get_session)) -> list[UserOut]:
     users = session.exec(select(User)).all()
+    mutated = False
+    for user in users:
+        if ensure_user_role_fields(user):
+            session.add(user)
+            mutated = True
+    if mutated:
+        session.commit()
+        for user in users:
+            session.refresh(user)
     return [_user_out(u) for u in users]
 
 
-@router.patch("/users/{username}", response_model=UserOut)
+@router.patch("/users/{username}", response_model=UserOut, dependencies=[Depends(require_permission(Permission.USERS_WRITE))])
 def update_user(username: str, payload: UserUpdate, session: Session = Depends(get_session)) -> UserOut:
     user = session.get(User, username)
     if not user:
@@ -2764,8 +2800,13 @@ def update_user(username: str, payload: UserUpdate, session: Session = Depends(g
         user.password_hash = hash_password(payload.password)
         user.force_password_change = False
         revoke_tokens(session, username)
-    if payload.is_admin is not None:
-        user.is_admin = payload.is_admin
+    if payload.role is not None or payload.is_admin is not None:
+        try:
+            role = normalize_requested_role(payload.role, payload.is_admin)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        user.role = role
+        user.is_admin = can_access_admin(role)
     user.username = new_username
     session.add(user)
     session.commit()
@@ -2773,19 +2814,24 @@ def update_user(username: str, payload: UserUpdate, session: Session = Depends(g
     return _user_out(user)
 
 
-@router.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission(Permission.USERS_WRITE))])
 def remove_user(username: str, session: Session = Depends(get_session)) -> None:
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-    if user.is_admin and username == settings.admin_default_username:
+    if role_for_user(user) == Role.PLATFORM_ADMIN and username == settings.admin_default_username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot delete default admin")
     revoke_tokens(session, username)
     session.delete(user)
     session.commit()
 
 
-@router.post("/images", response_model=ImageUploadTaskStatus, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/images",
+    response_model=ImageUploadTaskStatus,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def upload_image(file: UploadFile = File(...), session: Session = Depends(get_session)) -> ImageUploadTaskStatus:
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filename required")
@@ -2858,7 +2904,12 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     return _upload_task_out(task)
 
 
-@router.post("/images/direct-upload/start", response_model=DirectUploadSession, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/images/direct-upload/start",
+    response_model=DirectUploadSession,
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(get_session)) -> DirectUploadSession:
     if not settings.cdi_direct_upload_enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="direct CDI upload is disabled")
@@ -2925,7 +2976,11 @@ def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(g
     return DirectUploadSession(task=_upload_task_out(task), upload_url=upload_url, upload_token=token)
 
 
-@router.get("/images/upload-tasks/{task_id}", response_model=ImageUploadTaskStatus)
+@router.get(
+    "/images/upload-tasks/{task_id}",
+    response_model=ImageUploadTaskStatus,
+    dependencies=[Depends(require_permission(Permission.IMAGES_READ))],
+)
 def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> ImageUploadTaskStatus:
     task = session.get(ImageUploadTask, task_id)
     if not task:
@@ -2944,7 +2999,12 @@ def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> Im
     return _upload_task_out(task)
 
 
-@router.post("/images/import", response_model=ImageCreateResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/images/import",
+    response_model=ImageCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def import_image(payload: ImageImport, session: Session = Depends(get_session)) -> ImageCreateResponse:
     if not settings.kube_vm_storage_class:
         raise HTTPException(
@@ -3016,7 +3076,7 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
     )
 
 
-@router.get("/images", response_model=list[ImageMeta])
+@router.get("/images", response_model=list[ImageMeta], dependencies=[Depends(require_permission(Permission.IMAGES_READ))])
 def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
     pvc_files = {item["name"]: item for item in _list_pvc_files()}
     existing_records = session.exec(select(Image)).all()
@@ -3048,7 +3108,11 @@ def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
     ]
 
 
-@router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/images/{image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def delete_image(image_id: str, session: Session = Depends(get_session)) -> None:
     record = session.get(Image, image_id)
     if not record:
@@ -3075,7 +3139,11 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
     session.commit()
 
 
-@router.patch("/images/{image_id}", response_model=ImageMeta)
+@router.patch(
+    "/images/{image_id}",
+    response_model=ImageMeta,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
 def rename_image(image_id: str, payload: ImageRename, session: Session = Depends(get_session)) -> ImageMeta:
     record = session.get(Image, image_id)
     if not record:
@@ -3120,7 +3188,12 @@ def rename_image(image_id: str, payload: ImageRename, session: Session = Depends
     )
 
 
-@router.post("/templates", response_model=VMTemplate, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/templates",
+    response_model=VMTemplate,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
+)
 def create_template(payload: VMTemplateCreate, session: Session = Depends(get_session)) -> VMTemplate:
     image = session.get(Image, payload.image_id)
     if not image:
@@ -3176,7 +3249,11 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
     )
 
 
-@router.get("/templates", response_model=list[VMTemplate])
+@router.get(
+    "/templates",
+    response_model=list[VMTemplate],
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
+)
 def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
     templates = session.exec(select(Template)).all()
     return [
@@ -3201,7 +3278,11 @@ def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
     ]
 
 
-@router.patch("/templates/{template_id}", response_model=VMTemplate)
+@router.patch(
+    "/templates/{template_id}",
+    response_model=VMTemplate,
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
+)
 def update_template(template_id: str, payload: VMTemplateUpdate, session: Session = Depends(get_session)) -> VMTemplate:
     record = session.get(Template, template_id)
     if not record:
@@ -3271,7 +3352,11 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
     )
 
 
-@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/templates/{template_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
+)
 def delete_template(template_id: str, session: Session = Depends(get_session)) -> None:
     record = session.get(Template, template_id)
     if not record:
@@ -3606,7 +3691,7 @@ def _build_resource_recommendations(utilization: dict, pending: dict, nodes: lis
     return recs[:10]
 
 
-@router.get("/resources")
+@router.get("/resources", dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))])
 def cluster_resources() -> dict:
     core = kube._client()
     nodes = core.list_node().items
@@ -3843,7 +3928,11 @@ def cluster_resources() -> dict:
     }
 
 
-@router.get("/alerts-errors", response_model=AlertsAndErrorsView)
+@router.get(
+    "/alerts-errors",
+    response_model=AlertsAndErrorsView,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
 def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
     max_bytes = min(max(1024, int(settings.error_log_max_bytes)), ALERTS_ERRORS_MAX_LOG_BYTES)
     per_page = max(1, int(ERROR_LOG_PAGE_SIZE))
@@ -3866,7 +3955,11 @@ def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
     )
 
 
-@router.post("/alerts-errors/clear", response_model=ErrorLogClearResult)
+@router.post(
+    "/alerts-errors/clear",
+    response_model=ErrorLogClearResult,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
 def clear_alerts_error_log() -> ErrorLogClearResult:
     log_file_path = _to_str(settings.error_log_file_path)
     if not log_file_path:
@@ -3878,7 +3971,11 @@ def clear_alerts_error_log() -> ErrorLogClearResult:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear error log: {exc}")
 
 
-@router.post("/settings/concurrency", response_model=ConcurrencySettings)
+@router.post(
+    "/settings/concurrency",
+    response_model=ConcurrencySettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def update_concurrency(settings_payload: ConcurrencySettings, session: Session = Depends(get_session)) -> ConcurrencySettings:
     config = session.get(Config, 1) or Config(id=1)
     config.max_concurrent_vms = settings_payload.max_concurrent_vms
@@ -3888,7 +3985,11 @@ def update_concurrency(settings_payload: ConcurrencySettings, session: Session =
     return settings_payload
 
 
-@router.post("/settings/idle-timeout", response_model=IdleTimeoutSettings)
+@router.post(
+    "/settings/idle-timeout",
+    response_model=IdleTimeoutSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def update_idle_timeout(settings_payload: IdleTimeoutSettings, session: Session = Depends(get_session)) -> IdleTimeoutSettings:
     config = session.get(Config, 1) or Config(id=1)
     config.idle_timeout_minutes = settings_payload.idle_timeout_minutes
@@ -3897,13 +3998,21 @@ def update_idle_timeout(settings_payload: IdleTimeoutSettings, session: Session 
     return settings_payload
 
 
-@router.get("/settings/storage", response_model=StorageSettingsRead)
+@router.get(
+    "/settings/storage",
+    response_model=StorageSettingsRead,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
 def get_storage_settings(session: Session = Depends(get_session)) -> StorageSettingsRead:
     cfg = session.get(Config, 1)
     return _storage_settings_view(cfg)
 
 
-@router.patch("/settings/storage", response_model=StorageSettingsRead)
+@router.patch(
+    "/settings/storage",
+    response_model=StorageSettingsRead,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def update_storage_settings(
     payload: StorageSettingsUpdate,
     session: Session = Depends(get_session),
@@ -3937,13 +4046,21 @@ def update_storage_settings(
     return _storage_settings_view(cfg)
 
 
-@router.get("/settings/runtime", response_model=RuntimeSettingsRead)
+@router.get(
+    "/settings/runtime",
+    response_model=RuntimeSettingsRead,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
 def get_runtime_settings(session: Session = Depends(get_session)) -> RuntimeSettingsRead:
     cfg = session.get(Config, 1)
     return _runtime_settings_view(cfg)
 
 
-@router.patch("/settings/runtime", response_model=RuntimeSettingsRead)
+@router.patch(
+    "/settings/runtime",
+    response_model=RuntimeSettingsRead,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def update_runtime_storage_settings(
     payload: StorageSettingsUpdate,
     session: Session = Depends(get_session),
@@ -3953,7 +4070,12 @@ def update_runtime_storage_settings(
     return get_runtime_settings(session=session)
 
 
-@router.post("/settings/site/background", response_model=SiteBackgroundAsset, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/settings/site/background",
+    response_model=SiteBackgroundAsset,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def upload_site_background(file: UploadFile = File(...), session: Session = Depends(get_session)) -> SiteBackgroundAsset:
     original_name = Path(str(file.filename or "")).name
     suffix = Path(original_name).suffix.lower()
@@ -4018,7 +4140,11 @@ def upload_site_background(file: UploadFile = File(...), session: Session = Depe
     return SiteBackgroundAsset(theme_bg_image=public_path, filename=filename, size_bytes=total)
 
 
-@router.get("/settings/site", response_model=SiteSettings)
+@router.get(
+    "/settings/site",
+    response_model=SiteSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
 def get_site_settings(session: Session = Depends(get_session)) -> SiteSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     session.add(cfg)
@@ -4047,7 +4173,11 @@ def get_site_settings(session: Session = Depends(get_session)) -> SiteSettings:
     )
 
 
-@router.patch("/settings/site", response_model=SiteSettings)
+@router.patch(
+    "/settings/site",
+    response_model=SiteSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def update_site_settings(payload: SiteSettings, session: Session = Depends(get_session)) -> SiteSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     old_bg_image = str(cfg.theme_bg_image or "").strip()
@@ -4103,7 +4233,11 @@ def update_site_settings(payload: SiteSettings, session: Session = Depends(get_s
     )
 
 
-@router.get("/settings/sso", response_model=SSOSettings)
+@router.get(
+    "/settings/sso",
+    response_model=SSOSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
 def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     session.add(cfg)
@@ -4120,7 +4254,11 @@ def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     )
 
 
-@router.patch("/settings/sso", response_model=SSOSettings)
+@router.patch(
+    "/settings/sso",
+    response_model=SSOSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
 def update_sso_settings(payload: SSOSettings, session: Session = Depends(get_session)) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     cfg.sso_enabled = payload.sso_enabled
@@ -4146,7 +4284,11 @@ def update_sso_settings(payload: SSOSettings, session: Session = Depends(get_ses
     )
 
 
-@router.get("/pods", response_model=list[VMInstance])
+@router.get(
+    "/pods",
+    response_model=list[VMInstance],
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
 def list_running_pods(session: Session = Depends(get_session)) -> list[VMInstance]:
     instances = session.exec(select(Instance)).all()
     return [
@@ -4163,7 +4305,11 @@ def list_running_pods(session: Session = Depends(get_session)) -> list[VMInstanc
     ]
 
 
-@router.post("/pods/{instance_id}/stop", response_model=VMInstance)
+@router.post(
+    "/pods/{instance_id}/stop",
+    response_model=VMInstance,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
 def stop_pod(instance_id: str, session: Session = Depends(get_session)) -> VMInstance:
     record = session.get(Instance, instance_id)
     if not record:
@@ -4185,7 +4331,11 @@ def stop_pod(instance_id: str, session: Session = Depends(get_session)) -> VMIns
     )
 
 
-@router.delete("/pods/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/pods/{instance_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
 def delete_pod(instance_id: str, session: Session = Depends(get_session)) -> None:
     record = session.get(Instance, instance_id)
     if not record:

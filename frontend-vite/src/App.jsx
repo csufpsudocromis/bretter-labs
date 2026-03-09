@@ -50,6 +50,12 @@ const resolveThemeImageUrl = (value) => {
   return `${apiBase}/${raw}`;
 };
 
+const roleDisplay = (user) => {
+  const raw = String(user?.role || '').trim();
+  if (!raw) return user?.is_admin ? 'admin' : '';
+  return raw.replace(/_/g, ' ');
+};
+
 const AppShell = () => {
   const [user, setUser] = useState(null);
   const [error, setError] = useState(null);
@@ -176,6 +182,7 @@ const AppShell = () => {
   };
 
   const authed = Boolean(user);
+  const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
 
   return (
     <div className="page">
@@ -187,7 +194,7 @@ const AppShell = () => {
         {authed && (
           <div className="user-info">
             <span>
-              {user.username} {user.is_admin ? '(admin)' : ''}
+              {user.username} {canAccessAdmin ? `(${roleDisplay(user)})` : ''}
             </span>
             <button onClick={logout} className="ghost">
               Logout
@@ -207,7 +214,7 @@ const AppShell = () => {
         <>
           <nav className="nav">
             <Link to="/">User</Link>
-            {user.is_admin && <Link to="/admin">Admin</Link>}
+            {canAccessAdmin && <Link to="/admin">Admin</Link>}
           </nav>
           <Routes>
             <Route
@@ -218,7 +225,7 @@ const AppShell = () => {
                 </section>
               }
             />
-            {user.is_admin && (
+            {canAccessAdmin && (
               <>
                 <Route
                   path="/admin"

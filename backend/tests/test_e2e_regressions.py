@@ -3,8 +3,10 @@ from datetime import timedelta
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
+from src.auth import hash_password
 from src.db import engine
-from src.tables import ContainerImage, ContainerTemplate, Image, Template, Token
+from src.rbac import Role
+from src.tables import ContainerImage, ContainerTemplate, Image, Template, Token, User
 from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
@@ -90,6 +92,50 @@ def test_cookie_auth_login_me_logout(client: TestClient):
     assert logout.status_code == 204
     unauthorized = client.get("/auth/me")
     assert unauthorized.status_code == 401
+
+
+def test_rbac_user_cannot_access_admin(client: TestClient):
+    login = client.post("/auth/login", json={"username": "alice", "password": "password"})
+    assert login.status_code == 200
+    forbidden = client.get("/admin/settings/site")
+    assert forbidden.status_code == 403
+
+
+def test_rbac_viewer_has_read_only_admin_access(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            User(
+                username="viewer1",
+                password_hash=hash_password("password"),
+                role=Role.VIEWER,
+                is_admin=True,
+                force_password_change=False,
+            )
+        )
+        session.commit()
+
+    login = client.post("/auth/login", json={"username": "viewer1", "password": "password"})
+    assert login.status_code == 200, login.text
+    user = login.json()["user"]
+    assert user["role"] == Role.VIEWER
+    assert user["can_access_admin"] is True
+    assert user["is_admin"] is True
+
+    site_read = client.get("/admin/settings/site")
+    assert site_read.status_code == 200, site_read.text
+
+    blocked_write = client.post("/admin/settings/idle-timeout", json={"idle_timeout_minutes": 30})
+    assert blocked_write.status_code == 403
+    assert "missing permission" in blocked_write.json()["detail"]
+
+
+def test_rbac_rejects_invalid_role_on_user_create(login_admin: TestClient):
+    bad_create = login_admin.post(
+        "/admin/users",
+        json={"username": "badroleuser", "password": "password", "role": "superuser"},
+    )
+    assert bad_create.status_code == 422
+    assert "invalid role" in bad_create.json()["detail"]
 
 
 def test_cookie_auth_session_ttl_is_enforced(client: TestClient, monkeypatch):

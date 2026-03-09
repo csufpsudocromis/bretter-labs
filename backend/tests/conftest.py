@@ -36,6 +36,7 @@ from src.tables import (  # noqa: E402
     Token,
     User,
 )
+from src.rbac import Role  # noqa: E402
 
 
 @pytest.fixture
@@ -101,8 +102,24 @@ def reset_db():
                 idle_timeout_minutes=30,
             )
         )
-        session.add(User(username="admin", password_hash=hash_password("admin"), is_admin=True, force_password_change=False))
-        session.add(User(username="alice", password_hash=hash_password("password"), is_admin=False, force_password_change=False))
+        session.add(
+            User(
+                username="admin",
+                password_hash=hash_password("admin"),
+                role=Role.PLATFORM_ADMIN,
+                is_admin=True,
+                force_password_change=False,
+            )
+        )
+        session.add(
+            User(
+                username="alice",
+                password_hash=hash_password("password"),
+                role=Role.USER,
+                is_admin=False,
+                force_password_change=False,
+            )
+        )
         session.commit()
     yield
 

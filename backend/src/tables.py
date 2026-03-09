@@ -10,6 +10,7 @@ from .time_utils import utc_now
 class User(SQLModel, table=True):
     username: str = Field(primary_key=True, index=True)
     password_hash: str
+    role: str = Field(default="user", index=True)
     is_admin: bool = False
     force_password_change: bool = False
 
