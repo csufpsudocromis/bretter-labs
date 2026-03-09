@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     vm_memory_overhead_mb: int = 1024
     vm_runner_topology_spread_enabled: bool = True
     vm_runner_anti_affinity_enabled: bool = True
+    launch_reserved_cpu_m: int = 1000
+    launch_reserved_memory_mb: int = 2048
     container_ingress_enabled: bool = False
     container_ingress_class: str = ""
     container_ingress_base_domain: str = ""
@@ -67,6 +69,8 @@ class Settings(BaseSettings):
     cdi_upload_source_filename: str = "disk.img"
     public_scheme: str = "https"
     cors_allow_http: bool = False
+    cors_allowed_origins: str = ""
+    cors_allowed_origin_regex: str = ""
     auth_cookie_name: str = "blabs_session"
     auth_cookie_ttl_seconds: int = 86400
     auth_cookie_secure: bool = True

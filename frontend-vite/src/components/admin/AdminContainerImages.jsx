@@ -51,6 +51,7 @@ const AdminContainerImages = () => {
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({ name: '', image_ref: '' });
   const [busyAction, setBusyAction] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
 
   const actionKey = (imageId, action) => `${imageId}:${action}`;
   const isBusy = (imageId, action) => busyAction === actionKey(imageId, action);
@@ -81,6 +82,7 @@ const AdminContainerImages = () => {
   }, [hasQueuedScans, load]);
 
   const create = async () => {
+    if (isCreating) return;
     const imageRef = buildImageRef(form);
     const payload = {
       name: String(form.name || '').trim() || inferNameFromRef(imageRef),
@@ -90,14 +92,23 @@ const AdminContainerImages = () => {
       setError('Name and image source are required');
       return;
     }
+    setIsCreating(true);
+    setMessage('Adding image...');
     try {
-      await api.post('/admin/container-images', payload);
+      const res = await api.post('/admin/container-images', payload);
+      const created = res.data;
       setForm({ ...DEFAULT_FORM });
-      setMessage('Container image added');
+      if (created && created.id) {
+        setImages((prev) => [created, ...prev.filter((img) => img.id !== created.id)]);
+      }
+      setMessage('Container image added. Pre-pull/scan running in background.');
       setError('');
       load();
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to add container image');
+      setMessage('');
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -241,8 +252,8 @@ const AdminContainerImages = () => {
               </>
             )}
             <div className="muted small">Resolved reference: <code>{sourceImageRef || '-'}</code></div>
-            <button onClick={create} disabled={!canCreate}>
-              Add image
+            <button onClick={create} disabled={!canCreate || isCreating}>
+              {isCreating ? 'Adding...' : 'Add image'}
             </button>
             <p className="muted small">
               Supports Docker Hub, GHCR, Quay, ECR, GCR, ACR, and any OCI registry reachable by the cluster.

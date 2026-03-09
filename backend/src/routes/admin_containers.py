@@ -2,7 +2,6 @@ import json
 import logging
 import re
 import subprocess
-from datetime import datetime
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -25,6 +24,7 @@ from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
 from ..services.kubernetes import kube
+from ..time_utils import utc_now
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 logger = logging.getLogger(__name__)
@@ -188,14 +188,14 @@ def _trigger_image_scan(session: Session, record: ContainerImageTable) -> None:
         )
     except Exception:
         logger.warning("Container image scan failed for %s", record.image_ref, exc_info=True)
-        record.last_scan_at = datetime.utcnow()
+        record.last_scan_at = utc_now()
         record.last_scan_status = "error"
         record.last_scan_summary = "scan failed"
         session.add(record)
         session.commit()
         session.refresh(record)
         return
-    record.last_scan_at = datetime.utcnow()
+    record.last_scan_at = utc_now()
     record.last_scan_status = status_text
     record.last_scan_summary = summary_text[:512]
     session.add(record)
@@ -280,6 +280,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         env=_parse_json_map(record.env_json),
         auto_delete_minutes=record.auto_delete_minutes,
         idle_timeout_minutes=max(1, int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes)),
+        max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
         enabled=record.enabled,
         created_at=record.created_at,
     )
@@ -327,7 +328,7 @@ def stop_container_instance(instance_id: str, session: Session = Depends(get_ses
     record.status = "stopped"
     record.queue_not_before = None
     record.queue_reason = None
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
     session.refresh(record)
@@ -350,7 +351,11 @@ def delete_container_instance(instance_id: str, session: Session = Depends(get_s
 
 
 @router.post("/container-images", response_model=ContainerImageMeta, status_code=status.HTTP_201_CREATED)
-def create_container_image(payload: ContainerImageCreate, session: Session = Depends(get_session)) -> ContainerImageMeta:
+def create_container_image(
+    payload: ContainerImageCreate,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+) -> ContainerImageMeta:
     image_ref = _normalize_container_image_ref(payload.image_ref)
     _enforce_registry_policy(image_ref)
     _verify_image_signature(image_ref)
@@ -363,16 +368,18 @@ def create_container_image(payload: ContainerImageCreate, session: Session = Dep
         id=str(uuid4()),
         name=name,
         image_ref=image_ref,
-        created_at=datetime.utcnow(),
+        last_scan_at=utc_now() if settings.container_scan_enabled else None,
+        last_scan_status="queued" if settings.container_scan_enabled else "never",
+        last_scan_summary="scan queued" if settings.container_scan_enabled else "",
+        created_at=utc_now(),
     )
     session.add(record)
     session.commit()
     session.refresh(record)
-    try:
-        kube.prepull_container_image(image_ref)
-    except Exception:
-        logger.warning("Container image pre-pull failed for %s", image_ref, exc_info=True)
-    _trigger_image_scan(session, record)
+    if settings.container_image_prepull_enabled:
+        background_tasks.add_task(_run_image_prepull, image_ref)
+    if settings.container_scan_enabled:
+        background_tasks.add_task(_run_image_scan_for_id, record.id)
     return _image_out(record)
 
 
@@ -387,6 +394,7 @@ def list_container_images(session: Session = Depends(get_session)) -> list[Conta
 def update_container_image(
     image_id: str,
     payload: ContainerImageUpdate,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
 ) -> ContainerImageMeta:
     record = session.get(ContainerImageTable, image_id)
@@ -411,16 +419,19 @@ def update_container_image(
         if existing:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
         record.image_ref = image_ref
+        if settings.container_scan_enabled:
+            record.last_scan_at = utc_now()
+            record.last_scan_status = "queued"
+            record.last_scan_summary = "scan queued"
 
     session.add(record)
     session.commit()
     session.refresh(record)
     if "image_ref" in updates:
-        try:
-            kube.prepull_container_image(record.image_ref)
-        except Exception:
-            logger.warning("Container image pre-pull failed for %s", record.image_ref, exc_info=True)
-    _trigger_image_scan(session, record)
+        if settings.container_image_prepull_enabled:
+            background_tasks.add_task(_run_image_prepull, record.image_ref)
+        if settings.container_scan_enabled:
+            background_tasks.add_task(_run_image_scan_for_id, image_id)
     return _image_out(record)
 
 
@@ -481,7 +492,7 @@ def scan_container_image(
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
-    record.last_scan_at = datetime.utcnow()
+    record.last_scan_at = utc_now()
     record.last_scan_status = "queued"
     record.last_scan_summary = "scan queued"
     session.add(record)
@@ -534,8 +545,9 @@ def create_container_template(
         env_json=json.dumps(env, separators=(",", ":")),
         auto_delete_minutes=payload.auto_delete_minutes,
         idle_timeout_minutes=max(1, int(payload.idle_timeout_minutes or settings.idle_timeout_minutes)),
+        max_active_instances=max(0, int(payload.max_active_instances or 0)),
         enabled=payload.enabled,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     session.add(record)
     session.commit()
@@ -625,6 +637,8 @@ def update_container_template(
         record.auto_delete_minutes = max(1, int(updates.get("auto_delete_minutes") or 60))
     if "idle_timeout_minutes" in updates:
         record.idle_timeout_minutes = max(1, int(updates.get("idle_timeout_minutes") or settings.idle_timeout_minutes))
+    if "max_active_instances" in updates:
+        record.max_active_instances = max(0, int(updates.get("max_active_instances") or 0))
     if "enabled" in updates:
         record.enabled = bool(updates.get("enabled"))
     if "is_default" in updates:

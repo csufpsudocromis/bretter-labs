@@ -122,6 +122,7 @@
       let sc;
       let openerRef = null;
       let openerOrigin = '*';
+      const allowedOpenerOrigins = new Set();
       let idleSuspended = false;
       let presenceTimer = null;
       const PRESENCE_INTERVAL_MS = 2000;
@@ -132,6 +133,59 @@
       const OPENER_WATCH_INTERVAL_MS = 2000;
       let backendHeartbeatTimer = null;
       const BACKEND_HEARTBEAT_TICK_MS = 10000;
+
+      function normalizeOrigin(value) {
+        try {
+          return new URL(String(value || ''), window.location.href).origin;
+        } catch (err) {
+          return '';
+        }
+      }
+
+      function rememberAllowedOrigin(value) {
+        const origin = normalizeOrigin(value);
+        if (origin) {
+          allowedOpenerOrigins.add(origin);
+        }
+        return origin;
+      }
+
+      function isAllowedOrigin(origin) {
+        if (!origin) return false;
+        if (allowedOpenerOrigins.size === 0) return true;
+        return allowedOpenerOrigins.has(origin);
+      }
+
+      function postToOpener(message) {
+        const target = openerRef || window.opener;
+        if (!target) {
+          return;
+        }
+        try {
+          if (target.closed) {
+            return;
+          }
+        } catch (err) {
+          return;
+        }
+        const targetOrigins = new Set();
+        if (openerOrigin && openerOrigin !== '*') {
+          targetOrigins.add(openerOrigin);
+        }
+        allowedOpenerOrigins.forEach((origin) => targetOrigins.add(origin));
+        if (targetOrigins.size === 0) {
+          targetOrigins.add('*');
+        }
+        targetOrigins.forEach((targetOrigin) => {
+          try {
+            target.postMessage(message, targetOrigin);
+          } catch (err) {
+            // ignore postMessage failures
+          }
+        });
+      }
+
+      rememberAllowedOrigin(window.location.origin);
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -175,7 +229,9 @@
 
       function apiBaseUrl() {
         const base = apiBase || `${window.location.protocol}//${window.location.hostname}:30080`;
-        return base.replace(/\/$/, '');
+        const normalized = base.replace(/\/$/, '');
+        rememberAllowedOrigin(normalized);
+        return normalized;
       }
 
       function sendHeartbeat(timestamp) {
@@ -229,9 +285,7 @@
 
       function sendStop(reason = 'idle-timeout', action = 'delete') {
         requestStop(action);
-        if (window.opener) {
-          window.opener.postMessage({ type: 'idle-stop', instanceId, reason, action }, '*');
-        }
+        postToOpener({ type: 'idle-stop', source: 'vm', instanceId, reason, action });
       }
 
       function showEnded(reason = 'idle-timeout') {
@@ -309,50 +363,22 @@
       let lastActivitySentAt = 0;
 
       function notifyOpenerActivity(timestamp) {
-        const target = openerRef || window.opener;
-        if (!target) {
-          return;
-        }
-        try {
-          if (target.closed) {
-            return;
-          }
-        } catch (err) {
-          return;
-        }
         const now = timestamp || Date.now();
         if (now - lastActivitySentAt < 1000) {
           return;
         }
         lastActivitySentAt = now;
-        try {
-          target.postMessage({ type: 'idle-activity', source: 'vm', instanceId, timestamp: now }, openerOrigin);
-        } catch (err) {
-          // ignore postMessage failures
-        }
+        postToOpener({ type: 'idle-activity', source: 'vm', instanceId, timestamp: now });
       }
 
       function notifyOpenerFocus(focused) {
-        const target = openerRef || window.opener;
-        if (!target) {
-          return;
-        }
-        try {
-          if (target.closed) {
-            return;
-          }
-        } catch (err) {
-          return;
-        }
         const now = Date.now();
-        try {
-          target.postMessage(
-            { type: focused ? 'idle-focus' : 'idle-blur', source: 'vm', instanceId, timestamp: now },
-            openerOrigin,
-          );
-        } catch (err) {
-          // ignore postMessage failures
-        }
+        postToOpener({
+          type: focused ? 'idle-focus' : 'idle-blur',
+          source: 'vm',
+          instanceId,
+          timestamp: now,
+        });
       }
 
       function startPresenceHeartbeat() {
@@ -469,15 +495,22 @@
         });
         window.addEventListener('message', (event) => {
           const payload = event.data || {};
-          if (payload.type === 'idle-handshake' && payload.source === 'user') {
+          const messageOrigin = normalizeOrigin(event.origin);
+          if (payload.source !== 'user') {
+            return;
+          }
+          if (messageOrigin && !isAllowedOrigin(messageOrigin)) {
+            return;
+          }
+          if (messageOrigin) {
+            openerOrigin = messageOrigin;
+            rememberAllowedOrigin(messageOrigin);
+          }
+          if (payload.type === 'idle-handshake') {
             openerRef = event.source;
-            openerOrigin = event.origin || '*';
             try {
               if (payload.instanceId === instanceId) {
-                openerRef.postMessage(
-                  { type: 'idle-handshake-ack', source: 'vm', instanceId },
-                  openerOrigin,
-                );
+                postToOpener({ type: 'idle-handshake-ack', source: 'vm', instanceId });
               }
             } catch (err) {
               // ignore postMessage failures
@@ -485,7 +518,7 @@
             notifyOpenerFocus(!document.hidden);
             return;
           }
-          if (payload.type === 'idle-focus' && payload.source === 'user') {
+          if (payload.type === 'idle-focus') {
             idleSuspended = true;
             if (idleTimer) {
               clearTimeout(idleTimer);
@@ -494,15 +527,14 @@
             stopCountdown();
             return;
           }
-          if (payload.type === 'idle-blur' && payload.source === 'user') {
+          if (payload.type === 'idle-blur') {
             idleSuspended = false;
             const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
             recordActivity({ emit: false, timestamp: ts, heartbeat: false });
             return;
           }
-          if (payload.type === 'idle-activity' && payload.source === 'user') {
+          if (payload.type === 'idle-activity') {
             openerRef = event.source;
-            openerOrigin = event.origin || '*';
             if (promptActive) {
               stopCountdown();
             }
@@ -510,12 +542,18 @@
             recordActivity({ emit: false, timestamp: ts, heartbeat: false });
             return;
           }
-          if (payload.type === 'idle-auth' && payload.source === 'user') {
+          if (payload.type === 'idle-auth') {
             if (payload.instanceId && payload.instanceId !== instanceId) {
               return;
             }
             if (payload.apiBase) {
               apiBase = payload.apiBase;
+              rememberAllowedOrigin(apiBase);
+            }
+            if (Array.isArray(payload.allowedOrigins)) {
+              payload.allowedOrigins.forEach((originValue) => {
+                rememberAllowedOrigin(originValue);
+              });
             }
             startBackendHeartbeat();
             sendHeartbeat(Date.now());

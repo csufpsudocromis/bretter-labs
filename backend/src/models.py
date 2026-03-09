@@ -94,6 +94,7 @@ class VMTemplateCreate(BaseModel):
     idle_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     preclone_pool_size: int = Field(default=0, ge=0, le=50)
     preclone_pool_max: int = Field(default=0, ge=0, le=50)
+    max_active_instances: int = Field(default=2, ge=0, le=200)
     enabled: bool = False
     network_mode: str = Field(
         default="bridge", pattern="^(bridge|host|none|unrestricted|isolated)$"
@@ -111,6 +112,7 @@ class VMTemplateUpdate(BaseModel):
     idle_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     preclone_pool_size: Optional[int] = Field(default=None, ge=0, le=50)
     preclone_pool_max: Optional[int] = Field(default=None, ge=0, le=50)
+    max_active_instances: Optional[int] = Field(default=None, ge=0, le=200)
     enabled: Optional[bool] = None
     network_mode: Optional[str] = Field(
         default=None, pattern="^(bridge|host|none|unrestricted|isolated)$"
@@ -129,6 +131,7 @@ class VMTemplate(BaseModel):
     idle_timeout_minutes: int
     preclone_pool_size: int = 0
     preclone_pool_max: int = 0
+    max_active_instances: int = 2
     enabled: bool
     network_mode: str = "bridge"
     created_at: datetime
@@ -156,6 +159,7 @@ class ContainerTemplateCreate(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     auto_delete_minutes: int = Field(default=60, ge=1, le=1440)
     idle_timeout_minutes: int = Field(default=30, ge=1, le=1440)
+    max_active_instances: int = Field(default=2, ge=0, le=200)
     enabled: bool = False
 
 
@@ -182,6 +186,7 @@ class ContainerTemplateUpdate(BaseModel):
     env: Optional[dict[str, str]] = None
     auto_delete_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     idle_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    max_active_instances: Optional[int] = Field(default=None, ge=0, le=200)
     enabled: Optional[bool] = None
 
 
@@ -211,6 +216,7 @@ class ContainerTemplate(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     auto_delete_minutes: int = 60
     idle_timeout_minutes: int = 30
+    max_active_instances: int = 2
     enabled: bool = False
     created_at: datetime
 

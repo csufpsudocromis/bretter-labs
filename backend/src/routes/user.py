@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 import secrets
 from uuid import uuid4
@@ -13,9 +13,12 @@ from ..auth import require_user
 from ..config import settings
 from ..db import get_session
 from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
+from ..network_modes import normalize_vm_network_mode
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import PodRequest, PodStatus, kube
+from ..services.resource_guard import check_launch_headroom
 from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
+from ..time_utils import utc_now
 
 router = APIRouter()
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
@@ -124,8 +127,9 @@ def list_available_templates(user: User = Depends(require_user), session: Sessio
             idle_timeout_minutes=getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes),
             preclone_pool_size=getattr(record, "preclone_pool_size", 0),
             preclone_pool_max=getattr(record, "preclone_pool_max", getattr(record, "preclone_pool_size", 0)),
+            max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
             enabled=record.enabled,
-            network_mode=getattr(record, "network_mode", "bridge"),
+            network_mode=normalize_vm_network_mode(getattr(record, "network_mode", "bridge")),
             created_at=record.created_at,
         )
         for record in templates
@@ -142,7 +146,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
     for record in instances:
         # Treat every poll from the user as activity so the idle reaper doesn't reclaim a live VM.
         if record.status in {"running", "pending"}:
-            record.last_active_at = datetime.utcnow()
+            record.last_active_at = utc_now()
             session.add(record)
             changed = True
         pod_status: PodStatus | None = None
@@ -157,13 +161,13 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
         feedback[record.id] = _status_feedback(mapped, pod_status)
         if mapped != record.status:
             record.status = mapped
-            record.last_active_at = datetime.utcnow()
+            record.last_active_at = utc_now()
             session.add(record)
             changed = True
         # Auto-delete stopped/completed instances based on template setting.
         tmpl = templates.get(record.template_id)
         if tmpl and record.status in {"stopped", "completed"}:
-            cutoff = datetime.utcnow() - timedelta(minutes=tmpl.auto_delete_minutes)
+            cutoff = utc_now() - timedelta(minutes=tmpl.auto_delete_minutes)
             if record.last_active_at < cutoff:
                 try:
                     kube.delete_pod(record.id, record.owner, disk_pvc=record.disk_pvc)
@@ -205,7 +209,7 @@ def record_vm_activity(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
 
@@ -299,12 +303,30 @@ def start_vm(
             )
     if len(total_running) >= config.max_concurrent_vms:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
+    template_limit = max(0, int(getattr(template, "max_active_instances", 2) or 0))
+    if template_limit:
+        template_active = session.exec(
+            select(Instance)
+            .where(Instance.template_id == template.id)
+            .where(Instance.status.in_(["pending", "running"]))
+        ).all()
+        if len(template_active) >= template_limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"template concurrency limit reached ({template_limit})",
+            )
     # Enforce per-user limit against any non-stopped labs.
     active_count = sum(
         1 for inst in [*user_vm_instances, *user_container_instances] if inst.status not in {"stopped", "completed", "failed"}
     )
     if active_count >= config.per_user_vm_limit:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="per-user concurrency limit reached")
+    headroom_error = check_launch_headroom(
+        request_cpu_m=max(1, int(template.cpu_cores or 1)) * 1000,
+        request_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
+    )
+    if headroom_error:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
 
     instance_id = str(uuid4())
     try:
@@ -321,7 +343,7 @@ def start_vm(
         cpu_cores=template.cpu_cores,
         ram_mb=template.ram_mb,
         owner=user.username,
-        network_mode=getattr(template, "network_mode", "bridge"),
+        network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
         instance_disk_pvc=warm_pool_pvc,
         spice_password=spice_password,
     )
@@ -347,11 +369,12 @@ def start_vm(
     # Use the slim embed page (if mounted) to auto-connect and hide chrome.
     console_title = quote(template.name, safe="")
     idle_minutes = template.idle_timeout_minutes or settings.idle_timeout_minutes
+    spice_password_token = quote(spice_password, safe="")
     console_url = (
         f"{public_scheme}://{external_host}:{node_port}/{embed_page}"
         f"?host={external_host}&port={node_port}&secure={secure_param}&title={console_title}"
-        f"&instance_id={instance_id}&idle_minutes={idle_minutes}"
-        f"#password={quote(spice_password, safe='')}"
+        f"&instance_id={instance_id}&idle_minutes={idle_minutes}&password={spice_password_token}"
+        f"#password={spice_password_token}"
     )
 
     instance = Instance(
@@ -360,8 +383,8 @@ def start_vm(
         owner=user.username,
         status="pending",
         disk_pvc=pod_status.disk_pvc,
-        started_at=datetime.utcnow(),
-        last_active_at=datetime.utcnow(),
+        started_at=utc_now(),
+        last_active_at=utc_now(),
         console_url=console_url,
     )
     session.add(instance)
@@ -388,7 +411,7 @@ def stop_vm(instance_id: str, user: User = Depends(require_user), session: Sessi
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     kube.stop_pod(instance_id, record.owner)
     record.status = "stopped"
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
     session.refresh(record)
@@ -418,6 +441,24 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
     _require_clone_ready(image)
+    template_limit = max(0, int(getattr(template, "max_active_instances", 2) or 0))
+    if template_limit:
+        template_active = session.exec(
+            select(Instance)
+            .where(Instance.template_id == template.id)
+            .where(Instance.status.in_(["pending", "running"]))
+        ).all()
+        if len(template_active) >= template_limit:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=f"template concurrency limit reached ({template_limit})",
+            )
+    headroom_error = check_launch_headroom(
+        request_cpu_m=max(1, int(template.cpu_cores or 1)) * 1000,
+        request_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
+    )
+    if headroom_error:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
 
     # Ensure any old pod with the same name is removed before re-create.
     try:
@@ -440,7 +481,7 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
         cpu_cores=template.cpu_cores,
         ram_mb=template.ram_mb,
         owner=user.username,
-        network_mode=getattr(template, "network_mode", "bridge"),
+        network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
         instance_disk_pvc=warm_pool_pvc,
         spice_password=spice_password,
     )
@@ -464,17 +505,18 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
     secure_param = 1 if public_scheme == "https" else 0
     console_title = quote(template.name, safe="")
     idle_minutes = template.idle_timeout_minutes or settings.idle_timeout_minutes
+    spice_password_token = quote(spice_password, safe="")
     console_url = (
         f"{public_scheme}://{external_host}:{node_port}/{embed_page}"
         f"?host={external_host}&port={node_port}&secure={secure_param}&title={console_title}"
-        f"&instance_id={record.id}&idle_minutes={idle_minutes}"
-        f"#password={quote(spice_password, safe='')}"
+        f"&instance_id={record.id}&idle_minutes={idle_minutes}&password={spice_password_token}"
+        f"#password={spice_password_token}"
     )
 
     record.status = "pending"
     record.disk_pvc = pod_status.disk_pvc
-    record.started_at = datetime.utcnow()
-    record.last_active_at = datetime.utcnow()
+    record.started_at = utc_now()
+    record.last_active_at = utc_now()
     record.console_url = console_url
     session.add(record)
     session.commit()

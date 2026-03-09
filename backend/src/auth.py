@@ -1,5 +1,5 @@
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException, Request, Response, status
@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 from .config import settings
 from .db import get_session
 from .tables import ConnectToken, Token, User
+from .time_utils import utc_now
 
 
 def hash_password(password: str) -> str:
@@ -48,10 +49,11 @@ def _samesite_value(value: str, default: str = "lax") -> str:
 
 
 def set_auth_cookie(response: Response, token_value: str) -> None:
+    ttl_seconds = max(60, int(settings.auth_cookie_ttl_seconds or 86400))
     response.set_cookie(
         key=auth_cookie_name(),
         value=token_value,
-        max_age=max(60, int(settings.auth_cookie_ttl_seconds or 86400)),
+        max_age=ttl_seconds,
         httponly=True,
         samesite=_samesite_value(settings.auth_cookie_samesite, "lax"),
         secure=bool(settings.auth_cookie_secure),
@@ -92,6 +94,12 @@ def revoke_token_value(session: Session, token_value: str) -> None:
         session.commit()
 
 
+def _is_auth_token_expired(token: Token) -> bool:
+    ttl_seconds = max(60, int(settings.auth_cookie_ttl_seconds or 86400))
+    issued_at = token.issued_at or utc_now()
+    return issued_at + timedelta(seconds=ttl_seconds) <= utc_now()
+
+
 def issue_connect_token(
     session: Session,
     *,
@@ -102,7 +110,7 @@ def issue_connect_token(
     ttl_seconds: int = 120,
 ) -> str:
     token_value = secrets.token_urlsafe(48)
-    now = datetime.utcnow()
+    now = utc_now()
     row = ConnectToken(
         token=token_value,
         username=username,
@@ -125,7 +133,7 @@ def consume_connect_grant(
     resource_type: str = "container",
 ) -> User:
     row = session.get(ConnectToken, token_value)
-    now = datetime.utcnow()
+    now = utc_now()
     if (
         not row
         or row.token_type != "grant"
@@ -152,7 +160,7 @@ def validate_connect_session(
     resource_type: str = "container",
 ) -> User:
     row = session.get(ConnectToken, token_value)
-    now = datetime.utcnow()
+    now = utc_now()
     if (
         not row
         or row.token_type != "session"
@@ -176,8 +184,14 @@ def require_user(
     token = session.get(Token, token_value)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+    if _is_auth_token_expired(token):
+        session.delete(token)
+        session.commit()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="session expired")
     user = session.get(User, token.username)
     if not user:
+        session.delete(token)
+        session.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
     return user
 

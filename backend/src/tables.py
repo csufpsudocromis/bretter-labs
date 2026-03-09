@@ -4,6 +4,8 @@ from typing import Optional
 from sqlalchemy import BigInteger, Column, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
+from .time_utils import utc_now
+
 
 class User(SQLModel, table=True):
     username: str = Field(primary_key=True, index=True)
@@ -15,7 +17,7 @@ class User(SQLModel, table=True):
 class Token(SQLModel, table=True):
     token: str = Field(primary_key=True, index=True)
     username: str = Field(foreign_key="user.username")
-    issued_at: datetime = Field(default_factory=datetime.utcnow)
+    issued_at: datetime = Field(default_factory=utc_now)
 
 
 class ConnectToken(SQLModel, table=True):
@@ -24,8 +26,8 @@ class ConnectToken(SQLModel, table=True):
     instance_id: str = Field(index=True)
     resource_type: str = "container"
     token_type: str = "grant"
-    issued_at: datetime = Field(default_factory=datetime.utcnow)
-    expires_at: datetime = Field(default_factory=datetime.utcnow)
+    issued_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime = Field(default_factory=utc_now)
     used_at: Optional[datetime] = None
 
 
@@ -36,7 +38,7 @@ class Image(SQLModel, table=True):
     source_pvc: Optional[str] = None
     checksum: str
     size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ImageUploadTask(SQLModel, table=True):
@@ -53,8 +55,8 @@ class ImageUploadTask(SQLModel, table=True):
     upload_pvc: Optional[str] = None
     finalize_job: Optional[str] = None
     copy_job: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class Template(SQLModel, table=True):
@@ -69,9 +71,10 @@ class Template(SQLModel, table=True):
     idle_timeout_minutes: int = 30
     preclone_pool_size: int = 0
     preclone_pool_max: int = 0
+    max_active_instances: int = 2
     enabled: bool = False
     network_mode: str = "bridge"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class Instance(SQLModel, table=True):
@@ -80,8 +83,8 @@ class Instance(SQLModel, table=True):
     owner: str = Field(foreign_key="user.username")
     status: str = "pending"
     disk_pvc: Optional[str] = None
-    started_at: datetime = Field(default_factory=datetime.utcnow)
-    last_active_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=utc_now)
+    last_active_at: datetime = Field(default_factory=utc_now)
     console_url: Optional[str] = None
 
 
@@ -92,7 +95,7 @@ class ContainerImage(SQLModel, table=True):
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
     last_scan_summary: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ContainerTemplate(SQLModel, table=True):
@@ -123,8 +126,9 @@ class ContainerTemplate(SQLModel, table=True):
     env_json: str = "{}"
     auto_delete_minutes: int = 60
     idle_timeout_minutes: int = 30
+    max_active_instances: int = 2
     enabled: bool = False
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class ContainerInstance(SQLModel, table=True):
@@ -136,8 +140,8 @@ class ContainerInstance(SQLModel, table=True):
     queue_attempts: int = 0
     queue_not_before: Optional[datetime] = None
     queue_reason: Optional[str] = None
-    started_at: datetime = Field(default_factory=datetime.utcnow)
-    last_active_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=utc_now)
+    last_active_at: datetime = Field(default_factory=utc_now)
 
 
 class Config(SQLModel, table=True):

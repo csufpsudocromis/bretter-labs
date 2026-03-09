@@ -56,8 +56,10 @@ from ..models import (
     VMTemplateCreate,
     VMTemplateUpdate,
 )
+from ..network_modes import normalize_vm_network_mode
 from ..services.kubernetes import kube
 from ..tables import Config, Image, ImageUploadTask, Instance, Template, User
+from ..time_utils import utc_now
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 logger = logging.getLogger(__name__)
@@ -1166,6 +1168,8 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN preclone_pool_size INTEGER DEFAULT 0")
         if "preclone_pool_max" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN preclone_pool_max INTEGER DEFAULT 0")
+        if "max_active_instances" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN max_active_instances INTEGER DEFAULT 2")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1181,6 +1185,7 @@ def _ensure_template_columns() -> None:
             # Keep existing behavior for upgraded rows: max defaults to min.
             cur.execute("UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max IS NULL")
             cur.execute("UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max < preclone_pool_size")
+            cur.execute("UPDATE template SET max_active_instances = 2 WHERE max_active_instances IS NULL")
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -1335,7 +1340,7 @@ def _update_upload_task(
             task.finalize_job = finalize_job
         if copy_job is not None:
             task.copy_job = copy_job
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         session.add(task)
         session.commit()
 
@@ -1918,7 +1923,7 @@ def _ensure_upload_task_finalize_job(task: ImageUploadTask) -> None:
     task.finalize_job = _create_finalize_from_upload_job(task) if task.upload_pvc else _create_finalize_job(task)
     task.status = "finalizing"
     task.detail = "Finalizing image format/checksum on cluster"
-    task.updated_at = datetime.utcnow()
+    task.updated_at = utc_now()
 
 
 def _create_task_copy_job(task: ImageUploadTask) -> tuple[str, str]:
@@ -2039,7 +2044,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         source_pvc=task.source_pvc,
         checksum=task.checksum,
         size_bytes=task.size_bytes,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     session.add(record)
 
@@ -2058,7 +2063,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "Direct upload DataVolume not found"
                 task.error_message = "direct upload datavolume disappeared before completion"
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2070,7 +2075,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "failed"
             task.detail = "Direct CDI upload failed"
             task.error_message = msg or "direct upload failed"
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2079,7 +2084,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
         if phase_lower != "succeeded":
             task.detail = "Uploading image directly to CDI DataVolume"
             task.error_message = None
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2095,7 +2100,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "failed"
             task.detail = "Failed to submit finalize job"
             task.error_message = str(exc)
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2110,7 +2115,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "Finalize job not found"
                 task.error_message = "finalize job disappeared before completion"
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2119,7 +2124,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
 
         if phase in {"running", "pending"}:
             task.detail = "Finalizing image format/checksum on cluster"
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2129,7 +2134,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "failed"
             task.detail = "Finalize job failed"
             task.error_message = _read_job_log(task.finalize_job, tail_lines=120) or "finalize job failed"
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2142,7 +2147,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.checksum = out_sha
             task.detail = "Preparing source PVC copy job"
             task.error_message = None
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2150,7 +2155,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "failed"
             task.detail = "Failed to parse finalize output"
             task.error_message = str(exc)
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2166,7 +2171,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 if copy_job.startswith("dv:")
                 else "Copying image into clone source PVC"
             )
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2175,7 +2180,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "failed"
             task.detail = "Failed to start source PVC copy job"
             task.error_message = str(exc)
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2192,7 +2197,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     if copy_job.startswith("dv:")
                     else "Copying image into clone source PVC"
                 )
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2200,7 +2205,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "Failed to start source PVC copy job"
                 task.error_message = str(exc)
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2215,7 +2220,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     task.status = "failed"
                     task.detail = "DataVolume import not found"
                     task.error_message = "datavolume disappeared before completion"
-                    task.updated_at = datetime.utcnow()
+                    task.updated_at = utc_now()
                     session.add(task)
                     session.commit()
                     session.refresh(task)
@@ -2225,7 +2230,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             phase_lower = dv_phase.lower()
             if phase_lower not in {"succeeded", "failed"}:
                 task.detail = "Importing image into clone source PVC via CDI DataVolume"
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2234,7 +2239,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "CDI DataVolume import failed"
                 task.error_message = dv_msg or "datavolume import failed"
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2250,7 +2255,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     task.status = "failed"
                     task.detail = "Source PVC copy job not found"
                     task.error_message = "copy job disappeared before completion"
-                    task.updated_at = datetime.utcnow()
+                    task.updated_at = utc_now()
                     session.add(task)
                     session.commit()
                     session.refresh(task)
@@ -2259,7 +2264,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
 
             if phase in {"running", "pending"}:
                 task.detail = "Copying image into clone source PVC"
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2269,7 +2274,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "Source PVC copy failed"
                 task.error_message = _read_job_log(task.copy_job, tail_lines=120) or "copy job failed"
-                task.updated_at = datetime.utcnow()
+                task.updated_at = utc_now()
                 session.add(task)
                 session.commit()
                 session.refresh(task)
@@ -2280,7 +2285,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "completed"
             task.detail = "Image ready"
             task.error_message = None
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2289,7 +2294,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.status = "failed"
             task.detail = "Failed to register image metadata"
             task.error_message = str(exc)
-            task.updated_at = datetime.utcnow()
+            task.updated_at = utc_now()
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -2829,8 +2834,8 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         detail="Upload complete; submitting finalize job",
         error_message=None,
         image_id=image_id,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     session.add(task)
     session.commit()
@@ -2845,7 +2850,7 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         task.status = "failed"
         task.detail = "Failed to submit finalize job"
         task.error_message = str(exc)
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         session.add(task)
         session.commit()
         session.refresh(task)
@@ -2892,8 +2897,8 @@ def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(g
         detail="Ready for direct CDI upload",
         error_message=None,
         image_id=str(uuid4()),
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
+        created_at=utc_now(),
+        updated_at=utc_now(),
     )
     session.add(task)
     session.commit()
@@ -2903,7 +2908,7 @@ def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(g
         task.upload_pvc = _create_direct_upload_datavolume(task)
         token = _request_direct_upload_token(task.upload_pvc)
         task.detail = "Uploading image directly to CDI DataVolume"
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         session.add(task)
         session.commit()
         session.refresh(task)
@@ -2911,7 +2916,7 @@ def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(g
         task.status = "failed"
         task.detail = "Failed to initialize direct CDI upload"
         task.error_message = str(exc)
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         session.add(task)
         session.commit()
         session.refresh(task)
@@ -2932,7 +2937,7 @@ def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> Im
         task.status = "failed"
         task.detail = "Internal error while refreshing upload task"
         task.error_message = str(exc)
-        task.updated_at = datetime.utcnow()
+        task.updated_at = utc_now()
         session.add(task)
         session.commit()
         session.refresh(task)
@@ -2997,7 +3002,7 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
         source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
-        created_at=datetime.utcnow(),
+        created_at=utc_now(),
     )
     session.add(record)
     session.commit()
@@ -3025,7 +3030,7 @@ def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
             source_pvc=None,
             checksum="",
             size_bytes=info.get("size", 0),
-            created_at=datetime.utcnow(),
+            created_at=utc_now(),
         )
         session.add(record)
         existing_records.append(record)
@@ -3144,9 +3149,10 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         idle_timeout_minutes=payload.idle_timeout_minutes or settings.idle_timeout_minutes,
         preclone_pool_size=pool_min,
         preclone_pool_max=pool_max,
+        max_active_instances=max(0, int(payload.max_active_instances or 0)),
         enabled=payload.enabled,
-        network_mode=payload.network_mode,
-        created_at=datetime.utcnow(),
+        network_mode=normalize_vm_network_mode(payload.network_mode),
+        created_at=utc_now(),
     )
     session.add(record)
     session.commit()
@@ -3163,8 +3169,9 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         idle_timeout_minutes=record.idle_timeout_minutes,
         preclone_pool_size=record.preclone_pool_size,
         preclone_pool_max=record.preclone_pool_max,
+        max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
         enabled=record.enabled,
-        network_mode=record.network_mode,
+        network_mode=normalize_vm_network_mode(record.network_mode),
         created_at=record.created_at,
     )
 
@@ -3185,8 +3192,9 @@ def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
             idle_timeout_minutes=record.idle_timeout_minutes,
             preclone_pool_size=record.preclone_pool_size,
             preclone_pool_max=record.preclone_pool_max,
+            max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
             enabled=record.enabled,
-            network_mode=record.network_mode,
+            network_mode=normalize_vm_network_mode(record.network_mode),
             created_at=record.created_at,
         )
         for record in templates
@@ -3235,10 +3243,12 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         )
     record.preclone_pool_size = next_min
     record.preclone_pool_max = next_max
+    if payload.max_active_instances is not None:
+        record.max_active_instances = max(0, int(payload.max_active_instances or 0))
     if payload.enabled is not None:
         record.enabled = payload.enabled
     if payload.network_mode is not None:
-        record.network_mode = payload.network_mode
+        record.network_mode = normalize_vm_network_mode(payload.network_mode)
     session.add(record)
     session.commit()
     session.refresh(record)
@@ -3254,8 +3264,9 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         idle_timeout_minutes=record.idle_timeout_minutes,
         preclone_pool_size=record.preclone_pool_size,
         preclone_pool_max=record.preclone_pool_max,
+        max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
         enabled=record.enabled,
-        network_mode=record.network_mode,
+        network_mode=normalize_vm_network_mode(record.network_mode),
         created_at=record.created_at,
     )
 
@@ -4159,7 +4170,7 @@ def stop_pod(instance_id: str, session: Session = Depends(get_session)) -> VMIns
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     kube.stop_pod(instance_id, record.owner)
     record.status = "stopped"
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
     session.refresh(record)

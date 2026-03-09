@@ -288,3 +288,38 @@ button:disabled {
   box-shadow: 0 15px 50px rgba(15, 23, 42, 0.2);
   border: 1px solid #e2e8f0;
 }
+
+.container-template-form {
+  max-width: none;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: start;
+}
+
+.container-template-form .span-2 {
+  grid-column: 1 / -1;
+}
+
+.container-template-form label {
+  min-width: 0;
+}
+
+.container-template-form input,
+.container-template-form select,
+.container-template-form textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.container-templates-page .actions {
+  flex-wrap: wrap;
+}
+
+.container-templates-page .actions button {
+  flex: 1 1 120px;
+}
+
+.template-tile h4,
+.template-image-ref {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

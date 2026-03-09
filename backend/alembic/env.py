@@ -6,7 +6,10 @@ from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
-from backend.src import tables  # noqa: F401 - imports SQLModel metadata
+try:
+    from src import tables  # noqa: F401 - imports SQLModel metadata
+except ModuleNotFoundError:
+    from backend.src import tables  # type: ignore # noqa: F401
 
 config = context.config
 

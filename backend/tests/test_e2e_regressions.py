@@ -1,8 +1,11 @@
+from datetime import timedelta
+
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from src.db import engine
-from src.tables import ContainerImage, ContainerTemplate, Image, Template
+from src.tables import ContainerImage, ContainerTemplate, Image, Template, Token
+from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
 
@@ -87,6 +90,29 @@ def test_cookie_auth_login_me_logout(client: TestClient):
     assert logout.status_code == 204
     unauthorized = client.get("/auth/me")
     assert unauthorized.status_code == 401
+
+
+def test_cookie_auth_session_ttl_is_enforced(client: TestClient, monkeypatch):
+    monkeypatch.setattr("src.auth.settings.auth_cookie_ttl_seconds", 60)
+
+    login = client.post("/auth/login", json={"username": "alice", "password": "password"})
+    assert login.status_code == 200
+    token_value = client.cookies.get("blabs_session")
+    assert token_value
+
+    with Session(engine) as session:
+        token = session.get(Token, token_value)
+        assert token is not None
+        token.issued_at = utc_now() - timedelta(seconds=120)
+        session.add(token)
+        session.commit()
+
+    expired = client.get("/auth/me")
+    assert expired.status_code == 401
+    assert expired.json()["detail"] == "session expired"
+
+    with Session(engine) as session:
+        assert session.get(Token, token_value) is None
 
 
 def test_vm_and_container_lifecycle_with_single_active_lab_enforced(login_user: TestClient):

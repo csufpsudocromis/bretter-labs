@@ -17,6 +17,8 @@ const UserPanel = () => {
   const idleStartsAtRef = useRef(null);
   const lastActivityAtRef = useRef(null);
   const consoleWindowsRef = useRef({});
+  const consoleWindowOriginsRef = useRef({});
+  const allowedMessageOriginsRef = useRef(new Set());
   const containerWindowIdsRef = useRef(new Set());
   const consoleHandshakeRef = useRef({});
   const idleSuspendedRef = useRef(false);
@@ -33,6 +35,22 @@ const UserPanel = () => {
   const VM_PRESENCE_GRACE_MS = 10000;
   const ACTIVITY_STORAGE_KEY = 'blabs:last-activity-at';
 
+  const normalizeOrigin = (value) => {
+    try {
+      return new URL(String(value || ''), window.location.href).origin;
+    } catch (err) {
+      return '';
+    }
+  };
+
+  const rememberAllowedOrigin = (value) => {
+    const origin = normalizeOrigin(value);
+    if (origin) {
+      allowedMessageOriginsRef.current.add(origin);
+    }
+    return origin;
+  };
+
   const refresh = async () => {
     try {
       const [tmplRes, podsRes, ctTmplRes, ctInstRes] = await Promise.all([
@@ -47,6 +65,10 @@ const UserPanel = () => {
       setInstances(nextVmInstances);
       setContainerTemplates(ctTmplRes.data || []);
       setContainerInstances(nextContainerInstances);
+      nextVmInstances.forEach((inst) => rememberAllowedOrigin(inst?.console_url));
+      nextContainerInstances.forEach((inst) => {
+        rememberAllowedOrigin(inst?.access_url);
+      });
 
       const hasActiveLab = [...nextVmInstances, ...nextContainerInstances].some((inst) => {
         const statusText = String(inst?.status || '').toLowerCase();
@@ -70,6 +92,11 @@ const UserPanel = () => {
     const handle = setInterval(refresh, 5000);
     setPolling(handle);
     return () => clearInterval(handle);
+  }, []);
+
+  useEffect(() => {
+    rememberAllowedOrigin(window.location.origin);
+    rememberAllowedOrigin(api?.defaults?.baseURL || '');
   }, []);
 
   const ACTIVE_WORKLOAD_STATUSES = new Set(['queued', 'pending', 'building', 'starting', 'running']);
@@ -172,8 +199,14 @@ const UserPanel = () => {
     try {
       const res = await api.post(`/user/containers/${instance.id}/connect-token`);
       const connectUrl = String(res?.data?.connect_url || '').trim();
-      const win = window.open(connectUrl || instance.access_url || '', '_blank');
+      const fallbackUrl = String(instance.access_url || '').trim();
+      const launchUrl = connectUrl || fallbackUrl;
+      const win = window.open(launchUrl, '_blank');
       if (win) {
+        const preferredOrigin = rememberAllowedOrigin(connectUrl) || rememberAllowedOrigin(fallbackUrl);
+        if (preferredOrigin) {
+          consoleWindowOriginsRef.current[instance.id] = preferredOrigin;
+        }
         consoleWindowsRef.current[instance.id] = win;
         containerWindowIdsRef.current.add(instance.id);
         if (showIdlePrompt) {
@@ -264,18 +297,20 @@ const UserPanel = () => {
     if (instance?.console_url) {
       const win = window.open(instance.console_url, '_blank');
       if (win && instance?.id) {
+        const origin = rememberAllowedOrigin(instance.console_url);
+        if (origin) {
+          consoleWindowOriginsRef.current[instance.id] = origin;
+        }
         consoleWindowsRef.current[instance.id] = win;
         containerWindowIdsRef.current.delete(instance.id);
         startConsoleHandshake(instance.id, win);
         if (document.hasFocus()) {
-          try {
-            win.postMessage(
-              { type: 'idle-focus', source: 'user', instanceId: instance.id, timestamp: Date.now() },
-              '*',
-            );
-          } catch (err) {
-            // ignore postMessage failures
-          }
+          postToConsoleWindow(instance.id, win, {
+            type: 'idle-focus',
+            source: 'user',
+            instanceId: instance.id,
+            timestamp: Date.now(),
+          });
         }
       }
     } else {
@@ -371,16 +406,27 @@ const UserPanel = () => {
     }
   };
 
+  const postToConsoleWindow = (instanceId, win, payload) => {
+    if (!instanceId || !win || win.closed) {
+      return;
+    }
+    const targetOrigin = consoleWindowOriginsRef.current[instanceId] || '*';
+    try {
+      win.postMessage(payload, targetOrigin);
+    } catch (err) {
+      // ignore postMessage failures
+    }
+  };
+
   const sendAuthToConsole = (instanceId, win) => {
     if (!instanceId || !win || win.closed) {
       return;
     }
     const apiBase = api?.defaults?.baseURL || '';
-    try {
-      win.postMessage({ type: 'idle-auth', source: 'user', instanceId, apiBase }, '*');
-    } catch (err) {
-      // ignore postMessage failures
-    }
+    rememberAllowedOrigin(window.location.origin);
+    rememberAllowedOrigin(apiBase);
+    const allowedOrigins = Array.from(allowedMessageOriginsRef.current);
+    postToConsoleWindow(instanceId, win, { type: 'idle-auth', source: 'user', instanceId, apiBase, allowedOrigins });
   };
 
   const startConsoleHandshake = (instanceId, win) => {
@@ -390,14 +436,11 @@ const UserPanel = () => {
     const send = () => {
       if (!win || win.closed) {
         delete consoleWindowsRef.current[instanceId];
+        delete consoleWindowOriginsRef.current[instanceId];
         stopConsoleHandshake(instanceId);
         return;
       }
-      try {
-        win.postMessage({ type: 'idle-handshake', source: 'user', instanceId }, '*');
-      } catch (err) {
-        // ignore postMessage failures
-      }
+      postToConsoleWindow(instanceId, win, { type: 'idle-handshake', source: 'user', instanceId });
       sendAuthToConsole(instanceId, win);
     };
     send();
@@ -412,6 +455,7 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        delete consoleWindowOriginsRef.current[id];
         containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
         return;
@@ -429,6 +473,7 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        delete consoleWindowOriginsRef.current[id];
         containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
         return;
@@ -436,11 +481,7 @@ const UserPanel = () => {
       if (containerWindowIdsRef.current.has(id)) {
         return;
       }
-      try {
-        win.postMessage({ type: 'idle-activity', source: 'user', timestamp }, '*');
-      } catch (err) {
-        // ignore postMessage failures
-      }
+      postToConsoleWindow(id, win, { type: 'idle-activity', source: 'user', timestamp });
     });
   };
 
@@ -450,6 +491,7 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        delete consoleWindowOriginsRef.current[id];
         containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
         return;
@@ -457,14 +499,12 @@ const UserPanel = () => {
       if (containerWindowIdsRef.current.has(id)) {
         return;
       }
-      try {
-        win.postMessage(
-          { type: focused ? 'idle-focus' : 'idle-blur', source: 'user', instanceId: id, timestamp },
-          '*',
-        );
-      } catch (err) {
-        // ignore postMessage failures
-      }
+      postToConsoleWindow(id, win, {
+        type: focused ? 'idle-focus' : 'idle-blur',
+        source: 'user',
+        instanceId: id,
+        timestamp,
+      });
     });
   };
 
@@ -474,6 +514,7 @@ const UserPanel = () => {
     Object.entries(windows).forEach(([id, win]) => {
       if (!win || win.closed) {
         delete windows[id];
+        delete consoleWindowOriginsRef.current[id];
         containerWindowIdsRef.current.delete(id);
         stopConsoleHandshake(id);
         return;
@@ -481,31 +522,21 @@ const UserPanel = () => {
       if (!containerWindowIdsRef.current.has(id)) {
         return;
       }
-      try {
-        if (showPrompt) {
-          win.postMessage(
-            {
-              type: 'idle-parent-prompt',
-              source: 'user',
-              instanceId: id,
-              endsAt,
-              timestamp: Date.now(),
-            },
-            '*',
-          );
-        } else {
-          win.postMessage(
-            {
-              type: 'idle-parent-clear',
-              source: 'user',
-              instanceId: id,
-              timestamp: Date.now(),
-            },
-            '*',
-          );
-        }
-      } catch (err) {
-        // ignore postMessage failures
+      if (showPrompt) {
+        postToConsoleWindow(id, win, {
+          type: 'idle-parent-prompt',
+          source: 'user',
+          instanceId: id,
+          endsAt,
+          timestamp: Date.now(),
+        });
+      } else {
+        postToConsoleWindow(id, win, {
+          type: 'idle-parent-clear',
+          source: 'user',
+          instanceId: id,
+          timestamp: Date.now(),
+        });
       }
     });
   };
@@ -797,6 +828,19 @@ const UserPanel = () => {
 
   useEffect(() => {
     const handleMessage = (event) => {
+      const sourceInstanceId = Object.keys(consoleWindowsRef.current).find(
+        (id) => consoleWindowsRef.current[id] === event.source,
+      );
+      const messageOrigin = normalizeOrigin(event.origin);
+      if (messageOrigin && !allowedMessageOriginsRef.current.has(messageOrigin) && !sourceInstanceId) {
+        return;
+      }
+      if (messageOrigin) {
+        rememberAllowedOrigin(messageOrigin);
+        if (sourceInstanceId) {
+          consoleWindowOriginsRef.current[sourceInstanceId] = messageOrigin;
+        }
+      }
       const payload = event.data || {};
       const isVmSource = payload.source === 'vm';
       const isContainerSource = payload.source === 'container';
@@ -836,6 +880,7 @@ const UserPanel = () => {
       if (payload.type === 'idle-stop' && payload.instanceId) {
         const isContainerSource = payload.source === 'container';
         delete consoleWindowsRef.current[payload.instanceId];
+        delete consoleWindowOriginsRef.current[payload.instanceId];
         containerWindowIdsRef.current.delete(payload.instanceId);
         stopConsoleHandshake(payload.instanceId);
         if (payload.action === 'delete') {

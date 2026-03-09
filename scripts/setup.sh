@@ -91,6 +91,11 @@ MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
 ENABLE_METRICS_SERVER="${ENABLE_METRICS_SERVER:-1}"
 METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml}"
+RUN_POST_DEPLOY_SYNTHETIC_CHECK="${RUN_POST_DEPLOY_SYNTHETIC_CHECK:-1}"
+SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
+SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-admin}"
+SYNTHETIC_CHECK_TIMEOUT_SECONDS="${SYNTHETIC_CHECK_TIMEOUT_SECONDS:-420}"
+SYNTHETIC_CHECK_REQUIRE_TEMPLATES="${SYNTHETIC_CHECK_REQUIRE_TEMPLATES:-0}"
 
 RENDERED_APP_MANIFEST=""
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
@@ -339,6 +344,25 @@ validate_metrics_server_config() {
   esac
   if [ "$ENABLE_METRICS_SERVER" -eq 1 ] && [ -z "$METRICS_SERVER_MANIFEST_URL" ]; then
     fail "METRICS_SERVER_MANIFEST_URL cannot be empty when ENABLE_METRICS_SERVER=1."
+  fi
+}
+
+validate_synthetic_check_config() {
+  case "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" in
+    0|1) ;;
+    *) fail "RUN_POST_DEPLOY_SYNTHETIC_CHECK must be either 0 or 1." ;;
+  esac
+  case "$SYNTHETIC_CHECK_REQUIRE_TEMPLATES" in
+    0|1) ;;
+    *) fail "SYNTHETIC_CHECK_REQUIRE_TEMPLATES must be either 0 or 1." ;;
+  esac
+  if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 0 ]; then
+    return
+  fi
+  [ -n "$SYNTHETIC_CHECK_USERNAME" ] || fail "SYNTHETIC_CHECK_USERNAME cannot be empty when synthetic checks are enabled."
+  [ -n "$SYNTHETIC_CHECK_PASSWORD" ] || fail "SYNTHETIC_CHECK_PASSWORD cannot be empty when synthetic checks are enabled."
+  if ! is_uint "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" || [ "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" -lt 60 ]; then
+    fail "SYNTHETIC_CHECK_TIMEOUT_SECONDS must be an integer >= 60."
   fi
 }
 
@@ -715,6 +739,77 @@ EOF
   done < <(kubectl -n "$MONITORING_NAMESPACE" get statefulset -l app.kubernetes.io/instance="$MONITORING_RELEASE_NAME" -o name)
 }
 
+patch_default_pvc_alert_exclusions() {
+  if [ "$ENABLE_MONITORING" -ne 1 ]; then
+    return
+  fi
+
+  local rule_name
+  rule_name="${MONITORING_RELEASE_NAME}-kubernetes-storage"
+  if ! kubectl -n "$MONITORING_NAMESPACE" get prometheusrule "$rule_name" >/dev/null 2>&1; then
+    log "PrometheusRule ${rule_name} not found; skipping default PVC exclusion patch."
+    return
+  fi
+
+  log "Patching ${rule_name} PVC filling alerts to ignore pool-* PVCs..."
+  if ! kubectl -n "$MONITORING_NAMESPACE" get prometheusrule "$rule_name" -o json \
+    | python3 - <<'PY' \
+    | kubectl -n "$MONITORING_NAMESPACE" apply -f - >/dev/null; then
+import json
+import re
+import sys
+
+obj = json.load(sys.stdin)
+changed = 0
+
+for group in obj.get("spec", {}).get("groups", []):
+    for rule in group.get("rules", []):
+        alert_name = str(rule.get("alert") or "")
+        if alert_name not in {"KubePersistentVolumeFillingUp", "KubePersistentVolumeInodesFillingUp"}:
+            continue
+        expr = str(rule.get("expr") or "")
+        updated = expr
+        metric_list = []
+        if alert_name == "KubePersistentVolumeFillingUp":
+            metric_list = [
+                "kubelet_volume_stats_available_bytes",
+                "kubelet_volume_stats_capacity_bytes",
+                "kubelet_volume_stats_used_bytes",
+            ]
+        else:
+            metric_list = [
+                "kubelet_volume_stats_inodes_free",
+                "kubelet_volume_stats_inodes",
+                "kubelet_volume_stats_inodes_used",
+            ]
+        for metric in metric_list:
+            pattern = re.compile(rf"({metric})\\{{([^}}]*)\\}}")
+
+            def _inject_filter(match: re.Match[str]) -> str:
+                metric_name = match.group(1)
+                labels = match.group(2).strip()
+                if 'persistentvolumeclaim!~"pool-.*"' in labels:
+                    return f"{metric_name}{{{labels}}}"
+                if "persistentvolumeclaim=" in labels or "persistentvolumeclaim=~" in labels:
+                    return f"{metric_name}{{{labels}}}"
+                if labels:
+                    return f'{metric_name}{{{labels},persistentvolumeclaim!~"pool-.*"}}'
+                return f'{metric_name}{{persistentvolumeclaim!~"pool-.*"}}'
+
+            updated = pattern.sub(_inject_filter, updated)
+        if updated != expr:
+            rule["expr"] = updated
+            changed += 1
+
+obj.pop("status", None)
+print(json.dumps(obj))
+print(f"patched_rules={changed}", file=sys.stderr)
+PY
+    warn "Failed to patch default KubePersistentVolumeFillingUp rules; continuing."
+    return
+  fi
+}
+
 install_metrics_server() {
   if [ "$ENABLE_METRICS_SERVER" -ne 1 ]; then
     log "Skipping metrics-server install (ENABLE_METRICS_SERVER=0)."
@@ -805,9 +900,9 @@ spec:
             max by (namespace, persistentvolumeclaim) (
               100 * (
                 1 - (
-                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}"}
+                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}",persistentvolumeclaim!~"pool-.*"}
                   /
-                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}"}
+                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}",persistentvolumeclaim!~"pool-.*"}
                 )
               )
             ) >= ${AUTOCLEANUP_PVC_WARN_PCT}
@@ -821,9 +916,9 @@ spec:
             max by (namespace, persistentvolumeclaim) (
               100 * (
                 1 - (
-                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}"}
+                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}",persistentvolumeclaim!~"pool-.*"}
                   /
-                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}"}
+                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}",persistentvolumeclaim!~"pool-.*"}
                 )
               )
             ) >= ${AUTOCLEANUP_PVC_CRITICAL_PCT}
@@ -837,9 +932,9 @@ spec:
             max by (namespace, persistentvolumeclaim) (
               100 * (
                 1 - (
-                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}"}
+                  kubelet_volume_stats_available_bytes{namespace="${NAMESPACE}",persistentvolumeclaim!~"pool-.*"}
                   /
-                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}"}
+                  kubelet_volume_stats_capacity_bytes{namespace="${NAMESPACE}",persistentvolumeclaim!~"pool-.*"}
                 )
               )
             ) >= ${AUTOCLEANUP_PVC_EMERGENCY_PCT}
@@ -1819,6 +1914,222 @@ apply_manifests() {
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
 }
 
+run_post_deploy_synthetic_check() {
+  if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -ne 1 ]; then
+    log "Skipping post-deploy synthetic validation (RUN_POST_DEPLOY_SYNTHETIC_CHECK=0)."
+    return
+  fi
+
+  local username_b64 password_b64
+  username_b64="$(printf '%s' "$SYNTHETIC_CHECK_USERNAME" | base64 -w0)"
+  password_b64="$(printf '%s' "$SYNTHETIC_CHECK_PASSWORD" | base64 -w0)"
+
+  log "Running post-deploy synthetic validation job..."
+  kubectl -n "$NAMESPACE" delete job bretter-post-deploy-check --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bretter-post-deploy-check
+  namespace: ${NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 1800
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: synthetic-check
+          image: ${BACKEND_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: API_BASE
+              value: "http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+            - name: SYNTHETIC_USERNAME_B64
+              value: "${username_b64}"
+            - name: SYNTHETIC_PASSWORD_B64
+              value: "${password_b64}"
+            - name: SYNTHETIC_TIMEOUT_SECONDS
+              value: "${SYNTHETIC_CHECK_TIMEOUT_SECONDS}"
+            - name: SYNTHETIC_REQUIRE_TEMPLATES
+              value: "${SYNTHETIC_CHECK_REQUIRE_TEMPLATES}"
+          command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              python3 - <<'PY'
+import base64
+import json
+import os
+import sys
+import time
+
+import requests
+
+API_BASE = str(os.environ.get("API_BASE") or "").rstrip("/")
+USERNAME = base64.b64decode(str(os.environ.get("SYNTHETIC_USERNAME_B64") or "")).decode("utf-8")
+PASSWORD = base64.b64decode(str(os.environ.get("SYNTHETIC_PASSWORD_B64") or "")).decode("utf-8")
+TIMEOUT_SECONDS = max(60, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "420"))
+REQUIRE_TEMPLATES = str(os.environ.get("SYNTHETIC_REQUIRE_TEMPLATES") or "0") == "1"
+DEADLINE = time.time() + TIMEOUT_SECONDS
+SINGLE_LAB_LIMIT_MESSAGE = "you already have a virtual lab running"
+
+if not API_BASE:
+    print("FAIL: API_BASE is required", file=sys.stderr)
+    sys.exit(1)
+
+session = requests.Session()
+session.headers.update({"Accept": "application/json"})
+
+
+def fail(message: str) -> None:
+    print(f"FAIL: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def request_json(method: str, path: str, **kwargs):
+    url = path if path.startswith("http://") or path.startswith("https://") else f"{API_BASE}{path}"
+    response = session.request(method=method, url=url, timeout=20, **kwargs)
+    return response
+
+
+def wait_for_instance(path: str, instance_id: str, allowed_stages: set[str]) -> dict:
+    while time.time() < DEADLINE:
+        response = request_json("GET", path)
+        if response.status_code != 200:
+            time.sleep(2)
+            continue
+        rows = response.json() or []
+        for row in rows:
+            if str(row.get("id")) != instance_id:
+                continue
+            stage = str(row.get("status_stage") or row.get("status") or "").lower()
+            if stage in allowed_stages:
+                return row
+        time.sleep(3)
+    fail(f"timeout while waiting for instance {instance_id} at {path}")
+    return {}
+
+
+def wait_until_vm_released(instance_id: str) -> None:
+    while time.time() < DEADLINE:
+        response = request_json("GET", "/user/pods")
+        if response.status_code != 200:
+            time.sleep(2)
+            continue
+        rows = response.json() or []
+        row = next((item for item in rows if str(item.get("id")) == instance_id), None)
+        if row is None:
+            return
+        status = str(row.get("status") or "").lower()
+        if status in {"stopped", "completed", "failed"}:
+            return
+        time.sleep(3)
+    fail("VM slot did not release in time after delete.")
+
+
+def start_container_with_retry(template_id: str) -> requests.Response:
+    while time.time() < DEADLINE:
+        response = request_json("POST", f"/user/container-templates/{template_id}/start")
+        if response.status_code == 201:
+            return response
+        detail = ""
+        try:
+            payload = response.json()
+            detail = str(payload.get("detail") or "")
+        except Exception:
+            detail = response.text
+        if response.status_code == 429 and SINGLE_LAB_LIMIT_MESSAGE in detail.lower():
+            time.sleep(3)
+            continue
+        fail(f"container start failed ({response.status_code}): {detail[:300]}")
+    fail("timeout waiting to acquire launch slot for container start")
+    return requests.Response()
+
+
+login = request_json("POST", "/auth/login", json={"username": USERNAME, "password": PASSWORD})
+if login.status_code != 200:
+    fail(f"login failed ({login.status_code}): {login.text[:300]}")
+
+vm_templates_resp = request_json("GET", "/user/templates")
+if vm_templates_resp.status_code != 200:
+    fail(f"failed to fetch VM templates ({vm_templates_resp.status_code})")
+vm_templates = vm_templates_resp.json() or []
+
+ct_templates_resp = request_json("GET", "/user/container-templates")
+if ct_templates_resp.status_code != 200:
+    fail(f"failed to fetch container templates ({ct_templates_resp.status_code})")
+container_templates = ct_templates_resp.json() or []
+
+if not vm_templates or not container_templates:
+    message = (
+        "synthetic check skipped: missing enabled VM or container templates "
+        f"(vm={len(vm_templates)} container={len(container_templates)})"
+    )
+    if REQUIRE_TEMPLATES:
+        fail(message)
+    print(f"SKIP: {message}")
+    request_json("POST", "/auth/logout")
+    sys.exit(0)
+
+vm_template_id = str(vm_templates[0]["id"])
+container_template_id = str(container_templates[0]["id"])
+
+vm_start = request_json("POST", f"/user/templates/{vm_template_id}/start")
+if vm_start.status_code != 201:
+    fail(f"VM start failed ({vm_start.status_code}): {vm_start.text[:300]}")
+vm_id = str((vm_start.json() or {}).get("id") or "")
+if not vm_id:
+    fail("VM start response did not include instance id")
+
+vm_row = wait_for_instance("/user/pods", vm_id, {"pending", "building", "starting", "running", "queued"})
+if not str(vm_row.get("console_url") or "").strip():
+    fail("VM instance did not publish console_url")
+
+vm_delete = request_json("DELETE", f"/user/pods/{vm_id}")
+if vm_delete.status_code not in {204, 404}:
+    fail(f"VM delete failed ({vm_delete.status_code}): {vm_delete.text[:300]}")
+wait_until_vm_released(vm_id)
+
+container_start = start_container_with_retry(container_template_id)
+container_id = str((container_start.json() or {}).get("id") or "")
+if not container_id:
+    fail("container start response did not include instance id")
+
+wait_for_instance("/user/containers", container_id, {"pending", "building", "starting", "running", "queued"})
+
+connect_token = request_json("POST", f"/user/containers/{container_id}/connect-token")
+if connect_token.status_code != 200:
+    fail(f"container connect-token failed ({connect_token.status_code}): {connect_token.text[:300]}")
+connect_url = str((connect_token.json() or {}).get("connect_url") or "").strip()
+if not connect_url:
+    fail("container connect-token response missing connect_url")
+
+bridge = request_json("GET", f"/user/containers/{container_id}/connect/__blabs_idle_bridge.js")
+if bridge.status_code != 200:
+    fail(f"container connect bridge fetch failed ({bridge.status_code}): {bridge.text[:300]}")
+if "Still using this lab?" not in bridge.text:
+    fail("container connect bridge did not include idle prompt content")
+
+container_delete = request_json("DELETE", f"/user/containers/{container_id}")
+if container_delete.status_code not in {204, 404}:
+    fail(f"container delete failed ({container_delete.status_code}): {container_delete.text[:300]}")
+
+request_json("POST", "/auth/logout")
+print("Synthetic validation passed: login -> VM launch -> container launch/connect/idle prompt bridge -> delete.")
+PY
+EOF
+
+  if ! kubectl -n "$NAMESPACE" wait --for=condition=complete job/bretter-post-deploy-check --timeout="${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s"; then
+    kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-check --all-containers=true || true
+    fail "Post-deploy synthetic validation job failed."
+  fi
+  kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-check --all-containers=true || true
+}
+
 main() {
   validate_public_scheme
   validate_tls_config
@@ -1833,6 +2144,7 @@ main() {
   validate_cpu_manager_config
   validate_monitoring_config
   validate_metrics_server_config
+  validate_synthetic_check_config
   require_apt
   install_base_packages
   install_kubectl
@@ -1873,6 +2185,7 @@ main() {
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER"
+  log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
     log "Longhorn default data path override: $LONGHORN_DEFAULT_DATA_PATH"
@@ -1909,8 +2222,10 @@ main() {
   fi
 
   apply_manifests
+  run_post_deploy_synthetic_check
   install_metrics_server
   install_monitoring_stack
+  patch_default_pvc_alert_exclusions
   apply_monitoring_alert_rules
   log "Done."
 }

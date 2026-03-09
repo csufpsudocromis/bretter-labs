@@ -1,10 +1,13 @@
 import asyncio
+import base64
 import html
 import json
 import logging
+import ssl
 import socket
+import warnings
 from http.client import HTTPConnection
-from datetime import datetime, timedelta
+from datetime import timedelta
 from urllib.parse import urlencode, urlparse
 from uuid import uuid4
 
@@ -14,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSoc
 from fastapi.responses import RedirectResponse
 from kubernetes.client import ApiException
 from sqlmodel import Session, select
+from urllib3.exceptions import InsecureRequestWarning
 
 from ..auth import (
     issue_connect_token,
@@ -28,12 +32,14 @@ from ..models import ContainerDependencyCheck
 from ..models import ContainerTemplate as ContainerTemplateView
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
+from ..services.resource_guard import check_launch_headroom
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
 from ..tables import Instance
 from ..tables import User
+from ..time_utils import utc_now
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -51,6 +57,8 @@ _HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+_TLS_LIKELY_PORTS = {443, 8443, 9443, 6901, 4902}
 
 
 def _phase_to_status(phase: str) -> str:
@@ -155,6 +163,102 @@ def _container_service_host(instance_id: str) -> str:
     return f"ctsvc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
 
 
+def _container_prefers_tls(template: ContainerTemplateTable | None, container_port: int) -> bool:
+    if container_port in _TLS_LIKELY_PORTS:
+        return True
+    protocol = str(getattr(template, "healthcheck_protocol", "tcp") or "tcp").strip().lower()
+    return protocol == "https"
+
+
+def _container_http_schemes(template: ContainerTemplateTable | None, container_port: int) -> tuple[str, str]:
+    if _container_prefers_tls(template, container_port):
+        return ("https", "http")
+    return ("http", "https")
+
+
+def _container_ws_schemes(template: ContainerTemplateTable | None, container_port: int) -> tuple[str, str]:
+    if _container_prefers_tls(template, container_port):
+        return ("wss", "ws")
+    return ("ws", "wss")
+
+
+def _upstream_requires_https(response: requests.Response) -> bool:
+    if response.status_code not in {400, 403, 426, 495, 496, 497}:
+        return False
+    message = (response.text or "").lower()
+    return (
+        "https" in message
+        or "tls" in message
+        or "ssl" in message
+        or "plain http request" in message
+        or "remote end closed connection without response" in message
+    )
+
+
+def _tls_client_context() -> ssl.SSLContext:
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+def _build_basic_auth_header(username: str, password: str) -> str:
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
+
+
+def _template_image_ref(
+    session: Session,
+    template: ContainerTemplateTable | None,
+) -> str:
+    if not template:
+        return ""
+    image_id = getattr(template, "container_image_id", None)
+    if not image_id:
+        return ""
+    image_row = session.get(ContainerImageTable, image_id)
+    return str(getattr(image_row, "image_ref", "") or "").lower()
+
+
+def _is_kasm_template(
+    session: Session,
+    template: ContainerTemplateTable | None,
+) -> bool:
+    return "kasmweb/" in _template_image_ref(session, template)
+
+
+def _upstream_basic_auth_header(
+    session: Session,
+    template: ContainerTemplateTable | None,
+) -> str | None:
+    if not template:
+        return None
+    env_values = _parse_env(getattr(template, "env_json", "{}"))
+    raw_auth = str(env_values.get("BLABS_CONNECT_BASIC_AUTH", "")).strip()
+    if raw_auth:
+        if raw_auth.lower().startswith("basic "):
+            return raw_auth
+        if ":" in raw_auth:
+            username, password = raw_auth.split(":", 1)
+            if username and password:
+                return _build_basic_auth_header(username, password)
+
+    username = str(env_values.get("BLABS_CONNECT_BASIC_USER", "")).strip()
+    password = str(env_values.get("BLABS_CONNECT_BASIC_PASSWORD", "")).strip()
+    if username and password:
+        return _build_basic_auth_header(username, password)
+
+    image_ref = _template_image_ref(session, template)
+
+    # Kasm desktop images expose KasmVNC on 6901 with default kasm_user/vncpassword credentials.
+    if "kasmweb/" in image_ref:
+        username = str(env_values.get("VNC_USER", "kasm_user")).strip() or "kasm_user"
+        password = str(env_values.get("VNC_PW", "vncpassword")).strip() or "vncpassword"
+        return _build_basic_auth_header(username, password)
+
+    return None
+
+
 def _extract_connect_grant_token(request: Request) -> str:
     return str(request.cookies.get(_CONNECT_GRANT_COOKIE_NAME) or "").strip()
 
@@ -218,6 +322,8 @@ def _container_idle_bridge_javascript(
   const countdownSeconds = 300;
   const apiBaseDefault = `${{window.location.protocol}}//${{window.location.host}}`;
   let apiBase = apiBaseDefault;
+  let openerOrigin = '*';
+  const allowedOrigins = new Set();
   let promptActive = false;
   let parentPromptActive = false;
   let idleTimer = null;
@@ -227,17 +333,58 @@ def _container_idle_bridge_javascript(
   let lastHeartbeatAt = 0;
   let idleSuspended = false;
 
+  function normalizeOrigin(value) {{
+    try {{
+      return new URL(String(value || ''), window.location.href).origin;
+    }} catch (err) {{
+      return '';
+    }}
+  }}
+
+  function rememberAllowedOrigin(value) {{
+    const origin = normalizeOrigin(value);
+    if (origin) {{
+      allowedOrigins.add(origin);
+    }}
+    return origin;
+  }}
+
+  function isAllowedOrigin(origin) {{
+    if (!origin) return false;
+    if (allowedOrigins.size === 0) return true;
+    return allowedOrigins.has(origin);
+  }}
+
+  rememberAllowedOrigin(window.location.origin);
+  rememberAllowedOrigin(apiBaseDefault);
+  rememberAllowedOrigin(document.referrer);
+
   function openerPost(type, extra) {{
     if (!window.opener) return;
     try {{
       if (window.opener.closed) return;
-      window.opener.postMessage({{
+      const message = {{
         type,
         source: 'container',
         instanceId,
         timestamp: Date.now(),
         ...(extra || {{}})
-      }}, '*');
+      }};
+      const targets = new Set();
+      if (openerOrigin && openerOrigin !== '*') {{
+        targets.add(openerOrigin);
+      }}
+      allowedOrigins.forEach(function (origin) {{
+        targets.add(origin);
+      }});
+      if (targets.size === 0) {{
+        targets.add('*');
+      }}
+      targets.forEach(function (targetOrigin) {{
+        try {{
+          window.opener.postMessage(message, targetOrigin);
+        }} catch (err) {{}}
+      }});
     }} catch (err) {{}}
   }}
 
@@ -455,8 +602,26 @@ def _container_idle_bridge_javascript(
 
   window.addEventListener('message', function (event) {{
     const payload = event.data || {{}};
+    const messageOrigin = normalizeOrigin(event.origin);
     if (payload.source !== 'user') return;
-    if (payload.type === 'idle-auth') return;
+    if (messageOrigin && !isAllowedOrigin(messageOrigin)) return;
+    if (messageOrigin) {{
+      openerOrigin = messageOrigin;
+      rememberAllowedOrigin(messageOrigin);
+    }}
+    if (payload.type === 'idle-auth') {{
+      if (payload.instanceId && payload.instanceId !== instanceId) return;
+      if (payload.apiBase) {{
+        apiBase = String(payload.apiBase).trim() || apiBase;
+        rememberAllowedOrigin(apiBase);
+      }}
+      if (Array.isArray(payload.allowedOrigins)) {{
+        payload.allowedOrigins.forEach(function (value) {{
+          rememberAllowedOrigin(value);
+        }});
+      }}
+      return;
+    }}
     if (payload.type === 'idle-parent-prompt') {{
       if (payload.instanceId && payload.instanceId !== instanceId) return;
       const endsAt = Number(payload.endsAt);
@@ -684,6 +849,33 @@ def _active_workload_count(session: Session) -> int:
     return len(total_vm_active) + len(total_container_active)
 
 
+def _active_container_template_count(
+    session: Session,
+    template_id: str,
+    *,
+    exclude_instance_id: str | None = None,
+) -> int:
+    rows = session.exec(
+        select(ContainerInstanceTable)
+        .where(ContainerInstanceTable.template_id == template_id)
+        .where(ContainerInstanceTable.status.in_(["queued", "pending", "running"]))
+    ).all()
+    if exclude_instance_id:
+        rows = [row for row in rows if row.id != exclude_instance_id]
+    return len(rows)
+
+
+def _template_limit(template: ContainerTemplateTable) -> int:
+    return max(0, int(getattr(template, "max_active_instances", 2) or 0))
+
+
+def _container_headroom_error(template: ContainerTemplateTable) -> str | None:
+    return check_launch_headroom(
+        request_cpu_m=max(1, int(getattr(template, "cpu_millicores", 0) or 0)),
+        request_memory_mb=max(1, int(getattr(template, "memory_mb", 0) or 0)),
+    )
+
+
 def _mark_queued(record: ContainerInstanceTable, reason: str, *, increment_attempt: bool = True) -> None:
     attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
     if increment_attempt:
@@ -693,8 +885,8 @@ def _mark_queued(record: ContainerInstanceTable, reason: str, *, increment_attem
     record.status = "queued"
     record.queue_attempts = attempts
     record.queue_reason = queue_reason[:255]
-    record.queue_not_before = datetime.utcnow() + timedelta(seconds=delay_seconds)
-    record.last_active_at = datetime.utcnow()
+    record.queue_not_before = utc_now() + timedelta(seconds=delay_seconds)
+    record.last_active_at = utc_now()
 
 
 def _normalized_template_command(value: object) -> str | None:
@@ -772,6 +964,10 @@ def issue_container_connect_token(
         ttl_seconds=max(15, int(settings.connect_grant_ttl_seconds or 120)),
     )
     connect_url = f"{str(request.base_url).rstrip('/')}/user/containers/{instance_id}/connect/"
+    template = session.get(ContainerTemplateTable, record.template_id)
+    if _is_kasm_template(session, template):
+        ws_path = f"user/containers/{instance_id}/connect/websockify"
+        connect_url = f"{connect_url}?{urlencode({'path': ws_path})}"
     response = Response(
         content=json.dumps({"connect_url": connect_url}),
         media_type="application/json",
@@ -789,16 +985,18 @@ def issue_container_connect_token(
     return response
 
 
-@router.get("/containers/{instance_id}/connect")
-@router.post("/containers/{instance_id}/connect")
-@router.put("/containers/{instance_id}/connect")
-@router.patch("/containers/{instance_id}/connect")
-@router.delete("/containers/{instance_id}/connect")
-@router.get("/containers/{instance_id}/connect/{proxy_path:path}")
-@router.post("/containers/{instance_id}/connect/{proxy_path:path}")
-@router.put("/containers/{instance_id}/connect/{proxy_path:path}")
-@router.patch("/containers/{instance_id}/connect/{proxy_path:path}")
-@router.delete("/containers/{instance_id}/connect/{proxy_path:path}")
+@router.api_route(
+    "/containers/{instance_id}/connect",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+    operation_id="container_connect_proxy_root",
+)
+@router.api_route(
+    "/containers/{instance_id}/connect/{proxy_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+    include_in_schema=False,
+    operation_id="container_connect_proxy_path",
+)
 async def proxy_container_connect(
     instance_id: str,
     request: Request,
@@ -850,11 +1048,12 @@ async def proxy_container_connect(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container is not running")
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
 
     template = session.get(ContainerTemplateTable, record.template_id)
+    is_kasm = _is_kasm_template(session, template)
     container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
     template_idle_minutes = max(
         1,
@@ -876,9 +1075,6 @@ async def proxy_container_connect(
     upstream_path = _normalized_upstream_path(proxy_path)
     query_items = [(key, value) for key, value in request.query_params.multi_items() if key != "ct"]
     upstream_query = urlencode(query_items, doseq=True)
-    upstream_url = f"http://{upstream_host}:{container_port}{upstream_path}"
-    if upstream_query:
-        upstream_url = f"{upstream_url}?{upstream_query}"
 
     forwarded_headers: dict[str, str] = {}
     for key, value in request.headers.items():
@@ -892,27 +1088,50 @@ async def proxy_container_connect(
         }:
             continue
         forwarded_headers[key] = value
+    upstream_auth_header = _upstream_basic_auth_header(session, template)
+    if upstream_auth_header:
+        forwarded_headers["Authorization"] = upstream_auth_header
     forwarded_headers["X-Forwarded-Proto"] = "https"
     forwarded_headers["X-Forwarded-Host"] = str(request.headers.get("host") or "")
     forwarded_headers["X-Forwarded-Prefix"] = f"/user/containers/{instance_id}/connect"
 
     body = await request.body()
-    try:
-        upstream = requests.request(
-            method=request.method,
-            url=upstream_url,
-            headers=forwarded_headers,
-            data=body if body else None,
-            cookies=request.cookies,
-            allow_redirects=False,
-            stream=False,
-            timeout=_PROXY_TIMEOUT_SECONDS,
-        )
-    except requests.RequestException as exc:
+    upstream: requests.Response | None = None
+    last_exc: requests.RequestException | None = None
+    attempted_urls: list[str] = []
+    for scheme in _container_http_schemes(template, container_port):
+        upstream_url = f"{scheme}://{upstream_host}:{container_port}{upstream_path}"
+        if upstream_query:
+            upstream_url = f"{upstream_url}?{upstream_query}"
+        attempted_urls.append(upstream_url)
+        verify_tls = scheme != "https"
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InsecureRequestWarning)
+                candidate = requests.request(
+                    method=request.method,
+                    url=upstream_url,
+                    headers=forwarded_headers,
+                    data=body if body else None,
+                    cookies=request.cookies,
+                    allow_redirects=False,
+                    stream=False,
+                    timeout=_PROXY_TIMEOUT_SECONDS,
+                    verify=verify_tls,
+                )
+            if scheme == "http" and _upstream_requires_https(candidate):
+                continue
+            upstream = candidate
+            break
+        except requests.RequestException as exc:
+            last_exc = exc
+            continue
+    if upstream is None:
+        detail = str(last_exc) if last_exc else "no upstream response"
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"container connect proxy failed: {exc}",
-        ) from exc
+            detail=f"container connect proxy failed: {detail}; attempted={', '.join(attempted_urls)}",
+        ) from last_exc
 
     response_headers: dict[str, str] = {}
     for key, value in upstream.headers.items():
@@ -973,75 +1192,105 @@ async def proxy_container_connect_ws(
     if record.status not in {"pending", "running"}:
         await websocket.close(code=4409, reason="container not running")
         return
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
 
     template = session.get(ContainerTemplateTable, record.template_id)
+    is_kasm = _is_kasm_template(session, template)
     container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
     upstream_host = _container_service_host(record.id)
     upstream_path = _normalized_upstream_path(proxy_path)
     query_items = [(key, value) for key, value in websocket.query_params.multi_items() if key != "ct"]
     upstream_query = urlencode(query_items, doseq=True)
-    upstream_url = f"ws://{upstream_host}:{container_port}{upstream_path}"
-    if upstream_query:
-        upstream_url = f"{upstream_url}?{upstream_query}"
 
     protocols = [part.strip() for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",") if part.strip()]
+    upstream_auth_header = _upstream_basic_auth_header(session, template)
+    upstream_origin = str(websocket.headers.get("origin") or "").strip()
+    if not upstream_origin:
+        forwarded_host = str(websocket.headers.get("host") or "").strip()
+        if forwarded_host:
+            public_scheme = (settings.public_scheme or "https").strip() or "https"
+            upstream_origin = f"{public_scheme}://{forwarded_host}"
+    upstream_ws_headers: dict[str, str] = {}
+    if upstream_auth_header:
+        upstream_ws_headers["Authorization"] = upstream_auth_header
+    # KasmVNC/Websockify expects legacy Sec-WebSocket-Origin. For non-Kasm containers,
+    # send only standard Origin to avoid duplicate-origin handshake failures.
+    if upstream_origin and is_kasm:
+        upstream_ws_headers["Sec-WebSocket-Origin"] = upstream_origin
+    if not upstream_ws_headers:
+        upstream_ws_headers = None
 
     selected_subprotocol = protocols[0] if protocols else None
     await websocket.accept(subprotocol=selected_subprotocol)
 
-    try:
-        async with websockets.connect(
-            upstream_url,
-            subprotocols=protocols or None,
-            open_timeout=15,
-            close_timeout=5,
-            max_size=None,
-        ) as upstream:
-            async def client_to_upstream() -> None:
-                while True:
-                    message = await websocket.receive()
-                    kind = message.get("type")
-                    if kind == "websocket.disconnect":
-                        await upstream.close()
-                        return
-                    payload_bytes = message.get("bytes")
-                    if payload_bytes is not None:
-                        await upstream.send(payload_bytes)
-                        continue
-                    payload_text = message.get("text")
-                    if payload_text is not None:
-                        await upstream.send(payload_text)
-
-            async def upstream_to_client() -> None:
-                while True:
-                    payload = await upstream.recv()
-                    if isinstance(payload, bytes):
-                        await websocket.send_bytes(payload)
-                    else:
-                        await websocket.send_text(payload)
-
-            task_client = asyncio.create_task(client_to_upstream())
-            task_upstream = asyncio.create_task(upstream_to_client())
-            done, pending = await asyncio.wait({task_client, task_upstream}, return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
-            await asyncio.gather(*pending, return_exceptions=True)
-            await asyncio.gather(*done, return_exceptions=True)
-    except Exception:
-        logger.warning(
-            "Container websocket proxy failed for instance %s path %s upstream %s",
-            instance_id,
-            proxy_path,
-            upstream_url,
-            exc_info=True,
-        )
+    attempted_urls: list[str] = []
+    last_exc: Exception | None = None
+    for scheme in _container_ws_schemes(template, container_port):
+        upstream_url = f"{scheme}://{upstream_host}:{container_port}{upstream_path}"
+        if upstream_query:
+            upstream_url = f"{upstream_url}?{upstream_query}"
+        attempted_urls.append(upstream_url)
+        ssl_context = _tls_client_context() if scheme == "wss" else None
         try:
-            await websocket.close(code=1011, reason="upstream websocket error")
-        except Exception:
-            pass
+            async with websockets.connect(
+                upstream_url,
+                subprotocols=protocols or None,
+                additional_headers=upstream_ws_headers,
+                origin=None if is_kasm else (upstream_origin or None),
+                open_timeout=15,
+                close_timeout=5,
+                max_size=None,
+                ssl=ssl_context,
+            ) as upstream:
+                async def client_to_upstream() -> None:
+                    while True:
+                        message = await websocket.receive()
+                        kind = message.get("type")
+                        if kind == "websocket.disconnect":
+                            await upstream.close()
+                            return
+                        payload_bytes = message.get("bytes")
+                        if payload_bytes is not None:
+                            await upstream.send(payload_bytes)
+                            continue
+                        payload_text = message.get("text")
+                        if payload_text is not None:
+                            await upstream.send(payload_text)
+
+                async def upstream_to_client() -> None:
+                    while True:
+                        payload = await upstream.recv()
+                        if isinstance(payload, bytes):
+                            await websocket.send_bytes(payload)
+                        else:
+                            await websocket.send_text(payload)
+
+                task_client = asyncio.create_task(client_to_upstream())
+                task_upstream = asyncio.create_task(upstream_to_client())
+                done, pending = await asyncio.wait({task_client, task_upstream}, return_when=asyncio.FIRST_COMPLETED)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                await asyncio.gather(*done, return_exceptions=True)
+                return
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+    exc_info = (type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None
+    logger.warning(
+        "Container websocket proxy failed for instance %s path %s attempted=%s",
+        instance_id,
+        proxy_path,
+        ", ".join(attempted_urls),
+        exc_info=exc_info,
+    )
+    try:
+        await websocket.close(code=1011, reason="upstream websocket error")
+    except Exception:
+        pass
 
 
 def _create_container_runtime(
@@ -1114,7 +1363,7 @@ def list_user_containers(
     for record in instances:
         if record.status in {"running", "pending"}:
             # Match VM behavior so active user polling keeps running labs from being reaped.
-            record.last_active_at = datetime.utcnow()
+            record.last_active_at = utc_now()
             session.add(record)
             changed = True
         tmpl = templates.get(record.template_id)
@@ -1136,11 +1385,38 @@ def list_user_containers(
                 feedback[record.id] = ("queued", record.queue_reason or "Queued for retry when resources are available.")
                 access_map[record.id] = None
             else:
-                now = datetime.utcnow()
+                now = utc_now()
                 not_before = getattr(record, "queue_not_before", None)
                 should_try = not_before is None or now >= not_before
                 image = images.get(tmpl.container_image_id)
                 if should_try and image and active_count < max_concurrency:
+                    template_limit = _template_limit(tmpl)
+                    template_active_count = _active_container_template_count(
+                        session,
+                        tmpl.id,
+                        exclude_instance_id=record.id,
+                    )
+                    if template_limit and template_active_count >= template_limit:
+                        _mark_queued(
+                            record,
+                            f"Template concurrency limit reached ({template_limit}).",
+                            increment_attempt=False,
+                        )
+                        feedback[record.id] = ("queued", record.queue_reason or "Queued for retry.")
+                        access_map[record.id] = None
+                        session.add(record)
+                        changed = True
+                        diagnostics_map[record.id] = []
+                        continue
+                    headroom_error = _container_headroom_error(tmpl)
+                    if headroom_error:
+                        _mark_queued(record, headroom_error, increment_attempt=False)
+                        feedback[record.id] = ("queued", record.queue_reason or "Queued for retry.")
+                        access_map[record.id] = None
+                        session.add(record)
+                        changed = True
+                        diagnostics_map[record.id] = []
+                        continue
                     try:
                         pod_status, access_url, _ = _create_container_runtime(
                             instance_id=record.id,
@@ -1273,12 +1549,12 @@ def list_user_containers(
 
         if mapped != record.status:
             record.status = mapped
-            record.last_active_at = datetime.utcnow()
+            record.last_active_at = utc_now()
             session.add(record)
             changed = True
 
         if tmpl and record.status in {"stopped", "completed"}:
-            cutoff = datetime.utcnow() - timedelta(minutes=max(1, int(tmpl.auto_delete_minutes or 60)))
+            cutoff = utc_now() - timedelta(minutes=max(1, int(tmpl.auto_delete_minutes or 60)))
             if record.last_active_at < cutoff:
                 try:
                     kube.delete_container_pod(record.id, record.owner)
@@ -1343,10 +1619,22 @@ def start_container_template(
         select(ContainerInstanceTable).where(ContainerInstanceTable.status.in_(["pending", "running"]))
     ).all()
     cluster_full = len(total_vm_active) + len(total_container_active) >= int(config.max_concurrent_vms)
+    template_limit = _template_limit(template)
+    template_active_count = _active_container_template_count(session, template.id)
+    template_limit_reached = template_limit and template_active_count >= template_limit
+    headroom_error = _container_headroom_error(template)
 
     instance_id = str(uuid4())
-    now = datetime.utcnow()
-    if cluster_full and settings.container_start_queue_enabled:
+    now = utc_now()
+    queue_reason: str | None = None
+    if template_limit_reached:
+        queue_reason = f"Template concurrency limit reached ({template_limit})."
+    elif headroom_error:
+        queue_reason = headroom_error
+    elif cluster_full:
+        queue_reason = "Cluster concurrency limit reached. Waiting for available resources."
+
+    if queue_reason and settings.container_start_queue_enabled:
         record = ContainerInstanceTable(
             id=instance_id,
             template_id=template.id,
@@ -1354,7 +1642,7 @@ def start_container_template(
             status="queued",
             pod_name=kube.container_pod_name(instance_id=instance_id, owner=user.username),
             queue_attempts=0,
-            queue_reason="Cluster concurrency limit reached. Waiting for available resources.",
+            queue_reason=_humanize_queue_reason(queue_reason),
             queue_not_before=now + timedelta(seconds=_queue_backoff_seconds(0)),
             started_at=now,
             last_active_at=now,
@@ -1370,6 +1658,13 @@ def start_container_template(
             container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
             launch_diagnostics=[],
         )
+    if template_limit_reached:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"template concurrency limit reached ({template_limit})",
+        )
+    if headroom_error:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
     if cluster_full:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
 
@@ -1451,7 +1746,7 @@ def stop_container(
     record.status = "stopped"
     record.queue_not_before = None
     record.queue_reason = None
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
     session.refresh(record)
@@ -1476,6 +1771,61 @@ def restart_container(
     image = session.get(ContainerImageTable, template.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
+    config = session.get(Config, 1) or Config()
+    active_count = _active_workload_count(session)
+    is_already_active = str(record.status or "").lower() in {"queued", "pending", "running"}
+    cluster_full = (not is_already_active) and active_count >= int(config.max_concurrent_vms)
+
+    template_limit = _template_limit(template)
+    template_active_count = _active_container_template_count(
+        session,
+        template.id,
+        exclude_instance_id=record.id,
+    )
+    if template_limit and template_active_count >= template_limit:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"template concurrency limit reached ({template_limit})",
+        )
+    if cluster_full and settings.container_start_queue_enabled:
+        record.status = "queued"
+        record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
+        record.queue_reason = _humanize_queue_reason("Cluster concurrency limit reached. Waiting for available resources.")
+        record.queue_not_before = utc_now() + timedelta(seconds=_queue_backoff_seconds(record.queue_attempts))
+        record.last_active_at = utc_now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return _instance_out(
+            record,
+            stage="queued",
+            detail=record.queue_reason,
+            access_url=None,
+            container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
+            launch_diagnostics=[],
+        )
+    if cluster_full:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
+    headroom_error = _container_headroom_error(template)
+    if headroom_error and settings.container_start_queue_enabled:
+        record.status = "queued"
+        record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
+        record.queue_reason = _humanize_queue_reason(headroom_error)
+        record.queue_not_before = utc_now() + timedelta(seconds=_queue_backoff_seconds(record.queue_attempts))
+        record.last_active_at = utc_now()
+        session.add(record)
+        session.commit()
+        session.refresh(record)
+        return _instance_out(
+            record,
+            stage="queued",
+            detail=record.queue_reason,
+            access_url=None,
+            container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
+            launch_diagnostics=[],
+        )
+    if headroom_error:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
 
     try:
         kube.delete_container_pod(instance_id, user.username)
@@ -1495,8 +1845,8 @@ def restart_container(
     record.queue_attempts = 0
     record.queue_not_before = None
     record.queue_reason = None
-    record.started_at = datetime.utcnow()
-    record.last_active_at = datetime.utcnow()
+    record.started_at = utc_now()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
     session.refresh(record)
@@ -1523,7 +1873,7 @@ def record_container_activity(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container is not running")
-    record.last_active_at = datetime.utcnow()
+    record.last_active_at = utc_now()
     session.add(record)
     session.commit()
 

@@ -76,6 +76,7 @@ def reset_db():
     for path in SITE_ASSETS_DIR.glob("*"):
         if path.is_file():
             path.unlink()
+    SQLModel.metadata.drop_all(engine)
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
         for model in [

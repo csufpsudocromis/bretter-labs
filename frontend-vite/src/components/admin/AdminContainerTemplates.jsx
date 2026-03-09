@@ -85,7 +85,6 @@ const AdminContainerTemplates = () => {
   const [error, setError] = useState('');
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ ...DEFAULT_FORM });
 
   const load = async () => {
     try {
@@ -168,7 +167,7 @@ const AdminContainerTemplates = () => {
 
   const startEdit = (tmpl) => {
     setEditingId(tmpl.id);
-    setEditForm({
+    setForm({
       name: tmpl.name,
       description: tmpl.description || '',
       container_image_id: tmpl.container_image_id,
@@ -192,13 +191,15 @@ const AdminContainerTemplates = () => {
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
       enabled: Boolean(tmpl.enabled),
     });
+    setMessage('');
+    setError('');
   };
 
   const saveEdit = async () => {
     try {
-      await api.patch(`/admin/container-templates/${editingId}`, toPayload(editForm));
+      await api.patch(`/admin/container-templates/${editingId}`, toPayload(form));
       setEditingId(null);
-      setEditForm({ ...DEFAULT_FORM });
+      setForm({ ...DEFAULT_FORM });
       setMessage('Container template saved');
       setError('');
       load();
@@ -207,22 +208,27 @@ const AdminContainerTemplates = () => {
     }
   };
 
-  const imageName = (imageId) => images.find((img) => img.id === imageId)?.name || 'Container image';
+  const cancelEdit = () => {
+    setEditingId(null);
+    setForm({ ...DEFAULT_FORM });
+    setError('');
+  };
+
   const imageRef = (imageId) => images.find((img) => img.id === imageId)?.image_ref || '-';
   return (
-    <div>
+    <div className="container-templates-page">
       <h2>Container Templates</h2>
       {message && <div className="info">{message}</div>}
       {error && <div className="error">{error}</div>}
       <div className="grid">
-        <div>
-          <h3>Create container template</h3>
-          <div className="form">
+        <div className="card">
+          <h3>{editingId ? 'Edit container template' : 'Create container template'}</h3>
+          <div className="form container-template-form">
             <label>
               Name
               <input value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} />
             </label>
-            <label>
+            <label className="span-2">
               Description
               <textarea
                 rows={3}
@@ -373,7 +379,7 @@ const AdminContainerTemplates = () => {
               />
               Read-only root filesystem
             </label>
-            <label>
+            <label className="span-2">
               Dependency checks (host:port[:timeoutSeconds], one per line)
               <textarea
                 rows={4}
@@ -382,7 +388,7 @@ const AdminContainerTemplates = () => {
                 onChange={(e) => setForm((prev) => ({ ...prev, dependency_checks_text: e.target.value }))}
               />
             </label>
-            <label>
+            <label className="span-2">
               Command (optional)
               <input
                 value={form.command}
@@ -390,7 +396,7 @@ const AdminContainerTemplates = () => {
                 onChange={(e) => setForm((prev) => ({ ...prev, command: e.target.value }))}
               />
             </label>
-            <label>
+            <label className="span-2">
               Args (comma-separated)
               <input
                 value={form.args_text}
@@ -398,7 +404,7 @@ const AdminContainerTemplates = () => {
                 onChange={(e) => setForm((prev) => ({ ...prev, args_text: e.target.value }))}
               />
             </label>
-            <label>
+            <label className="span-2">
               Environment variables
               <textarea
                 rows={4}
@@ -422,12 +428,35 @@ const AdminContainerTemplates = () => {
                 }
               />
             </label>
-            <button onClick={create} disabled={!form.name || !form.container_image_id}>
-              Create
-            </button>
+            {editingId && (
+              <label>
+                Enabled
+                <select
+                  value={form.enabled ? 'true' : 'false'}
+                  onChange={(e) => setForm((prev) => ({ ...prev, enabled: e.target.value === 'true' }))}
+                >
+                  <option value="true">Enabled</option>
+                  <option value="false">Disabled</option>
+                </select>
+              </label>
+            )}
+            {editingId ? (
+              <div className="actions span-2">
+                <button className="ghost" onClick={cancelEdit}>
+                  Cancel
+                </button>
+                <button onClick={saveEdit} disabled={!form.name || !form.container_image_id}>
+                  Save
+                </button>
+              </div>
+            ) : (
+              <button className="span-2" onClick={create} disabled={!form.name || !form.container_image_id}>
+                Create
+              </button>
+            )}
           </div>
         </div>
-        <div>
+        <div className="card">
           <h3>Existing container templates</h3>
           <div className="tile-grid">
             {templates.length === 0 && <div className="muted">No container templates yet.</div>}
@@ -444,29 +473,7 @@ const AdminContainerTemplates = () => {
                   <span>{tmpl.memory_mb} MB RAM</span>
                   <span>Port {tmpl.container_port || 80}</span>
                 </div>
-                <div className="muted small">
-                  Access: {tmpl.expose_strategy || 'nodeport'} | Probe: {tmpl.healthcheck_protocol || 'tcp'}{' '}
-                  {(tmpl.healthcheck_path || '/')} | Expect: {tmpl.readiness_http_status || 200}
-                </div>
-                <div className="muted small">Network: {tmpl.network_mode || 'bridge'}</div>
-                {tmpl.readiness_success_path && (
-                  <div className="muted small">Success path: {tmpl.readiness_success_path}</div>
-                )}
-                <div className="muted small">Startup timeout: {tmpl.startup_timeout_seconds || 300}s</div>
-                <div className="muted small">Idle timeout: {tmpl.idle_timeout_minutes || 30}m</div>
-                {Array.isArray(tmpl.dependency_checks) && tmpl.dependency_checks.length > 0 && (
-                  <div className="muted small">
-                    Dependencies:{' '}
-                    {tmpl.dependency_checks.map((dep) => `${dep.host}:${dep.port}`).join(', ')}
-                  </div>
-                )}
-                <div className="muted small">
-                  Security: non-root {tmpl.run_as_non_root ? 'on' : 'off'}, read-only rootfs{' '}
-                  {tmpl.read_only_root_filesystem ? 'on' : 'off'}
-                </div>
-                {tmpl.description && <div className="muted small">{tmpl.description}</div>}
-                <div className="muted small">Image: {imageName(tmpl.container_image_id)}</div>
-                <div className="muted small">Ref: {imageRef(tmpl.container_image_id)}</div>
+                <div className="muted small template-image-ref">Image: {imageRef(tmpl.container_image_id)}</div>
                 <div className="actions">
                   <button className="ghost" onClick={() => toggle(tmpl.id, !tmpl.enabled)}>
                     {tmpl.enabled ? 'Disable' : 'Enable'}
@@ -481,238 +488,6 @@ const AdminContainerTemplates = () => {
               </div>
             ))}
           </div>
-          {editingId && (
-            <div className="card" style={{ marginTop: '1rem' }}>
-              <h4>Edit container template</h4>
-              <div className="form">
-                <label>
-                  Name
-                  <input
-                    value={editForm.name}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Description
-                  <textarea
-                    rows={3}
-                    value={editForm.description}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Container image
-                  <select
-                    value={editForm.container_image_id}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, container_image_id: e.target.value }))}
-                  >
-                    <option value="">Select image</option>
-                    {images.map((img) => (
-                      <option key={img.id} value={img.id}>
-                        {img.name} ({img.image_ref})
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  CPU cores
-                  <input
-                    type="number"
-                    min={1}
-                    max={32}
-                    value={editForm.cpu_cores}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({ ...prev, cpu_cores: parseInt(e.target.value, 10) || 1 }))
-                    }
-                  />
-                </label>
-                <label>
-                  Memory (MB)
-                  <input
-                    type="number"
-                    min={64}
-                    max={131072}
-                    value={editForm.memory_mb}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({ ...prev, memory_mb: parseInt(e.target.value, 10) || 512 }))
-                    }
-                  />
-                </label>
-                <label>
-                  Container port
-                  <input
-                    type="number"
-                    min={1}
-                    max={65535}
-                    value={editForm.container_port}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({
-                        ...prev,
-                        container_port: Math.max(1, Math.min(65535, parseInt(e.target.value, 10) || 80)),
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Access strategy
-                  <select
-                    value={editForm.expose_strategy}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, expose_strategy: e.target.value }))}
-                  >
-                    <option value="nodeport">NodePort</option>
-                    <option value="ingress">Ingress</option>
-                  </select>
-                </label>
-                <label>
-                  Network mode
-                  <select
-                    value={editForm.network_mode}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, network_mode: e.target.value }))}
-                  >
-                    <option value="bridge">Bridge (DNS/HTTP/HTTPS egress)</option>
-                    <option value="isolated">Isolated (deny egress)</option>
-                    <option value="none">None (deny egress)</option>
-                    <option value="unrestricted">Unrestricted (no policy)</option>
-                  </select>
-                </label>
-                <label>
-                  Healthcheck protocol
-                  <select
-                    value={editForm.healthcheck_protocol}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, healthcheck_protocol: e.target.value }))}
-                  >
-                    <option value="tcp">TCP</option>
-                    <option value="http">HTTP</option>
-                  </select>
-                </label>
-                <label>
-                  Healthcheck path
-                  <input
-                    value={editForm.healthcheck_path}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, healthcheck_path: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Expected HTTP status
-                  <input
-                    type="number"
-                    min={100}
-                    max={599}
-                    value={editForm.readiness_http_status}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({
-                        ...prev,
-                        readiness_http_status: Math.max(100, Math.min(599, parseInt(e.target.value, 10) || 200)),
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Optional success path
-                  <input
-                    value={editForm.readiness_success_path}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, readiness_success_path: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Startup timeout (seconds)
-                  <input
-                    type="number"
-                    min={10}
-                    max={1800}
-                    value={editForm.startup_timeout_seconds}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({
-                        ...prev,
-                        startup_timeout_seconds: Math.max(10, Math.min(1800, parseInt(e.target.value, 10) || 300)),
-                      }))
-                    }
-                  />
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(editForm.run_as_non_root)}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, run_as_non_root: e.target.checked }))}
-                  />
-                  Run as non-root
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(editForm.read_only_root_filesystem)}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({ ...prev, read_only_root_filesystem: e.target.checked }))
-                    }
-                  />
-                  Read-only root filesystem
-                </label>
-                <label>
-                  Dependency checks (host:port[:timeoutSeconds], one per line)
-                  <textarea
-                    rows={4}
-                    value={editForm.dependency_checks_text}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, dependency_checks_text: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Command (optional)
-                  <input
-                    value={editForm.command}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, command: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Args (comma-separated)
-                  <input
-                    value={editForm.args_text}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, args_text: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Environment variables
-                  <textarea
-                    rows={4}
-                    value={editForm.env_text}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, env_text: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Idle timeout (minutes)
-                  <input
-                    type="number"
-                    min={1}
-                    max={1440}
-                    value={editForm.idle_timeout_minutes}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({
-                        ...prev,
-                        idle_timeout_minutes: Math.max(1, parseInt(e.target.value, 10) || 30),
-                      }))
-                    }
-                  />
-                </label>
-                <label>
-                  Enabled
-                  <select
-                    value={editForm.enabled ? 'true' : 'false'}
-                    onChange={(e) => setEditForm((prev) => ({ ...prev, enabled: e.target.value === 'true' }))}
-                  >
-                    <option value="true">Enabled</option>
-                    <option value="false">Disabled</option>
-                  </select>
-                </label>
-                <div className="actions">
-                  <button className="ghost" onClick={() => setEditingId(null)}>
-                    Cancel
-                  </button>
-                  <button onClick={saveEdit} disabled={!editForm.name || !editForm.container_image_id}>
-                    Save
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>

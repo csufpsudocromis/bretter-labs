@@ -13,6 +13,7 @@ VM_VHOST_NET_ENABLED="${VM_VHOST_NET_ENABLED:-true}"
 VM_NET_MULTIQUEUE_ENABLED="${VM_NET_MULTIQUEUE_ENABLED:-true}"
 SPICE_TICKETING="${SPICE_TICKETING:-true}"
 SPICE_PASSWORD="${SPICE_PASSWORD:-}"
+TAP_EGRESS_IF=""
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
@@ -167,16 +168,26 @@ QEMU_ARGS+=(
 
 cleanup_net() {
   set +e
+  local egress_if="${TAP_EGRESS_IF:-$(detect_egress_interface)}"
   if [[ -f /tmp/dnsmasq.pid ]]; then
     kill "$(cat /tmp/dnsmasq.pid)" >/dev/null 2>&1 || true
     rm -f /tmp/dnsmasq.pid
   fi
-  iptables -t nat -D POSTROUTING -s 192.168.241.0/24 -o eth0 -j MASQUERADE >/dev/null 2>&1 || true
-  iptables -D FORWARD -i tap0 -o eth0 -j ACCEPT >/dev/null 2>&1 || true
-  iptables -D FORWARD -i eth0 -o tap0 -m state --state RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || true
+  iptables -t nat -D POSTROUTING -s 192.168.241.0/24 -o "${egress_if}" -j MASQUERADE >/dev/null 2>&1 || true
+  iptables -D FORWARD -i tap0 -o "${egress_if}" -j ACCEPT >/dev/null 2>&1 || true
+  iptables -D FORWARD -i "${egress_if}" -o tap0 -m state --state RELATED,ESTABLISHED -j ACCEPT >/dev/null 2>&1 || true
   ip addr del 192.168.241.1/24 dev tap0 >/dev/null 2>&1 || true
   ip link set tap0 down >/dev/null 2>&1 || true
   ip tuntap del dev tap0 mode tap >/dev/null 2>&1 || true
+}
+
+detect_egress_interface() {
+  local iface
+  iface="$(ip -4 route show default 2>/dev/null | awk '{print $5; exit}')"
+  if [[ -z "$iface" ]]; then
+    iface="$(ip route show default 2>/dev/null | awk '{print $5; exit}')"
+  fi
+  echo "${iface:-eth0}"
 }
 
 setup_tap_nat() {
@@ -196,18 +207,19 @@ setup_tap_nat() {
   fi
   ip addr add 192.168.241.1/24 dev tap0
   ip link set tap0 up
-  # Forward VM traffic through pod eth0 with kernel NAT instead of qemu slirp.
+  TAP_EGRESS_IF="$(detect_egress_interface)"
+  # Forward VM traffic through the pod/node default interface with kernel NAT.
   echo 1 > /proc/sys/net/ipv4/ip_forward
-  iptables -t nat -A POSTROUTING -s 192.168.241.0/24 -o eth0 -j MASQUERADE
-  iptables -A FORWARD -i tap0 -o eth0 -j ACCEPT
-  iptables -A FORWARD -i eth0 -o tap0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+  iptables -t nat -A POSTROUTING -s 192.168.241.0/24 -o "${TAP_EGRESS_IF}" -j MASQUERADE
+  iptables -A FORWARD -i tap0 -o "${TAP_EGRESS_IF}" -j ACCEPT
+  iptables -A FORWARD -i "${TAP_EGRESS_IF}" -o tap0 -m state --state RELATED,ESTABLISHED -j ACCEPT
   dnsmasq \
     --interface=tap0 \
     --bind-interfaces \
     --except-interface=lo \
     --dhcp-range=192.168.241.50,192.168.241.200,12h \
     --dhcp-option=option:router,192.168.241.1 \
-    --dhcp-option=option:dns-server,1.1.1.1,8.8.8.8 \
+    --dhcp-option=option:dns-server,192.168.241.1 \
     --pid-file=/tmp/dnsmasq.pid
   trap cleanup_net EXIT
 }

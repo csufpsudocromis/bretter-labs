@@ -25,7 +25,9 @@ from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
 from ..config import settings
+from ..network_modes import normalize_vm_network_mode
 from ..tables import Config, ContainerInstance, ContainerTemplate, Image, Instance, Template
+from ..time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ class PodRequest:
     cpu_cores: int
     ram_mb: int
     owner: str
-    network_mode: str = "default"
+    network_mode: str = "bridge"
     instance_disk_pvc: Optional[str] = None
     spice_password: Optional[str] = None
 
@@ -610,6 +612,7 @@ class KubernetesService:
         core = self._client()
         pod_name = self._pod_name(req)
         self.ensure_namespace(settings.kube_namespace)
+        vm_network_mode = normalize_vm_network_mode(req.network_mode)
         instance_disk_pvc = self._ensure_instance_disk_pvc(req)
         guest_ram_mb = max(512, int(req.ram_mb))
         memory_overhead_mb = max(0, int(settings.vm_memory_overhead_mb))
@@ -773,12 +776,12 @@ class KubernetesService:
                     read_only=True,
                 )
             )
-        host_network = (req.network_mode or "bridge") == "host"
         spec_kwargs = {
             "containers": [container],
             "restart_policy": "Never",
             "volumes": volumes,
-            "host_network": host_network,
+            # Keep VM runners on pod networking; host networking causes fixed-port collisions.
+            "host_network": False,
             "tolerations": [
                 client.V1Toleration(
                     key="node-role.kubernetes.io/control-plane",
@@ -838,8 +841,8 @@ class KubernetesService:
         body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=spec)
         try:
             core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
-            if (req.network_mode or "bridge") not in {"unrestricted", "host"}:
-                self.apply_network_policy(pod_name, mode=req.network_mode or "bridge")
+            if vm_network_mode != "unrestricted":
+                self.apply_network_policy(pod_name, mode=vm_network_mode)
             return PodStatus(
                 instance_id=req.instance_id,
                 phase="Pending",
@@ -1481,7 +1484,7 @@ class KubernetesService:
         templates = {t.id: t for t in session.exec(select(Template)).all()}
         container_templates = {t.id: t for t in session.exec(select(ContainerTemplate)).all()}
         images = {img.id: img for img in session.exec(select(Image)).all()}
-        now = datetime.utcnow()
+        now = utc_now()
         stale_instances: list[Instance] = []
         stale_container_instances: list[ContainerInstance] = []
         for inst in session.exec(select(Instance).where(Instance.status == "running")).all():

@@ -231,8 +231,7 @@ const AdminTemplates = () => {
             <label>
               Network mode
               <select value={form.network_mode} onChange={(e) => setForm({ ...form, network_mode: e.target.value })}>
-                <option value="bridge">Bridge (DNS/HTTP/HTTPS egress)</option>
-                <option value="host">Host</option>
+                <option value="bridge">Bridge (DNS + web egress)</option>
                 <option value="none">None (no egress)</option>
                 <option value="unrestricted">Unrestricted</option>
                 <option value="isolated">Isolated (no egress)</option>
@@ -392,8 +391,7 @@ const AdminTemplates = () => {
                     value={editForm.network_mode}
                     onChange={(e) => setEditForm({ ...editForm, network_mode: e.target.value })}
                   >
-                    <option value="bridge">Bridge (DNS/HTTP/HTTPS egress)</option>
-                    <option value="host">Host</option>
+                    <option value="bridge">Bridge (DNS + web egress)</option>
                     <option value="none">None (no egress)</option>
                     <option value="unrestricted">Unrestricted</option>
                     <option value="isolated">Isolated (no egress)</option>
