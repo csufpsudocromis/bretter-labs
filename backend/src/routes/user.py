@@ -150,6 +150,37 @@ def _public_api_base() -> str:
     return f"{_public_scheme()}://{_public_console_host()}:30080"
 
 
+def _request_console_base(request: Request | None) -> tuple[str, str, str]:
+    if request is None:
+        return _public_api_base(), _public_console_host(), "30080"
+    scheme = str(request.url.scheme or _public_scheme()).strip().lower()
+    if scheme not in {"http", "https"}:
+        scheme = _public_scheme()
+    host_header = str(request.headers.get("host") or "").strip()
+    parsed_host = urlparse(f"//{host_header}") if host_header else None
+    host = ""
+    if parsed_host and parsed_host.hostname:
+        host = parsed_host.hostname
+    if not host:
+        host = _public_console_host()
+
+    port = ""
+    if parsed_host and parsed_host.port:
+        port = str(parsed_host.port)
+    if not port:
+        parsed_base = urlparse(str(request.base_url))
+        if parsed_base.port:
+            port = str(parsed_base.port)
+    if not port:
+        port = "443" if scheme == "https" else "80"
+
+    base = f"{scheme}://{host}"
+    default_port = (scheme == "https" and port == "443") or (scheme == "http" and port == "80")
+    if not default_port:
+        base = f"{base}:{port}"
+    return base, host, port
+
+
 def _connect_cookie_samesite() -> str:
     raw = str(getattr(settings, "connect_cookie_samesite", "lax") or "lax").strip().lower()
     if raw not in {"lax", "strict", "none"}:
@@ -237,15 +268,20 @@ def _extract_spice_password(console_url: str | None) -> str:
     return ""
 
 
-def _vm_console_embed_url(instance_id: str, title: str, idle_minutes: int, spice_password: str) -> str:
-    base = _public_api_base()
-    host = _public_console_host()
-    secure_param = 1 if _public_scheme() == "https" else 0
+def _vm_console_embed_url(
+    instance_id: str,
+    title: str,
+    idle_minutes: int,
+    spice_password: str,
+    request: Request | None = None,
+) -> str:
+    base, host, port = _request_console_base(request)
+    secure_param = 1 if base.startswith("https://") else 0
     ws_path = f"/user/pods/{instance_id}/connect/websockify"
     query = urlencode(
         {
             "host": host,
-            "port": "30080",
+            "port": port,
             "secure": str(secure_param),
             "title": title,
             "instance_id": instance_id,
@@ -415,6 +451,7 @@ def issue_vm_connect_token(
         title=(template.name if template else "VM"),
         idle_minutes=idle_minutes,
         spice_password=spice_password,
+        request=request,
     )
     grant_token = issue_connect_token(
         session,
@@ -524,6 +561,7 @@ async def proxy_vm_console(
             title=(template.name if template else "VM"),
             idle_minutes=idle_minutes,
             spice_password=spice_password,
+            request=request,
         )
         response = RedirectResponse(url=embed_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
         if issued_connect_session:
@@ -631,23 +669,20 @@ async def proxy_vm_console_ws(
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
-    await websocket.accept()
+    protocols = [
+        part.strip()
+        for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",")
+        if part.strip()
+    ]
+    selected_subprotocol = protocols[0] if protocols else None
+    await websocket.accept(subprotocol=selected_subprotocol)
 
     upstream_host = _vm_service_host(instance_id)
     upstream_path = "/" + proxy_path.lstrip("/")
     query_items = [(key, value) for key, value in websocket.query_params.multi_items() if key not in {"cs", "ct", "connect_token"}]
     upstream_query = urlencode(query_items, doseq=True)
 
-    forwarded_headers: dict[str, str] = {}
-    for key, value in websocket.headers.items():
-        lowered = key.lower()
-        if lowered in _HOP_BY_HOP_HEADERS or lowered in {"host", "authorization", "cookie"}:
-            continue
-        forwarded_headers[key] = value
-    forwarded_headers["X-Forwarded-Proto"] = "https"
-    forwarded_headers["X-Forwarded-Host"] = str(websocket.headers.get("host") or "")
-    forwarded_headers["X-Forwarded-Prefix"] = f"/user/pods/{instance_id}/connect"
-    upstream_ws_headers = [(key, value) for key, value in forwarded_headers.items()]
+    upstream_ws_headers = None
 
     attempted_urls: list[str] = []
     last_exc: Exception | None = None
@@ -660,6 +695,7 @@ async def proxy_vm_console_ws(
         try:
             async with websockets.connect(
                 upstream_url,
+                subprotocols=protocols or None,
                 additional_headers=upstream_ws_headers,
                 origin=None,
                 open_timeout=15,

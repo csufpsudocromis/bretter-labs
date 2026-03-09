@@ -704,6 +704,7 @@ class KubernetesService:
         # Clone-backed instance disks are mounted at /data; Linux defaults to virtio for faster IO.
         dest_disk = f"/data/{Path(req.image_path).name}"
         drive_if = "virtio" if is_linux else "ide"
+        # SPICE works best with qxl on Windows images; keep std on Linux guests.
         vga = "std" if is_linux else "qxl"
         suffix = Path(req.image_path).suffix.lower()
         # Use the native disk format for both Linux and Windows.
@@ -1393,7 +1394,13 @@ class KubernetesService:
         raw = str(getattr(settings, "vm_console_source_cidrs", "") or "").strip()
         if not raw:
             return None
-        peers: list[client.V1NetworkPolicyPeer] = []
+        # When CIDR allowlists are enabled, always allow backend pods so proxy-based console access
+        # keeps working even if pod CIDRs are not part of the external source ranges.
+        peers: list[client.V1NetworkPolicyPeer] = [
+            client.V1NetworkPolicyPeer(
+                pod_selector=client.V1LabelSelector(match_labels={"app": "bretter-backend"})
+            )
+        ]
         for entry in raw.split(","):
             cidr = entry.strip()
             if not cidr:
