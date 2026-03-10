@@ -201,6 +201,6 @@ kubectl -n labs logs deploy/bretter-frontend --tail=200
 
 ## Related pages
 
-- [Operations Runbook](Operations-Runbook.md)
-- [Storage Capacity Playbook](Storage-Capacity-Playbook.md)
-- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive.md)
+- [Operations Runbook](Operations-Runbook)
+- [Storage Capacity Playbook](Storage-Capacity-Playbook)
+- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)

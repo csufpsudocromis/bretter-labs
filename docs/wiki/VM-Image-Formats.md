@@ -58,5 +58,5 @@ qemu-img convert -p -f qcow2 -O raw normalized.qcow2 disk.raw
 
 ## Related pages
 
-- [Operations Runbook](Operations-Runbook.md)
-- [Setup and Configuration](Setup-and-Configuration.md)
+- [Operations Runbook](Operations-Runbook)
+- [Setup and Configuration](Setup-and-Configuration)

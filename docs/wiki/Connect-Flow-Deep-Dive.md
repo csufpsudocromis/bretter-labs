@@ -80,6 +80,6 @@ kubectl -n labs get svc,endpoints | rg 'ctsvc-|vm-|virt-launcher-'
 
 ## Related pages
 
-- [Security and Auth](Security-and-Auth.md)
-- [Error Catalog](Error-Catalog.md)
-- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
+- [Security and Auth](Security-and-Auth)
+- [Error Catalog](Error-Catalog)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)

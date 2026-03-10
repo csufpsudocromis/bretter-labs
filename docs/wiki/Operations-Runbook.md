@@ -173,8 +173,8 @@ If this persists unexpectedly, verify the user has no active VM/container instan
 
 ## Related pages
 
-- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
-- [Error Catalog](Error-Catalog.md)
-- [Storage Capacity Playbook](Storage-Capacity-Playbook.md)
-- [Network Modes Reference](Network-Modes-Reference.md)
-- [LDAP Authentication](LDAP-Authentication.md)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+- [Error Catalog](Error-Catalog)
+- [Storage Capacity Playbook](Storage-Capacity-Playbook)
+- [Network Modes Reference](Network-Modes-Reference)
+- [LDAP Authentication](LDAP-Authentication)

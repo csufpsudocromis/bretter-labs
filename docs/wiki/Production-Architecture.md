@@ -70,7 +70,7 @@ Database:
 
 ## Related production docs
 
-- [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
-- [Production Helm Values Reference](Production-Helm-Values-Reference.md)
-- [Security and Auth](Security-and-Auth.md)
-- [Operations Runbook](Operations-Runbook.md)
+- [Hardened Deployment Guide](Hardened-Deployment-Guide)
+- [Production Helm Values Reference](Production-Helm-Values-Reference)
+- [Security and Auth](Security-and-Auth)
+- [Operations Runbook](Operations-Runbook)

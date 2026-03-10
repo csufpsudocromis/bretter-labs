@@ -63,6 +63,6 @@ kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'ldap|bind|search
 
 ## Related pages
 
-- [Security and Auth](Security-and-Auth.md)
-- [Setup and Configuration](Setup-and-Configuration.md)
-- [Error Catalog](Error-Catalog.md)
+- [Security and Auth](Security-and-Auth)
+- [Setup and Configuration](Setup-and-Configuration)
+- [Error Catalog](Error-Catalog)

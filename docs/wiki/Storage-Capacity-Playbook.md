@@ -64,6 +64,6 @@ kubectl -n labs get pods | rg 'Pending|ContainerCreating|Evicted'
 
 ## Related pages
 
-- [Operations Runbook](Operations-Runbook.md)
-- [Error Catalog](Error-Catalog.md)
-- [Scaling and Quotas](Scaling-and-Quotas.md)
+- [Operations Runbook](Operations-Runbook)
+- [Error Catalog](Error-Catalog)
+- [Scaling and Quotas](Scaling-and-Quotas)

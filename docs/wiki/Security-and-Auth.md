@@ -100,11 +100,11 @@ OpenAPI/docs endpoints are disabled in non-dev by default.
 
 ## Related pages
 
-- [Production Architecture](Production-Architecture.md)
-- [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
-- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive.md)
-- [Operations Runbook](Operations-Runbook.md)
-- [Scaling and Quotas](Scaling-and-Quotas.md)
-- [Pentest Plan and Checklist](Pentest-Plan-and-Checklist.md)
-- [Setup and Configuration](Setup-and-Configuration.md)
-- [LDAP Authentication](LDAP-Authentication.md)
+- [Production Architecture](Production-Architecture)
+- [Hardened Deployment Guide](Hardened-Deployment-Guide)
+- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
+- [Operations Runbook](Operations-Runbook)
+- [Scaling and Quotas](Scaling-and-Quotas)
+- [Pentest Plan and Checklist](Pentest-Plan-and-Checklist)
+- [Setup and Configuration](Setup-and-Configuration)
+- [LDAP Authentication](LDAP-Authentication)

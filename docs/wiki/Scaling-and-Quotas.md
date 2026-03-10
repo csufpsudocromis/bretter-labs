@@ -79,6 +79,6 @@ If users are blocked unexpectedly:
 
 ## Related pages
 
-- [Operations Runbook](Operations-Runbook.md)
-- [Security and Auth](Security-and-Auth.md)
-- [Container Labs](Container-Labs.md)
+- [Operations Runbook](Operations-Runbook)
+- [Security and Auth](Security-and-Auth)
+- [Container Labs](Container-Labs)

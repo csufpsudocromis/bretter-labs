@@ -69,6 +69,6 @@ helm upgrade --install bretter-labs ./deploy/helm \
 
 ## Related pages
 
-- [Production Architecture](Production-Architecture.md)
-- [Hardened Deployment Guide](Hardened-Deployment-Guide.md)
-- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
+- [Production Architecture](Production-Architecture)
+- [Hardened Deployment Guide](Hardened-Deployment-Guide)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)

@@ -97,6 +97,6 @@ kubectl -n labs get svc,endpoints | rg '<ct-pod-name-prefix>'
 
 ## Related pages
 
-- [Operations Runbook](Operations-Runbook.md)
-- [Scaling and Quotas](Scaling-and-Quotas.md)
-- [Security and Auth](Security-and-Auth.md)
+- [Operations Runbook](Operations-Runbook)
+- [Scaling and Quotas](Scaling-and-Quotas)
+- [Security and Auth](Security-and-Auth)

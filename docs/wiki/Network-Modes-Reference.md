@@ -104,6 +104,6 @@ kubectl -n labs get pods -o wide | rg '^vm-|^virt-launcher-|^ct-'
 
 ## Related pages
 
-- [Template Best Practices](Template-Best-Practices.md)
-- [Security and Auth](Security-and-Auth.md)
-- [Operations Runbook](Operations-Runbook.md)
+- [Template Best Practices](Template-Best-Practices)
+- [Security and Auth](Security-and-Auth)
+- [Operations Runbook](Operations-Runbook)

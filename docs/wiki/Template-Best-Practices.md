@@ -76,6 +76,6 @@ Use these defaults to reduce failed launches and improve startup consistency.
 
 ## Related pages
 
-- [Network Modes Reference](Network-Modes-Reference.md)
-- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
-- [Error Catalog](Error-Catalog.md)
+- [Network Modes Reference](Network-Modes-Reference)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+- [Error Catalog](Error-Catalog)

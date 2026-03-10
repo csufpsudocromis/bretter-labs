@@ -140,7 +140,7 @@ kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | tail -n 10
 
 ## Related pages
 
-- [Production Architecture](Production-Architecture.md)
-- [Production Helm Values Reference](Production-Helm-Values-Reference.md)
-- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP.md)
-- [Security and Auth](Security-and-Auth.md)
+- [Production Architecture](Production-Architecture)
+- [Production Helm Values Reference](Production-Helm-Values-Reference)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+- [Security and Auth](Security-and-Auth)

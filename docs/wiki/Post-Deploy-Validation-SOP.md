@@ -83,6 +83,6 @@ Fail if:
 
 ## Related pages
 
-- [Operations Runbook](Operations-Runbook.md)
-- [Error Catalog](Error-Catalog.md)
-- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive.md)
+- [Operations Runbook](Operations-Runbook)
+- [Error Catalog](Error-Catalog)
+- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
