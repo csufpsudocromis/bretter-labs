@@ -54,6 +54,27 @@ const UserPanel = () => {
     return origin;
   };
 
+  const isSameHostOrigin = (origin) => {
+    if (!origin) {
+      return false;
+    }
+    try {
+      const parsed = new URL(origin);
+      return parsed.protocol === window.location.protocol && parsed.hostname === window.location.hostname;
+    } catch (err) {
+      return false;
+    }
+  };
+
+  const isKnownActiveInstanceId = (instanceId) => {
+    if (!instanceId) {
+      return false;
+    }
+    return (
+      latestVmInstanceIdsRef.current.includes(instanceId) || latestContainerInstanceIdsRef.current.includes(instanceId)
+    );
+  };
+
   const refresh = async () => {
     try {
       const [tmplRes, podsRes, ctTmplRes, ctInstRes] = await Promise.all([
@@ -925,18 +946,32 @@ const UserPanel = () => {
 
   useEffect(() => {
     const handleMessage = (event) => {
+      const payload = event.data || {};
       const sourceInstanceId = resolveConsoleSourceInstanceId(event.source);
       const messageOrigin = normalizeOrigin(event.origin);
-      if (messageOrigin && !allowedMessageOriginsRef.current.has(messageOrigin) && !sourceInstanceId) {
+      const payloadInstanceId = typeof payload.instanceId === 'string' ? payload.instanceId : null;
+      const payloadSource = payload.source;
+      const isConsoleSource = payloadSource === 'vm' || payloadSource === 'container';
+      const trustedByInstance =
+        isConsoleSource && payloadInstanceId && isKnownActiveInstanceId(payloadInstanceId) && isSameHostOrigin(messageOrigin);
+      if (messageOrigin && !allowedMessageOriginsRef.current.has(messageOrigin) && !sourceInstanceId && !trustedByInstance) {
         return;
       }
+      const resolvedInstanceId = sourceInstanceId || (trustedByInstance ? payloadInstanceId : null);
       if (messageOrigin) {
         rememberAllowedOrigin(messageOrigin);
-        if (sourceInstanceId) {
-          consoleWindowOriginsRef.current[sourceInstanceId] = messageOrigin;
+        if (resolvedInstanceId) {
+          consoleWindowOriginsRef.current[resolvedInstanceId] = messageOrigin;
         }
       }
-      const payload = event.data || {};
+      if (resolvedInstanceId && event.source && typeof event.source.postMessage === 'function') {
+        consoleWindowsRef.current[resolvedInstanceId] = event.source;
+        if (payload.source === 'container') {
+          containerWindowIdsRef.current.add(resolvedInstanceId);
+        } else if (payload.source === 'vm') {
+          containerWindowIdsRef.current.delete(resolvedInstanceId);
+        }
+      }
       const isVmSource = payload.source === 'vm';
       const isContainerSource = payload.source === 'container';
       if (payload.type === 'idle-parent-prompt' && isVmSource) {
@@ -996,6 +1031,13 @@ const UserPanel = () => {
       }
       if (payload.type === 'idle-stop' && payload.instanceId) {
         const isContainerSource = payload.source === 'container';
+        if (payload.source === 'vm' && (payload.reason === 'idle-timeout' || payload.reason === 'user-end')) {
+          vmParentPromptActiveRef.current = false;
+          clearIdleTimers();
+          clearIdlePrompt();
+          setSessionEnded(true);
+          setMessage(payload.reason === 'idle-timeout' ? 'Session ended due to inactivity.' : 'Session ended.');
+        }
         delete consoleWindowsRef.current[payload.instanceId];
         delete consoleWindowOriginsRef.current[payload.instanceId];
         containerWindowIdsRef.current.delete(payload.instanceId);
