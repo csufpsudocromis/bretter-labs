@@ -436,6 +436,33 @@ const UserPanel = () => {
     }
   };
 
+  const resolveConsoleSourceInstanceId = (sourceWindow) => {
+    if (!sourceWindow) {
+      return null;
+    }
+    const windows = consoleWindowsRef.current;
+    for (const [id, win] of Object.entries(windows)) {
+      if (!win || win.closed) {
+        delete windows[id];
+        delete consoleWindowOriginsRef.current[id];
+        containerWindowIdsRef.current.delete(id);
+        stopConsoleHandshake(id);
+        continue;
+      }
+      if (win === sourceWindow) {
+        return id;
+      }
+      try {
+        if (sourceWindow.top === win || sourceWindow.parent === win) {
+          return id;
+        }
+      } catch (err) {
+        // Cross-origin hierarchy checks can throw; ignore and continue.
+      }
+    }
+    return null;
+  };
+
   const sendAuthToConsole = (instanceId, win) => {
     if (!instanceId || !win || win.closed) {
       return;
@@ -556,6 +583,24 @@ const UserPanel = () => {
           timestamp: Date.now(),
         });
       }
+    });
+  };
+
+  const broadcastIdleControlToVmConsoles = (type, extra = {}) => {
+    const windows = consoleWindowsRef.current;
+    const timestamp = Date.now();
+    Object.entries(windows).forEach(([id, win]) => {
+      if (!win || win.closed) {
+        delete windows[id];
+        delete consoleWindowOriginsRef.current[id];
+        containerWindowIdsRef.current.delete(id);
+        stopConsoleHandshake(id);
+        return;
+      }
+      if (containerWindowIdsRef.current.has(id)) {
+        return;
+      }
+      postToConsoleWindow(id, win, { type, source: 'user', instanceId: id, timestamp, ...extra });
     });
   };
 
@@ -880,9 +925,7 @@ const UserPanel = () => {
 
   useEffect(() => {
     const handleMessage = (event) => {
-      const sourceInstanceId = Object.keys(consoleWindowsRef.current).find(
-        (id) => consoleWindowsRef.current[id] === event.source,
-      );
+      const sourceInstanceId = resolveConsoleSourceInstanceId(event.source);
       const messageOrigin = normalizeOrigin(event.origin);
       if (messageOrigin && !allowedMessageOriginsRef.current.has(messageOrigin) && !sourceInstanceId) {
         return;
@@ -985,6 +1028,7 @@ const UserPanel = () => {
     setSessionEnded(false);
     idleSuspendedRef.current = false;
     idleSuspendReasonRef.current = null;
+    broadcastIdleControlToVmConsoles('idle-parent-clear');
     recordActivity();
     refresh();
   };
@@ -996,6 +1040,7 @@ const UserPanel = () => {
     setSessionEnded(true);
     setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
     const reason = auto ? 'idle-timeout' : 'user-end';
+    broadcastIdleControlToVmConsoles('idle-parent-ended', { reason });
     deleteInstances(latestVmInstanceIdsRef.current, reason, true);
     deleteContainerInstances(latestContainerInstanceIdsRef.current, reason, true);
   };

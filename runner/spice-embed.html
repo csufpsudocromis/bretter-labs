@@ -582,6 +582,12 @@
           }
         });
         document.getElementById('idle-continue').addEventListener('click', () => {
+          postToOpener({
+            type: 'idle-continue',
+            source: 'vm',
+            instanceId,
+            timestamp: Date.now(),
+          });
           stopCountdown();
           recordActivity({ heartbeat: true });
         });
