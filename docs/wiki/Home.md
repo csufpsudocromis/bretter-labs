@@ -53,14 +53,14 @@ Last reviewed: March 9, 2026.
 
 ```mermaid
 flowchart LR
-  U[User Browser]
-  FE[Frontend (React/Vite)]
-  BE[Backend (FastAPI)]
-  DB[(Postgres + Alembic)]
-  K8S[Kubernetes API]
-  VM[VM Runner Pods]
-  CT[Container Lab Pods]
-  ST[(PVC and StorageClass)]
+  U["User Browser"]
+  FE["Frontend React/Vite"]
+  BE["Backend FastAPI"]
+  DB["Postgres + Alembic"]
+  K8S["Kubernetes API"]
+  VM["VM Runner Pods"]
+  CT["Container Lab Pods"]
+  ST["PVC and StorageClass"]
 
   U --> FE
   FE --> BE
