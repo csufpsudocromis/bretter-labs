@@ -152,10 +152,20 @@
         return origin;
       }
 
+      function isLikelyUserOrigin(origin) {
+        if (!origin) return false;
+        try {
+          const parsed = new URL(origin);
+          return parsed.protocol === window.location.protocol && parsed.hostname === window.location.hostname;
+        } catch (err) {
+          return false;
+        }
+      }
+
       function isAllowedOrigin(origin) {
         if (!origin) return false;
-        if (allowedOpenerOrigins.size === 0) return true;
-        return allowedOpenerOrigins.has(origin);
+        if (allowedOpenerOrigins.size === 0) return isLikelyUserOrigin(origin);
+        return allowedOpenerOrigins.has(origin) || isLikelyUserOrigin(origin);
       }
 
       function postToOpener(message) {
@@ -170,24 +180,14 @@
         } catch (err) {
           return;
         }
-        const targetOrigins = new Set();
-        if (openerOrigin && openerOrigin !== '*') {
-          targetOrigins.add(openerOrigin);
+        const targetOrigin = openerOrigin && openerOrigin !== '*' ? openerOrigin : '*';
+        try {
+          target.postMessage(message, targetOrigin);
+        } catch (err) {
+          // ignore postMessage failures
         }
-        allowedOpenerOrigins.forEach((origin) => targetOrigins.add(origin));
-        if (targetOrigins.size === 0) {
-          targetOrigins.add('*');
-        }
-        targetOrigins.forEach((targetOrigin) => {
-          try {
-            target.postMessage(message, targetOrigin);
-          } catch (err) {
-            // ignore postMessage failures
-          }
-        });
       }
 
-      rememberAllowedOrigin(window.location.origin);
       function connect() {
         try {
           sc = new SpiceHtml5.SpiceMainConn({
@@ -528,8 +528,8 @@
             openerOrigin = messageOrigin;
             rememberAllowedOrigin(messageOrigin);
           }
+          openerRef = event.source;
           if (payload.type === 'idle-handshake') {
-            openerRef = event.source;
             try {
               if (payload.instanceId === instanceId) {
                 postToOpener({ type: 'idle-handshake-ack', source: 'vm', instanceId });
