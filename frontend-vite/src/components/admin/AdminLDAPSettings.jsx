@@ -72,7 +72,7 @@ const AdminLDAPSettings = () => {
           <label>
             LDAP Server URI
             <input
-              placeholder="ldaps://ldap.fullerton.edu:636"
+              placeholder="ldaps://ldap.example.edu:636"
               value={data.ldap_server_uri}
               onChange={(e) => setData({ ...data, ldap_server_uri: e.target.value })}
             />
@@ -81,7 +81,7 @@ const AdminLDAPSettings = () => {
           <label>
             Bind DN (service account)
             <input
-              placeholder="cn=svc-ldap,ou=service,dc=fullerton,dc=edu"
+              placeholder="cn=svc-ldap,ou=service,dc=example,dc=edu"
               value={data.ldap_bind_dn}
               onChange={(e) => setData({ ...data, ldap_bind_dn: e.target.value })}
             />
@@ -99,7 +99,7 @@ const AdminLDAPSettings = () => {
           <label>
             User Base DN
             <input
-              placeholder="ou=users,dc=fullerton,dc=edu"
+              placeholder="ou=users,dc=example,dc=edu"
               value={data.ldap_user_base_dn}
               onChange={(e) => setData({ ...data, ldap_user_base_dn: e.target.value })}
             />

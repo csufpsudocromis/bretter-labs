@@ -384,7 +384,7 @@ const AdminContainerTemplates = () => {
               <textarea
                 rows={4}
                 value={form.dependency_checks_text}
-                placeholder={'kimai-db.labs.svc.cluster.local:3306:120\\nredis.labs.svc.cluster.local:6379:60'}
+                placeholder={'db.<namespace>.svc.cluster.local:5432:120\\ncache.<namespace>.svc.cluster.local:6379:60'}
                 onChange={(e) => setForm((prev) => ({ ...prev, dependency_checks_text: e.target.value }))}
               />
             </label>
