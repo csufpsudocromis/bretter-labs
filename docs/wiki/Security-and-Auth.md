@@ -83,8 +83,8 @@ If login/API calls must work from LAN IPs and campus domains, set explicit allow
 Examples:
 
 ```bash
-BLABS_CORS_ALLOWED_ORIGINS="https://10.68.49.250:30073,https://labs.fullerton.edu"
-BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\\.)?fullerton\\.edu(:[0-9]+)?$"
+BLABS_CORS_ALLOWED_ORIGINS="https://<UI_HOST>:30073,https://labs.example.edu"
+BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\\.)?example\\.edu(:[0-9]+)?$"
 ```
 
 Notes:

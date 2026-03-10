@@ -18,7 +18,7 @@ If you do not see the LDAP tile under `/admin/settings`, confirm backend/fronten
 
 ## Required fields
 
-- `LDAP Server URI` (example: `ldaps://ldap.fullerton.edu:636`)
+- `LDAP Server URI` (example: `ldaps://ldap.example.edu:636`)
 - `Bind DN`
 - `Bind Password`
 - `User Base DN`

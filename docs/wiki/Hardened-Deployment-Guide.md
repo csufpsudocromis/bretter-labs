@@ -9,8 +9,8 @@ Use this as a production hardening checklist for Bretter Labs.
 Set explicit origins and avoid broad wildcards.
 
 ```bash
-BLABS_CORS_ALLOWED_ORIGINS="https://labs.fullerton.edu,https://10.68.49.250:30073"
-BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\.)*fullerton\.edu(:[0-9]+)?$"
+BLABS_CORS_ALLOWED_ORIGINS="https://labs.example.edu,https://<UI_HOST>:30073"
+BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\.)*example\.edu(:[0-9]+)?$"
 ```
 
 Rules:

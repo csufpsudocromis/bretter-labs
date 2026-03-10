@@ -81,11 +81,11 @@ External secrets (optional):
 
 ```bash
 NAMESPACE=labs \
-NODE_EXTERNAL_HOST=10.68.49.250 \
+NODE_EXTERNAL_HOST=<NODE_EXTERNAL_HOST_OR_FQDN> \
 PUBLIC_SCHEME=https \
 TLS_ENABLED=1 \
 VM_STORAGE_CLASS=longhorn-r1 \
-BLABS_CORS_ALLOWED_ORIGINS="https://10.68.49.250:30073,https://labs.fullerton.edu" \
+BLABS_CORS_ALLOWED_ORIGINS="https://<UI_HOST>:30073,https://labs.example.edu" \
 ENABLE_MONITORING=1 \
 ./scripts/setup.sh
 ```
