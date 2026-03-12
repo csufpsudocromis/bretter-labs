@@ -135,8 +135,8 @@ Example:
 
 ```bash
 NAMESPACE=labs \
-NODE_EXTERNAL_HOST=10.68.49.250 \
-CONTROL_NODE=cbekube1 \
+NODE_EXTERNAL_HOST= < IP > \
+CONTROL_NODE= <Hostname> \
 VM_STORAGE_CLASS=longhorn-r1 \
 ./scripts/setup.sh
 ```
