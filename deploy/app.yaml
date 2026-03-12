@@ -361,11 +361,11 @@ spec:
             requests:
               cpu: 250m
               memory: 512Mi
-              ephemeral-storage: 1Gi
+              ephemeral-storage: 2Gi
             limits:
               cpu: "1"
               memory: 2Gi
-              ephemeral-storage: 4Gi
+              ephemeral-storage: 8Gi
           startupProbe:
             tcpSocket:
               port: 8000
