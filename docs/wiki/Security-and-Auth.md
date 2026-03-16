@@ -17,6 +17,7 @@ Bootstrap admin behavior:
 - Generated bootstrap secret is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - Backend startup fails fast if no admin user exists and no bootstrap secret is configured.
 - First login requires password reset (`force_password_change=true`).
+- Capture the generated bootstrap secret in secure credential storage, then verify backend env pruning after first-login reset.
 - Setup synthetic validation requires explicit `SYNTHETIC_CHECK_PASSWORD` on existing deployments; when setup generates a bootstrap secret and no synthetic password is provided, synthetic validation is auto-skipped.
 
 Default cookie names:
@@ -93,7 +94,7 @@ Notes:
 - Keep skip-verify disabled unless troubleshooting non-production cert issues.
 - LDAP settings changes are dynamic in DB config; backend restart is not required after save.
 - LDAP bind password and SSO client secret are write-only in admin APIs and are not returned by read endpoints.
-- If `BLABS_SECRETS_ENCRYPTION_KEY` is configured, these stored secrets are encrypted at rest.
+- In production (`BLABS_PRODUCTION_PROFILE=1`), `BLABS_SECRETS_ENCRYPTION_KEY` is required and these stored secrets are encrypted at rest.
 
 ## Login rate limiting and audit events
 

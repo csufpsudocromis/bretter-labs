@@ -9,8 +9,7 @@ Last reviewed: March 16, 2026.
 
 ```bash
 python3 scripts/validate_production_profile.py --strict \
-  -f deploy/helm/values-production.yaml \
-  -f deploy/helm/values-prod-site.yaml
+  -f deploy/helm/values-production.yaml
 ```
 
 3. Deploy:

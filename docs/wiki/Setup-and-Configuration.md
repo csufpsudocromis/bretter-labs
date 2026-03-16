@@ -56,7 +56,7 @@ Auth/session/cors:
 - `AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS`
 - `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS`
 - `AUTH_LOGIN_LOCKOUT_SECONDS`
-- `SECRETS_ENCRYPTION_KEY` (recommended in production)
+- `SECRETS_ENCRYPTION_KEY` (required when `PRODUCTION_PROFILE=1`)
 
 OIDC/SSO:
 
@@ -137,16 +137,19 @@ ENABLE_MONITORING=1 \
 - By default, setup prunes `BLABS_ADMIN_DEFAULT_PASSWORD` from the backend deployment after rollout to avoid long-lived bootstrap secrets in pod specs.
 - Generated bootstrap secrets are written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - Enterprise CORS (`CORS_ENTERPRISE_PROFILE=1`) requires explicit `CORS_ALLOWED_ORIGINS`, blocks `CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
+- Production profile rejects localhost/127.0.0.1 CORS origins; set real UI origins.
+- Production profile requires `RUNNER_NODE_SELECTOR_VALUE` and a strong `SECRETS_ENCRYPTION_KEY`.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
 - Setup no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or set explicit immutable image refs.
 - Production values (`deploy/helm/values-production.yaml`) are digest-pinned and CI-enforced for backend/frontend/runner image refs.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
-- Use `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f <site-values>.yaml` before production rollouts.
+- Use `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml` before production rollouts (add additional `-f <site-values>.yaml` overlays when used).
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
+- After first-login reset, verify bootstrap env pruning: `kubectl -n labs get deploy bretter-backend -o yaml | grep BLABS_ADMIN_DEFAULT_PASSWORD` should return nothing.
 - When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.

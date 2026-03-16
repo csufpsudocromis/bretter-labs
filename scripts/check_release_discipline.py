@@ -12,6 +12,7 @@ SEMVER_RE = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+WEAK_SECRET_VALUES = {"admin", "password", "changeme", "admin123", "secret", "default"}
 
 
 def _load_json(path: Path) -> dict:
@@ -33,6 +34,18 @@ def _extract_yaml_scalar(text: str, key: str) -> str:
     if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
         return raw[1:-1].strip()
     return raw
+
+
+def _looks_placeholder(value: str) -> bool:
+    lowered = value.lower()
+    return (
+        not value
+        or "<" in value
+        or ">" in value
+        or "changeme" in lowered
+        or "example" in lowered
+        or lowered in {"tbd", "todo"}
+    )
 
 
 def main() -> int:
@@ -101,18 +114,33 @@ def main() -> int:
             f"PRODUCTION_PROFILE={production_profile!r}"
         )
 
-    expected_neutral_defaults = {
-        "CONTROL_NODE": "",
-        "NODE_EXTERNAL_HOST": "",
-        "CORS_ALLOWED_ORIGINS": "https://localhost:30073",
-    }
-    for key, expected in expected_neutral_defaults.items():
-        actual = _extract_yaml_scalar(values_production, key)
-        if actual != expected:
+    required_production_overrides = (
+        "CONTROL_NODE",
+        "NODE_EXTERNAL_HOST",
+        "RUNNER_NODE_SELECTOR_VALUE",
+        "VM_STORAGE_CLASS",
+    )
+    for key in required_production_overrides:
+        actual = _extract_yaml_scalar(values_production, key).strip()
+        if _looks_placeholder(actual):
             errors.append(
-                "deploy/helm/values-production.yaml should keep neutral repo defaults "
-                f"for {key}: expected {expected!r}, found {actual!r}"
+                "deploy/helm/values-production.yaml must define concrete production values "
+                f"for {key} (found {actual!r})"
             )
+
+    cors_allowed_origins = _extract_yaml_scalar(values_production, "CORS_ALLOWED_ORIGINS")
+    if not cors_allowed_origins:
+        errors.append("deploy/helm/values-production.yaml must set CORS_ALLOWED_ORIGINS for production.")
+    elif "localhost" in cors_allowed_origins.lower() or "127.0.0.1" in cors_allowed_origins:
+        errors.append(
+            "deploy/helm/values-production.yaml must not include localhost/127.0.0.1 in CORS_ALLOWED_ORIGINS."
+        )
+
+    secrets_encryption_key = _extract_yaml_scalar(values_production, "SECRETS_ENCRYPTION_KEY")
+    if _looks_placeholder(secrets_encryption_key) or secrets_encryption_key.lower() in WEAK_SECRET_VALUES:
+        errors.append("deploy/helm/values-production.yaml must set a strong SECRETS_ENCRYPTION_KEY.")
+    elif len(secrets_encryption_key) < 24:
+        errors.append("deploy/helm/values-production.yaml SECRETS_ENCRYPTION_KEY must be at least 24 characters.")
 
     setup_script = _read_text(setup_script_path)
     if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:

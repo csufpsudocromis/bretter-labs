@@ -28,6 +28,7 @@ ENTERPRISE_CORS_DEFAULT_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPT
 ENTERPRISE_CORS_DEFAULT_HEADERS = ["Accept", "Content-Type", "Authorization"]
 ENTERPRISE_CORS_ALLOWED_METHODS = set(ENTERPRISE_CORS_DEFAULT_METHODS)
 INSECURE_BOOTSTRAP_PASSWORDS = {"admin", "password", "changeme", "admin123"}
+WEAK_SECRET_VALUES = INSECURE_BOOTSTRAP_PASSWORDS | {"secret", "default"}
 
 
 def _resolve_admin_bootstrap_password() -> str:
@@ -72,6 +73,18 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
     if not _configured_cors_origins():
         errors.append("BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_PRODUCTION_PROFILE=true.")
+    cors_origins_raw = str(getattr(settings, "cors_allowed_origins", "") or "").strip().lower()
+    if "localhost" in cors_origins_raw or "127.0.0.1" in cors_origins_raw:
+        errors.append("BLABS_CORS_ALLOWED_ORIGINS must not include localhost/127.0.0.1 in production.")
+    if not str(getattr(settings, "kube_node_selector_value", "") or "").strip():
+        errors.append("BLABS_KUBE_NODE_SELECTOR_VALUE must be set when BLABS_PRODUCTION_PROFILE=true.")
+    secrets_encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
+    if not secrets_encryption_key:
+        errors.append("BLABS_SECRETS_ENCRYPTION_KEY must be set when BLABS_PRODUCTION_PROFILE=true.")
+    elif secrets_encryption_key.lower() in WEAK_SECRET_VALUES:
+        errors.append("BLABS_SECRETS_ENCRYPTION_KEY cannot use weak default values in production.")
+    elif len(secrets_encryption_key) < 24:
+        errors.append("BLABS_SECRETS_ENCRYPTION_KEY must be at least 24 characters in production.")
 
     if errors:
         raise RuntimeError("Invalid production startup configuration:\n- " + "\n- ".join(errors))

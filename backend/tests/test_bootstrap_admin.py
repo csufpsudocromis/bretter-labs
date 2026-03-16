@@ -3,6 +3,22 @@ import pytest
 import src.main as main_module
 
 
+def _set_valid_production_baseline(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "admin_default_username", "admin")
+    monkeypatch.setattr(main_module.settings, "admin_default_password", "")
+    monkeypatch.setattr(main_module.settings, "production_profile", True)
+    monkeypatch.setattr(main_module.settings, "public_scheme", "https")
+    monkeypatch.setattr(main_module.settings, "auth_cookie_secure", True)
+    monkeypatch.setattr(main_module.settings, "connect_cookie_secure", True)
+    monkeypatch.setattr(main_module.settings, "api_docs_enabled", False)
+    monkeypatch.setattr(main_module.settings, "vm_connect_insecure_tls", False)
+    monkeypatch.setattr(main_module.settings, "container_connect_insecure_tls", False)
+    monkeypatch.setattr(main_module.settings, "cors_enterprise_profile", True)
+    monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://10.68.49.250:30073")
+    monkeypatch.setattr(main_module.settings, "kube_node_selector_value", "cbekube2")
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key", "A" * 32)
+
+
 def test_bootstrap_password_uses_configured_secret(monkeypatch):
     monkeypatch.setattr(main_module.settings, "admin_default_password", "one-time-secret")
     assert main_module._resolve_admin_bootstrap_password() == "one-time-secret"
@@ -30,9 +46,7 @@ def test_startup_validation_rejects_weak_bootstrap_password(monkeypatch):
 
 
 def test_startup_validation_enforces_production_profile(monkeypatch):
-    monkeypatch.setattr(main_module.settings, "admin_default_username", "admin")
-    monkeypatch.setattr(main_module.settings, "admin_default_password", "")
-    monkeypatch.setattr(main_module.settings, "production_profile", True)
+    _set_valid_production_baseline(monkeypatch)
     monkeypatch.setattr(main_module.settings, "public_scheme", "http")
     monkeypatch.setattr(main_module.settings, "auth_cookie_secure", False)
     monkeypatch.setattr(main_module.settings, "connect_cookie_secure", False)
@@ -42,4 +56,18 @@ def test_startup_validation_enforces_production_profile(monkeypatch):
     monkeypatch.setattr(main_module.settings, "cors_enterprise_profile", False)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "")
     with pytest.raises(RuntimeError, match="Invalid production startup configuration"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_requires_secrets_encryption_key_in_production(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key", "")
+    with pytest.raises(RuntimeError, match="BLABS_SECRETS_ENCRYPTION_KEY must be set"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_rejects_localhost_cors_origins_in_production(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://localhost:30073")
+    with pytest.raises(RuntimeError, match="must not include localhost/127.0.0.1"):
         main_module._validate_startup_config()

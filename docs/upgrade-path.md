@@ -19,8 +19,7 @@ This document covers safe upgrades between Bretter Labs releases, including the 
 
 ```bash
 python3 scripts/validate_production_profile.py --strict \
-  -f deploy/helm/values-production.yaml \
-  -f deploy/helm/values-prod-site.yaml
+  -f deploy/helm/values-production.yaml
 ```
 
 ## Upgrade procedure

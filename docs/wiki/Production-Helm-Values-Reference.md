@@ -12,15 +12,18 @@ Use that file as the baseline and override per environment.
 
 - The repo chart consumes only `appTemplateValues` from values files.
 - Unsupported top-level keys fail Helm template rendering by design.
-- `deploy/helm/values-production.yaml` starts with neutral placeholders for environment-specific fields.
+- `deploy/helm/values-production.yaml` now carries concrete production defaults for the primary cluster.
+- For another environment, layer a site override file and run strict validation before rollout.
 
 ## Required production overrides
 
 - `appTemplateValues.CONTROL_NODE`
 - `appTemplateValues.NODE_EXTERNAL_HOST`
-- `appTemplateValues.CORS_ALLOWED_ORIGINS` (replace default `https://localhost:30073`)
+- `appTemplateValues.RUNNER_NODE_SELECTOR_VALUE`
+- `appTemplateValues.CORS_ALLOWED_ORIGINS`
 - `appTemplateValues.VM_STORAGE_CLASS`
 - `appTemplateValues.TLS_SECRET_NAME`
+- `appTemplateValues.SECRETS_ENCRYPTION_KEY`
 - `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
 
@@ -41,7 +44,7 @@ Use that file as the baseline and override per environment.
 ## Usage pattern
 
 1. Copy production values into an environment overlay.
-2. Commit environment-specific override files.
+2. Commit environment-specific override files (excluding secret material when using private overlays).
 3. Deploy with explicit values files in order.
 4. Run rollout status + post-deploy synthetic check (set `SYNTHETIC_CHECK_PASSWORD` explicitly on existing deployments).
 

@@ -12,6 +12,7 @@ import yaml
 DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off", ""}
+WEAK_SECRET_VALUES = {"admin", "password", "changeme", "admin123", "secret", "default"}
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -69,6 +70,21 @@ def _is_digest_pinned(image_ref: str) -> bool:
     return bool(DIGEST_PIN_RE.match(image_ref))
 
 
+def _split_csv_values(raw: str) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in str(raw or "").split(","):
+        value = str(item or "").strip()
+        if not value:
+            continue
+        normalized = value.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        values.append(value)
+    return values
+
+
 def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[str]]:
     app_values = values.get("appTemplateValues")
     if not isinstance(app_values, dict):
@@ -120,25 +136,46 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
     if not cors_origins:
         errors.append("CORS_ALLOWED_ORIGINS must be explicitly set for production.")
     elif "localhost" in cors_origins.lower() or "127.0.0.1" in cors_origins:
-        message = "CORS_ALLOWED_ORIGINS contains localhost/127.0.0.1; replace with real UI origins."
-        if strict:
-            errors.append(message)
-        else:
-            warnings.append(message)
+        errors.append("CORS_ALLOWED_ORIGINS contains localhost/127.0.0.1; replace with real UI origins.")
 
     if get_text("CORS_ALLOWED_ORIGIN_REGEX"):
         errors.append("CORS_ALLOWED_ORIGIN_REGEX must be empty in production profile.")
 
-    required_override_keys = ("CONTROL_NODE", "NODE_EXTERNAL_HOST", "VM_STORAGE_CLASS")
+    cors_methods = _split_csv_values(get_text("CORS_ALLOWED_METHODS"))
+    if "*" in cors_methods:
+        errors.append("CORS_ALLOWED_METHODS cannot include wildcard '*' in production profile.")
+    cors_headers = _split_csv_values(get_text("CORS_ALLOWED_HEADERS"))
+    if "*" in cors_headers:
+        errors.append("CORS_ALLOWED_HEADERS cannot include wildcard '*' in production profile.")
+
+    required_override_keys = ("CONTROL_NODE", "NODE_EXTERNAL_HOST", "RUNNER_NODE_SELECTOR_VALUE", "VM_STORAGE_CLASS")
     for key in required_override_keys:
         value = get_text(key)
         if not _looks_placeholder(value):
             continue
-        message = f"{key} appears unset/placeholder and should be overridden for production."
-        if strict:
-            errors.append(message)
-        else:
-            warnings.append(message)
+        errors.append(f"{key} appears unset/placeholder and must be overridden for production.")
+
+    secrets_encryption_key = get_text("SECRETS_ENCRYPTION_KEY")
+    if _looks_placeholder(secrets_encryption_key) or secrets_encryption_key.lower() in WEAK_SECRET_VALUES:
+        errors.append("SECRETS_ENCRYPTION_KEY must be set to a strong non-placeholder value for production.")
+    elif len(secrets_encryption_key) < 24:
+        errors.append("SECRETS_ENCRYPTION_KEY must be at least 24 characters for production.")
+
+    signature_verification_enabled = get_bool("CONTAINER_SIGNATURE_VERIFICATION_ENABLED", default=False)
+    signature_key_ref = get_text("CONTAINER_SIGNATURE_KEY_REF")
+    if signature_verification_enabled and not signature_key_ref:
+        errors.append("CONTAINER_SIGNATURE_KEY_REF is required when CONTAINER_SIGNATURE_VERIFICATION_ENABLED is true.")
+    if not signature_verification_enabled:
+        warnings.append(
+            "CONTAINER_SIGNATURE_VERIFICATION_ENABLED is disabled; enable and configure CONTAINER_SIGNATURE_KEY_REF "
+            "if your production threat model requires image signature verification."
+        )
+
+    if get_bool("CONTAINER_INGRESS_ENABLED", default=False):
+        if not get_text("CONTAINER_INGRESS_CLASS"):
+            errors.append("CONTAINER_INGRESS_CLASS is required when CONTAINER_INGRESS_ENABLED is true.")
+        if not get_text("CONTAINER_INGRESS_BASE_DOMAIN"):
+            errors.append("CONTAINER_INGRESS_BASE_DOMAIN is required when CONTAINER_INGRESS_ENABLED is true.")
 
     admin_bootstrap = get_text("ADMIN_BOOTSTRAP_PASSWORD")
     if admin_bootstrap and admin_bootstrap.lower() in {"admin", "password", "changeme", "admin123"}:

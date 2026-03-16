@@ -115,6 +115,7 @@ Bootstrap admin account:
 Password change is required on first login.
 When setup generates the secret, it is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` with mode `600`.
 If no admin user exists and no bootstrap secret is configured, backend startup fails fast.
+After first login/reset, keep the bootstrap file in secure storage and verify `BLABS_ADMIN_DEFAULT_PASSWORD` has been pruned from the backend deployment.
 
 ## Key Setup Variables
 
@@ -153,7 +154,7 @@ If no admin user exists and no bootstrap secret is configured, backend startup f
 | `AUTH_LOGIN_LOCKOUT_SECONDS` | `300` | Temporary lockout duration after too many failed attempts |
 | `VM_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip VM upstream TLS verification |
 | `CONTAINER_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip container upstream TLS verification |
-| `SECRETS_ENCRYPTION_KEY` | empty | Optional key for encrypting stored runtime secrets (`sso_client_secret`, `ldap_bind_password`) |
+| `SECRETS_ENCRYPTION_KEY` | empty | Required when `PRODUCTION_PROFILE=1`; encrypts stored runtime secrets (`sso_client_secret`, `ldap_bind_password`) |
 | `METRICS_SERVER_VERSION` | `v0.8.1` | Metrics-server release used to build default manifest URL |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
@@ -181,9 +182,13 @@ Example:
 
 ```bash
 NAMESPACE=labs \
-NODE_EXTERNAL_HOST= < IP > \
-CONTROL_NODE= <Hostname> \
+NODE_EXTERNAL_HOST=10.68.49.250 \
+CONTROL_NODE=cbekube1 \
+RUNNER_NODE_SELECTOR_VALUE=cbekube2 \
 VM_STORAGE_CLASS=longhorn-r1 \
+CORS_ENTERPRISE_PROFILE=1 \
+CORS_ALLOWED_ORIGINS=https://10.68.49.250:30073 \
+SECRETS_ENCRYPTION_KEY='<32+ char secret>' \
 ./scripts/setup.sh
 ```
 
@@ -255,7 +260,7 @@ Release guardrail check:
 
 ```bash
 python3 scripts/check_release_discipline.py
-python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f deploy/helm/values-prod-site.yaml
+python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
 ./scripts/ci_guardrails.sh
 ```
 

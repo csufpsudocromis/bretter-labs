@@ -8,10 +8,11 @@ Use this checklist before first production deployment and for each release.
 
 - Set `appTemplateValues.CONTROL_NODE` in `deploy/helm/values-production.yaml`.
 - Set `appTemplateValues.NODE_EXTERNAL_HOST` in `deploy/helm/values-production.yaml`.
-- Replace `appTemplateValues.CORS_ALLOWED_ORIGINS` with your real UI origins (do not leave `https://localhost:30073`).
+- Set `appTemplateValues.RUNNER_NODE_SELECTOR_VALUE` in `deploy/helm/values-production.yaml`.
+- Set `appTemplateValues.CORS_ALLOWED_ORIGINS` to your real UI origins (no localhost/127.0.0.1).
 - Set `appTemplateValues.VM_STORAGE_CLASS` to the intended production class.
 - Set `appTemplateValues.TLS_SECRET_NAME` to the production certificate secret.
-- Set `SECRETS_ENCRYPTION_KEY` (or external secrets wiring) before enabling SSO/LDAP secrets at scale.
+- Set a strong `SECRETS_ENCRYPTION_KEY` before production rollout.
 
 ## Image and supply chain
 
@@ -25,6 +26,8 @@ Use this checklist before first production deployment and for each release.
 - Use one-time bootstrap admin secret for first deployment only.
 - Keep `PRUNE_BOOTSTRAP_ADMIN_ENV=1` so bootstrap secret is removed from running backend pod specs.
 - Confirm first-login password reset flow (`force_password_change=true`) is functioning.
+- Capture generated bootstrap secret file (`~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt`) into secure credential storage.
+- After first-login reset, verify backend deployment env no longer includes `BLABS_ADMIN_DEFAULT_PASSWORD`.
 
 ## Network and runtime hardening
 

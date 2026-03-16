@@ -523,6 +523,7 @@ validate_container_runtime_config() {
 }
 
 validate_auth_and_cors_config() {
+  local cors_origins_lower secrets_key_lower
   case "$PRODUCTION_PROFILE" in
     0|1) ;;
     *) fail "PRODUCTION_PROFILE must be either 0 or 1." ;;
@@ -554,9 +555,37 @@ validate_auth_and_cors_config() {
     if [ "$CORS_ENTERPRISE_PROFILE" -ne 1 ]; then
       fail "CORS_ENTERPRISE_PROFILE must be 1 when PRODUCTION_PROFILE=1."
     fi
+    if [[ "$CORS_ALLOWED_METHODS" == *"*"* ]]; then
+      fail "CORS_ALLOWED_METHODS cannot include wildcard '*' when PRODUCTION_PROFILE=1."
+    fi
+    if [[ "$CORS_ALLOWED_HEADERS" == *"*"* ]]; then
+      fail "CORS_ALLOWED_HEADERS cannot include wildcard '*' when PRODUCTION_PROFILE=1."
+    fi
+    cors_origins_lower="${CORS_ALLOWED_ORIGINS,,}"
+    if [[ "$cors_origins_lower" == *"localhost"* || "$cors_origins_lower" == *"127.0.0.1"* ]]; then
+      fail "CORS_ALLOWED_ORIGINS cannot include localhost/127.0.0.1 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$PRUNE_BOOTSTRAP_ADMIN_ENV" -ne 1 ]; then
+      fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be 1 when PRODUCTION_PROFILE=1."
+    fi
     if [ "$VM_CONNECT_INSECURE_TLS" -ne 0 ] || [ "$CONTAINER_CONNECT_INSECURE_TLS" -ne 0 ]; then
       fail "VM/CONTAINER_CONNECT_INSECURE_TLS must be 0 when PRODUCTION_PROFILE=1."
     fi
+    if [ -z "$RUNNER_NODE_SELECTOR_VALUE" ]; then
+      fail "RUNNER_NODE_SELECTOR_VALUE must be set when PRODUCTION_PROFILE=1."
+    fi
+    if [ -z "$SECRETS_ENCRYPTION_KEY" ]; then
+      fail "SECRETS_ENCRYPTION_KEY must be set when PRODUCTION_PROFILE=1."
+    fi
+    if [ "${#SECRETS_ENCRYPTION_KEY}" -lt 24 ]; then
+      fail "SECRETS_ENCRYPTION_KEY must be at least 24 characters when PRODUCTION_PROFILE=1."
+    fi
+    secrets_key_lower="${SECRETS_ENCRYPTION_KEY,,}"
+    case "$secrets_key_lower" in
+      admin|password|changeme|admin123|secret|default)
+        fail "SECRETS_ENCRYPTION_KEY uses a weak value; set a strong key for production."
+        ;;
+    esac
   fi
 }
 
@@ -3061,6 +3090,16 @@ EOF
   log "Pruning bootstrap admin secret from bretter-backend deployment env..."
   kubectl -n "$NAMESPACE" patch deployment bretter-backend --type=strategic --patch "$patch_payload" >/dev/null
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s
+
+  env_names="$(
+    kubectl -n "$NAMESPACE" get deployment bretter-backend \
+      -o jsonpath='{range .spec.template.spec.containers[?(@.name=="backend")].env[*]}{.name}{"\n"}{end}' \
+      2>/dev/null || true
+  )"
+  if printf '%s\n' "$env_names" | grep -qx 'BLABS_ADMIN_DEFAULT_PASSWORD'; then
+    fail "Failed to prune BLABS_ADMIN_DEFAULT_PASSWORD from bretter-backend deployment."
+  fi
+  log "Verified bootstrap admin secret env is pruned from bretter-backend deployment."
 }
 
 run_post_deploy_api_health_check() {

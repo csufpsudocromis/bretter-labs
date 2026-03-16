@@ -30,7 +30,7 @@ run_success "dry-run all phases" \
 run_success "validate production profile command (repo defaults)" \
   python3 "$ROOT_DIR/scripts/validate_production_profile.py"
 
-run_failure "strict production profile validation rejects neutral defaults" \
+run_success "strict production profile validation passes concrete production defaults" \
   python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict
 
 run_success "dry-run deploy phase only" \
@@ -56,5 +56,14 @@ run_failure "reject invalid post-deploy API health check toggle" \
 
 run_failure "reject invalid bootstrap env prune toggle" \
   env SETUP_DRY_RUN=1 PRUNE_BOOTSTRAP_ADMIN_ENV=2 "$SETUP_SCRIPT"
+
+tmp_values="$(mktemp)"
+cat >"$tmp_values" <<'EOF'
+appTemplateValues:
+  CONTROL_NODE: ""
+EOF
+run_failure "strict production profile validation rejects placeholder overrides" \
+  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
+rm -f "$tmp_values"
 
 echo "[smoke] setup.sh smoke checks passed"
