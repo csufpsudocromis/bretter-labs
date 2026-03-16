@@ -13,7 +13,8 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 
 - The repo chart consumes only `appTemplateValues` from values files.
 - Unsupported top-level keys fail Helm template rendering by design.
-- `deploy/helm/values-production.yaml` is intentionally non-secret and environment-neutral.
+- `deploy/helm/values-production.yaml` is intentionally non-secret and serves as a hardened baseline with reference coordinates.
+- Override site-specific coordinates in your overlay file (`values-production-site.template.yaml` -> `values-prod-site.yaml`).
 - Use `deploy/helm/values-production-site.template.yaml` to create a site overlay with real coordinates and secret object names.
 
 ## Required production overrides

@@ -1,9 +1,12 @@
-# Bretter Labs production override values.
+# Bretter Labs hardened production baseline values.
 # This file only contains keys consumed by deploy/helm/files/app.yaml.tpl.
+# It is validated in CI with scripts/validate_production_profile.py --strict.
+# Apply environment-specific values through a separate overlay
+# (deploy/helm/values-production-site.template.yaml) during deployment.
 
 appTemplateValues:
-  # Reusable production baseline coordinates.
-  # Override these in a site-specific values overlay for your environment.
+  # Reference production coordinates used for baseline validation.
+  # Treat these as site-specific and override via your production overlay.
   CONTROL_NODE: control-plane-1
   NODE_EXTERNAL_HOST: labs-gateway.internal
   RUNNER_NODE_SELECTOR_VALUE: runner-pool
@@ -55,7 +58,7 @@ appTemplateValues:
   AUTH_LOGIN_LOCKOUT_SECONDS: "300"
   VM_CONNECT_INSECURE_TLS: "0"
   CONTAINER_CONNECT_INSECURE_TLS: "0"
-  # Production secret injection path (do not commit raw runtime keys).
+  # Runtime secret injection path (do not commit raw encryption keys here).
   RUNTIME_SECRETS_SECRET_NAME: bretter-runtime-secrets
   RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: secrets_encryption_key
   SECRETS_ENCRYPTION_KEY: ""

@@ -17,6 +17,7 @@ Users launch labs with staged status feedback and connect in the browser.
 - [Supported VM Image Types](#supported-vm-image-types)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
+- [Production Checks at a Glance](#production-checks-at-a-glance)
 - [Key Setup Variables](#key-setup-variables)
 - [Security and Session Model](#security-and-session-model)
 - [Admin and User Workflows](#admin-and-user-workflows)
@@ -117,6 +118,34 @@ When setup generates the secret, it is written to `~/.config/bretter-labs/bootst
 If no admin user exists and no bootstrap secret is configured, backend startup fails fast.
 After first login/reset, keep the bootstrap file in secure storage and verify `BLABS_ADMIN_DEFAULT_PASSWORD` has been pruned from the backend deployment.
 
+## Production Checks at a Glance
+
+Use this flow for repeatable production rollouts:
+
+```bash
+# 1) create/update your site overlay (cluster-specific values + secret wiring names)
+cp deploy/helm/values-production-site.template.yaml deploy/helm/values-prod-site.yaml
+
+# 2) validate hardened baseline + your site overlay
+python3 scripts/validate_production_profile.py --strict \
+  -f deploy/helm/values-production.yaml \
+  -f deploy/helm/values-prod-site.yaml
+
+# 3) run repository guardrails (includes strict production profile validation)
+./scripts/ci_guardrails.sh
+
+# 4) deploy with production profile; postdeploy runs go-live proof by default
+PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
+```
+
+Proof artifact and operator docs:
+
+- Go-live proof script: `scripts/production_go_live_proof.sh`
+- Default report dir: `artifacts/go-live/`
+- Production values reference: `docs/wiki/Production-Helm-Values-Reference.md`
+- Secret operations: `docs/wiki/Secret-Operations-Runbook.md`
+- Post-deploy validation SOP: `docs/wiki/Post-Deploy-Validation-SOP.md`
+
 ## Key Setup Variables
 
 | Variable | Default | Purpose |
@@ -210,7 +239,7 @@ Production note:
 - Keep `deploy/helm/values-production.yaml` non-secret (`SECRETS_ENCRYPTION_KEY` stays empty).
 - Provide `SECRETS_ENCRYPTION_KEY` only at deploy time (or pre-create `RUNTIME_SECRETS_SECRET_NAME`).
 - Provide signature key material via `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` (or pre-create `CONTAINER_SIGNATURE_KEY_SECRET_NAME`).
-- In production profile, set explicit `CONTROL_NODE`, `NODE_EXTERNAL_HOST`, and `VM_STORAGE_CLASS`; setup now fails fast if they are missing or placeholder values.
+- In production profile, set explicit `CONTROL_NODE`, `NODE_EXTERNAL_HOST`, `RUNNER_NODE_SELECTOR_VALUE`, and `VM_STORAGE_CLASS`; setup now fails fast if they are missing or placeholder values.
 - `RUN_PRODUCTION_GO_LIVE_PROOF` defaults to `1` when `PRODUCTION_PROFILE=1`, so `postdeploy` now includes live go/no-go verification by default.
 
 ## Security and Session Model

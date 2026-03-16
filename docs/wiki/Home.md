@@ -41,6 +41,25 @@ Last reviewed: March 16, 2026.
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist)
 - [Setup and Configuration](Setup-and-Configuration)
 
+## Production checks at a glance
+
+Use this sequence for every production rollout:
+
+```bash
+python3 scripts/validate_production_profile.py --strict \
+  -f deploy/helm/values-production.yaml \
+  -f deploy/helm/values-prod-site.yaml
+./scripts/ci_guardrails.sh
+PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
+NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
+
+Reference pages:
+
+- [Production Helm Values Reference](Production-Helm-Values-Reference)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
+- [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+
 ## Current platform snapshot
 
 - Kubernetes-native VM and container lab orchestration
