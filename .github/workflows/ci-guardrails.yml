@@ -92,6 +92,9 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix frontend-vite ci
 
+      - name: Lint frontend
+        run: npm --prefix frontend-vite run lint
+
       - name: Build frontend
         run: npm --prefix frontend-vite run build
 

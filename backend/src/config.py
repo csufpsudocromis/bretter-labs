@@ -3,12 +3,12 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     admin_default_username: str = "admin"
-    # Empty means "generate one-time random bootstrap secret at first startup".
+    # Empty is valid only after bootstrap; first deploy must provide a one-time secret.
     admin_default_password: str = ""
     max_concurrent_vms: int = 50
     per_user_vm_limit: int = 2
     idle_timeout_minutes: int = 30
-    storage_root: str = "/home/cbeis/golden-images"
+    storage_root: str = "/mnt/lab-images"
     database_path: str = "backend/data/app.db"
     database_url: str = ""
     kube_namespace: str = "labs"
@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     kube_cdi_namespace: str = "cdi"
     kube_use_kvm: bool = True  # set False if /dev/kvm is unavailable
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
-    kube_node_external_host: str = "10.68.48.105"
+    kube_node_external_host: str = ""
     kube_tls_secret: str = "bretter-tls"
     # Default Windows to UEFI/q35; can be overridden per environment.
     windows_efi_enabled: bool = True

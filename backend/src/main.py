@@ -2,7 +2,6 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
-import secrets
 from urllib.parse import urlparse
 
 from fastapi import FastAPI
@@ -30,12 +29,14 @@ ENTERPRISE_CORS_DEFAULT_HEADERS = ["Accept", "Content-Type", "Authorization"]
 ENTERPRISE_CORS_ALLOWED_METHODS = set(ENTERPRISE_CORS_DEFAULT_METHODS)
 
 
-def _resolve_admin_bootstrap_password() -> tuple[str, bool]:
+def _resolve_admin_bootstrap_password() -> str:
     configured = str(getattr(settings, "admin_default_password", "") or "").strip()
     if configured:
-        return configured, False
-    # 32+ chars from URL-safe alphabet keeps copy/paste simple while avoiding static defaults.
-    return secrets.token_urlsafe(24), True
+        return configured
+    raise RuntimeError(
+        "No admin user exists and BLABS_ADMIN_DEFAULT_PASSWORD is empty. "
+        "Provide a one-time bootstrap secret during first deployment."
+    )
 
 
 def _normalize_origin(origin: str) -> str | None:
@@ -234,7 +235,7 @@ async def lifespan(_: FastAPI):
         _apply_storage_overrides(config)
         admin_user = session.get(User, settings.admin_default_username)
         if not admin_user:
-            bootstrap_password, generated_password = _resolve_admin_bootstrap_password()
+            bootstrap_password = _resolve_admin_bootstrap_password()
             session.add(
                 User(
                     username=settings.admin_default_username,
@@ -244,18 +245,11 @@ async def lifespan(_: FastAPI):
                     force_password_change=True,
                 )
             )
-            if generated_password:
-                logger.warning(
-                    "Bootstrap admin created with one-time random secret for username=%s. "
-                    "Retrieve the secret from secure bootstrap output and reset password immediately after first login.",
-                    settings.admin_default_username,
-                )
-            else:
-                logger.info(
-                    "Bootstrap admin created for username=%s using configured bootstrap secret. "
-                    "force_password_change=true",
-                    settings.admin_default_username,
-                )
+            logger.info(
+                "Bootstrap admin created for username=%s using configured bootstrap secret. "
+                "force_password_change=true",
+                settings.admin_default_username,
+            )
         session.commit()
     global _reaper_task
     _reaper_task = asyncio.create_task(reaper_loop())

@@ -15,6 +15,7 @@ Bootstrap admin behavior:
 - Setup uses a one-time bootstrap secret (generated random unless `ADMIN_BOOTSTRAP_PASSWORD` is set).
 - Bootstrap secret is only used when no admin user exists.
 - Generated bootstrap secret is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
+- Backend startup fails fast if no admin user exists and no bootstrap secret is configured.
 - First login requires password reset (`force_password_change=true`).
 
 Default cookie names:

@@ -128,6 +128,7 @@ ENABLE_MONITORING=1 \
 
 - Runtime settings page is read-only by design.
 - `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
+- Backend startup is fail-fast if no admin user exists and `ADMIN_BOOTSTRAP_PASSWORD` is empty.
 - By default, setup prunes `BLABS_ADMIN_DEFAULT_PASSWORD` from the backend deployment after rollout to avoid long-lived bootstrap secrets in pod specs.
 - Generated bootstrap secrets are written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - Enterprise CORS (`CORS_ENTERPRISE_PROFILE=1`) requires explicit `CORS_ALLOWED_ORIGINS`, blocks `CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.

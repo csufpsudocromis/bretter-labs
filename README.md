@@ -114,6 +114,7 @@ Bootstrap admin account:
 
 Password change is required on first login.
 When setup generates the secret, it is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` with mode `600`.
+If no admin user exists and no bootstrap secret is configured, backend startup fails fast.
 
 ## Key Setup Variables
 
@@ -124,7 +125,7 @@ When setup generates the secret, it is written to `~/.config/bretter-labs/bootst
 | `NODE_EXTERNAL_HOST` | auto | Public host/IP used in generated URLs |
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
-| `ADMIN_BOOTSTRAP_PASSWORD` | random | Initial one-time admin secret used only when no admin user exists |
+| `ADMIN_BOOTSTRAP_PASSWORD` | random | Initial one-time admin secret used only when no admin user exists (required for first bootstrap path) |
 | `VM_STORAGE_CLASS` | auto | StorageClass for VM clone disks |
 | `BACKEND_NODEPORT_ENABLED` | `0` | Expose backend API as NodePort (`30080`) only when explicitly enabled |
 | `HELM_RELEASE_NAME` | `bretter-labs` | Helm release name for base app deploy |

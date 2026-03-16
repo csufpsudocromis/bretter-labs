@@ -2,8 +2,9 @@
 # This file only contains keys consumed by deploy/helm/files/app.yaml.tpl.
 
 appTemplateValues:
-  CONTROL_NODE: cbekube1
-  NODE_EXTERNAL_HOST: 10.68.49.250
+  # Must be overridden per environment before production deployment.
+  CONTROL_NODE: ""
+  NODE_EXTERNAL_HOST: ""
   RUNNER_NODE_SELECTOR_VALUE: ""
   VM_STORAGE_CLASS: longhorn-r1
   # Production profile requires immutable digest pins.
@@ -42,7 +43,7 @@ appTemplateValues:
   CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "20"
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "300"
   CORS_ENTERPRISE_PROFILE: "1"
-  CORS_ALLOWED_ORIGINS: "https://labs.fullerton.edu,https://10.68.49.250:30073"
+  CORS_ALLOWED_ORIGINS: "https://localhost:30073"
   CORS_ALLOWED_ORIGIN_REGEX: ""
   CORS_ALLOWED_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
   CORS_ALLOWED_HEADERS: "Accept,Content-Type,Authorization"

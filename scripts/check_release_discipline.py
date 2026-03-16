@@ -93,6 +93,19 @@ def main() -> int:
                 f"{key}={image_ref!r}"
             )
 
+    expected_neutral_defaults = {
+        "CONTROL_NODE": "",
+        "NODE_EXTERNAL_HOST": "",
+        "CORS_ALLOWED_ORIGINS": "https://localhost:30073",
+    }
+    for key, expected in expected_neutral_defaults.items():
+        actual = _extract_yaml_scalar(values_production, key)
+        if actual != expected:
+            errors.append(
+                "deploy/helm/values-production.yaml should keep neutral repo defaults "
+                f"for {key}: expected {expected!r}, found {actual!r}"
+            )
+
     if errors:
         print("Release/version discipline checks failed:", file=sys.stderr)
         for item in errors:
