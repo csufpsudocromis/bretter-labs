@@ -19,7 +19,8 @@ server {
   root /usr/share/nginx/html;
 
   location /api/ {
-    proxy_pass http://bretter-backend:8000/;
+    proxy_pass https://bretter-backend:8000/;
+    proxy_ssl_verify off;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -30,7 +31,8 @@ server {
   }
 
   location /auth/ {
-    proxy_pass http://bretter-backend:8000;
+    proxy_pass https://bretter-backend:8000;
+    proxy_ssl_verify off;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -40,7 +42,8 @@ server {
   }
 
   location /user/ {
-    proxy_pass http://bretter-backend:8000;
+    proxy_pass https://bretter-backend:8000;
+    proxy_ssl_verify off;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
