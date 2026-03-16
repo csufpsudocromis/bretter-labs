@@ -369,7 +369,7 @@ spec:
                 - ALL
           resources:
             requests:
-              cpu: 25m
+              cpu: 50m
               memory: 64Mi
               ephemeral-storage: 64Mi
             limits:

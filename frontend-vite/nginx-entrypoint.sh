@@ -30,7 +30,7 @@ server {
     proxy_ssl_verify on;
     proxy_ssl_verify_depth 3;
     proxy_ssl_server_name on;
-    proxy_ssl_name $host;
+    proxy_ssl_name localhost;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -46,7 +46,7 @@ server {
     proxy_ssl_verify on;
     proxy_ssl_verify_depth 3;
     proxy_ssl_server_name on;
-    proxy_ssl_name $host;
+    proxy_ssl_name localhost;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -61,7 +61,7 @@ server {
     proxy_ssl_verify on;
     proxy_ssl_verify_depth 3;
     proxy_ssl_server_name on;
-    proxy_ssl_name $host;
+    proxy_ssl_name localhost;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -124,4 +124,10 @@ server {
 EOF
 fi
 
-exec nginx -g "daemon off;"
+# nginx.conf in this image sets pid under /run, which is not writable for non-root.
+# Copy to /tmp, rewrite pid there, and launch nginx with the writable config path.
+NGINX_CONF_RUNTIME="/tmp/nginx.conf"
+cp /etc/nginx/nginx.conf "$NGINX_CONF_RUNTIME"
+sed -i 's#^\s*pid\s\+/run/nginx\.pid;#pid /tmp/nginx.pid;#' "$NGINX_CONF_RUNTIME"
+
+exec nginx -c "$NGINX_CONF_RUNTIME" -g "daemon off;"
