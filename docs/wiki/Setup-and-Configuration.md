@@ -94,6 +94,7 @@ Monitoring/ops:
 - `RUN_POST_DEPLOY_API_HEALTH_CHECK`
 - `POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
+- `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
 
 External secrets (optional):
 
@@ -142,6 +143,8 @@ ENABLE_MONITORING=1 \
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
+- If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
+- To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
 - When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.

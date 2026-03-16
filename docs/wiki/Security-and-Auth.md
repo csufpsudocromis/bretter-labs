@@ -17,6 +17,7 @@ Bootstrap admin behavior:
 - Generated bootstrap secret is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - Backend startup fails fast if no admin user exists and no bootstrap secret is configured.
 - First login requires password reset (`force_password_change=true`).
+- Setup synthetic validation requires explicit `SYNTHETIC_CHECK_PASSWORD` on existing deployments; when setup generates a bootstrap secret and no synthetic password is provided, synthetic validation is auto-skipped.
 
 Default cookie names:
 

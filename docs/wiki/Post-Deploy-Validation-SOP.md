@@ -1,6 +1,6 @@
 # Post-Deploy Validation SOP
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
 
 Run this after every deployment before closing the change.
 
@@ -42,6 +42,19 @@ Pass criteria:
 
 - Job completes successfully.
 - Logs include end-to-end success markers for VM/container paths.
+
+Notes:
+
+- Setup auto-disables synthetic validation when it generated a fresh bootstrap admin secret and no `SYNTHETIC_CHECK_PASSWORD` was supplied.
+- For existing deployments, run authenticated synthetic validation with explicit credentials:
+
+```bash
+SETUP_PHASES=postdeploy \
+RUN_POST_DEPLOY_SYNTHETIC_CHECK=1 \
+SYNTHETIC_CHECK_USERNAME=admin \
+SYNTHETIC_CHECK_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
+./scripts/setup.sh
+```
 
 ## Phase 3: Manual UI validation
 

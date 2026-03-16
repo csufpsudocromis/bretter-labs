@@ -42,7 +42,7 @@ Use that file as the baseline and override per environment.
 1. Copy production values into an environment overlay.
 2. Commit environment-specific override files.
 3. Deploy with explicit values files in order.
-4. Run rollout status + post-deploy synthetic check.
+4. Run rollout status + post-deploy synthetic check (set `SYNTHETIC_CHECK_PASSWORD` explicitly on existing deployments).
 
 Example:
 
