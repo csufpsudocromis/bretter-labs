@@ -2,10 +2,20 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION" 2>/dev/null || true)"
+if [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){2}$ ]]; then
+  DEFAULT_IMAGE_TAG="v${APP_VERSION}"
+else
+  DEFAULT_IMAGE_TAG="latest"
+fi
+
 NAMESPACE="${NAMESPACE:-labs}"
-BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-backend:latest}"
-FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-frontend:latest}"
-RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/csufpsudocromis/win-vm-runner:latest}"
+BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-backend:${DEFAULT_IMAGE_TAG}}"
+FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-frontend:${DEFAULT_IMAGE_TAG}}"
+RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/csufpsudocromis/win-vm-runner:${DEFAULT_IMAGE_TAG}}"
+ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
+SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
+SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
 APPLY_GOLDEN_PVC="${APPLY_GOLDEN_PVC:-0}"
 APPLY_GOLDEN_HOSTPATH="${APPLY_GOLDEN_HOSTPATH:-1}"
@@ -135,6 +145,10 @@ log() {
   echo "==> $*"
 }
 
+warn() {
+  echo "WARNING: $*" >&2
+}
+
 fail() {
   echo "ERROR: $*" >&2
   exit 1
@@ -182,6 +196,35 @@ validate_preload_config() {
 
 is_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+phase_enabled() {
+  local phase="$1"
+  case ",${SETUP_PHASES}," in
+    *",${phase},"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+is_mutable_image_reference() {
+  local ref="$1"
+  local without_digest last_component tag
+  if [[ "$ref" == *@sha256:* ]]; then
+    return 1
+  fi
+  without_digest="${ref%%@*}"
+  last_component="${without_digest##*/}"
+  if [[ "$last_component" != *:* ]]; then
+    return 0
+  fi
+  tag="${last_component##*:}"
+  if [ -z "$tag" ]; then
+    return 0
+  fi
+  if [ "${tag,,}" = "latest" ]; then
+    return 0
+  fi
+  return 1
 }
 
 validate_longhorn_tuning_config() {
@@ -269,6 +312,61 @@ validate_kubelet_serving_csr_autoapproval_config() {
   fi
   if [ -z "$KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE" ]; then
     fail "KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE cannot be empty when ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=1."
+  fi
+}
+
+validate_setup_phase_config() {
+  case "$SETUP_DRY_RUN" in
+    0|1) ;;
+    *) fail "SETUP_DRY_RUN must be either 0 or 1." ;;
+  esac
+
+  local raw phase deduped
+  local -a phases
+  raw="$(printf '%s' "$SETUP_PHASES" | tr -d '[:space:]')"
+  [ -n "$raw" ] || fail "SETUP_PHASES cannot be empty."
+  if [ "$raw" = "all" ]; then
+    SETUP_PHASES="prereqs,deploy,postdeploy"
+    return
+  fi
+
+  deduped=""
+  IFS=',' read -r -a phases <<<"$raw"
+  for phase in "${phases[@]}"; do
+    case "$phase" in
+      prereqs|deploy|postdeploy) ;;
+      *) fail "Unsupported setup phase: ${phase}. Allowed values: prereqs,deploy,postdeploy (or all)." ;;
+    esac
+    case ",${deduped}," in
+      *",${phase},"*) continue ;;
+      *) deduped="${deduped}${deduped:+,}${phase}" ;;
+    esac
+  done
+  [ -n "$deduped" ] || fail "SETUP_PHASES resolved to an empty phase set."
+  SETUP_PHASES="$deduped"
+}
+
+validate_image_reference_policy() {
+  case "$ALLOW_MUTABLE_IMAGE_TAGS" in
+    0|1) ;;
+    *) fail "ALLOW_MUTABLE_IMAGE_TAGS must be either 0 or 1." ;;
+  esac
+
+  if [ "$ALLOW_MUTABLE_IMAGE_TAGS" -eq 1 ]; then
+    warn "Mutable image references are allowed (ALLOW_MUTABLE_IMAGE_TAGS=1). This is not recommended for production."
+    return
+  fi
+
+  local invalid_refs=()
+  local image_var image_ref
+  for image_var in BACKEND_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
+    image_ref="${!image_var}"
+    if is_mutable_image_reference "$image_ref"; then
+      invalid_refs+=("${image_var}=${image_ref}")
+    fi
+  done
+  if [ "${#invalid_refs[@]}" -gt 0 ]; then
+    fail "Mutable image references are not allowed: ${invalid_refs[*]}. Use immutable tags or digests, or set ALLOW_MUTABLE_IMAGE_TAGS=1 for dev-only workflows."
   fi
 }
 
@@ -2890,38 +2988,17 @@ EOF
   kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-check --all-containers=true || true
 }
 
-main() {
-  validate_public_scheme
-  validate_tls_config
-  validate_preload_config
-  validate_longhorn_tuning_config
-  validate_autocleanup_config
-  validate_storage_guard_config
-  validate_vm_network_config
-  validate_container_runtime_config
-  validate_postgres_config
-  validate_external_secrets_config
-  validate_cdi_upload_config
-  validate_cpu_manager_config
-  validate_monitoring_config
-  validate_metrics_server_config
-  validate_kubelet_serving_csr_autoapproval_config
-  configure_admin_bootstrap_credentials
-  validate_synthetic_check_config
-  validate_helm_deploy_config
-  require_apt
-  install_base_packages
-  install_kubectl
+ensure_cluster_runtime_context() {
+  if ! command -v kubectl >/dev/null 2>&1; then
+    fail "kubectl is required for selected phases. Run SETUP_PHASES=prereqs first or install kubectl manually."
+  fi
   ensure_kubeconfig
-  tune_longhorn_for_phase2
   detect_control_node
   detect_node_external_host
-  enable_cpu_manager_static_all_nodes
-  ensure_cdi_installed
-  configure_cdi_upload_proxy_url
-  install_external_secrets_operator
-  prepare_rendered_manifests
+}
 
+log_runtime_configuration() {
+  log "Selected setup phases: $SETUP_PHASES (dry run: $SETUP_DRY_RUN)"
   log "Using control node: $CONTROL_NODE"
   log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
   if [ -n "$RUNNER_NODE_SELECTOR_VALUE" ]; then
@@ -2964,6 +3041,7 @@ main() {
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
+  log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
   if [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
     log "Synthetic check password was auto-set to the bootstrap admin secret."
@@ -2975,7 +3053,33 @@ main() {
   log "Cleanup automation enabled: $ENABLE_AUTOCLEANUP (schedule: $AUTOCLEANUP_SCHEDULE)"
   log "Cleanup alert thresholds: nodefs ${AUTOCLEANUP_NODEFS_WARN_PCT}/${AUTOCLEANUP_NODEFS_CRITICAL_PCT}/${AUTOCLEANUP_NODEFS_EMERGENCY_PCT}% pvc ${AUTOCLEANUP_PVC_WARN_PCT}/${AUTOCLEANUP_PVC_CRITICAL_PCT}/${AUTOCLEANUP_PVC_EMERGENCY_PCT}%"
   log "Storage guard thresholds: warn<${SETUP_WARN_FREE_GIB}Gi, fail<${SETUP_MIN_FREE_GIB}Gi"
-  run_storage_preflight_checks
+}
+
+run_phase_prereqs() {
+  if [ "$SETUP_DRY_RUN" -eq 1 ]; then
+    log "DRY_RUN: would execute prereqs phase."
+    return
+  fi
+
+  require_apt
+  install_base_packages
+  install_kubectl
+  ensure_kubeconfig
+  tune_longhorn_for_phase2
+  detect_control_node
+  detect_node_external_host
+  enable_cpu_manager_static_all_nodes
+  ensure_cdi_installed
+  configure_cdi_upload_proxy_url
+  install_external_secrets_operator
+  prepare_rendered_manifests
+}
+
+run_phase_deploy() {
+  if [ "$SETUP_DRY_RUN" -eq 1 ]; then
+    log "DRY_RUN: would execute deploy phase."
+    return
+  fi
 
   if [ "$PUSH_IMAGES" -eq 1 ] || [ "$LOAD_LOCAL_IMAGES" -eq 1 ]; then
     install_node
@@ -3004,11 +3108,77 @@ main() {
   fi
 
   apply_manifests
+}
+
+run_phase_postdeploy() {
+  if [ "$SETUP_DRY_RUN" -eq 1 ]; then
+    log "DRY_RUN: would execute postdeploy phase."
+    return
+  fi
+
   run_post_deploy_synthetic_check
   install_metrics_server
   install_monitoring_stack
   patch_default_pvc_alert_exclusions
   apply_monitoring_alert_rules
+}
+
+main() {
+  validate_public_scheme
+  validate_tls_config
+  validate_setup_phase_config
+  validate_image_reference_policy
+  validate_preload_config
+  validate_longhorn_tuning_config
+  validate_autocleanup_config
+  validate_storage_guard_config
+  validate_vm_network_config
+  validate_container_runtime_config
+  validate_postgres_config
+  validate_external_secrets_config
+  validate_cdi_upload_config
+  validate_cpu_manager_config
+  validate_monitoring_config
+  validate_metrics_server_config
+  validate_kubelet_serving_csr_autoapproval_config
+  configure_admin_bootstrap_credentials
+  validate_synthetic_check_config
+  validate_helm_deploy_config
+
+  if phase_enabled prereqs; then
+    run_phase_prereqs
+  fi
+  if [ "$SETUP_DRY_RUN" -eq 1 ]; then
+    if phase_enabled deploy; then
+      run_phase_deploy
+    fi
+    if phase_enabled postdeploy; then
+      run_phase_postdeploy
+    fi
+    log "Done (dry run)."
+    return
+  fi
+
+  if ! phase_enabled prereqs && { phase_enabled deploy || phase_enabled postdeploy; }; then
+    ensure_cluster_runtime_context
+  fi
+  if ! phase_enabled prereqs && phase_enabled deploy; then
+    ensure_cdi_installed
+    configure_cdi_upload_proxy_url
+    install_external_secrets_operator
+    prepare_rendered_manifests
+  fi
+
+  log_runtime_configuration
+
+  if phase_enabled deploy; then
+    run_storage_preflight_checks
+    run_phase_deploy
+  fi
+  if phase_enabled postdeploy; then
+    run_phase_postdeploy
+  fi
+
   log "Done."
 }
 

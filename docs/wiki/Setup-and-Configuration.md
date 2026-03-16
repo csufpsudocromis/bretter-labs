@@ -21,6 +21,8 @@ Core:
 - `NAMESPACE` (default `labs`)
 - `HELM_RELEASE_NAME` (default `bretter-labs`)
 - `HELM_CHART_DIR` (default `deploy/helm`)
+- `SETUP_PHASES` (default `prereqs,deploy,postdeploy`, or `all`)
+- `SETUP_DRY_RUN` (default `0`)
 - `CONTROL_NODE`
 - `NODE_EXTERNAL_HOST`
 - `PUBLIC_SCHEME` (`https` recommended)
@@ -32,6 +34,13 @@ Storage:
 - `GOLDEN_IMAGES_HOSTPATH`
 - `BACKEND_DATA_HOSTPATH`
 - `POSTGRES_DATA_HOSTPATH`
+
+Images:
+
+- `BACKEND_IMAGE`
+- `FRONTEND_IMAGE`
+- `RUNNER_IMAGE`
+- `ALLOW_MUTABLE_IMAGE_TAGS` (default `0`; production should stay `0`)
 
 Auth/session/cors:
 
@@ -88,6 +97,7 @@ External secrets (optional):
 
 ```bash
 NAMESPACE=labs \
+SETUP_PHASES=all \
 NODE_EXTERNAL_HOST=<NODE_EXTERNAL_HOST_OR_FQDN> \
 PUBLIC_SCHEME=https \
 TLS_ENABLED=1 \
@@ -112,6 +122,9 @@ ENABLE_MONITORING=1 \
 - Runtime settings page is read-only by design.
 - `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
 - Enterprise CORS (`BLABS_CORS_ENTERPRISE_PROFILE=1`) requires explicit `BLABS_CORS_ALLOWED_ORIGINS`, blocks `BLABS_CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
+- Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
+- Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
+- `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.

@@ -18,6 +18,25 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run shellcheck
+        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      - name: Validate Helm chart rendering
+        run: |
+          helm lint ./deploy/helm
+          helm template bretter-labs ./deploy/helm -f deploy/helm/values.yaml >/tmp/helm-values.yaml
+          helm template bretter-labs ./deploy/helm -f deploy/helm/values.yaml -f deploy/helm/values-production.yaml >/tmp/helm-values-production.yaml
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -29,7 +48,7 @@ jobs:
       - name: Install backend dependencies
         run: |
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r backend/requirements.txt pytest httpx
+          .venv/bin/pip install -r backend/requirements-dev.txt
           .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 
       - name: Run release/version guardrail

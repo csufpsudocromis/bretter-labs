@@ -128,9 +128,15 @@ Password change is required on first login.
 | `HELM_CHART_DIR` | `deploy/helm` | Chart path used by setup for base deploy |
 | `APPLY_GOLDEN_HOSTPATH` | `1` | HostPath-backed golden image PVC |
 | `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` instead |
+| `BACKEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend:v<VERSION>` | Backend image reference |
+| `FRONTEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-frontend:v<VERSION>` | Frontend image reference |
+| `RUNNER_IMAGE` | `ghcr.io/csufpsudocromis/win-vm-runner:v<VERSION>` | Runner image reference |
 | `LOAD_LOCAL_IMAGES` | `1` | Build/import local images into cluster runtime |
 | `PUSH_IMAGES` | `0` | Build and push images to registry |
 | `CREATE_PULL_SECRET` | `0` | Create/update `ghcr-creds` pull secret |
+| `ALLOW_MUTABLE_IMAGE_TAGS` | `0` | Dev-only override to permit mutable image refs like `:latest` |
+| `SETUP_PHASES` | `prereqs,deploy,postdeploy` | Select setup phases (`prereqs`,`deploy`,`postdeploy`,`all`) |
+| `SETUP_DRY_RUN` | `0` | Validate and print phase plan without running cluster/package actions |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
 | `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE` | `*/5 * * * *` | Cron schedule for kubelet-serving CSR auto-approver job |
@@ -141,6 +147,15 @@ Metrics-server TLS guidance:
 - For production clusters, configure kubelet serving certs so metrics-server can validate trust and SANs for node addresses.
 - Use `METRICS_SERVER_INSECURE_TLS=1` only for local/dev clusters when proper kubelet PKI is unavailable.
 - `setup.sh` installs a kubelet-serving CSR auto-approver CronJob (default enabled) that only approves pending requests when requester/subject/SANs match the target node.
+- By default, `setup.sh` rejects mutable image refs (for example `:latest` or missing tag). Use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` only for dev workflows.
+
+Setup phase guidance:
+
+- `SETUP_PHASES=all` (default equivalent: `prereqs,deploy,postdeploy`) runs end-to-end.
+- `SETUP_PHASES=prereqs` prepares host/cluster prerequisites only.
+- `SETUP_PHASES=deploy` applies app deployment steps only.
+- `SETUP_PHASES=postdeploy` runs synthetic checks/metrics/monitoring steps only.
+- `SETUP_DRY_RUN=1` validates config and phase selection without making changes.
 
 Example:
 

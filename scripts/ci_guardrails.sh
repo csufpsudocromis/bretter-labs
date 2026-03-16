@@ -7,7 +7,7 @@ if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
 fi
 
-cd "$ROOT_DIR/backend"
+cd "$ROOT_DIR"
 
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_release_discipline.py"
 if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
@@ -15,6 +15,6 @@ if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
   exit 1
 fi
 
-PYTHONPATH="$PWD" "$PYTHON_BIN" -m pytest -q \
-  tests/test_ci_guardrails.py \
-  tests/test_e2e_regressions.py
+PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
+
+"$ROOT_DIR/scripts/smoke_setup.sh"
