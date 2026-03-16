@@ -258,7 +258,7 @@ uvicorn backend.src.main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 cd frontend-vite
-npm install
+npm ci
 npm run dev -- --host --port 5173
 ```
 
@@ -282,6 +282,8 @@ Release guardrail check:
 ```bash
 python3 scripts/check_release_discipline.py
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+# when using a site overlay:
+python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f deploy/helm/values-prod-site.yaml
 ./scripts/ci_guardrails.sh
 ```
 
