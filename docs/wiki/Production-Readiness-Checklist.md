@@ -17,6 +17,7 @@ Use this checklist before first production deployment and for each release.
 - Ensure runtime secret `bretter-runtime-secrets` exists with data key `secrets_encryption_key` (or your configured overrides) before/at rollout.
 - Set `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (required for production profile).
 - Set `CONTAINER_SIGNATURE_KEY_REF` and `CONTAINER_SIGNATURE_KEY_SECRET_NAME` for managed-key verification.
+- Verify `bretter-cosign-public-key` matches the expected official key fingerprint before rollout.
 
 ## Image and supply chain
 

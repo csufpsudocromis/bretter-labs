@@ -48,11 +48,15 @@ Expected: no output.
 Runtime secret wiring checks:
 
 ```bash
-kubectl -n labs get secret bretter-runtime-secrets -o jsonpath="{.data['secrets_encryption_key']}" | wc -c
-kubectl -n labs get secret bretter-cosign-public-key -o jsonpath="{.data['cosign.pub']}" | wc -c
+kubectl -n labs get secret bretter-runtime-secrets -o go-template='{{index .data "secrets_encryption_key"}}' | wc -c
+kubectl -n labs get secret bretter-cosign-public-key -o go-template='{{index .data "cosign.pub"}}' | wc -c
+kubectl -n labs get secret bretter-cosign-public-key -o go-template='{{index .data "cosign.pub"}}' | base64 -d | sha256sum
 ```
 
-Expected: both commands print a value greater than `0`.
+Expected:
+
+- First two commands print a value greater than `0`.
+- Third command prints the expected SHA256 fingerprint for your official cosign public key.
 
 ## VM and container workload visibility
 

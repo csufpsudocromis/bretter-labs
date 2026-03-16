@@ -1,6 +1,6 @@
 # Production Architecture
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
 
 Use this page as the production target state for Bretter Labs deployments.
 
@@ -61,6 +61,16 @@ Secrets:
 
 - Use External Secrets + corporate store (Vault or equivalent).
 - Keep credentials out of plaintext manifests.
+- Keep `deploy/helm/values-production.yaml` non-secret (`SECRETS_ENCRYPTION_KEY` remains empty).
+- Inject runtime encryption key via `RUNTIME_SECRETS_SECRET_NAME` / `RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`.
+- Inject cosign verification key via `CONTAINER_SIGNATURE_KEY_SECRET_NAME` mounted at `CONTAINER_SIGNATURE_KEY_REF`.
+
+Production gates:
+
+- Run strict production validation before rollout:
+  - `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml`
+- Run go-live proof after rollout:
+  - `NAMESPACE=labs ./scripts/production_go_live_proof.sh`
 
 Database:
 

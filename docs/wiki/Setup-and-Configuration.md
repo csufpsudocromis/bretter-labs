@@ -61,6 +61,7 @@ Auth/session/cors:
 - `RUNTIME_SECRETS_ENCRYPTION_KEY_KEY` (default `secrets_encryption_key`)
 - `CONTAINER_SIGNATURE_KEY_REF` (required when signature verification is enabled)
 - `CONTAINER_SIGNATURE_KEY_SECRET_NAME` (default `bretter-cosign-public-key` for `/etc/bretter-signing/*` key refs)
+- `CONTAINER_SIGNATURE_PUBLIC_KEY` (optional inline setup input to create/update signature key secret)
 - `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` (optional setup input to create/update signature key secret)
 
 OIDC/SSO:

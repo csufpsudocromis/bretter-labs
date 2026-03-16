@@ -171,6 +171,15 @@ Keep kubelet metrics scraping in strict TLS mode:
   - `allowPrivilegeEscalation=false` + dropped capabilities
   - explicit CPU/memory requests and limits
 
+## 14) Runtime and signature secrets
+
+- Keep `SECRETS_ENCRYPTION_KEY` empty in committed production values.
+- Ensure runtime encryption key is injected through `bretter-runtime-secrets` (`secrets_encryption_key` key by default).
+- Ensure `bretter-cosign-public-key` contains your official `cosign.pub`.
+- Keep `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` with `CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub`.
+- After rollout, run:
+  - `NAMESPACE=labs ./scripts/production_go_live_proof.sh`
+
 ## Related pages
 
 - [Production Architecture](Production-Architecture)
