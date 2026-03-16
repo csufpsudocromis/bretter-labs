@@ -45,15 +45,16 @@ Images:
 Auth/session/cors:
 
 - `ADMIN_BOOTSTRAP_PASSWORD`
-- `BLABS_AUTH_COOKIE_TTL_SECONDS`
-- `BLABS_CONNECT_GRANT_TTL_SECONDS`
-- `BLABS_CONNECT_SESSION_TTL_SECONDS`
-- `BLABS_AUTH_COOKIE_SECURE`, `BLABS_CONNECT_COOKIE_SECURE`
-- `BLABS_CORS_ENTERPRISE_PROFILE`
-- `BLABS_CORS_ALLOWED_ORIGINS`
-- `BLABS_CORS_ALLOWED_METHODS`
-- `BLABS_CORS_ALLOWED_HEADERS`
-- `BLABS_CORS_ALLOWED_ORIGIN_REGEX` (non-enterprise mode only)
+- `BACKEND_NODEPORT_ENABLED` (default `0`, keep disabled for hardened deployments)
+- `CORS_ENTERPRISE_PROFILE`
+- `CORS_ALLOWED_ORIGINS`
+- `CORS_ALLOWED_METHODS`
+- `CORS_ALLOWED_HEADERS`
+- `CORS_ALLOWED_ORIGIN_REGEX` (non-enterprise mode only)
+- `AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS`
+- `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS`
+- `AUTH_LOGIN_LOCKOUT_SECONDS`
+- `SECRETS_ENCRYPTION_KEY` (recommended in production)
 
 OIDC/SSO:
 
@@ -102,8 +103,8 @@ NODE_EXTERNAL_HOST=<NODE_EXTERNAL_HOST_OR_FQDN> \
 PUBLIC_SCHEME=https \
 TLS_ENABLED=1 \
 VM_STORAGE_CLASS=longhorn-r1 \
-BLABS_CORS_ENTERPRISE_PROFILE=1 \
-BLABS_CORS_ALLOWED_ORIGINS="https://<UI_HOST>:30073,https://labs.example.edu" \
+CORS_ENTERPRISE_PROFILE=1 \
+CORS_ALLOWED_ORIGINS="https://<UI_HOST>:30073,https://labs.example.edu" \
 ENABLE_MONITORING=1 \
 ./scripts/setup.sh
 ```
@@ -121,7 +122,8 @@ ENABLE_MONITORING=1 \
 
 - Runtime settings page is read-only by design.
 - `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
-- Enterprise CORS (`BLABS_CORS_ENTERPRISE_PROFILE=1`) requires explicit `BLABS_CORS_ALLOWED_ORIGINS`, blocks `BLABS_CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
+- Generated bootstrap secrets are written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
+- Enterprise CORS (`CORS_ENTERPRISE_PROFILE=1`) requires explicit `CORS_ALLOWED_ORIGINS`, blocks `CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.

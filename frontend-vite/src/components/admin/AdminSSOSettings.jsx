@@ -6,12 +6,13 @@ const AdminSSOSettings = () => {
     sso_enabled: false,
     sso_provider: '',
     sso_client_id: '',
-    sso_client_secret: '',
+    sso_client_secret_configured: false,
     sso_authorize_url: '',
     sso_token_url: '',
     sso_userinfo_url: '',
     sso_redirect_url: '',
   });
+  const [secretInput, setSecretInput] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
@@ -32,8 +33,22 @@ const AdminSSOSettings = () => {
     setSaving(true);
     setError('');
     setMessage('');
+    const payload = {
+      sso_enabled: data.sso_enabled,
+      sso_provider: data.sso_provider,
+      sso_client_id: data.sso_client_id,
+      sso_authorize_url: data.sso_authorize_url,
+      sso_token_url: data.sso_token_url,
+      sso_userinfo_url: data.sso_userinfo_url,
+      sso_redirect_url: data.sso_redirect_url,
+    };
+    if (secretInput.trim()) {
+      payload.sso_client_secret = secretInput;
+    }
     try {
-      await api.patch('/admin/settings/sso', data);
+      const res = await api.patch('/admin/settings/sso', payload);
+      setData(res.data || {});
+      setSecretInput('');
       setMessage('SSO settings updated.');
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to save SSO settings');
@@ -71,8 +86,9 @@ const AdminSSOSettings = () => {
             Client Secret
             <input
               type="password"
-              value={data.sso_client_secret}
-              onChange={(e) => setData({ ...data, sso_client_secret: e.target.value })}
+              value={secretInput}
+              placeholder={data.sso_client_secret_configured ? 'Configured (leave blank to keep current)' : 'Not configured'}
+              onChange={(e) => setSecretInput(e.target.value)}
             />
           </label>
           <label>

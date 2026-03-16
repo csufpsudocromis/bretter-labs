@@ -1,4 +1,10 @@
 {{- $manifest := .Files.Get "files/app.yaml.tpl" -}}
+{{- $allowedTopLevel := dict "appTemplateValues" true -}}
+{{- range $valueKey, $_ := .Values }}
+{{- if not (hasKey $allowedTopLevel $valueKey) -}}
+{{- fail (printf "unsupported top-level values key: %s (only appTemplateValues is supported by this chart)" $valueKey) -}}
+{{- end -}}
+{{- end -}}
 {{- $manifest = replace "__NAMESPACE__" (toString .Release.Namespace) $manifest -}}
 {{- range $key, $value := .Values.appTemplateValues }}
 {{- if ne $key "NAMESPACE" }}

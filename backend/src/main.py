@@ -110,9 +110,15 @@ def _default_cors_origins() -> list[str]:
         public_scheme = str(settings.public_scheme or "https").strip().lower()
         if public_scheme not in {"http", "https"}:
             public_scheme = "https"
-        node_origin = f"{public_scheme}://{node_host}:30080"
-        if node_origin not in seen:
-            allowlist.append(node_origin)
+        for port in ("30073", "30080"):
+            node_origin = f"{public_scheme}://{node_host}:{port}"
+            if node_origin not in seen:
+                seen.add(node_origin)
+                allowlist.append(node_origin)
+        root_origin = f"{public_scheme}://{node_host}"
+        if root_origin not in seen:
+            seen.add(root_origin)
+            allowlist.append(root_origin)
     return allowlist
 
 
@@ -240,10 +246,9 @@ async def lifespan(_: FastAPI):
             )
             if generated_password:
                 logger.warning(
-                    "Bootstrap admin created with one-time random secret. username=%s password=%s. "
-                    "Reset password immediately after first login.",
+                    "Bootstrap admin created with one-time random secret for username=%s. "
+                    "Retrieve the secret from secure bootstrap output and reset password immediately after first login.",
                     settings.admin_default_username,
-                    bootstrap_password,
                 )
             else:
                 logger.info(

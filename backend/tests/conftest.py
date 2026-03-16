@@ -23,6 +23,7 @@ from src.auth import hash_password  # noqa: E402
 from src.db import engine  # noqa: E402
 from src.main import app  # noqa: E402
 import src.main as main_module  # noqa: E402
+import src.routes.auth as auth_routes  # noqa: E402
 from src.services.kubernetes import PodStatus, kube  # noqa: E402
 from src.tables import (  # noqa: E402
     Config,
@@ -76,6 +77,8 @@ def client(monkeypatch, reset_db):
 
 @pytest.fixture
 def reset_db():
+    auth_routes._LOGIN_ATTEMPTS.clear()
+    auth_routes._LOGIN_BLOCKED_UNTIL.clear()
     for path in SITE_ASSETS_DIR.glob("*"):
         if path.is_file():
             path.unlink()

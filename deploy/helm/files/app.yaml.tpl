@@ -492,6 +492,28 @@ spec:
               value: "__CONTAINER_START_QUEUE_BASE_DELAY_SECONDS__"
             - name: BLABS_CONTAINER_START_QUEUE_MAX_DELAY_SECONDS
               value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
+            - name: BLABS_CORS_ENTERPRISE_PROFILE
+              value: "__CORS_ENTERPRISE_PROFILE__"
+            - name: BLABS_CORS_ALLOWED_ORIGINS
+              value: "__CORS_ALLOWED_ORIGINS__"
+            - name: BLABS_CORS_ALLOWED_ORIGIN_REGEX
+              value: "__CORS_ALLOWED_ORIGIN_REGEX__"
+            - name: BLABS_CORS_ALLOWED_METHODS
+              value: "__CORS_ALLOWED_METHODS__"
+            - name: BLABS_CORS_ALLOWED_HEADERS
+              value: "__CORS_ALLOWED_HEADERS__"
+            - name: BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS
+              value: "__AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS__"
+            - name: BLABS_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS
+              value: "__AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS__"
+            - name: BLABS_AUTH_LOGIN_LOCKOUT_SECONDS
+              value: "__AUTH_LOGIN_LOCKOUT_SECONDS__"
+            - name: BLABS_VM_CONNECT_INSECURE_TLS
+              value: "__VM_CONNECT_INSECURE_TLS__"
+            - name: BLABS_CONTAINER_CONNECT_INSECURE_TLS
+              value: "__CONTAINER_CONNECT_INSECURE_TLS__"
+            - name: BLABS_SECRETS_ENCRYPTION_KEY
+              value: "__SECRETS_ENCRYPTION_KEY__"
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images
@@ -517,13 +539,13 @@ metadata:
   name: bretter-backend
   namespace: __NAMESPACE__
 spec:
-  type: NodePort
+  type: __BACKEND_SERVICE_TYPE__
   selector:
     app: bretter-backend
   ports:
     - port: 8000
       targetPort: 8000
-      nodePort: 30080
+__BACKEND_SERVICE_NODEPORT_LINE__
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -646,8 +668,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - ipBlock:
-            cidr: 0.0.0.0/0
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: __NAMESPACE__
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring

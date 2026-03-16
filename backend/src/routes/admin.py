@@ -38,6 +38,7 @@ from ..models import (
     ImageMeta,
     ImageUploadTaskStatus,
     LDAPSettings,
+    LDAPSettingsUpdate,
     RuntimeDriftItem,
     RuntimeHealthCheck,
     StorageSettingsRead,
@@ -47,6 +48,7 @@ from ..models import (
     RuntimeSettingsRead,
     SiteSettings,
     SSOSettings,
+    SSOSettingsUpdate,
     TeamQuotaCreate,
     TeamQuotaOut,
     TeamQuotaUpdate,
@@ -72,6 +74,7 @@ from ..rbac import (
 )
 from ..services.kubernetes import kube
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
+from ..secret_codec import encrypt_secret, secret_is_configured
 from ..tables import Config, Image, ImageUploadTask, Instance, TeamQuota, Template, User
 from ..time_utils import utc_now
 
@@ -4442,7 +4445,7 @@ def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
         sso_enabled=cfg.sso_enabled,
         sso_provider=cfg.sso_provider,
         sso_client_id=cfg.sso_client_id,
-        sso_client_secret=cfg.sso_client_secret,
+        sso_client_secret_configured=secret_is_configured(cfg.sso_client_secret),
         sso_authorize_url=cfg.sso_authorize_url,
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,
@@ -4455,12 +4458,13 @@ def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     response_model=SSOSettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_sso_settings(payload: SSOSettings, session: Session = Depends(get_session)) -> SSOSettings:
+def update_sso_settings(payload: SSOSettingsUpdate, session: Session = Depends(get_session)) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     cfg.sso_enabled = payload.sso_enabled
     cfg.sso_provider = payload.sso_provider
     cfg.sso_client_id = payload.sso_client_id
-    cfg.sso_client_secret = payload.sso_client_secret
+    if "sso_client_secret" in payload.model_fields_set:
+        cfg.sso_client_secret = encrypt_secret(payload.sso_client_secret)
     cfg.sso_authorize_url = payload.sso_authorize_url
     cfg.sso_token_url = payload.sso_token_url
     cfg.sso_userinfo_url = payload.sso_userinfo_url
@@ -4472,7 +4476,7 @@ def update_sso_settings(payload: SSOSettings, session: Session = Depends(get_ses
         sso_enabled=cfg.sso_enabled,
         sso_provider=cfg.sso_provider,
         sso_client_id=cfg.sso_client_id,
-        sso_client_secret=cfg.sso_client_secret,
+        sso_client_secret_configured=secret_is_configured(cfg.sso_client_secret),
         sso_authorize_url=cfg.sso_authorize_url,
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,
@@ -4493,7 +4497,7 @@ def get_ldap_settings(session: Session = Depends(get_session)) -> LDAPSettings:
         ldap_enabled=cfg.ldap_enabled,
         ldap_server_uri=cfg.ldap_server_uri,
         ldap_bind_dn=cfg.ldap_bind_dn,
-        ldap_bind_password=cfg.ldap_bind_password,
+        ldap_bind_password_configured=secret_is_configured(cfg.ldap_bind_password),
         ldap_user_base_dn=cfg.ldap_user_base_dn,
         ldap_user_filter=cfg.ldap_user_filter,
         ldap_start_tls=cfg.ldap_start_tls,
@@ -4508,7 +4512,7 @@ def get_ldap_settings(session: Session = Depends(get_session)) -> LDAPSettings:
     response_model=LDAPSettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_ldap_settings(payload: LDAPSettings, session: Session = Depends(get_session)) -> LDAPSettings:
+def update_ldap_settings(payload: LDAPSettingsUpdate, session: Session = Depends(get_session)) -> LDAPSettings:
     user_filter = str(payload.ldap_user_filter or "").strip() or "(uid={username})"
     if "{username}" not in user_filter:
         raise HTTPException(
@@ -4519,7 +4523,8 @@ def update_ldap_settings(payload: LDAPSettings, session: Session = Depends(get_s
     cfg.ldap_enabled = bool(payload.ldap_enabled)
     cfg.ldap_server_uri = str(payload.ldap_server_uri or "").strip()
     cfg.ldap_bind_dn = str(payload.ldap_bind_dn or "").strip()
-    cfg.ldap_bind_password = str(payload.ldap_bind_password or "")
+    if "ldap_bind_password" in payload.model_fields_set:
+        cfg.ldap_bind_password = encrypt_secret(payload.ldap_bind_password)
     cfg.ldap_user_base_dn = str(payload.ldap_user_base_dn or "").strip()
     cfg.ldap_user_filter = user_filter
     cfg.ldap_start_tls = bool(payload.ldap_start_tls)
@@ -4533,7 +4538,7 @@ def update_ldap_settings(payload: LDAPSettings, session: Session = Depends(get_s
         ldap_enabled=cfg.ldap_enabled,
         ldap_server_uri=cfg.ldap_server_uri,
         ldap_bind_dn=cfg.ldap_bind_dn,
-        ldap_bind_password=cfg.ldap_bind_password,
+        ldap_bind_password_configured=secret_is_configured(cfg.ldap_bind_password),
         ldap_user_base_dn=cfg.ldap_user_base_dn,
         ldap_user_filter=cfg.ldap_user_filter,
         ldap_start_tls=cfg.ldap_start_tls,

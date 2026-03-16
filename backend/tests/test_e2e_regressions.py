@@ -134,6 +134,7 @@ def test_admin_can_read_and_update_ldap_settings(login_admin: TestClient):
     read = login_admin.get("/admin/settings/ldap")
     assert read.status_code == 200, read.text
     assert read.json()["ldap_enabled"] is False
+    assert read.json()["ldap_bind_password_configured"] is False
 
     payload = {
         "ldap_enabled": True,
@@ -153,11 +154,71 @@ def test_admin_can_read_and_update_ldap_settings(login_admin: TestClient):
     assert body["ldap_enabled"] is True
     assert body["ldap_server_uri"] == payload["ldap_server_uri"]
     assert body["ldap_timeout_seconds"] == 12
+    assert body["ldap_bind_password_configured"] is True
 
     bad_filter = dict(payload)
     bad_filter["ldap_user_filter"] = "(uid=test)"
     reject = login_admin.patch("/admin/settings/ldap", json=bad_filter)
     assert reject.status_code == 422
+
+
+def test_admin_secret_settings_are_write_only(login_admin: TestClient):
+    sso_read = login_admin.get("/admin/settings/sso")
+    assert sso_read.status_code == 200, sso_read.text
+    assert "sso_client_secret" not in sso_read.json()
+
+    ldap_read = login_admin.get("/admin/settings/ldap")
+    assert ldap_read.status_code == 200, ldap_read.text
+    assert "ldap_bind_password" not in ldap_read.json()
+
+
+def test_login_rate_limit_blocks_repeated_failures(client: TestClient, monkeypatch):
+    monkeypatch.setattr("src.routes.auth.settings.auth_login_rate_limit_max_attempts", 2)
+    monkeypatch.setattr("src.routes.auth.settings.auth_login_lockout_seconds", 60)
+    monkeypatch.setattr("src.routes.auth.settings.auth_login_rate_limit_window_seconds", 120)
+
+    first = client.post("/auth/login", json={"username": "alice", "password": "wrong"})
+    assert first.status_code == 401, first.text
+
+    second = client.post("/auth/login", json={"username": "alice", "password": "wrong"})
+    assert second.status_code == 429, second.text
+    assert "Retry-After" in second.headers
+
+    blocked_valid = client.post("/auth/login", json={"username": "alice", "password": "password"})
+    assert blocked_valid.status_code == 429, blocked_valid.text
+
+
+def test_encrypted_ldap_bind_password_is_used_at_runtime(login_admin: TestClient, client: TestClient, monkeypatch):
+    monkeypatch.setattr("src.secret_codec.settings.secrets_encryption_key", "unit-test-secret-key")
+    monkeypatch.setattr("src.routes.auth.settings.secrets_encryption_key", "unit-test-secret-key")
+
+    payload = {
+        "ldap_enabled": True,
+        "ldap_server_uri": "ldaps://ldap.example.edu:636",
+        "ldap_bind_dn": "cn=svc,dc=example,dc=edu",
+        "ldap_bind_password": "bind-pass-123",
+        "ldap_user_base_dn": "ou=users,dc=example,dc=edu",
+        "ldap_user_filter": "(uid={username})",
+        "ldap_start_tls": False,
+        "ldap_insecure_skip_verify": False,
+        "ldap_timeout_seconds": 12,
+        "ldap_auto_create_users": True,
+    }
+    write = login_admin.patch("/admin/settings/ldap", json=payload)
+    assert write.status_code == 200, write.text
+
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        assert str(cfg.ldap_bind_password).startswith("enc:v1:")
+
+    def _ldap_ok(username, password, cfg):
+        assert cfg.bind_password == "bind-pass-123"
+        return True, "dn"
+
+    monkeypatch.setattr("src.routes.auth.ldap_authenticate", _ldap_ok)
+    login = client.post("/auth/login", json={"username": "ldapenc", "password": "ldap-pass"})
+    assert login.status_code == 200, login.text
 
 
 def test_ldap_login_auto_provisions_user(client: TestClient, monkeypatch):

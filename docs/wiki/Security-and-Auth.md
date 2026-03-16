@@ -14,6 +14,7 @@ Bootstrap admin behavior:
 - Username defaults to `admin`.
 - Setup uses a one-time bootstrap secret (generated random unless `ADMIN_BOOTSTRAP_PASSWORD` is set).
 - Bootstrap secret is only used when no admin user exists.
+- Generated bootstrap secret is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - First login requires password reset (`force_password_change=true`).
 
 Default cookie names:
@@ -82,6 +83,16 @@ Notes:
 - Use `ldaps://` in production where possible.
 - Keep skip-verify disabled unless troubleshooting non-production cert issues.
 - LDAP settings changes are dynamic in DB config; backend restart is not required after save.
+- LDAP bind password and SSO client secret are write-only in admin APIs and are not returned by read endpoints.
+- If `BLABS_SECRETS_ENCRYPTION_KEY` is configured, these stored secrets are encrypted at rest.
+
+## Login rate limiting and audit events
+
+- Login failures are rate-limited by backend settings:
+  - `BLABS_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default `5`)
+  - `BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default `300`)
+  - `BLABS_AUTH_LOGIN_LOCKOUT_SECONDS` (default `300`)
+- Successful and failed login/logout/SSO callback events are logged with source, username, and request IP.
 
 ## CORS and login origin policy
 
@@ -99,7 +110,7 @@ BLABS_CORS_ALLOWED_HEADERS="Accept,Content-Type,Authorization"
 
 Notes:
 
-- Include the **frontend origin** (for example `:30073`), not only API origin (`:30080`).
+- Include the **frontend origin** (for example `:30073`, where `/api` is proxied).
 - Keep `BLABS_AUTH_COOKIE_SECURE=1` and `BLABS_CONNECT_COOKIE_SECURE=1` when using HTTPS.
 - In enterprise mode, `BLABS_CORS_ALLOWED_ORIGIN_REGEX` is not allowed.
 - In non-enterprise mode, regex-based origins remain available for dev/legacy compatibility.

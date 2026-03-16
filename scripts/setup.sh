@@ -65,6 +65,19 @@ VM_RUNNER_PRIVILEGED="${VM_RUNNER_PRIVILEGED:-0}"
 VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY="${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY:-Local}"
 VM_CONSOLE_SOURCE_CIDRS="${VM_CONSOLE_SOURCE_CIDRS:-}"
 VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
+BACKEND_NODEPORT_ENABLED="${BACKEND_NODEPORT_ENABLED:-0}"
+BACKEND_NODEPORT="${BACKEND_NODEPORT:-30080}"
+CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
+CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
+CORS_ALLOWED_ORIGIN_REGEX="${CORS_ALLOWED_ORIGIN_REGEX:-}"
+CORS_ALLOWED_METHODS="${CORS_ALLOWED_METHODS:-GET,POST,PUT,PATCH,DELETE,OPTIONS}"
+CORS_ALLOWED_HEADERS="${CORS_ALLOWED_HEADERS:-Accept,Content-Type,Authorization}"
+AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS="${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}"
+AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS="${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS:-5}"
+AUTH_LOGIN_LOCKOUT_SECONDS="${AUTH_LOGIN_LOCKOUT_SECONDS:-300}"
+VM_CONNECT_INSECURE_TLS="${VM_CONNECT_INSECURE_TLS:-0}"
+CONTAINER_CONNECT_INSECURE_TLS="${CONTAINER_CONNECT_INSECURE_TLS:-0}"
+SECRETS_ENCRYPTION_KEY="${SECRETS_ENCRYPTION_KEY:-}"
 CONTAINER_INGRESS_ENABLED="${CONTAINER_INGRESS_ENABLED:-0}"
 CONTAINER_INGRESS_CLASS="${CONTAINER_INGRESS_CLASS:-}"
 CONTAINER_INGRESS_BASE_DOMAIN="${CONTAINER_INGRESS_BASE_DOMAIN:-}"
@@ -140,6 +153,7 @@ RENDERED_GOLDEN_PVC_MANIFEST=""
 RENDERED_HELM_VALUES=""
 ADMIN_BOOTSTRAP_PASSWORD_GENERATED=0
 SYNTHETIC_CHECK_PASSWORD_AUTOSET=0
+ADMIN_BOOTSTRAP_SECRET_FILE=""
 
 log() {
   echo "==> $*"
@@ -160,10 +174,27 @@ generate_random_bootstrap_secret() {
   printf '%s' "$generated"
 }
 
+persist_generated_bootstrap_secret() {
+  local secret_file_dir secret_file_path
+  secret_file_dir="${HOME}/.config/bretter-labs"
+  mkdir -p "$secret_file_dir"
+  chmod 700 "$secret_file_dir" >/dev/null 2>&1 || true
+  secret_file_path="${secret_file_dir}/bootstrap-admin-$(date -u +%Y%m%dT%H%M%SZ).txt"
+  umask 077
+  cat >"$secret_file_path" <<EOF
+username=admin
+password=${ADMIN_BOOTSTRAP_PASSWORD}
+generated_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+  chmod 600 "$secret_file_path" >/dev/null 2>&1 || true
+  ADMIN_BOOTSTRAP_SECRET_FILE="$secret_file_path"
+}
+
 configure_admin_bootstrap_credentials() {
   if [ -z "$ADMIN_BOOTSTRAP_PASSWORD" ]; then
     ADMIN_BOOTSTRAP_PASSWORD="$(generate_random_bootstrap_secret)"
     ADMIN_BOOTSTRAP_PASSWORD_GENERATED=1
+    persist_generated_bootstrap_secret
   fi
   if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 1 ] && [ -z "$SYNTHETIC_CHECK_PASSWORD" ]; then
     SYNTHETIC_CHECK_PASSWORD="$ADMIN_BOOTSTRAP_PASSWORD"
@@ -398,6 +429,19 @@ validate_vm_network_config() {
   if ! is_uint "$VM_CONSOLE_TICKET_LENGTH" || [ "$VM_CONSOLE_TICKET_LENGTH" -lt 12 ] || [ "$VM_CONSOLE_TICKET_LENGTH" -gt 64 ]; then
     fail "VM_CONSOLE_TICKET_LENGTH must be an integer between 12 and 64."
   fi
+  case "$BACKEND_NODEPORT_ENABLED" in
+    0|1) ;;
+    *) fail "BACKEND_NODEPORT_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ "$BACKEND_NODEPORT_ENABLED" -eq 1 ]; then
+    if ! is_uint "$BACKEND_NODEPORT" || [ "$BACKEND_NODEPORT" -lt 30000 ] || [ "$BACKEND_NODEPORT" -gt 32767 ]; then
+      fail "BACKEND_NODEPORT must be a valid NodePort in 30000-32767 when BACKEND_NODEPORT_ENABLED=1."
+    fi
+  fi
+  case "$VM_CONNECT_INSECURE_TLS" in
+    0|1) ;;
+    *) fail "VM_CONNECT_INSECURE_TLS must be either 0 or 1." ;;
+  esac
 }
 
 validate_container_runtime_config() {
@@ -441,6 +485,29 @@ validate_container_runtime_config() {
   fi
   if ! is_uint "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS" || [ "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS" -lt "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS" ]; then
     fail "CONTAINER_START_QUEUE_MAX_DELAY_SECONDS must be >= CONTAINER_START_QUEUE_BASE_DELAY_SECONDS."
+  fi
+  case "$CONTAINER_CONNECT_INSECURE_TLS" in
+    0|1) ;;
+    *) fail "CONTAINER_CONNECT_INSECURE_TLS must be either 0 or 1." ;;
+  esac
+}
+
+validate_auth_and_cors_config() {
+  case "$CORS_ENTERPRISE_PROFILE" in
+    0|1) ;;
+    *) fail "CORS_ENTERPRISE_PROFILE must be either 0 or 1." ;;
+  esac
+  if [ "$CORS_ENTERPRISE_PROFILE" -eq 1 ] && [ -z "$CORS_ALLOWED_ORIGINS" ]; then
+    fail "CORS_ALLOWED_ORIGINS must be set when CORS_ENTERPRISE_PROFILE=1."
+  fi
+  if ! is_uint "$AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS" || [ "$AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS" -lt 10 ]; then
+    fail "AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS must be an integer >= 10."
+  fi
+  if ! is_uint "$AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS" || [ "$AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS" -lt 1 ]; then
+    fail "AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS must be an integer >= 1."
+  fi
+  if ! is_uint "$AUTH_LOGIN_LOCKOUT_SECONDS" || [ "$AUTH_LOGIN_LOCKOUT_SECONDS" -lt 10 ]; then
+    fail "AUTH_LOGIN_LOCKOUT_SECONDS must be an integer >= 10."
   fi
 }
 
@@ -1609,11 +1676,15 @@ render_helm_values_override() {
   local backend_image frontend_image runner_image public_scheme tls_secret_name
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
+  local backend_service_type backend_service_nodeport_line
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
+  local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
+  local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
+  local vm_connect_insecure_tls container_connect_insecure_tls secrets_encryption_key
   local backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
   local admin_bootstrap_password
 
@@ -1637,6 +1708,15 @@ render_helm_values_override() {
   vm_console_external_traffic_policy="$(yaml_escape "$VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY")"
   vm_console_source_cidrs="$(yaml_escape "$VM_CONSOLE_SOURCE_CIDRS")"
   vm_console_ticket_length="$(yaml_escape "$VM_CONSOLE_TICKET_LENGTH")"
+  if [ "$BACKEND_NODEPORT_ENABLED" -eq 1 ]; then
+    backend_service_type="NodePort"
+    backend_service_nodeport_line="      nodePort: ${BACKEND_NODEPORT}"
+  else
+    backend_service_type="ClusterIP"
+    backend_service_nodeport_line=""
+  fi
+  backend_service_type="$(yaml_escape "$backend_service_type")"
+  backend_service_nodeport_line="$(yaml_escape "$backend_service_nodeport_line")"
   container_ingress_enabled="$(yaml_escape "$CONTAINER_INGRESS_ENABLED")"
   container_ingress_class="$(yaml_escape "$CONTAINER_INGRESS_CLASS")"
   container_ingress_base_domain="$(yaml_escape "$CONTAINER_INGRESS_BASE_DOMAIN")"
@@ -1652,6 +1732,17 @@ render_helm_values_override() {
   container_start_queue_enabled="$(yaml_escape "$CONTAINER_START_QUEUE_ENABLED")"
   container_start_queue_base_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS")"
   container_start_queue_max_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
+  cors_enterprise_profile="$(yaml_escape "$CORS_ENTERPRISE_PROFILE")"
+  cors_allowed_origins="$(yaml_escape "$CORS_ALLOWED_ORIGINS")"
+  cors_allowed_origin_regex="$(yaml_escape "$CORS_ALLOWED_ORIGIN_REGEX")"
+  cors_allowed_methods="$(yaml_escape "$CORS_ALLOWED_METHODS")"
+  cors_allowed_headers="$(yaml_escape "$CORS_ALLOWED_HEADERS")"
+  auth_login_rate_limit_window_seconds="$(yaml_escape "$AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS")"
+  auth_login_rate_limit_max_attempts="$(yaml_escape "$AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS")"
+  auth_login_lockout_seconds="$(yaml_escape "$AUTH_LOGIN_LOCKOUT_SECONDS")"
+  vm_connect_insecure_tls="$(yaml_escape "$VM_CONNECT_INSECURE_TLS")"
+  container_connect_insecure_tls="$(yaml_escape "$CONTAINER_CONNECT_INSECURE_TLS")"
+  secrets_encryption_key="$(yaml_escape "$SECRETS_ENCRYPTION_KEY")"
   backend_data_hostpath="$(yaml_escape "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(yaml_escape "$GOLDEN_IMAGES_HOSTPATH")"
   postgres_data_hostpath="$(yaml_escape "$POSTGRES_DATA_HOSTPATH")"
@@ -1681,6 +1772,8 @@ appTemplateValues:
   VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY: "${vm_console_external_traffic_policy}"
   VM_CONSOLE_SOURCE_CIDRS: "${vm_console_source_cidrs}"
   VM_CONSOLE_TICKET_LENGTH: "${vm_console_ticket_length}"
+  BACKEND_SERVICE_TYPE: "${backend_service_type}"
+  BACKEND_SERVICE_NODEPORT_LINE: "${backend_service_nodeport_line}"
   CONTAINER_INGRESS_ENABLED: "${container_ingress_enabled}"
   CONTAINER_INGRESS_CLASS: "${container_ingress_class}"
   CONTAINER_INGRESS_BASE_DOMAIN: "${container_ingress_base_domain}"
@@ -1696,6 +1789,17 @@ appTemplateValues:
   CONTAINER_START_QUEUE_ENABLED: "${container_start_queue_enabled}"
   CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "${container_start_queue_base_delay_seconds}"
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "${container_start_queue_max_delay_seconds}"
+  CORS_ENTERPRISE_PROFILE: "${cors_enterprise_profile}"
+  CORS_ALLOWED_ORIGINS: "${cors_allowed_origins}"
+  CORS_ALLOWED_ORIGIN_REGEX: "${cors_allowed_origin_regex}"
+  CORS_ALLOWED_METHODS: "${cors_allowed_methods}"
+  CORS_ALLOWED_HEADERS: "${cors_allowed_headers}"
+  AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS: "${auth_login_rate_limit_window_seconds}"
+  AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS: "${auth_login_rate_limit_max_attempts}"
+  AUTH_LOGIN_LOCKOUT_SECONDS: "${auth_login_lockout_seconds}"
+  VM_CONNECT_INSECURE_TLS: "${vm_connect_insecure_tls}"
+  CONTAINER_CONNECT_INSECURE_TLS: "${container_connect_insecure_tls}"
+  SECRETS_ENCRYPTION_KEY: "${secrets_encryption_key}"
   BACKEND_DATA_HOSTPATH: "${backend_data_hostpath}"
   GOLDEN_IMAGES_HOSTPATH: "${golden_images_hostpath}"
   POSTGRES_DATA_HOSTPATH: "${postgres_data_hostpath}"
@@ -1782,7 +1886,7 @@ ensure_ghcr_login() {
 }
 
 build_images() {
-  local vite_api_base="${VITE_API_BASE:-${PUBLIC_SCHEME}://${NODE_EXTERNAL_HOST}:30080}"
+  local vite_api_base="${VITE_API_BASE:-/api}"
 
   log "Building backend image: $BACKEND_IMAGE"
   podman build -t "$BACKEND_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
@@ -3019,7 +3123,10 @@ log_runtime_configuration() {
   log "Using public scheme: $PUBLIC_SCHEME"
   log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
   if [ "$ADMIN_BOOTSTRAP_PASSWORD_GENERATED" -eq 1 ]; then
-    log "Generated one-time bootstrap admin secret for username 'admin' (used only if no admin user exists): $ADMIN_BOOTSTRAP_PASSWORD"
+    log "Generated one-time bootstrap admin secret for username 'admin' (used only if no admin user exists)."
+    if [ -n "$ADMIN_BOOTSTRAP_SECRET_FILE" ]; then
+      log "Bootstrap admin secret saved to: $ADMIN_BOOTSTRAP_SECRET_FILE (permissions 600)."
+    fi
   else
     log "Using provided ADMIN_BOOTSTRAP_PASSWORD for bootstrap admin (applies only when no admin user exists)."
   fi
@@ -3039,12 +3146,16 @@ log_runtime_configuration() {
   log "VM console external traffic policy: $VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY"
   log "VM console source CIDRs: ${VM_CONSOLE_SOURCE_CIDRS:-unrestricted}"
   log "VM console ticket length: $VM_CONSOLE_TICKET_LENGTH"
+  log "Backend NodePort exposure enabled: $BACKEND_NODEPORT_ENABLED (nodePort: $BACKEND_NODEPORT)"
   log "Container ingress enabled: $CONTAINER_INGRESS_ENABLED (base domain: ${CONTAINER_INGRESS_BASE_DOMAIN:-disabled}, class: ${CONTAINER_INGRESS_CLASS:-default})"
   log "Container image pre-pull enabled: $CONTAINER_IMAGE_PREPULL_ENABLED (timeout: ${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS}s)"
   log "Container allowed registries: $CONTAINER_ALLOWED_REGISTRIES"
   log "Container signature verification enabled: $CONTAINER_SIGNATURE_VERIFICATION_ENABLED (key: ${CONTAINER_SIGNATURE_KEY_REF:-keyless})"
   log "Container scanning enabled: $CONTAINER_SCAN_ENABLED (interval: ${CONTAINER_SCAN_INTERVAL_MINUTES}m severity: ${CONTAINER_SCAN_SEVERITY})"
   log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
+  log "CORS enterprise profile: $CORS_ENTERPRISE_PROFILE (origins: ${CORS_ALLOWED_ORIGINS:-default})"
+  log "Auth login rate limit window/max/lockout: ${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS}s/${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS}/${AUTH_LOGIN_LOCKOUT_SECONDS}s"
+  log "Strict upstream TLS defaults: VM insecure=$VM_CONNECT_INSECURE_TLS container insecure=$CONTAINER_CONNECT_INSECURE_TLS"
   log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
@@ -3054,7 +3165,7 @@ log_runtime_configuration() {
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
   if [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
-    log "Synthetic check password was auto-set to the bootstrap admin secret."
+    log "Synthetic check password was auto-set from the bootstrap admin secret."
   fi
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
@@ -3144,6 +3255,7 @@ main() {
   validate_storage_guard_config
   validate_vm_network_config
   validate_container_runtime_config
+  validate_auth_and_cors_config
   validate_postgres_config
   validate_external_secrets_config
   validate_cdi_upload_config

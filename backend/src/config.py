@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     kube_image_pvc: str = "golden-images"
     kube_runtime_class: str = ""  # set to your RuntimeClass name if needed
     reaper_interval_seconds: int = 60
-    runner_image: str = "ghcr.io/csufpsudocromis/win-vm-runner:latest"
+    runner_image: str = "ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1"
     image_pull_secret: str = "ghcr-creds"  # optional: name of imagePullSecret in the namespace
     kube_node_selector_key: str = "kubernetes.io/hostname"
     kube_node_selector_value: str = ""  # set to pin pods to a node (e.g., kub1)
@@ -81,10 +81,16 @@ class Settings(BaseSettings):
     auth_cookie_ttl_seconds: int = 86400
     auth_cookie_secure: bool = True
     auth_cookie_samesite: str = "lax"
+    auth_login_rate_limit_window_seconds: int = 300
+    auth_login_rate_limit_max_attempts: int = 5
+    auth_login_lockout_seconds: int = 300
     connect_grant_ttl_seconds: int = 120
     connect_session_ttl_seconds: int = 3600
     connect_cookie_samesite: str = "lax"
     connect_cookie_secure: bool = True
+    vm_connect_insecure_tls: bool = False
+    container_connect_insecure_tls: bool = False
+    secrets_encryption_key: str = ""
     site_assets_dir: str = "/data/site-assets"
     alertmanager_api_url: str = "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
     alertmanager_timeout_seconds: int = 5

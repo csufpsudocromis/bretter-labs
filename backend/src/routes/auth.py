@@ -1,7 +1,11 @@
 import base64
 import hashlib
+import logging
 import re
 import secrets
+import threading
+import time
+from collections import deque
 from datetime import timedelta
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -20,19 +24,25 @@ from ..auth import (
     set_auth_cookie,
     verify_password,
 )
+from ..config import settings
 from ..db import get_session
 from ..models import Credentials, UserOut
 from ..rbac import Role, can_access_admin, list_permissions_for_role, role_for_user
+from ..secret_codec import decrypt_secret
 from ..services.ldap_auth import LDAPRuntimeConfig, authenticate as ldap_authenticate, missing_required_fields as ldap_missing_required_fields
 from ..services.team_quotas import normalize_team
-from ..tables import Config, OIDCLoginState, User
+from ..tables import Config, OIDCLoginState, Token, User
 from ..time_utils import utc_now
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 OIDC_STATE_TTL_SECONDS = 300
 OIDC_HTTP_TIMEOUT_SECONDS = 15
 OIDC_SCOPE = "openid profile email"
 _USERNAME_CLEAN_RE = re.compile(r"[^a-zA-Z0-9._@-]+")
+_LOGIN_ATTEMPTS: dict[str, deque[float]] = {}
+_LOGIN_BLOCKED_UNTIL: dict[str, float] = {}
+_LOGIN_ATTEMPT_LOCK = threading.Lock()
 
 
 def _user_out(user: User) -> UserOut:
@@ -46,6 +56,102 @@ def _user_out(user: User) -> UserOut:
         permissions=list_permissions_for_role(role),
         can_access_admin=can_access_admin(role),
     )
+
+
+def _request_ip(request: Request) -> str:
+    forwarded = str(request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        first = str(forwarded.split(",", 1)[0]).strip()
+        if first:
+            return first[:128]
+    real_ip = str(request.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip[:128]
+    client_host = str(getattr(request.client, "host", "") or "").strip()
+    return (client_host or "unknown")[:128]
+
+
+def _rate_limit_key(request: Request, username: str) -> str:
+    user_key = str(username or "").strip().lower() or "<empty>"
+    return f"{_request_ip(request)}::{user_key}"
+
+
+def _auth_rate_limit_values() -> tuple[int, int, int]:
+    window_seconds = max(10, int(settings.auth_login_rate_limit_window_seconds or 300))
+    max_attempts = max(1, int(settings.auth_login_rate_limit_max_attempts or 5))
+    lockout_seconds = max(10, int(settings.auth_login_lockout_seconds or 300))
+    return window_seconds, max_attempts, lockout_seconds
+
+
+def _is_login_rate_limited(rate_key: str, now: float) -> int:
+    window_seconds, _, _ = _auth_rate_limit_values()
+    with _LOGIN_ATTEMPT_LOCK:
+        blocked_until = float(_LOGIN_BLOCKED_UNTIL.get(rate_key, 0.0) or 0.0)
+        if blocked_until > now:
+            return max(1, int(blocked_until - now))
+        if blocked_until:
+            _LOGIN_BLOCKED_UNTIL.pop(rate_key, None)
+        attempts = _LOGIN_ATTEMPTS.get(rate_key)
+        if not attempts:
+            return 0
+        cutoff = now - window_seconds
+        while attempts and attempts[0] < cutoff:
+            attempts.popleft()
+        if not attempts:
+            _LOGIN_ATTEMPTS.pop(rate_key, None)
+    return 0
+
+
+def _record_login_failure(rate_key: str, now: float) -> int:
+    window_seconds, max_attempts, lockout_seconds = _auth_rate_limit_values()
+    with _LOGIN_ATTEMPT_LOCK:
+        attempts = _LOGIN_ATTEMPTS.setdefault(rate_key, deque())
+        cutoff = now - window_seconds
+        while attempts and attempts[0] < cutoff:
+            attempts.popleft()
+        attempts.append(now)
+        if len(attempts) >= max_attempts:
+            blocked_until = now + lockout_seconds
+            _LOGIN_BLOCKED_UNTIL[rate_key] = blocked_until
+            attempts.clear()
+            return lockout_seconds
+    return 0
+
+
+def _clear_login_failures(rate_key: str) -> None:
+    with _LOGIN_ATTEMPT_LOCK:
+        _LOGIN_ATTEMPTS.pop(rate_key, None)
+        _LOGIN_BLOCKED_UNTIL.pop(rate_key, None)
+
+
+def _audit_auth_event(
+    *,
+    event: str,
+    outcome: str,
+    request: Request,
+    username: str,
+    source: str,
+    detail: str = "",
+) -> None:
+    logger.info(
+        "auth_event event=%s outcome=%s source=%s user=%s ip=%s detail=%s",
+        event,
+        outcome,
+        source,
+        str(username or "").strip()[:128],
+        _request_ip(request),
+        str(detail or "").strip()[:256],
+    )
+
+
+def _decrypt_runtime_secret_or_raise(raw_value: str, *, field_name: str) -> str:
+    try:
+        return decrypt_secret(raw_value)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{field_name} is configured but could not be decrypted.",
+        ) from exc
 
 
 def _sso_config(session: Session) -> Config:
@@ -150,7 +256,7 @@ def _oidc_exchange_token(cfg: Config, code: str, code_verifier: str) -> dict:
         "redirect_uri": str(cfg.sso_redirect_url),
         "code_verifier": code_verifier,
     }
-    client_secret = str(cfg.sso_client_secret or "").strip()
+    client_secret = _decrypt_runtime_secret_or_raise(str(cfg.sso_client_secret or ""), field_name="sso_client_secret").strip()
     if client_secret:
         payload["client_secret"] = client_secret
     try:
@@ -201,26 +307,61 @@ def _redirect_with_auth_error(target: str, message: str) -> RedirectResponse:
 
 
 @router.post("/login")
-def login(credentials: Credentials, response: Response, session: Session = Depends(get_session)) -> dict:
+def login(credentials: Credentials, request: Request, response: Response, session: Session = Depends(get_session)) -> dict:
     username = str(credentials.username or "").strip()
     password = str(credentials.password or "")
+    rate_key = _rate_limit_key(request, username)
+    now = time.time()
+    retry_after = _is_login_rate_limited(rate_key, now)
+    if retry_after > 0:
+        _audit_auth_event(
+            event="login",
+            outcome="rate_limited",
+            request=request,
+            username=username,
+            source="local",
+            detail=f"retry_after={retry_after}s",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many failed login attempts; try again later",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     user = session.get(User, username)
     if user and verify_password(password, user.password_hash):
+        _clear_login_failures(rate_key)
         token = issue_token(session, user.username)
         set_auth_cookie(response, token)
+        _audit_auth_event(event="login", outcome="success", request=request, username=user.username, source="local")
         return {"user": _user_out(user)}
 
     cfg = session.get(Config, 1) or Config(id=1)
     session.add(cfg)
     session.commit()
     if not bool(cfg.ldap_enabled):
+        lockout = _record_login_failure(rate_key, time.time())
+        _audit_auth_event(
+            event="login",
+            outcome="failed",
+            request=request,
+            username=username,
+            source="local",
+            detail="invalid_credentials",
+        )
+        if lockout > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many failed login attempts; try again later",
+                headers={"Retry-After": str(lockout)},
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     ldap_cfg = LDAPRuntimeConfig(
         enabled=bool(cfg.ldap_enabled),
         server_uri=str(cfg.ldap_server_uri or "").strip(),
         bind_dn=str(cfg.ldap_bind_dn or "").strip(),
-        bind_password=str(cfg.ldap_bind_password or ""),
+        bind_password=_decrypt_runtime_secret_or_raise(str(cfg.ldap_bind_password or ""), field_name="ldap_bind_password"),
         user_base_dn=str(cfg.ldap_user_base_dn or "").strip(),
         user_filter=str(cfg.ldap_user_filter or "").strip() or "(uid={username})",
         start_tls=bool(cfg.ldap_start_tls),
@@ -241,6 +382,21 @@ def login(credentials: Credentials, response: Response, session: Session = Depen
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LDAP authentication backend error: {exc}") from exc
     if not ldap_ok:
+        lockout = _record_login_failure(rate_key, time.time())
+        _audit_auth_event(
+            event="login",
+            outcome="failed",
+            request=request,
+            username=username,
+            source="ldap",
+            detail="invalid_credentials",
+        )
+        if lockout > 0:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="too many failed login attempts; try again later",
+                headers={"Retry-After": str(lockout)},
+            )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
 
     if not user:
@@ -263,6 +419,8 @@ def login(credentials: Credentials, response: Response, session: Session = Depen
 
     token = issue_token(session, user.username)
     set_auth_cookie(response, token)
+    _clear_login_failures(rate_key)
+    _audit_auth_event(event="login", outcome="success", request=request, username=user.username, source="ldap")
     return {"user": _user_out(user)}
 
 
@@ -336,6 +494,14 @@ def sso_callback(
     if state_row.expires_at <= utc_now():
         session.delete(state_row)
         session.commit()
+        _audit_auth_event(
+            event="sso_callback",
+            outcome="failed",
+            request=request,
+            username="",
+            source="oidc",
+            detail="state_expired",
+        )
         return _redirect_with_auth_error(state_row.return_to, "oidc_state_expired")
 
     return_to = state_row.return_to
@@ -345,8 +511,24 @@ def sso_callback(
 
     if error:
         detail = str(error_description or error or "oidc_error").strip() or "oidc_error"
+        _audit_auth_event(
+            event="sso_callback",
+            outcome="failed",
+            request=request,
+            username="",
+            source="oidc",
+            detail=detail,
+        )
         return _redirect_with_auth_error(return_to, detail)
     if not str(code or "").strip():
+        _audit_auth_event(
+            event="sso_callback",
+            outcome="failed",
+            request=request,
+            username="",
+            source="oidc",
+            detail="missing_oidc_code",
+        )
         return _redirect_with_auth_error(return_to, "missing_oidc_code")
 
     token_payload = _oidc_exchange_token(cfg, str(code), code_verifier)
@@ -368,6 +550,7 @@ def sso_callback(
     token = issue_token(session, user.username)
     response = RedirectResponse(url=return_to or _sanitize_return_to("/", request), status_code=status.HTTP_302_FOUND)
     set_auth_cookie(response, token)
+    _audit_auth_event(event="sso_callback", outcome="success", request=request, username=user.username, source="oidc")
     return response
 
 
@@ -378,12 +561,18 @@ def logout(
     authorization: str | None = Header(default=None),
     session: Session = Depends(get_session),
 ) -> Response:
+    username = ""
+    token_value = ""
     try:
         token_value = extract_auth_token(authorization, request)
     except HTTPException:
         token_value = ""
     if token_value:
+        token_row = session.get(Token, token_value)
+        if token_row:
+            username = str(token_row.username or "")
         revoke_token_value(session, token_value)
     clear_auth_cookie(response)
     response.status_code = status.HTTP_204_NO_CONTENT
+    _audit_auth_event(event="logout", outcome="success", request=request, username=username, source="local")
     return response

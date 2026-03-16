@@ -2,8 +2,8 @@ import axios from 'axios';
 
 const defaultApiBase =
   typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:30080`
-    : 'https://127.0.0.1:30080';
+    ? `${window.location.origin}/api`
+    : 'http://127.0.0.1/api';
 
 export const AUTH_INVALID_EVENT = 'blabs-auth-invalid';
 

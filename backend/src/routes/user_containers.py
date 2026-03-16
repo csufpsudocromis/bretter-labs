@@ -198,8 +198,9 @@ def _upstream_requires_https(response: requests.Response) -> bool:
 
 def _tls_client_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
+    if bool(getattr(settings, "container_connect_insecure_tls", False)):
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
     return context
 
 
@@ -273,9 +274,24 @@ def _extract_connect_session_token_ws(websocket: WebSocket) -> str:
 
 
 def _connect_cookie_secure(request: Request) -> bool:
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if forwarded_proto == "https":
+        return True
     if request.url.scheme == "https":
         return True
     return bool(settings.connect_cookie_secure)
+
+
+def _request_base_url(request: Request) -> str:
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    scheme = forwarded_proto or str(request.url.scheme or "https").strip().lower()
+    if scheme not in {"http", "https"}:
+        scheme = "https"
+    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = forwarded_host or str(request.headers.get("host") or "").strip()
+    if not host:
+        host = str(request.url.netloc or "").strip()
+    return f"{scheme}://{host}"
 
 
 def _connect_cookie_samesite() -> str:
@@ -970,7 +986,7 @@ def issue_container_connect_token(
         token_type="grant",
         ttl_seconds=max(15, int(settings.connect_grant_ttl_seconds or 120)),
     )
-    connect_url = f"{str(request.base_url).rstrip('/')}/user/containers/{instance_id}/connect/"
+    connect_url = f"{_request_base_url(request).rstrip('/')}/user/containers/{instance_id}/connect/"
     template = session.get(ContainerTemplateTable, record.template_id)
     if _is_kasm_template(session, template):
         ws_path = f"user/containers/{instance_id}/connect/websockify"

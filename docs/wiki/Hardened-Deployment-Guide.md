@@ -78,11 +78,12 @@ Recommended:
 
 - Namespace default deny (ingress + egress)
 - Explicit allow rules only for required paths:
-  - frontend -> backend
+  - frontend proxy -> backend (`/api`, `/auth`, `/user`)
   - backend -> Postgres
   - backend -> kube-apiserver
   - DNS egress
   - runtime connect paths
+- Keep backend direct NodePort disabled (`BACKEND_NODEPORT_ENABLED=0`) unless explicitly needed for dev break-glass.
 
 Quick check:
 
@@ -149,6 +150,11 @@ Keep kubelet metrics scraping in strict TLS mode:
 - Enable kubelet serving cert bootstrap (`serverTLSBootstrap: true`) so certificates include valid node SANs.
 - Keep kubelet-serving CSR approval automated (`ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=1`) or enforce an equivalent signed approval process.
 - Verify metrics-server has no `--kubelet-insecure-tls` arg and `kubectl top nodes` returns data.
+
+## 12) Runtime proxy TLS posture
+
+- Keep `BLABS_VM_CONNECT_INSECURE_TLS=0` and `BLABS_CONTAINER_CONNECT_INSECURE_TLS=0` in production.
+- Enable the insecure toggles only for local/dev clusters that cannot provide valid upstream certificates.
 
 ## Related pages
 

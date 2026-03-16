@@ -23,6 +23,7 @@ from ..config import settings
 from ..db import get_session
 from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
 from ..network_modes import normalize_vm_network_mode
+from ..secret_codec import secret_is_configured
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import PodRequest, PodStatus, kube
 from ..services.resource_guard import check_launch_headroom
@@ -147,16 +148,18 @@ def _public_console_host() -> str:
 
 
 def _public_api_base() -> str:
-    return f"{_public_scheme()}://{_public_console_host()}:30080"
+    return f"{_public_scheme()}://{_public_console_host()}:30073"
 
 
 def _request_console_base(request: Request | None) -> tuple[str, str, str]:
     if request is None:
-        return _public_api_base(), _public_console_host(), "30080"
-    scheme = str(request.url.scheme or _public_scheme()).strip().lower()
+        return _public_api_base(), _public_console_host(), "30073"
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    scheme = forwarded_proto or str(request.url.scheme or _public_scheme()).strip().lower()
     if scheme not in {"http", "https"}:
         scheme = _public_scheme()
-    host_header = str(request.headers.get("host") or "").strip()
+    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host_header = forwarded_host or str(request.headers.get("host") or "").strip()
     parsed_host = urlparse(f"//{host_header}") if host_header else None
     host = ""
     if parsed_host and parsed_host.hostname:
@@ -192,6 +195,9 @@ def _connect_cookie_secure(request: Request) -> bool:
     configured_secure = bool(getattr(settings, "connect_cookie_secure", True))
     if configured_secure:
         return True
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
     return request.url.scheme == "https"
 
 
@@ -314,8 +320,9 @@ def _vm_http_schemes() -> tuple[str, str]:
 
 def _tls_client_context() -> ssl.SSLContext:
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if bool(getattr(settings, "vm_connect_insecure_tls", False)):
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     return ctx
 
 
@@ -804,7 +811,7 @@ def sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
         sso_enabled=cfg.sso_enabled,
         sso_provider=cfg.sso_provider,
         sso_client_id=cfg.sso_client_id,
-        sso_client_secret="",
+        sso_client_secret_configured=secret_is_configured(cfg.sso_client_secret),
         sso_authorize_url=cfg.sso_authorize_url,
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,

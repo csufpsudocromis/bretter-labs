@@ -5,7 +5,7 @@ const DEFAULTS = {
   ldap_enabled: false,
   ldap_server_uri: '',
   ldap_bind_dn: '',
-  ldap_bind_password: '',
+  ldap_bind_password_configured: false,
   ldap_user_base_dn: '',
   ldap_user_filter: '(uid={username})',
   ldap_start_tls: false,
@@ -16,6 +16,7 @@ const DEFAULTS = {
 
 const AdminLDAPSettings = () => {
   const [data, setData] = useState({ ...DEFAULTS });
+  const [bindPasswordInput, setBindPasswordInput] = useState('');
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
@@ -36,11 +37,24 @@ const AdminLDAPSettings = () => {
     setSaving(true);
     setError('');
     setMessage('');
+    const payload = {
+      ldap_enabled: data.ldap_enabled,
+      ldap_server_uri: data.ldap_server_uri,
+      ldap_bind_dn: data.ldap_bind_dn,
+      ldap_user_base_dn: data.ldap_user_base_dn,
+      ldap_user_filter: data.ldap_user_filter,
+      ldap_start_tls: data.ldap_start_tls,
+      ldap_insecure_skip_verify: data.ldap_insecure_skip_verify,
+      ldap_timeout_seconds: Number(data.ldap_timeout_seconds || 10),
+      ldap_auto_create_users: data.ldap_auto_create_users,
+    };
+    if (bindPasswordInput.trim()) {
+      payload.ldap_bind_password = bindPasswordInput;
+    }
     try {
-      await api.patch('/admin/settings/ldap', {
-        ...data,
-        ldap_timeout_seconds: Number(data.ldap_timeout_seconds || 10),
-      });
+      const res = await api.patch('/admin/settings/ldap', payload);
+      setData({ ...DEFAULTS, ...(res.data || {}) });
+      setBindPasswordInput('');
       setMessage('LDAP settings updated.');
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to save LDAP settings');
@@ -91,8 +105,9 @@ const AdminLDAPSettings = () => {
             Bind Password
             <input
               type="password"
-              value={data.ldap_bind_password}
-              onChange={(e) => setData({ ...data, ldap_bind_password: e.target.value })}
+              value={bindPasswordInput}
+              placeholder={data.ldap_bind_password_configured ? 'Configured (leave blank to keep current)' : 'Not configured'}
+              onChange={(e) => setBindPasswordInput(e.target.value)}
             />
           </label>
 

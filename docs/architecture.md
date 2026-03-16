@@ -75,4 +75,5 @@ Bretter Labs is a FastAPI + React (Vite) platform that provisions per-user VM an
 - Deployments include backend/frontend and supporting Kubernetes resources.
 - Cluster-facing endpoints:
   - UI: `https://<host>:30073`
-  - API: `https://<host>:30080`
+  - API (frontend proxy): `https://<host>:30073/api`
+  - Direct backend NodePort is disabled by default and can be enabled explicitly for dev workflows.
