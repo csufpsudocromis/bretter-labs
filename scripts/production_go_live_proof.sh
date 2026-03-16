@@ -50,12 +50,16 @@ run_check "frontend rollout status" \
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
 
 backend_meta="$(
-  kubectl -n "$NAMESPACE" get deployment bretter-backend -o json \
-    | python3 - <<'PY'
+  python3 - "$NAMESPACE" <<'PY'
 import json
+import subprocess
 import sys
 
-payload = json.load(sys.stdin)
+namespace = str(sys.argv[1] if len(sys.argv) > 1 else "labs").strip() or "labs"
+raw = subprocess.check_output(
+    ["kubectl", "-n", namespace, "get", "deployment", "bretter-backend", "-o", "json"], text=True
+)
+payload = json.loads(raw)
 spec = (((payload or {}).get("spec") or {}).get("template") or {}).get("spec") or {}
 containers = spec.get("containers") or []
 backend = next((item for item in containers if item.get("name") == "backend"), None)
