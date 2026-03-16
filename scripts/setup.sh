@@ -828,12 +828,14 @@ ensure_cdi_installed() {
   kubectl wait --for=condition=Established crd/datavolumes.cdi.kubevirt.io --timeout=300s
   kubectl -n "$CDI_NAMESPACE" rollout status deployment/cdi-operator --timeout=300s >/dev/null 2>&1 || true
   kubectl -n "$CDI_NAMESPACE" wait --for=condition=Available deployment --all --timeout=600s >/dev/null 2>&1 || true
-  local i
-  for i in $(seq 1 30); do
+  local attempts
+  attempts=0
+  while [ "$attempts" -lt 30 ]; do
     if kubectl api-resources --api-group=upload.cdi.kubevirt.io 2>/dev/null | awk '{print $1}' | grep -qx "uploadtokenrequests"; then
       return
     fi
     sleep 2
+    attempts=$((attempts + 1))
   done
   fail "CDI upload token API did not become available."
 }
@@ -969,14 +971,21 @@ patch_default_pvc_alert_exclusions() {
   fi
 
   log "Patching ${rule_name} PVC filling alerts to ignore pool-* PVCs..."
-  if ! kubectl -n "$MONITORING_NAMESPACE" get prometheusrule "$rule_name" -o json \
-    | python3 - <<'PY' \
+  if ! python3 - "$MONITORING_NAMESPACE" "$rule_name" <<'PY' \
     | kubectl -n "$MONITORING_NAMESPACE" apply -f - >/dev/null; then
 import json
 import re
+import subprocess
 import sys
 
-obj = json.load(sys.stdin)
+namespace = sys.argv[1]
+rule_name = sys.argv[2]
+obj = json.loads(
+    subprocess.check_output(
+        ["kubectl", "-n", namespace, "get", "prometheusrule", rule_name, "-o", "json"],
+        text=True,
+    )
+)
 changed = 0
 
 for group in obj.get("spec", {}).get("groups", []):
@@ -1869,6 +1878,7 @@ preload_runner_image_on_worker_nodes() {
     cleanup_node_debugger_pods "$node"
     # Stage the tar on the host and import from file for reliable cross-node loads.
     if ! preload_output="$(
+      # shellcheck disable=SC2016
       kubectl debug "node/${node}" --quiet --image=busybox:1.36 -- \
         sh -c 'set -eu; tmp=/host/tmp/bretter-runner-image.tar; cat >"$tmp"; chroot /host ctr -n k8s.io images import /tmp/bretter-runner-image.tar; rm -f "$tmp"' \
         < "$runner_tar" 2>&1
