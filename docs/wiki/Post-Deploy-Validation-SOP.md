@@ -44,6 +44,10 @@ Optional one-shot proof report:
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
 ```
 
+Note:
+
+- `setup.sh` runs this report automatically in `postdeploy` when `RUN_PRODUCTION_GO_LIVE_PROOF=1` (default for `PRODUCTION_PROFILE=1`).
+
 ## Phase 2: Synthetic job (preferred)
 
 If setup synthetic check is enabled:

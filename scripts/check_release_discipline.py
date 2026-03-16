@@ -54,6 +54,7 @@ def main() -> int:
     frontend_pkg_path = root / "frontend-vite" / "package.json"
     frontend_lock_path = root / "frontend-vite" / "package-lock.json"
     values_prod_path = root / "deploy" / "helm" / "values-production.yaml"
+    values_prod_site_template_path = root / "deploy" / "helm" / "values-production-site.template.yaml"
     setup_script_path = root / "scripts" / "setup.sh"
     frontend_dockerfile_path = root / "frontend-vite" / "Dockerfile"
     backend_dockerfile_path = root / "backend" / "Dockerfile"
@@ -97,6 +98,12 @@ def main() -> int:
         errors.append(f"CHANGELOG.md missing heading for current version: {version_heading}")
 
     values_production = _read_text(values_prod_path)
+    if not values_prod_site_template_path.exists():
+        errors.append("deploy/helm/values-production-site.template.yaml is missing.")
+        values_site_template = ""
+    else:
+        values_site_template = _read_text(values_prod_site_template_path)
+
     for key in ("BACKEND_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
         image_ref = _extract_yaml_scalar(values_production, key)
         if not image_ref:
@@ -168,6 +175,24 @@ def main() -> int:
         errors.append(
             "deploy/helm/values-production.yaml must set CONTAINER_SIGNATURE_KEY_SECRET_NAME when using /etc/bretter-signing key refs."
         )
+
+    if values_site_template:
+        for key in (
+            "CONTROL_NODE",
+            "NODE_EXTERNAL_HOST",
+            "RUNNER_NODE_SELECTOR_VALUE",
+            "VM_STORAGE_CLASS",
+            "CORS_ALLOWED_ORIGINS",
+            "TLS_SECRET_NAME",
+        ):
+            if not _extract_yaml_scalar(values_site_template, key).strip():
+                errors.append(
+                    f"deploy/helm/values-production-site.template.yaml must define {key} placeholder for site overlays."
+                )
+
+        template_secrets_key = _extract_yaml_scalar(values_site_template, "SECRETS_ENCRYPTION_KEY").strip()
+        if template_secrets_key:
+            errors.append("deploy/helm/values-production-site.template.yaml must keep SECRETS_ENCRYPTION_KEY empty.")
 
     setup_script = _read_text(setup_script_path)
     if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:

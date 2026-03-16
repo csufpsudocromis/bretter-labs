@@ -68,9 +68,11 @@ Secrets:
 Production gates:
 
 - Run strict production validation before rollout:
-  - `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml`
+  - `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f deploy/helm/values-prod-site.yaml`
 - Run go-live proof after rollout:
   - `NAMESPACE=labs ./scripts/production_go_live_proof.sh`
+- Or run deploy + postdeploy with automatic proof:
+  - `PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh`
 
 Database:
 
@@ -84,3 +86,4 @@ Database:
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Security and Auth](Security-and-Auth)
 - [Operations Runbook](Operations-Runbook)
+- [Secret Operations Runbook](Secret-Operations-Runbook)

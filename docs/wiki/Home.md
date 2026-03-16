@@ -12,6 +12,7 @@ Last reviewed: March 16, 2026.
 
 - Admin setup: [Setup and Configuration](Setup-and-Configuration)
 - Operations/SRE: [Operations Runbook](Operations-Runbook)
+- Secrets/Ops: [Secret Operations Runbook](Secret-Operations-Runbook)
 - Troubleshooting: [Error Catalog](Error-Catalog) + [Operations Runbook](Operations-Runbook)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive) + [Template Best Practices](Template-Best-Practices)
 - Security: [Security and Auth](Security-and-Auth) + [LDAP Authentication](LDAP-Authentication) + [Hardened Deployment Guide](Hardened-Deployment-Guide)
@@ -25,6 +26,7 @@ Last reviewed: March 16, 2026.
 - [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)

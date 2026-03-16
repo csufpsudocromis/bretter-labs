@@ -8,6 +8,7 @@
 - [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)

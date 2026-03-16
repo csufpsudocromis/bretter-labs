@@ -156,6 +156,70 @@ Typical causes:
 - PVC/storage class scheduling failure
 - Namespace/team quota limits
 
+### Token/session auth failures (`invalid token`, `session expired`, repeated login loops)
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'invalid token|session expired|missing authorization token|auth'
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_AUTH_COOKIE_SECURE|BLABS_CONNECT_COOKIE_SECURE|BLABS_PUBLIC_SCHEME|BLABS_CORS_ALLOWED_ORIGINS'
+```
+
+If users report sudden login failures after rollout:
+
+1. Verify frontend origin is included in `BLABS_CORS_ALLOWED_ORIGINS`.
+2. Verify requests are using the same scheme/host (`https` in production).
+3. Confirm system clocks are sane on control plane and worker nodes.
+
+### Runner scheduling failures (node selector / taints / insufficient resources)
+
+Checks:
+
+```bash
+kubectl -n labs get pods -o wide | rg '^vm-|^virt-launcher-'
+kubectl -n labs describe pod <vm-runner-or-virt-launcher-pod>
+kubectl get nodes --show-labels | rg 'kubernetes.io/hostname|runner'
+kubectl describe nodes | rg -n 'Taints|Allocatable|DiskPressure|MemoryPressure'
+```
+
+Look for:
+
+- `0/X nodes are available` scheduler messages.
+- Node selector mismatch with `RUNNER_NODE_SELECTOR_VALUE`.
+- Resource shortage, taint rejection, or storage attach constraints.
+
+### Signature verification failures (container image registration/start)
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'signature|cosign|verification|public key'
+kubectl -n labs get secret bretter-cosign-public-key -o go-template='{{index .data "cosign.pub"}}' | wc -c
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED|BLABS_CONTAINER_SIGNATURE_KEY_REF|container-signature-key'
+```
+
+If verification fails:
+
+1. Confirm key secret contains the expected file (`cosign.pub` by default).
+2. Confirm `BLABS_CONTAINER_SIGNATURE_KEY_REF` matches the mounted file path.
+3. Re-check key fingerprint against your trusted source before retrying image registration.
+
+### Runtime secret injection misconfiguration
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=300 | rg -n 'BLABS_SECRETS_ENCRYPTION_KEY|decrypt|Encrypted secret'
+kubectl -n labs get secret bretter-runtime-secrets -o go-template='{{index .data "secrets_encryption_key"}}' | wc -c
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_SECRETS_ENCRYPTION_KEY'
+```
+
+Common outcomes:
+
+- Missing key -> startup fails in production profile.
+- Wrong key -> decrypt errors for encrypted settings.
+- Secret key-name drift -> deployment references a different key than the secret provides.
+
 ### Upload appears stuck at 100%
 
 Usually browser upload is done and cluster finalization is still running.
@@ -220,6 +284,7 @@ If this persists unexpectedly, verify the user has no active VM/container instan
 ## Related pages
 
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Error Catalog](Error-Catalog)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
 - [Network Modes Reference](Network-Modes-Reference)

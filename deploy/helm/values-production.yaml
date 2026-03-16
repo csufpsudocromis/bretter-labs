@@ -2,11 +2,12 @@
 # This file only contains keys consumed by deploy/helm/files/app.yaml.tpl.
 
 appTemplateValues:
-  # Production coordinates for the current cluster.
-  CONTROL_NODE: cbekube1
-  NODE_EXTERNAL_HOST: 10.68.49.250
-  RUNNER_NODE_SELECTOR_VALUE: cbekube2
-  VM_STORAGE_CLASS: longhorn-r1
+  # Reusable production baseline coordinates.
+  # Override these in a site-specific values overlay for your environment.
+  CONTROL_NODE: control-plane-1
+  NODE_EXTERNAL_HOST: labs-gateway.internal
+  RUNNER_NODE_SELECTOR_VALUE: runner-pool
+  VM_STORAGE_CLASS: prod-vm-storage
   # Production profile requires immutable digest pins.
   BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend@sha256:8b3dba2d8224e2812ead41af23a38fe7c0bc0f4668559fd0e63e4cddbcdbfb97
   FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend@sha256:95cb0841c776cac89c236fa4febfbd2bb053b7471a35c3449b60719af307d3b2
@@ -45,7 +46,7 @@ appTemplateValues:
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "300"
   PRODUCTION_PROFILE: "1"
   CORS_ENTERPRISE_PROFILE: "1"
-  CORS_ALLOWED_ORIGINS: "https://10.68.49.250:30073"
+  CORS_ALLOWED_ORIGINS: "https://labs-gateway.internal:30073"
   CORS_ALLOWED_ORIGIN_REGEX: ""
   CORS_ALLOWED_METHODS: "GET,POST,PUT,PATCH,DELETE,OPTIONS"
   CORS_ALLOWED_HEADERS: "Accept,Content-Type,Authorization"

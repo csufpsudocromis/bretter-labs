@@ -166,6 +166,9 @@ After first login/reset, keep the bootstrap file in secure storage and verify `B
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
 | `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE` | `*/5 * * * *` | Cron schedule for kubelet-serving CSR auto-approver job |
+| `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
+| `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
+| `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |
 
 Metrics-server TLS guidance:
 
@@ -189,12 +192,12 @@ Example:
 
 ```bash
 NAMESPACE=labs \
-NODE_EXTERNAL_HOST=10.68.49.250 \
-CONTROL_NODE=cbekube1 \
-RUNNER_NODE_SELECTOR_VALUE=cbekube2 \
-VM_STORAGE_CLASS=longhorn-r1 \
+NODE_EXTERNAL_HOST=prod-labs.internal \
+CONTROL_NODE=control-plane-1 \
+RUNNER_NODE_SELECTOR_VALUE=runner-pool \
+VM_STORAGE_CLASS=prod-vm-storage \
 CORS_ENTERPRISE_PROFILE=1 \
-CORS_ALLOWED_ORIGINS=https://10.68.49.250:30073 \
+CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
 SECRETS_ENCRYPTION_KEY='<32+ char secret>' \
 CONTAINER_SIGNATURE_PUBLIC_KEY_FILE=./cosign.pub \
 ./scripts/setup.sh
@@ -202,9 +205,13 @@ CONTAINER_SIGNATURE_PUBLIC_KEY_FILE=./cosign.pub \
 
 Production note:
 
+- `deploy/helm/values-production.yaml` is a reusable hardened baseline.
+- Use `deploy/helm/values-production-site.template.yaml` to create environment-specific overlays (for example `deploy/helm/values-prod-site.yaml`).
 - Keep `deploy/helm/values-production.yaml` non-secret (`SECRETS_ENCRYPTION_KEY` stays empty).
 - Provide `SECRETS_ENCRYPTION_KEY` only at deploy time (or pre-create `RUNTIME_SECRETS_SECRET_NAME`).
 - Provide signature key material via `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` (or pre-create `CONTAINER_SIGNATURE_KEY_SECRET_NAME`).
+- In production profile, set explicit `CONTROL_NODE`, `NODE_EXTERNAL_HOST`, and `VM_STORAGE_CLASS`; setup now fails fast if they are missing or placeholder values.
+- `RUN_PRODUCTION_GO_LIVE_PROOF` defaults to `1` when `PRODUCTION_PROFILE=1`, so `postdeploy` now includes live go/no-go verification by default.
 
 ## Security and Session Model
 
@@ -283,6 +290,10 @@ Post-rollout proof artifact:
 ```bash
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
 ```
+
+Deploy-time proof:
+
+- `SETUP_PHASES=deploy,postdeploy PRODUCTION_PROFILE=1 ./scripts/setup.sh` runs the same proof automatically unless `RUN_PRODUCTION_GO_LIVE_PROOF=0`.
 
 ## Operations
 

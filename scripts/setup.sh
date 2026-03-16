@@ -171,6 +171,9 @@ SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
 SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-}"
 SYNTHETIC_CHECK_TIMEOUT_SECONDS="${SYNTHETIC_CHECK_TIMEOUT_SECONDS:-420}"
 SYNTHETIC_CHECK_REQUIRE_TEMPLATES="${SYNTHETIC_CHECK_REQUIRE_TEMPLATES:-0}"
+RUN_PRODUCTION_GO_LIVE_PROOF="${RUN_PRODUCTION_GO_LIVE_PROOF:-$PRODUCTION_PROFILE}"
+PRODUCTION_GO_LIVE_REPORT_DIR="${PRODUCTION_GO_LIVE_REPORT_DIR:-$ROOT_DIR/artifacts/go-live}"
+PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS="${PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS:-120}"
 ADMIN_BOOTSTRAP_PASSWORD="${ADMIN_BOOTSTRAP_PASSWORD:-}"
 
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
@@ -258,6 +261,21 @@ validate_preload_config() {
 
 is_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+looks_placeholder_value() {
+  local value lowered
+  value="${1:-}"
+  lowered="${value,,}"
+  if [ -z "$value" ]; then
+    return 0
+  fi
+  case "$lowered" in
+    *"<"*|*">"*|*changeme*|*example*|tbd|todo)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 is_semver_tag() {
@@ -588,6 +606,15 @@ validate_auth_and_cors_config() {
     esac
   fi
   if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+    if looks_placeholder_value "$CONTROL_NODE"; then
+      fail "CONTROL_NODE must be explicitly set (non-placeholder) when PRODUCTION_PROFILE=1."
+    fi
+    if looks_placeholder_value "$NODE_EXTERNAL_HOST"; then
+      fail "NODE_EXTERNAL_HOST must be explicitly set (non-placeholder) when PRODUCTION_PROFILE=1."
+    fi
+    if looks_placeholder_value "$VM_STORAGE_CLASS"; then
+      fail "VM_STORAGE_CLASS must be explicitly set (non-placeholder) when PRODUCTION_PROFILE=1."
+    fi
     if [ "$PUBLIC_SCHEME" != "https" ]; then
       fail "PUBLIC_SCHEME must be https when PRODUCTION_PROFILE=1."
     fi
@@ -793,6 +820,27 @@ validate_synthetic_check_config() {
   [ -n "$SYNTHETIC_CHECK_PASSWORD" ] || fail "SYNTHETIC_CHECK_PASSWORD cannot be empty when synthetic checks are enabled."
   if ! is_uint "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" || [ "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" -lt 60 ]; then
     fail "SYNTHETIC_CHECK_TIMEOUT_SECONDS must be an integer >= 60."
+  fi
+}
+
+validate_production_go_live_proof_config() {
+  case "$RUN_PRODUCTION_GO_LIVE_PROOF" in
+    0|1) ;;
+    *) fail "RUN_PRODUCTION_GO_LIVE_PROOF must be either 0 or 1." ;;
+  esac
+
+  if [ "$RUN_PRODUCTION_GO_LIVE_PROOF" -eq 0 ]; then
+    if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+      warn "RUN_PRODUCTION_GO_LIVE_PROOF=0 disables automatic production go-live verification."
+    fi
+    return
+  fi
+
+  if [ -z "$PRODUCTION_GO_LIVE_REPORT_DIR" ]; then
+    fail "PRODUCTION_GO_LIVE_REPORT_DIR cannot be empty when RUN_PRODUCTION_GO_LIVE_PROOF=1."
+  fi
+  if ! is_uint "$PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS" || [ "$PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS" -lt 10 ]; then
+    fail "PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS must be an integer >= 10 when RUN_PRODUCTION_GO_LIVE_PROOF=1."
   fi
 }
 
@@ -3490,6 +3538,22 @@ EOF
   kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-check --all-containers=true || true
 }
 
+run_production_go_live_proof() {
+  if [ "$RUN_PRODUCTION_GO_LIVE_PROOF" -ne 1 ]; then
+    log "Skipping production go-live proof report (RUN_PRODUCTION_GO_LIVE_PROOF=0)."
+    return
+  fi
+
+  log "Running production go-live proof report..."
+  env \
+    NAMESPACE="$NAMESPACE" \
+    REPORT_DIR="$PRODUCTION_GO_LIVE_REPORT_DIR" \
+    HEALTH_TIMEOUT_SECONDS="$PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS" \
+    NODE_EXTERNAL_HOST="$NODE_EXTERNAL_HOST" \
+    PUBLIC_SCHEME="$PUBLIC_SCHEME" \
+    "$ROOT_DIR/scripts/production_go_live_proof.sh"
+}
+
 ensure_cluster_runtime_context() {
   if ! command -v kubectl >/dev/null 2>&1; then
     fail "kubectl is required for selected phases. Run SETUP_PHASES=prereqs first or install kubectl manually."
@@ -3573,6 +3637,7 @@ log_runtime_configuration() {
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
+  log "Production go-live proof enabled: $RUN_PRODUCTION_GO_LIVE_PROOF (report dir: $PRODUCTION_GO_LIVE_REPORT_DIR health-timeout: ${PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS}s)"
   if [ "$SYNTHETIC_CHECK_AUTO_DISABLED" -eq 1 ]; then
     log "Synthetic check auto-disabled: set SYNTHETIC_CHECK_PASSWORD to run authenticated synthetic validation on existing deployments."
   elif [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
@@ -3656,6 +3721,7 @@ run_phase_postdeploy() {
   apply_monitoring_alert_rules
   run_post_deploy_api_health_check
   run_post_deploy_synthetic_check
+  run_production_go_live_proof
 }
 
 main() {
@@ -3681,6 +3747,7 @@ main() {
   configure_admin_bootstrap_credentials
   validate_post_deploy_api_health_config
   validate_synthetic_check_config
+  validate_production_go_live_proof_config
   validate_helm_deploy_config
 
   if phase_enabled prereqs; then

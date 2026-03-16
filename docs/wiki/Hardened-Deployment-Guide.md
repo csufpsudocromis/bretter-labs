@@ -173,6 +173,7 @@ Keep kubelet metrics scraping in strict TLS mode:
 
 ## 14) Runtime and signature secrets
 
+- Keep `values-production.yaml` as a non-secret baseline and place site-specific overrides in a separate overlay file.
 - Keep `SECRETS_ENCRYPTION_KEY` empty in committed production values.
 - Ensure runtime encryption key is injected through `bretter-runtime-secrets` (`secrets_encryption_key` key by default).
 - Ensure `bretter-cosign-public-key` contains your official `cosign.pub`.
@@ -185,4 +186,5 @@ Keep kubelet metrics scraping in strict TLS mode:
 - [Production Architecture](Production-Architecture)
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Security and Auth](Security-and-Auth)

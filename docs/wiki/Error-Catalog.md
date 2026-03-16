@@ -72,6 +72,27 @@ If using production profile:
 
 - Remove localhost/127.0.0.1 origins from `BLABS_CORS_ALLOWED_ORIGINS`.
 
+### `invalid token` / `session expired` / repeated auth prompts
+
+Likely causes:
+
+- Session expired due TTL.
+- Cookie scope/scheme mismatch after host or TLS changes.
+- Token rows invalidated during restart/logout.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'invalid token|session expired|missing authorization token'
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_AUTH_COOKIE_SECURE|BLABS_CONNECT_COOKIE_SECURE|BLABS_PUBLIC_SCHEME|BLABS_CORS_ALLOWED_ORIGINS'
+```
+
+Fix:
+
+- Keep frontend/API origin and scheme consistent (`https` in production).
+- Validate CORS allowlist includes the real UI origin.
+- Ask affected users to perform a fresh login after rollout.
+
 ## VM/image ingest
 
 ### `failed to normalize image format`
@@ -153,6 +174,55 @@ kubectl -n labs get pods | rg 'Pending|ContainerCreating'
 kubectl -n labs describe pod <pod-name>
 kubectl -n labs get resourcequota
 ```
+
+If VM runners are affected, also check:
+
+```bash
+kubectl get nodes --show-labels | rg 'kubernetes.io/hostname|runner'
+kubectl describe pod <pod-name> | rg -n '0/[0-9]+ nodes are available|node selector|taint|insufficient'
+```
+
+### `Signature verification failed` (container registration/update)
+
+Likely causes:
+
+- Signature key secret missing/wrong file name.
+- Wrong public key content for signed image.
+- `CONTAINER_SIGNATURE_KEY_REF` path does not match mounted key file.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'signature|cosign|verification'
+kubectl -n labs get secret bretter-cosign-public-key -o go-template='{{index .data "cosign.pub"}}' | wc -c
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED|BLABS_CONTAINER_SIGNATURE_KEY_REF|container-signature-key'
+```
+
+Fix:
+
+- Re-apply `bretter-cosign-public-key` with the expected `cosign.pub`.
+- Confirm key fingerprint against your trusted source.
+- Redeploy/retry registration.
+
+### `Unable to decrypt secret with BLABS_SECRETS_ENCRYPTION_KEY`
+
+Likely causes:
+
+- Runtime encryption key changed without re-encrypting stored values.
+- Deployment references wrong runtime secret/key name.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=300 | rg -n 'Unable to decrypt secret|BLABS_SECRETS_ENCRYPTION_KEY'
+kubectl -n labs get secret bretter-runtime-secrets -o go-template='{{index .data "secrets_encryption_key"}}' | wc -c
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_SECRETS_ENCRYPTION_KEY'
+```
+
+Fix:
+
+- Restore correct runtime key secret wiring.
+- If key was rotated, use controlled maintenance and validate decrypt-sensitive flows before reopening access.
 
 ## Connect path
 
@@ -248,5 +318,6 @@ kubectl -n labs logs deploy/bretter-frontend --tail=200
 ## Related pages
 
 - [Operations Runbook](Operations-Runbook)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)

@@ -1,0 +1,24 @@
+# Site-specific production override template.
+# Copy this file per environment, replace placeholders, and keep secrets out of git.
+#
+# Example:
+# cp deploy/helm/values-production-site.template.yaml deploy/helm/values-prod-site.yaml
+# $EDITOR deploy/helm/values-prod-site.yaml
+# python3 scripts/validate_production_profile.py --strict \
+#   -f deploy/helm/values-production.yaml \
+#   -f deploy/helm/values-prod-site.yaml
+
+appTemplateValues:
+  CONTROL_NODE: "<control-node-hostname>"
+  NODE_EXTERNAL_HOST: "<public-node-host-or-ip>"
+  RUNNER_NODE_SELECTOR_VALUE: "<runner-node-selector-value>"
+  VM_STORAGE_CLASS: "<vm-storage-class>"
+  CORS_ALLOWED_ORIGINS: "https://<ui-origin-host>:30073"
+  TLS_SECRET_NAME: "<tls-secret-name>"
+  # Keep empty in committed values files. Inject key material via runtime Kubernetes Secret.
+  SECRETS_ENCRYPTION_KEY: ""
+  RUNTIME_SECRETS_SECRET_NAME: "<runtime-secret-name>"
+  RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: "<runtime-secret-key-name>"
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED: "1"
+  CONTAINER_SIGNATURE_KEY_REF: /etc/bretter-signing/cosign.pub
+  CONTAINER_SIGNATURE_KEY_SECRET_NAME: "<signature-key-secret-name>"

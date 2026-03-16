@@ -6,9 +6,10 @@ Use this checklist before first production deployment and for each release.
 
 ## Required configuration
 
-- Set `appTemplateValues.CONTROL_NODE` in `deploy/helm/values-production.yaml`.
-- Set `appTemplateValues.NODE_EXTERNAL_HOST` in `deploy/helm/values-production.yaml`.
-- Set `appTemplateValues.RUNNER_NODE_SELECTOR_VALUE` in `deploy/helm/values-production.yaml`.
+- Keep `deploy/helm/values-production.yaml` as baseline and define site-specific values in an overlay (for example `deploy/helm/values-prod-site.yaml`).
+- Set `appTemplateValues.CONTROL_NODE` in site overlay.
+- Set `appTemplateValues.NODE_EXTERNAL_HOST` in site overlay.
+- Set `appTemplateValues.RUNNER_NODE_SELECTOR_VALUE` in site overlay.
 - Set `appTemplateValues.CORS_ALLOWED_ORIGINS` to your real UI origins (no localhost/127.0.0.1).
 - Set `appTemplateValues.VM_STORAGE_CLASS` to the intended production class.
 - Set `appTemplateValues.TLS_SECRET_NAME` to the production certificate secret.
@@ -44,8 +45,9 @@ Use this checklist before first production deployment and for each release.
 ## Validation and operations
 
 - Run CI guardrails (including TLS login smoke path) on release branch/PR.
-- Run strict production profile validation before rollout.
+- Run strict production profile validation before rollout (`-f values-production.yaml -f <site-overlay>.yaml`).
 - Run `scripts/production_go_live_proof.sh` after rollout and archive the generated report.
+- Keep `RUN_PRODUCTION_GO_LIVE_PROOF=1` for production postdeploy automation (default when `PRODUCTION_PROFILE=1`).
 - Run post-deploy API health and synthetic checks.
 - Verify backup/restore path for Postgres before go-live.
 - Confirm rollback plan is documented for backend/frontend image digest rollbacks.

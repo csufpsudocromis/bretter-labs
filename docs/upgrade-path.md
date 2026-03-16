@@ -19,7 +19,8 @@ This document covers safe upgrades between Bretter Labs releases, including the 
 
 ```bash
 python3 scripts/validate_production_profile.py --strict \
-  -f deploy/helm/values-production.yaml
+  -f deploy/helm/values-production.yaml \
+  -f deploy/helm/values-prod-site.yaml
 ```
 
 ## Upgrade procedure
@@ -28,7 +29,7 @@ python3 scripts/validate_production_profile.py --strict \
 2. Deploy with setup or Helm upgrade.
 
 ```bash
-SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
+PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 ```
 
 3. Confirm rollout health and API health endpoint.
@@ -65,3 +66,4 @@ SYNTHETIC_CHECK_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
 1. `/api/health` returns `{"status":"ok"}`.
 2. Login, VM launch/connect/delete, container launch/connect/delete.
 3. No new repeating auth or storage errors in backend logs.
+4. Archive `artifacts/go-live/production-go-live-*.txt` output with release notes.
