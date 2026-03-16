@@ -146,6 +146,7 @@ ENABLE_MONITORING=1 \
 ## Related pages
 
 - [Production Architecture](Production-Architecture)
+- [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Operations Runbook](Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)

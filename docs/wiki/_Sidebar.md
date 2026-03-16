@@ -5,6 +5,7 @@
 - [Production Architecture](Production-Architecture)
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
+- [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Operations Runbook](Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Error Catalog](Error-Catalog)

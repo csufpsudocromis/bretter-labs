@@ -1,6 +1,6 @@
 # Production Helm Values Reference
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
 
 Canonical file:
 
@@ -8,51 +8,34 @@ Canonical file:
 
 Use that file as the baseline and override per environment.
 
-## Required overrides before production use
+## Chart value model
+
+- The repo chart consumes only `appTemplateValues` from values files.
+- Unsupported top-level keys fail Helm template rendering by design.
+- `deploy/helm/values-production.yaml` starts with neutral placeholders for environment-specific fields.
+
+## Required production overrides
 
 - `appTemplateValues.CONTROL_NODE`
 - `appTemplateValues.NODE_EXTERNAL_HOST`
+- `appTemplateValues.CORS_ALLOWED_ORIGINS` (replace default `https://localhost:30073`)
 - `appTemplateValues.VM_STORAGE_CLASS`
-- `appTemplateValues.BACKEND_IMAGE` (must be digest-pinned)
-- `appTemplateValues.FRONTEND_IMAGE` (must be digest-pinned)
-- `appTemplateValues.RUNNER_IMAGE` (must be digest-pinned)
-- `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.TLS_SECRET_NAME`
-- `ingress.host`
-- `ingress.tls.secretName`
-- `cors.allowedOrigins`
-- `database.postgres.storageClass`
-- `secrets.externalSecrets.clusterSecretStore`
-- `secrets.externalSecrets.postgresSecretName`
-- `runner.nodeSelector` and `runner.tolerations`
-- `networkPolicy.vmConsoleSourceCidrs` (if restricting console sources)
+- `appTemplateValues.PUBLIC_SCHEME`
+
+## Image pinning policy
+
+- `appTemplateValues.BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` must remain digest-pinned (`@sha256:...`).
+- This is CI-enforced by `scripts/check_release_discipline.py`.
 
 ## Key sections and intent
 
-- `global`:
-  - Namespace, app version, public scheme.
-- `ingress`:
-  - TLS, host, websocket timeout, optional mTLS controls.
-- `cors`:
-  - Allowed origins and constrained regex policy.
-- `auth`:
-  - Session cookie and connect-token TTL controls.
-- `frontend` and `backend`:
-  - Replicas/resources/probes/security contexts.
-- `runner`:
-  - Runtime pod placement and VM network backend posture.
-- `networkPolicy`:
-  - Default-deny posture and explicit flow allow toggles.
-- `database`:
-  - Postgres size/resources and migration behavior.
-- `secrets`:
-  - External Secrets provider wiring.
-- `quotas`:
-  - Namespace CPU/RAM/storage guardrails.
-- `backup`:
-  - Backup schedule and restore validation cadence.
-- `observability`:
-  - Monitoring + post-deploy synthetic checks.
+- `appTemplateValues` includes:
+  - deployment coordinates (`NAMESPACE`, `CONTROL_NODE`, `NODE_EXTERNAL_HOST`)
+  - image refs (`BACKEND_IMAGE`, `FRONTEND_IMAGE`, `RUNNER_IMAGE`)
+  - TLS/public URL controls (`PUBLIC_SCHEME`, `TLS_SECRET_NAME`)
+  - auth/cors hardening values
+  - runtime/storage/network options consumed by `deploy/helm/files/app.yaml.tpl`
 
 ## Usage pattern
 

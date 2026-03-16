@@ -1,10 +1,27 @@
 # Error Catalog
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
 
 Use this page for exact UI/API errors and first-response fixes.
 
 ## Login and auth
+
+### `No admin user exists and BLABS_ADMIN_DEFAULT_PASSWORD is empty`
+
+Meaning:
+
+- Backend startup is fail-fast when first bootstrap secret is missing and no admin row exists.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=200 | rg -n 'BLABS_ADMIN_DEFAULT_PASSWORD|No admin user exists'
+```
+
+Fix:
+
+- Set `ADMIN_BOOTSTRAP_PASSWORD` during initial deploy (`scripts/setup.sh` handles this automatically by default).
+- Re-run deploy phase, then verify backend rollout.
 
 ### `Login failed`
 
