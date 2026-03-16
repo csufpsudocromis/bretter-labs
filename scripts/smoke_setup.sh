@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SETUP_SCRIPT="$ROOT_DIR/scripts/setup.sh"
+PYTHON_BIN="${PYTHON:-python3}"
+if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
+  PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
+fi
 
 run_success() {
   local name="$1"
@@ -28,10 +32,10 @@ run_success "dry-run all phases" \
   env SETUP_DRY_RUN=1 SETUP_PHASES=all "$SETUP_SCRIPT"
 
 run_success "validate production profile command (repo defaults)" \
-  python3 "$ROOT_DIR/scripts/validate_production_profile.py"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py"
 
 run_success "strict production profile validation passes concrete production defaults" \
-  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict
 
 run_success "dry-run deploy phase only" \
   env SETUP_DRY_RUN=1 SETUP_PHASES=deploy "$SETUP_SCRIPT"
@@ -63,7 +67,7 @@ appTemplateValues:
   CONTROL_NODE: ""
 EOF
 run_failure "strict production profile validation rejects placeholder overrides" \
-  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
 rm -f "$tmp_values"
 
 tmp_values="$(mktemp)"
@@ -72,7 +76,7 @@ appTemplateValues:
   SECRETS_ENCRYPTION_KEY: "dont-commit-secrets-in-values"
 EOF
 run_failure "strict production profile validation rejects committed plaintext secrets key" \
-  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
 rm -f "$tmp_values"
 
 tmp_values="$(mktemp)"
@@ -81,7 +85,7 @@ appTemplateValues:
   RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: ""
 EOF
 run_failure "strict production profile validation requires runtime secret injection keys" \
-  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
 rm -f "$tmp_values"
 
 echo "[smoke] setup.sh smoke checks passed"
