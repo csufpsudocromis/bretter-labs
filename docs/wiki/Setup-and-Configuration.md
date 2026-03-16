@@ -26,6 +26,7 @@ Core:
 - `CONTROL_NODE`
 - `NODE_EXTERNAL_HOST`
 - `PUBLIC_SCHEME` (`https` recommended)
+- `PRODUCTION_PROFILE` (`1` recommended for production)
 - `TLS_ENABLED`, `TLS_SECRET_NAME`
 
 Storage:
@@ -141,6 +142,7 @@ ENABLE_MONITORING=1 \
 - Production values (`deploy/helm/values-production.yaml`) are digest-pinned and CI-enforced for backend/frontend/runner image refs.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
+- Use `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f <site-values>.yaml` before production rollouts.
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.

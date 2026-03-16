@@ -22,6 +22,7 @@ Use that file as the baseline and override per environment.
 - `appTemplateValues.VM_STORAGE_CLASS`
 - `appTemplateValues.TLS_SECRET_NAME`
 - `appTemplateValues.PUBLIC_SCHEME`
+- `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
 
 ## Image pinning policy
 

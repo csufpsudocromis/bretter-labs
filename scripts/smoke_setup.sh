@@ -27,6 +27,12 @@ run_failure() {
 run_success "dry-run all phases" \
   env SETUP_DRY_RUN=1 SETUP_PHASES=all "$SETUP_SCRIPT"
 
+run_success "validate production profile command (repo defaults)" \
+  python3 "$ROOT_DIR/scripts/validate_production_profile.py"
+
+run_failure "strict production profile validation rejects neutral defaults" \
+  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict
+
 run_success "dry-run deploy phase only" \
   env SETUP_DRY_RUN=1 SETUP_PHASES=deploy "$SETUP_SCRIPT"
 

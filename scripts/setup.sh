@@ -76,6 +76,7 @@ VM_CONSOLE_SOURCE_CIDRS="${VM_CONSOLE_SOURCE_CIDRS:-}"
 VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
 BACKEND_NODEPORT_ENABLED="${BACKEND_NODEPORT_ENABLED:-0}"
 BACKEND_NODEPORT="${BACKEND_NODEPORT:-30080}"
+PRODUCTION_PROFILE="${PRODUCTION_PROFILE:-0}"
 CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
 CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
 CORS_ALLOWED_ORIGIN_REGEX="${CORS_ALLOWED_ORIGIN_REGEX:-}"
@@ -522,6 +523,10 @@ validate_container_runtime_config() {
 }
 
 validate_auth_and_cors_config() {
+  case "$PRODUCTION_PROFILE" in
+    0|1) ;;
+    *) fail "PRODUCTION_PROFILE must be either 0 or 1." ;;
+  esac
   case "$CORS_ENTERPRISE_PROFILE" in
     0|1) ;;
     *) fail "CORS_ENTERPRISE_PROFILE must be either 0 or 1." ;;
@@ -542,6 +547,17 @@ validate_auth_and_cors_config() {
     0|1) ;;
     *) fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be either 0 or 1." ;;
   esac
+  if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+    if [ "$PUBLIC_SCHEME" != "https" ]; then
+      fail "PUBLIC_SCHEME must be https when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$CORS_ENTERPRISE_PROFILE" -ne 1 ]; then
+      fail "CORS_ENTERPRISE_PROFILE must be 1 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$VM_CONNECT_INSECURE_TLS" -ne 0 ] || [ "$CONTAINER_CONNECT_INSECURE_TLS" -ne 0 ]; then
+      fail "VM/CONTAINER_CONNECT_INSECURE_TLS must be 0 when PRODUCTION_PROFILE=1."
+    fi
+  fi
 }
 
 validate_postgres_config() {
@@ -1802,6 +1818,7 @@ render_helm_values_override() {
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
+  local production_profile
   local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
   local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
   local vm_connect_insecure_tls container_connect_insecure_tls secrets_encryption_key
@@ -1852,6 +1869,7 @@ render_helm_values_override() {
   container_start_queue_enabled="$(yaml_escape "$CONTAINER_START_QUEUE_ENABLED")"
   container_start_queue_base_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS")"
   container_start_queue_max_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
+  production_profile="$(yaml_escape "$PRODUCTION_PROFILE")"
   cors_enterprise_profile="$(yaml_escape "$CORS_ENTERPRISE_PROFILE")"
   cors_allowed_origins="$(yaml_escape "$CORS_ALLOWED_ORIGINS")"
   cors_allowed_origin_regex="$(yaml_escape "$CORS_ALLOWED_ORIGIN_REGEX")"
@@ -1909,6 +1927,7 @@ appTemplateValues:
   CONTAINER_START_QUEUE_ENABLED: "${container_start_queue_enabled}"
   CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "${container_start_queue_base_delay_seconds}"
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "${container_start_queue_max_delay_seconds}"
+  PRODUCTION_PROFILE: "${production_profile}"
   CORS_ENTERPRISE_PROFILE: "${cors_enterprise_profile}"
   CORS_ALLOWED_ORIGINS: "${cors_allowed_origins}"
   CORS_ALLOWED_ORIGIN_REGEX: "${cors_allowed_origin_regex}"
@@ -3360,6 +3379,7 @@ log_runtime_configuration() {
   log "Container signature verification enabled: $CONTAINER_SIGNATURE_VERIFICATION_ENABLED (key: ${CONTAINER_SIGNATURE_KEY_REF:-keyless})"
   log "Container scanning enabled: $CONTAINER_SCAN_ENABLED (interval: ${CONTAINER_SCAN_INTERVAL_MINUTES}m severity: ${CONTAINER_SCAN_SEVERITY})"
   log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
+  log "Backend production profile: $PRODUCTION_PROFILE"
   log "CORS enterprise profile: $CORS_ENTERPRISE_PROFILE (origins: ${CORS_ALLOWED_ORIGINS:-default})"
   log "Auth login rate limit window/max/lockout: ${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS}s/${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS}/${AUTH_LOGIN_LOCKOUT_SECONDS}s"
   log "Bootstrap admin env pruning: $PRUNE_BOOTSTRAP_ADMIN_ENV"

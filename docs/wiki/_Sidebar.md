@@ -6,6 +6,7 @@
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Production Readiness Checklist](Production-Readiness-Checklist)
+- [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Error Catalog](Error-Catalog)

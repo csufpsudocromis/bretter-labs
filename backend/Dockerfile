@@ -19,6 +19,8 @@ RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates curl; \
     curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"; \
+    curl -fsSL -o /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256"; \
+    echo "$(cat /tmp/kubectl.sha256)  /usr/local/bin/kubectl" | sha256sum -c -; \
     chmod +x /usr/local/bin/kubectl; \
     curl -fsSL -o /tmp/cosign-linux-amd64 "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"; \
     curl -fsSL -o /tmp/cosign_checksums.txt "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign_checksums.txt"; \
@@ -31,6 +33,7 @@ RUN set -eux; \
     tar -xzf "/tmp/${TRIVY_BASENAME}.tar.gz" -C /tmp trivy; \
     install -m 0755 /tmp/trivy /usr/local/bin/trivy; \
     rm -f \
+      /tmp/kubectl.sha256 \
       /tmp/cosign-linux-amd64 \
       /tmp/cosign_checksums.txt \
       /tmp/trivy \

@@ -27,6 +27,7 @@ _reaper_task: asyncio.Task | None = None
 ENTERPRISE_CORS_DEFAULT_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 ENTERPRISE_CORS_DEFAULT_HEADERS = ["Accept", "Content-Type", "Authorization"]
 ENTERPRISE_CORS_ALLOWED_METHODS = set(ENTERPRISE_CORS_DEFAULT_METHODS)
+INSECURE_BOOTSTRAP_PASSWORDS = {"admin", "password", "changeme", "admin123"}
 
 
 def _resolve_admin_bootstrap_password() -> str:
@@ -37,6 +38,43 @@ def _resolve_admin_bootstrap_password() -> str:
         "No admin user exists and BLABS_ADMIN_DEFAULT_PASSWORD is empty. "
         "Provide a one-time bootstrap secret during first deployment."
     )
+
+
+def _validate_startup_config() -> None:
+    admin_username = str(getattr(settings, "admin_default_username", "") or "").strip()
+    if not admin_username:
+        raise RuntimeError("BLABS_ADMIN_DEFAULT_USERNAME cannot be empty.")
+
+    bootstrap_password = str(getattr(settings, "admin_default_password", "") or "").strip()
+    if bootstrap_password and bootstrap_password.lower() in INSECURE_BOOTSTRAP_PASSWORDS:
+        raise RuntimeError(
+            "BLABS_ADMIN_DEFAULT_PASSWORD cannot use weak defaults "
+            "(admin/password/changeme/admin123). Provide a one-time bootstrap secret."
+        )
+
+    if not bool(getattr(settings, "production_profile", False)):
+        return
+
+    errors: list[str] = []
+    if str(getattr(settings, "public_scheme", "https") or "").strip().lower() != "https":
+        errors.append("BLABS_PUBLIC_SCHEME must be https when BLABS_PRODUCTION_PROFILE=true.")
+    if not bool(getattr(settings, "auth_cookie_secure", True)):
+        errors.append("BLABS_AUTH_COOKIE_SECURE must be true when BLABS_PRODUCTION_PROFILE=true.")
+    if not bool(getattr(settings, "connect_cookie_secure", True)):
+        errors.append("BLABS_CONNECT_COOKIE_SECURE must be true when BLABS_PRODUCTION_PROFILE=true.")
+    if bool(getattr(settings, "api_docs_enabled", False)):
+        errors.append("BLABS_API_DOCS_ENABLED must be false when BLABS_PRODUCTION_PROFILE=true.")
+    if bool(getattr(settings, "vm_connect_insecure_tls", False)):
+        errors.append("BLABS_VM_CONNECT_INSECURE_TLS must be false when BLABS_PRODUCTION_PROFILE=true.")
+    if bool(getattr(settings, "container_connect_insecure_tls", False)):
+        errors.append("BLABS_CONTAINER_CONNECT_INSECURE_TLS must be false when BLABS_PRODUCTION_PROFILE=true.")
+    if not bool(getattr(settings, "cors_enterprise_profile", False)):
+        errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
+    if not _configured_cors_origins():
+        errors.append("BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_PRODUCTION_PROFILE=true.")
+
+    if errors:
+        raise RuntimeError("Invalid production startup configuration:\n- " + "\n- ".join(errors))
 
 
 def _normalize_origin(origin: str) -> str | None:
@@ -214,6 +252,7 @@ def _scan_due_container_image(session: Session) -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    _validate_startup_config()
     init_db()
     with Session(engine) as session:
         config = session.get(Config, 1)

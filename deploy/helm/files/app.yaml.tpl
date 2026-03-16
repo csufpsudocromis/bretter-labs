@@ -546,6 +546,8 @@ spec:
               value: "__CONTAINER_START_QUEUE_BASE_DELAY_SECONDS__"
             - name: BLABS_CONTAINER_START_QUEUE_MAX_DELAY_SECONDS
               value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
+            - name: BLABS_PRODUCTION_PROFILE
+              value: "__PRODUCTION_PROFILE__"
             - name: BLABS_CORS_ENTERPRISE_PROFILE
               value: "__CORS_ENTERPRISE_PROFILE__"
             - name: BLABS_CORS_ALLOWED_ORIGINS

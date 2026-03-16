@@ -40,6 +40,7 @@ Security properties:
 - Grant/session cookies are path-scoped to connect routes.
 - Session TTL is server-enforced.
 - Session and connect tokens are hashed before database storage (raw token values are not persisted).
+- Legacy plaintext token rows are migrated to hashed storage via Alembic and plaintext lookup fallback is removed.
 
 ## Internal API proxy TLS
 

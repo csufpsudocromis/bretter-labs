@@ -124,6 +124,7 @@ If no admin user exists and no bootstrap secret is configured, backend startup f
 | `CONTROL_NODE` | auto | Preferred control node for pinned workloads |
 | `NODE_EXTERNAL_HOST` | auto | Public host/IP used in generated URLs |
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
+| `PRODUCTION_PROFILE` | `0` | Enables backend startup hardening checks (set `1` for production) |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
 | `ADMIN_BOOTSTRAP_PASSWORD` | random | Initial one-time admin secret used only when no admin user exists (required for first bootstrap path) |
 | `VM_STORAGE_CLASS` | auto | StorageClass for VM clone disks |
@@ -190,6 +191,7 @@ VM_STORAGE_CLASS=longhorn-r1 \
 
 - Login uses secure HTTP-only session cookies (not browser localStorage tokens).
 - VM/container connect uses short-lived access tokens for connect windows.
+- Session/connect tokens are stored hashed in DB; legacy plaintext rows are migrated by Alembic.
 - Optional LDAP login support can be enabled under `/admin/settings/ldap`.
 - Enterprise CORS mode (`BLABS_CORS_ENTERPRISE_PROFILE=1`) requires explicit `BLABS_CORS_ALLOWED_ORIGINS`, disables `BLABS_CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - In enterprise mode, default CORS methods/headers are `GET,POST,PUT,PATCH,DELETE,OPTIONS` and `Accept,Content-Type,Authorization` (override via `BLABS_CORS_ALLOWED_METHODS` and `BLABS_CORS_ALLOWED_HEADERS`).
@@ -253,6 +255,7 @@ Release guardrail check:
 
 ```bash
 python3 scripts/check_release_discipline.py
+python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f deploy/helm/values-prod-site.yaml
 ./scripts/ci_guardrails.sh
 ```
 
@@ -278,6 +281,7 @@ Common issues:
 - GitHub wiki: https://github.com/csufpsudocromis/bretter-labs/wiki
 - Repository wiki source pages: `docs/wiki/`
 - Architecture deep dive: `docs/architecture.md`
+- Upgrade procedure: `docs/upgrade-path.md`
 
 ## Project Structure
 

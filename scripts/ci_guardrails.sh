@@ -10,6 +10,7 @@ fi
 cd "$ROOT_DIR"
 
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_release_discipline.py"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py"
 if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
   echo "ERROR: pytest is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
   exit 1
@@ -23,7 +24,12 @@ if ! "$PYTHON_BIN" -c "import black" >/dev/null 2>&1; then
   exit 1
 fi
 
-"$PYTHON_BIN" -m black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py
+"$PYTHON_BIN" -m black --check \
+  backend/src \
+  backend/tests \
+  scripts/check_release_discipline.py \
+  scripts/bump_version.py \
+  scripts/validate_production_profile.py
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 

@@ -37,11 +37,6 @@ def _token_storage_key(token_value: str, *, domain: str) -> str:
     return f"{_TOKEN_HASH_PREFIX}{digest}"
 
 
-def _is_token_storage_key(value: str) -> bool:
-    normalized = str(value or "").strip().lower()
-    return normalized.startswith(_TOKEN_HASH_PREFIX) and len(normalized) == len(_TOKEN_HASH_PREFIX) + 64
-
-
 def session_token_storage_key(token_value: str) -> str:
     return _token_storage_key(token_value, domain=_SESSION_TOKEN_DOMAIN)
 
@@ -55,14 +50,9 @@ def lookup_session_token(session: Session, token_value: str) -> Token | None:
     if not normalized:
         return None
     hashed_key = session_token_storage_key(normalized)
-    if hashed_key:
-        token = session.get(Token, hashed_key)
-        if token:
-            return token
-    if _is_token_storage_key(normalized):
+    if not hashed_key:
         return None
-    # Backward compatibility for legacy plaintext rows.
-    return session.get(Token, normalized)
+    return session.get(Token, hashed_key)
 
 
 def _lookup_connect_token(session: Session, token_value: str) -> ConnectToken | None:
@@ -70,14 +60,9 @@ def _lookup_connect_token(session: Session, token_value: str) -> ConnectToken | 
     if not normalized:
         return None
     hashed_key = connect_token_storage_key(normalized)
-    if hashed_key:
-        token = session.get(ConnectToken, hashed_key)
-        if token:
-            return token
-    if _is_token_storage_key(normalized):
+    if not hashed_key:
         return None
-    # Backward compatibility for legacy plaintext rows.
-    return session.get(ConnectToken, normalized)
+    return session.get(ConnectToken, hashed_key)
 
 
 def issue_token(session: Session, username: str) -> str:
@@ -148,19 +133,12 @@ def revoke_token_value(session: Session, token_value: str) -> None:
     normalized = str(token_value or "").strip()
     if not normalized:
         return
-    deleted = False
     hashed_key = session_token_storage_key(normalized)
-    if hashed_key:
-        token = session.get(Token, hashed_key)
-        if token:
-            session.delete(token)
-            deleted = True
-    if normalized != hashed_key and not _is_token_storage_key(normalized):
-        legacy_token = session.get(Token, normalized)
-        if legacy_token:
-            session.delete(legacy_token)
-            deleted = True
-    if deleted:
+    if not hashed_key:
+        return
+    token = session.get(Token, hashed_key)
+    if token:
+        session.delete(token)
         session.commit()
 
 

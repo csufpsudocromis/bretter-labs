@@ -94,6 +94,12 @@ def main() -> int:
             errors.append(
                 "deploy/helm/values-production.yaml must pin production images by digest: " f"{key}={image_ref!r}"
             )
+    production_profile = _extract_yaml_scalar(values_production, "PRODUCTION_PROFILE")
+    if production_profile != "1":
+        errors.append(
+            "deploy/helm/values-production.yaml must enable backend startup hardening profile: "
+            f"PRODUCTION_PROFILE={production_profile!r}"
+        )
 
     expected_neutral_defaults = {
         "CONTROL_NODE": "",
@@ -123,6 +129,8 @@ def main() -> int:
     backend_dockerfile = _read_text(backend_dockerfile_path)
     if "releases/latest" in backend_dockerfile or "contrib/install.sh" in backend_dockerfile:
         errors.append("backend/Dockerfile must pin cosign/trivy downloads to explicit versions.")
+    if "kubectl.sha256" not in backend_dockerfile or "sha256sum -c -" not in backend_dockerfile:
+        errors.append("backend/Dockerfile must verify kubectl download integrity with checksum validation.")
 
     if errors:
         print("Release/version discipline checks failed:", file=sys.stderr)
