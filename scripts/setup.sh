@@ -172,6 +172,7 @@ RENDERED_GOLDEN_PVC_MANIFEST=""
 RENDERED_HELM_VALUES=""
 ADMIN_BOOTSTRAP_PASSWORD_GENERATED=0
 SYNTHETIC_CHECK_PASSWORD_AUTOSET=0
+SYNTHETIC_CHECK_AUTO_DISABLED=0
 ADMIN_BOOTSTRAP_SECRET_FILE=""
 
 log() {
@@ -216,8 +217,13 @@ configure_admin_bootstrap_credentials() {
     persist_generated_bootstrap_secret
   fi
   if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 1 ] && [ -z "$SYNTHETIC_CHECK_PASSWORD" ]; then
-    SYNTHETIC_CHECK_PASSWORD="$ADMIN_BOOTSTRAP_PASSWORD"
-    SYNTHETIC_CHECK_PASSWORD_AUTOSET=1
+    if [ "$ADMIN_BOOTSTRAP_PASSWORD_GENERATED" -eq 1 ]; then
+      RUN_POST_DEPLOY_SYNTHETIC_CHECK=0
+      SYNTHETIC_CHECK_AUTO_DISABLED=1
+    else
+      SYNTHETIC_CHECK_PASSWORD="$ADMIN_BOOTSTRAP_PASSWORD"
+      SYNTHETIC_CHECK_PASSWORD_AUTOSET=1
+    fi
   fi
 }
 
@@ -3368,7 +3374,9 @@ log_runtime_configuration() {
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
-  if [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
+  if [ "$SYNTHETIC_CHECK_AUTO_DISABLED" -eq 1 ]; then
+    log "Synthetic check auto-disabled: set SYNTHETIC_CHECK_PASSWORD to run authenticated synthetic validation on existing deployments."
+  elif [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
     log "Synthetic check password was auto-set from the bootstrap admin secret."
   fi
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
