@@ -3126,174 +3126,174 @@ spec:
             - |
               set -euo pipefail
               python3 - <<'PY'
-import base64
-import json
-import os
-import sys
-import time
-
-import requests
-
-API_BASE = str(os.environ.get("API_BASE") or "").rstrip("/")
-USERNAME = base64.b64decode(str(os.environ.get("SYNTHETIC_USERNAME_B64") or "")).decode("utf-8")
-PASSWORD = base64.b64decode(str(os.environ.get("SYNTHETIC_PASSWORD_B64") or "")).decode("utf-8")
-TIMEOUT_SECONDS = max(60, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "420"))
-REQUIRE_TEMPLATES = str(os.environ.get("SYNTHETIC_REQUIRE_TEMPLATES") or "0") == "1"
-VERIFY_TLS = str(os.environ.get("SYNTHETIC_VERIFY_TLS") or "1") == "1"
-DEADLINE = time.time() + TIMEOUT_SECONDS
-SINGLE_LAB_LIMIT_MESSAGE = "you already have a virtual lab running"
-
-if not API_BASE:
-    print("FAIL: API_BASE is required", file=sys.stderr)
-    sys.exit(1)
-
-session = requests.Session()
-session.headers.update({"Accept": "application/json"})
-
-
-def fail(message: str) -> None:
-    print(f"FAIL: {message}", file=sys.stderr)
-    sys.exit(1)
-
-
-def request_json(method: str, path: str, **kwargs):
-    url = path if path.startswith("http://") or path.startswith("https://") else f"{API_BASE}{path}"
-    response = session.request(method=method, url=url, timeout=20, verify=VERIFY_TLS, **kwargs)
-    return response
-
-
-def wait_for_instance(path: str, instance_id: str, allowed_stages: set[str]) -> dict:
-    while time.time() < DEADLINE:
-        response = request_json("GET", path)
-        if response.status_code != 200:
-            time.sleep(2)
-            continue
-        rows = response.json() or []
-        for row in rows:
-            if str(row.get("id")) != instance_id:
-                continue
-            stage = str(row.get("status_stage") or row.get("status") or "").lower()
-            if stage in allowed_stages:
-                return row
-        time.sleep(3)
-    fail(f"timeout while waiting for instance {instance_id} at {path}")
-    return {}
-
-
-def wait_until_vm_released(instance_id: str) -> None:
-    while time.time() < DEADLINE:
-        response = request_json("GET", "/user/pods")
-        if response.status_code != 200:
-            time.sleep(2)
-            continue
-        rows = response.json() or []
-        row = next((item for item in rows if str(item.get("id")) == instance_id), None)
-        if row is None:
-            return
-        status = str(row.get("status") or "").lower()
-        if status in {"stopped", "completed", "failed"}:
-            return
-        time.sleep(3)
-    fail("VM slot did not release in time after delete.")
-
-
-def start_container_with_retry(template_id: str) -> requests.Response:
-    while time.time() < DEADLINE:
-        response = request_json("POST", f"/user/container-templates/{template_id}/start")
-        if response.status_code == 201:
-            return response
-        detail = ""
-        try:
-            payload = response.json()
-            detail = str(payload.get("detail") or "")
-        except Exception:
-            detail = response.text
-        if response.status_code == 429 and SINGLE_LAB_LIMIT_MESSAGE in detail.lower():
-            time.sleep(3)
-            continue
-        fail(f"container start failed ({response.status_code}): {detail[:300]}")
-    fail("timeout waiting to acquire launch slot for container start")
-    return requests.Response()
-
-
-health = request_json("GET", "/health")
-if health.status_code != 200:
-    fail(f"health check failed ({health.status_code}): {health.text[:300]}")
-health_payload = health.json() if "application/json" in str(health.headers.get("content-type") or "") else {}
-if str(health_payload.get("status") or "").lower() != "ok":
-    fail(f"unexpected health payload: {json.dumps(health_payload)[:300]}")
-
-login = request_json("POST", "/auth/login", json={"username": USERNAME, "password": PASSWORD})
-if login.status_code != 200:
-    fail(f"login failed ({login.status_code}): {login.text[:300]}")
-
-vm_templates_resp = request_json("GET", "/user/templates")
-if vm_templates_resp.status_code != 200:
-    fail(f"failed to fetch VM templates ({vm_templates_resp.status_code})")
-vm_templates = vm_templates_resp.json() or []
-
-ct_templates_resp = request_json("GET", "/user/container-templates")
-if ct_templates_resp.status_code != 200:
-    fail(f"failed to fetch container templates ({ct_templates_resp.status_code})")
-container_templates = ct_templates_resp.json() or []
-
-if not vm_templates or not container_templates:
-    message = (
-        "synthetic check skipped: missing enabled VM or container templates "
-        f"(vm={len(vm_templates)} container={len(container_templates)})"
-    )
-    if REQUIRE_TEMPLATES:
-        fail(message)
-    print(f"SKIP: {message}")
-    request_json("POST", "/auth/logout")
-    sys.exit(0)
-
-vm_template_id = str(vm_templates[0]["id"])
-container_template_id = str(container_templates[0]["id"])
-
-vm_start = request_json("POST", f"/user/templates/{vm_template_id}/start")
-if vm_start.status_code != 201:
-    fail(f"VM start failed ({vm_start.status_code}): {vm_start.text[:300]}")
-vm_id = str((vm_start.json() or {}).get("id") or "")
-if not vm_id:
-    fail("VM start response did not include instance id")
-
-vm_row = wait_for_instance("/user/pods", vm_id, {"pending", "building", "starting", "running", "queued"})
-if not str(vm_row.get("console_url") or "").strip():
-    fail("VM instance did not publish console_url")
-
-vm_delete = request_json("DELETE", f"/user/pods/{vm_id}")
-if vm_delete.status_code not in {204, 404}:
-    fail(f"VM delete failed ({vm_delete.status_code}): {vm_delete.text[:300]}")
-wait_until_vm_released(vm_id)
-
-container_start = start_container_with_retry(container_template_id)
-container_id = str((container_start.json() or {}).get("id") or "")
-if not container_id:
-    fail("container start response did not include instance id")
-
-wait_for_instance("/user/containers", container_id, {"pending", "building", "starting", "running", "queued"})
-
-connect_token = request_json("POST", f"/user/containers/{container_id}/connect-token")
-if connect_token.status_code != 200:
-    fail(f"container connect-token failed ({connect_token.status_code}): {connect_token.text[:300]}")
-connect_url = str((connect_token.json() or {}).get("connect_url") or "").strip()
-if not connect_url:
-    fail("container connect-token response missing connect_url")
-
-bridge = request_json("GET", f"/user/containers/{container_id}/connect/__blabs_idle_bridge.js")
-if bridge.status_code != 200:
-    fail(f"container connect bridge fetch failed ({bridge.status_code}): {bridge.text[:300]}")
-if "Still using this lab?" not in bridge.text:
-    fail("container connect bridge did not include idle prompt content")
-
-container_delete = request_json("DELETE", f"/user/containers/{container_id}")
-if container_delete.status_code not in {204, 404}:
-    fail(f"container delete failed ({container_delete.status_code}): {container_delete.text[:300]}")
-
-request_json("POST", "/auth/logout")
-print("Synthetic validation passed: login -> VM launch -> container launch/connect/idle prompt bridge -> delete.")
-PY
+              import base64
+              import json
+              import os
+              import sys
+              import time
+              
+              import requests
+              
+              API_BASE = str(os.environ.get("API_BASE") or "").rstrip("/")
+              USERNAME = base64.b64decode(str(os.environ.get("SYNTHETIC_USERNAME_B64") or "")).decode("utf-8")
+              PASSWORD = base64.b64decode(str(os.environ.get("SYNTHETIC_PASSWORD_B64") or "")).decode("utf-8")
+              TIMEOUT_SECONDS = max(60, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "420"))
+              REQUIRE_TEMPLATES = str(os.environ.get("SYNTHETIC_REQUIRE_TEMPLATES") or "0") == "1"
+              VERIFY_TLS = str(os.environ.get("SYNTHETIC_VERIFY_TLS") or "1") == "1"
+              DEADLINE = time.time() + TIMEOUT_SECONDS
+              SINGLE_LAB_LIMIT_MESSAGE = "you already have a virtual lab running"
+              
+              if not API_BASE:
+                  print("FAIL: API_BASE is required", file=sys.stderr)
+                  sys.exit(1)
+              
+              session = requests.Session()
+              session.headers.update({"Accept": "application/json"})
+              
+              
+              def fail(message: str) -> None:
+                  print(f"FAIL: {message}", file=sys.stderr)
+                  sys.exit(1)
+              
+              
+              def request_json(method: str, path: str, **kwargs):
+                  url = path if path.startswith("http://") or path.startswith("https://") else f"{API_BASE}{path}"
+                  response = session.request(method=method, url=url, timeout=20, verify=VERIFY_TLS, **kwargs)
+                  return response
+              
+              
+              def wait_for_instance(path: str, instance_id: str, allowed_stages: set[str]) -> dict:
+                  while time.time() < DEADLINE:
+                      response = request_json("GET", path)
+                      if response.status_code != 200:
+                          time.sleep(2)
+                          continue
+                      rows = response.json() or []
+                      for row in rows:
+                          if str(row.get("id")) != instance_id:
+                              continue
+                          stage = str(row.get("status_stage") or row.get("status") or "").lower()
+                          if stage in allowed_stages:
+                              return row
+                      time.sleep(3)
+                  fail(f"timeout while waiting for instance {instance_id} at {path}")
+                  return {}
+              
+              
+              def wait_until_vm_released(instance_id: str) -> None:
+                  while time.time() < DEADLINE:
+                      response = request_json("GET", "/user/pods")
+                      if response.status_code != 200:
+                          time.sleep(2)
+                          continue
+                      rows = response.json() or []
+                      row = next((item for item in rows if str(item.get("id")) == instance_id), None)
+                      if row is None:
+                          return
+                      status = str(row.get("status") or "").lower()
+                      if status in {"stopped", "completed", "failed"}:
+                          return
+                      time.sleep(3)
+                  fail("VM slot did not release in time after delete.")
+              
+              
+              def start_container_with_retry(template_id: str) -> requests.Response:
+                  while time.time() < DEADLINE:
+                      response = request_json("POST", f"/user/container-templates/{template_id}/start")
+                      if response.status_code == 201:
+                          return response
+                      detail = ""
+                      try:
+                          payload = response.json()
+                          detail = str(payload.get("detail") or "")
+                      except Exception:
+                          detail = response.text
+                      if response.status_code == 429 and SINGLE_LAB_LIMIT_MESSAGE in detail.lower():
+                          time.sleep(3)
+                          continue
+                      fail(f"container start failed ({response.status_code}): {detail[:300]}")
+                  fail("timeout waiting to acquire launch slot for container start")
+                  return requests.Response()
+              
+              
+              health = request_json("GET", "/health")
+              if health.status_code != 200:
+                  fail(f"health check failed ({health.status_code}): {health.text[:300]}")
+              health_payload = health.json() if "application/json" in str(health.headers.get("content-type") or "") else {}
+              if str(health_payload.get("status") or "").lower() != "ok":
+                  fail(f"unexpected health payload: {json.dumps(health_payload)[:300]}")
+              
+              login = request_json("POST", "/auth/login", json={"username": USERNAME, "password": PASSWORD})
+              if login.status_code != 200:
+                  fail(f"login failed ({login.status_code}): {login.text[:300]}")
+              
+              vm_templates_resp = request_json("GET", "/user/templates")
+              if vm_templates_resp.status_code != 200:
+                  fail(f"failed to fetch VM templates ({vm_templates_resp.status_code})")
+              vm_templates = vm_templates_resp.json() or []
+              
+              ct_templates_resp = request_json("GET", "/user/container-templates")
+              if ct_templates_resp.status_code != 200:
+                  fail(f"failed to fetch container templates ({ct_templates_resp.status_code})")
+              container_templates = ct_templates_resp.json() or []
+              
+              if not vm_templates or not container_templates:
+                  message = (
+                      "synthetic check skipped: missing enabled VM or container templates "
+                      f"(vm={len(vm_templates)} container={len(container_templates)})"
+                  )
+                  if REQUIRE_TEMPLATES:
+                      fail(message)
+                  print(f"SKIP: {message}")
+                  request_json("POST", "/auth/logout")
+                  sys.exit(0)
+              
+              vm_template_id = str(vm_templates[0]["id"])
+              container_template_id = str(container_templates[0]["id"])
+              
+              vm_start = request_json("POST", f"/user/templates/{vm_template_id}/start")
+              if vm_start.status_code != 201:
+                  fail(f"VM start failed ({vm_start.status_code}): {vm_start.text[:300]}")
+              vm_id = str((vm_start.json() or {}).get("id") or "")
+              if not vm_id:
+                  fail("VM start response did not include instance id")
+              
+              vm_row = wait_for_instance("/user/pods", vm_id, {"pending", "building", "starting", "running", "queued"})
+              if not str(vm_row.get("console_url") or "").strip():
+                  fail("VM instance did not publish console_url")
+              
+              vm_delete = request_json("DELETE", f"/user/pods/{vm_id}")
+              if vm_delete.status_code not in {204, 404}:
+                  fail(f"VM delete failed ({vm_delete.status_code}): {vm_delete.text[:300]}")
+              wait_until_vm_released(vm_id)
+              
+              container_start = start_container_with_retry(container_template_id)
+              container_id = str((container_start.json() or {}).get("id") or "")
+              if not container_id:
+                  fail("container start response did not include instance id")
+              
+              wait_for_instance("/user/containers", container_id, {"pending", "building", "starting", "running", "queued"})
+              
+              connect_token = request_json("POST", f"/user/containers/{container_id}/connect-token")
+              if connect_token.status_code != 200:
+                  fail(f"container connect-token failed ({connect_token.status_code}): {connect_token.text[:300]}")
+              connect_url = str((connect_token.json() or {}).get("connect_url") or "").strip()
+              if not connect_url:
+                  fail("container connect-token response missing connect_url")
+              
+              bridge = request_json("GET", f"/user/containers/{container_id}/connect/__blabs_idle_bridge.js")
+              if bridge.status_code != 200:
+                  fail(f"container connect bridge fetch failed ({bridge.status_code}): {bridge.text[:300]}")
+              if "Still using this lab?" not in bridge.text:
+                  fail("container connect bridge did not include idle prompt content")
+              
+              container_delete = request_json("DELETE", f"/user/containers/{container_id}")
+              if container_delete.status_code not in {204, 404}:
+                  fail(f"container delete failed ({container_delete.status_code}): {container_delete.text[:300]}")
+              
+              request_json("POST", "/auth/logout")
+              print("Synthetic validation passed: login -> VM launch -> container launch/connect/idle prompt bridge -> delete.")
+              PY
 EOF
 
   if ! kubectl -n "$NAMESPACE" wait --for=condition=complete job/bretter-post-deploy-check --timeout="${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s"; then
