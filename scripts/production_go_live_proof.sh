@@ -37,6 +37,25 @@ run_check() {
   fi
 }
 
+secret_data_value_b64() {
+  local namespace="$1"
+  local secret_name="$2"
+  local data_key="$3"
+  python3 - "$namespace" "$secret_name" "$data_key" <<'PY'
+import json
+import subprocess
+import sys
+
+namespace = str(sys.argv[1]).strip()
+secret_name = str(sys.argv[2]).strip()
+data_key = str(sys.argv[3]).strip()
+raw = subprocess.check_output(["kubectl", "-n", namespace, "get", "secret", secret_name, "-o", "json"], text=True)
+payload = json.loads(raw)
+data = (payload or {}).get("data") or {}
+print(str(data.get(data_key, "")), end="")
+PY
+}
+
 log "Production go-live proof started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Namespace: $NAMESPACE"
 log "Report: $report_path"
@@ -169,7 +188,7 @@ if [ "$fail_count" -eq 0 ] || [ -n "$backend_meta" ]; then
 fi
 
 if [ -n "$runtime_secret_name" ] && [ -n "$runtime_secret_key" ]; then
-  runtime_secret_b64="$(kubectl -n "$NAMESPACE" get secret "$runtime_secret_name" -o "jsonpath={.data['$runtime_secret_key']}" 2>/dev/null || true)"
+  runtime_secret_b64="$(secret_data_value_b64 "$NAMESPACE" "$runtime_secret_name" "$runtime_secret_key" 2>/dev/null || true)"
   if [ -n "$runtime_secret_b64" ]; then
     pass_check "runtime secret exists with encryption key data"
   else
@@ -184,7 +203,7 @@ if [[ "$signature_key_ref" == /etc/bretter-signing/* ]]; then
   if [ -z "$signature_secret_name" ] || [ -z "$signature_key_file" ]; then
     fail_check "signature key secret exists with expected key file"
   else
-    signature_key_b64="$(kubectl -n "$NAMESPACE" get secret "$signature_secret_name" -o "jsonpath={.data['$signature_key_file']}" 2>/dev/null || true)"
+    signature_key_b64="$(secret_data_value_b64 "$NAMESPACE" "$signature_secret_name" "$signature_key_file" 2>/dev/null || true)"
     if [ -n "$signature_key_b64" ]; then
       pass_check "signature key secret exists with expected key file"
     else
