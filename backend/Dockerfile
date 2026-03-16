@@ -17,7 +17,7 @@ ARG COSIGN_VERSION=v3.0.5
 ARG TRIVY_VERSION=v0.69.3
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates curl tar; \
+    apt-get install -y --no-install-recommends ca-certificates curl; \
     curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"; \
     chmod +x /usr/local/bin/kubectl; \
     curl -fsSL -o /tmp/cosign-linux-amd64 "https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}/cosign-linux-amd64"; \
@@ -36,7 +36,7 @@ RUN set -eux; \
       /tmp/trivy \
       /tmp/trivy_checksums.txt \
       "/tmp/${TRIVY_BASENAME}.tar.gz"; \
-    apt-get purge -y --auto-remove curl tar; \
+    apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
 
 COPY backend /app/backend
