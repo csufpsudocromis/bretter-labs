@@ -20,12 +20,14 @@ Validates:
 kubectl -n labs rollout status deploy/bretter-backend --timeout=300s
 kubectl -n labs rollout status deploy/bretter-frontend --timeout=300s
 kubectl -n labs get pods -o wide
+curl -skf https://<NODE_EXTERNAL_HOST>:30073/api/health
 ```
 
 Fail if:
 
 - Any control-plane deployment is unavailable.
 - Pods are crashlooping or not ready.
+- `/api/health` does not return `{"status":"ok"}`.
 
 ## Phase 2: Synthetic job (preferred)
 

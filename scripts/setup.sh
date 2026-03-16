@@ -141,6 +141,14 @@ HELM_CHART_DIR="${HELM_CHART_DIR:-$ROOT_DIR/deploy/helm}"
 ENABLE_METRICS_SERVER="${ENABLE_METRICS_SERVER:-1}"
 METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml}"
 METRICS_SERVER_INSECURE_TLS="${METRICS_SERVER_INSECURE_TLS:-0}"
+ENABLE_ADMISSION_POLICIES="${ENABLE_ADMISSION_POLICIES:-1}"
+INSTALL_KYVERNO="${INSTALL_KYVERNO:-1}"
+KYVERNO_NAMESPACE="${KYVERNO_NAMESPACE:-kyverno}"
+KYVERNO_RELEASE_NAME="${KYVERNO_RELEASE_NAME:-kyverno}"
+KYVERNO_CHART_VERSION="${KYVERNO_CHART_VERSION:-}"
+ADMISSION_POLICY_TEMPLATE="${ADMISSION_POLICY_TEMPLATE:-$ROOT_DIR/deploy/policies/kyverno/clusterpolicies.yaml.tpl}"
+RUN_POST_DEPLOY_API_HEALTH_CHECK="${RUN_POST_DEPLOY_API_HEALTH_CHECK:-1}"
+POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS="${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS:-120}"
 RUN_POST_DEPLOY_SYNTHETIC_CHECK="${RUN_POST_DEPLOY_SYNTHETIC_CHECK:-1}"
 SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
 SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-}"
@@ -620,6 +628,40 @@ validate_metrics_server_config() {
   esac
   if [ "$ENABLE_METRICS_SERVER" -eq 1 ] && [ -z "$METRICS_SERVER_MANIFEST_URL" ]; then
     fail "METRICS_SERVER_MANIFEST_URL cannot be empty when ENABLE_METRICS_SERVER=1."
+  fi
+}
+
+validate_admission_policy_config() {
+  case "$ENABLE_ADMISSION_POLICIES" in
+    0|1) ;;
+    *) fail "ENABLE_ADMISSION_POLICIES must be either 0 or 1." ;;
+  esac
+  case "$INSTALL_KYVERNO" in
+    0|1) ;;
+    *) fail "INSTALL_KYVERNO must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_ADMISSION_POLICIES" -eq 0 ]; then
+    return
+  fi
+  [ -n "$KYVERNO_NAMESPACE" ] || fail "KYVERNO_NAMESPACE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
+  [ -n "$KYVERNO_RELEASE_NAME" ] || fail "KYVERNO_RELEASE_NAME cannot be empty when ENABLE_ADMISSION_POLICIES=1."
+  if [ -n "$KYVERNO_CHART_VERSION" ] && ! [[ "$KYVERNO_CHART_VERSION" =~ ^v?[0-9]+(\.[0-9]+){2}$ ]]; then
+    fail "KYVERNO_CHART_VERSION must look like X.Y.Z (or be empty for latest chart)."
+  fi
+  [ -n "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
+  [ -f "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE does not exist: $ADMISSION_POLICY_TEMPLATE"
+}
+
+validate_post_deploy_api_health_config() {
+  case "$RUN_POST_DEPLOY_API_HEALTH_CHECK" in
+    0|1) ;;
+    *) fail "RUN_POST_DEPLOY_API_HEALTH_CHECK must be either 0 or 1." ;;
+  esac
+  if [ "$RUN_POST_DEPLOY_API_HEALTH_CHECK" -eq 0 ]; then
+    return
+  fi
+  if ! is_uint "$POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS" || [ "$POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS" -lt 10 ]; then
+    fail "POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS must be an integer >= 10."
   fi
 }
 
@@ -1180,6 +1222,51 @@ PY
   fi
 
   kubectl -n kube-system rollout status deployment/metrics-server --timeout=600s
+}
+
+install_kyverno() {
+  if [ "$ENABLE_ADMISSION_POLICIES" -ne 1 ]; then
+    log "Skipping Kyverno install (ENABLE_ADMISSION_POLICIES=0)."
+    return
+  fi
+  if [ "$INSTALL_KYVERNO" -ne 1 ]; then
+    log "Skipping Kyverno install (INSTALL_KYVERNO=0)."
+    return
+  fi
+
+  install_helm
+  log "Installing Kyverno in namespace ${KYVERNO_NAMESPACE}..."
+  helm repo add kyverno https://kyverno.github.io/kyverno >/dev/null 2>&1 || true
+  helm repo update >/dev/null
+
+  local helm_cmd=(upgrade --install "$KYVERNO_RELEASE_NAME" kyverno/kyverno --namespace "$KYVERNO_NAMESPACE" --create-namespace)
+  if [ -n "$KYVERNO_CHART_VERSION" ]; then
+    helm_cmd+=(--version "${KYVERNO_CHART_VERSION#v}")
+  fi
+  helm "${helm_cmd[@]}"
+
+  kubectl wait --for=condition=Established crd/clusterpolicies.kyverno.io --timeout=180s >/dev/null
+
+  local deploy
+  while IFS= read -r deploy; do
+    [ -n "$deploy" ] || continue
+    kubectl -n "$KYVERNO_NAMESPACE" rollout status "$deploy" --timeout=600s
+  done < <(kubectl -n "$KYVERNO_NAMESPACE" get deployment -l app.kubernetes.io/part-of=kyverno -o name)
+}
+
+apply_admission_policies() {
+  if [ "$ENABLE_ADMISSION_POLICIES" -ne 1 ]; then
+    log "Skipping admission policy apply (ENABLE_ADMISSION_POLICIES=0)."
+    return
+  fi
+  if ! kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
+    fail "Kyverno CRDs are not present. Set INSTALL_KYVERNO=1 or install Kyverno before applying admission policies."
+  fi
+
+  local namespace_escaped
+  namespace_escaped="$(escape_sed_replacement "$NAMESPACE")"
+  log "Applying Kyverno admission policies from ${ADMISSION_POLICY_TEMPLATE}..."
+  sed -e "s/__NAMESPACE__/${namespace_escaped}/g" "$ADMISSION_POLICY_TEMPLATE" | kubectl apply -f -
 }
 
 apply_monitoring_alert_rules() {
@@ -1845,6 +1932,8 @@ apply_base_release_with_helm() {
     adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-default-deny-ingress
     adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-backend-allow-ingress
     adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-frontend-allow-ingress
+    adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-backend-restrict-egress
+    adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-frontend-restrict-egress
     adopt_resource_for_helm "$NAMESPACE" networkpolicy bretter-postgres-allow-backend
     adopt_resource_for_helm "$NAMESPACE" poddisruptionbudget bretter-backend
     adopt_resource_for_helm "$NAMESPACE" poddisruptionbudget bretter-frontend
@@ -2886,15 +2975,54 @@ apply_manifests() {
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
 }
 
+run_post_deploy_api_health_check() {
+  if [ "$RUN_POST_DEPLOY_API_HEALTH_CHECK" -ne 1 ]; then
+    log "Skipping post-deploy API health check (RUN_POST_DEPLOY_API_HEALTH_CHECK=0)."
+    return
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    fail "curl is required for post-deploy API health checks."
+  fi
+
+  local url attempts i response
+  local curl_tls_flags=()
+  url="${PUBLIC_SCHEME}://${NODE_EXTERNAL_HOST}:30073/api/health"
+  attempts=$(((POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS + 4) / 5))
+  if [ "$attempts" -lt 1 ]; then
+    attempts=1
+  fi
+  if [ "$PUBLIC_SCHEME" = "https" ]; then
+    curl_tls_flags+=(--insecure)
+  fi
+
+  log "Running post-deploy API health check at ${url}..."
+  for ((i = 1; i <= attempts; i++)); do
+    response="$(curl -fsS --max-time 10 "${curl_tls_flags[@]}" "$url" 2>/dev/null || true)"
+    if printf '%s' "$response" | grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"'; then
+      log "Post-deploy API health check passed."
+      return
+    fi
+    sleep 5
+  done
+
+  fail "Post-deploy API health check failed at ${url}."
+}
+
 run_post_deploy_synthetic_check() {
   if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -ne 1 ]; then
     log "Skipping post-deploy synthetic validation (RUN_POST_DEPLOY_SYNTHETIC_CHECK=0)."
     return
   fi
 
-  local username_b64 password_b64
+  local username_b64 password_b64 synthetic_api_base synthetic_verify_tls
   username_b64="$(printf '%s' "$SYNTHETIC_CHECK_USERNAME" | base64 -w0)"
   password_b64="$(printf '%s' "$SYNTHETIC_CHECK_PASSWORD" | base64 -w0)"
+  synthetic_api_base="http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+  synthetic_verify_tls="1"
+  if [ "$TLS_ENABLED" -eq 1 ]; then
+    synthetic_api_base="https://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+    synthetic_verify_tls="0"
+  fi
 
   log "Running post-deploy synthetic validation job..."
   kubectl -n "$NAMESPACE" delete job bretter-post-deploy-check --ignore-not-found=true >/dev/null 2>&1 || true
@@ -2918,7 +3046,9 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - name: API_BASE
-              value: "http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+              value: "${synthetic_api_base}"
+            - name: SYNTHETIC_VERIFY_TLS
+              value: "${synthetic_verify_tls}"
             - name: SYNTHETIC_USERNAME_B64
               value: "${username_b64}"
             - name: SYNTHETIC_PASSWORD_B64
@@ -2946,6 +3076,7 @@ USERNAME = base64.b64decode(str(os.environ.get("SYNTHETIC_USERNAME_B64") or ""))
 PASSWORD = base64.b64decode(str(os.environ.get("SYNTHETIC_PASSWORD_B64") or "")).decode("utf-8")
 TIMEOUT_SECONDS = max(60, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "420"))
 REQUIRE_TEMPLATES = str(os.environ.get("SYNTHETIC_REQUIRE_TEMPLATES") or "0") == "1"
+VERIFY_TLS = str(os.environ.get("SYNTHETIC_VERIFY_TLS") or "1") == "1"
 DEADLINE = time.time() + TIMEOUT_SECONDS
 SINGLE_LAB_LIMIT_MESSAGE = "you already have a virtual lab running"
 
@@ -2964,7 +3095,7 @@ def fail(message: str) -> None:
 
 def request_json(method: str, path: str, **kwargs):
     url = path if path.startswith("http://") or path.startswith("https://") else f"{API_BASE}{path}"
-    response = session.request(method=method, url=url, timeout=20, **kwargs)
+    response = session.request(method=method, url=url, timeout=20, verify=VERIFY_TLS, **kwargs)
     return response
 
 
@@ -3021,6 +3152,13 @@ def start_container_with_retry(template_id: str) -> requests.Response:
     fail("timeout waiting to acquire launch slot for container start")
     return requests.Response()
 
+
+health = request_json("GET", "/health")
+if health.status_code != 200:
+    fail(f"health check failed ({health.status_code}): {health.text[:300]}")
+health_payload = health.json() if "application/json" in str(health.headers.get("content-type") or "") else {}
+if str(health_payload.get("status") or "").lower() != "ok":
+    fail(f"unexpected health payload: {json.dumps(health_payload)[:300]}")
 
 login = request_json("POST", "/auth/login", json={"username": USERNAME, "password": PASSWORD})
 if login.status_code != 200:
@@ -3161,8 +3299,10 @@ log_runtime_configuration() {
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
+  log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION:-latest})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
+  log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
   if [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
     log "Synthetic check password was auto-set from the bootstrap admin secret."
@@ -3237,11 +3377,14 @@ run_phase_postdeploy() {
     return
   fi
 
-  run_post_deploy_synthetic_check
   install_metrics_server
   install_monitoring_stack
+  install_kyverno
+  apply_admission_policies
   patch_default_pvc_alert_exclusions
   apply_monitoring_alert_rules
+  run_post_deploy_api_health_check
+  run_post_deploy_synthetic_check
 }
 
 main() {
@@ -3262,8 +3405,10 @@ main() {
   validate_cpu_manager_config
   validate_monitoring_config
   validate_metrics_server_config
+  validate_admission_policy_config
   validate_kubelet_serving_csr_autoapproval_config
   configure_admin_bootstrap_credentials
+  validate_post_deploy_api_health_config
   validate_synthetic_check_config
   validate_helm_deploy_config
 

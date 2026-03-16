@@ -14,6 +14,10 @@ if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
   echo "ERROR: pytest is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
   exit 1
 fi
+if ! "$PYTHON_BIN" -c "import fastapi" >/dev/null 2>&1; then
+  echo "ERROR: fastapi is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
+  exit 1
+fi
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 

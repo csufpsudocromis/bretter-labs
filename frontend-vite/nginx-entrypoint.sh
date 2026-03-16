@@ -2,17 +2,23 @@
 set -eu
 
 CONF_PATH="/etc/nginx/conf.d/default.conf"
+TRUST_BUNDLE="/tmp/backend-upstream-ca.pem"
 
 if [ -f /tls/tls.crt ] && [ -f /tls/tls.key ]; then
+  if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+    cat /etc/ssl/certs/ca-certificates.crt /tls/tls.crt >"$TRUST_BUNDLE"
+  else
+    cp /tls/tls.crt "$TRUST_BUNDLE"
+  fi
   cat >"$CONF_PATH" <<'EOF'
 server {
-  listen 80;
+  listen 8080;
   server_name _;
   return 301 https://$host:30073$request_uri;
 }
 
 server {
-  listen 443 ssl;
+  listen 8443 ssl;
   server_name _;
   ssl_certificate /tls/tls.crt;
   ssl_certificate_key /tls/tls.key;
@@ -20,7 +26,11 @@ server {
 
   location /api/ {
     proxy_pass https://bretter-backend:8000/;
-    proxy_ssl_verify off;
+    proxy_ssl_trusted_certificate /tmp/backend-upstream-ca.pem;
+    proxy_ssl_verify on;
+    proxy_ssl_verify_depth 3;
+    proxy_ssl_server_name on;
+    proxy_ssl_name $host;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -32,7 +42,11 @@ server {
 
   location /auth/ {
     proxy_pass https://bretter-backend:8000;
-    proxy_ssl_verify off;
+    proxy_ssl_trusted_certificate /tmp/backend-upstream-ca.pem;
+    proxy_ssl_verify on;
+    proxy_ssl_verify_depth 3;
+    proxy_ssl_server_name on;
+    proxy_ssl_name $host;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
@@ -43,7 +57,11 @@ server {
 
   location /user/ {
     proxy_pass https://bretter-backend:8000;
-    proxy_ssl_verify off;
+    proxy_ssl_trusted_certificate /tmp/backend-upstream-ca.pem;
+    proxy_ssl_verify on;
+    proxy_ssl_verify_depth 3;
+    proxy_ssl_server_name on;
+    proxy_ssl_name $host;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -62,7 +80,7 @@ EOF
 else
   cat >"$CONF_PATH" <<'EOF'
 server {
-  listen 80;
+  listen 8443;
   server_name _;
   root /usr/share/nginx/html;
 

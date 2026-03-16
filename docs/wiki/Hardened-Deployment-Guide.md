@@ -76,13 +76,12 @@ Runner pods may have different requirements; keep that exception explicit and do
 
 Recommended:
 
-- Namespace default deny (ingress + egress)
-- Explicit allow rules only for required paths:
+- Namespace default deny ingress
+- Explicit egress restrictions for core services:
   - frontend proxy -> backend (`/api`, `/auth`, `/user`)
-  - backend -> Postgres
-  - backend -> kube-apiserver
+  - backend -> Postgres + namespace-local runtime paths
   - DNS egress
-  - runtime connect paths
+  - backend outbound TLS (`tcp/443`) for API/registry integrations
 - Keep backend direct NodePort disabled (`BACKEND_NODEPORT_ENABLED=0`) unless explicitly needed for dev break-glass.
 
 Quick check:
@@ -91,6 +90,11 @@ Quick check:
 kubectl -n labs get networkpolicy
 kubectl -n labs describe networkpolicy
 ```
+
+Expected egress policies:
+
+- `bretter-frontend-restrict-egress`
+- `bretter-backend-restrict-egress`
 
 ## 6) Ingress hardening (optional mTLS)
 
@@ -155,6 +159,17 @@ Keep kubelet metrics scraping in strict TLS mode:
 
 - Keep `BLABS_VM_CONNECT_INSECURE_TLS=0` and `BLABS_CONTAINER_CONNECT_INSECURE_TLS=0` in production.
 - Enable the insecure toggles only for local/dev clusters that cannot provide valid upstream certificates.
+- Frontend reverse proxy should validate backend TLS (`proxy_ssl_verify on`) using the mounted trust bundle; avoid `proxy_ssl_verify off`.
+
+## 13) Admission policy enforcement (Kyverno)
+
+- Enable `ENABLE_ADMISSION_POLICIES=1` (default) in hardened environments.
+- Keep `INSTALL_KYVERNO=1` so setup can install/upgrade Kyverno before policy apply.
+- Enforced Bretter core workloads are validated for:
+  - immutable image tags (no `:latest` / `:edge`)
+  - non-root + RuntimeDefault seccomp
+  - `allowPrivilegeEscalation=false` + dropped capabilities
+  - explicit CPU/memory requests and limits
 
 ## Related pages
 

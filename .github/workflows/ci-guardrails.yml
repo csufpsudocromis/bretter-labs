@@ -18,13 +18,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install shellcheck
+      - name: Install shellcheck and shfmt
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck
+          sudo apt-get install -y shellcheck shfmt
 
       - name: Run shellcheck
-        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh
+        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh frontend-vite/nginx-entrypoint.sh
+
+      - name: Run shfmt
+        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
+
+      - name: Run hadolint
+        run: |
+          docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < backend/Dockerfile
+          docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < frontend-vite/Dockerfile
+          docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < runner/Dockerfile
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          skip-dirs: .venv,frontend-vite/node_modules
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
 
       - name: Setup Helm
         uses: azure/setup-helm@v4

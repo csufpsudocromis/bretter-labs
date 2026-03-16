@@ -83,8 +83,13 @@ Monitoring/ops:
 - `AUTOCLEANUP_NODEFS_WARN_PCT`, `AUTOCLEANUP_NODEFS_CRITICAL_PCT`, `AUTOCLEANUP_NODEFS_EMERGENCY_PCT`
 - `AUTOCLEANUP_PVC_WARN_PCT`, `AUTOCLEANUP_PVC_CRITICAL_PCT`, `AUTOCLEANUP_PVC_EMERGENCY_PCT`
 - `METRICS_SERVER_INSECURE_TLS` (default `0`; dev-only override)
+- `ENABLE_ADMISSION_POLICIES` (default `1`)
+- `INSTALL_KYVERNO` (default `1`)
+- `KYVERNO_NAMESPACE`, `KYVERNO_RELEASE_NAME`, `KYVERNO_CHART_VERSION`
 - `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL`
 - `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE`
+- `RUN_POST_DEPLOY_API_HEALTH_CHECK`
+- `POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
 
 External secrets (optional):
@@ -128,6 +133,8 @@ ENABLE_MONITORING=1 \
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
+- Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
+- When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.
 - LDAP requires backend schema migration `0018` and current frontend bundle to render settings tile.

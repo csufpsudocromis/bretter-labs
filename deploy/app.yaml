@@ -165,7 +165,16 @@ spec:
     metadata:
       labels:
         app: bretter-postgres
+        security.bretter-labs.io/enforce-admission: "true"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       nodeSelector:
         kubernetes.io/hostname: __CONTROL_NODE__
       tolerations:
@@ -176,6 +185,15 @@ spec:
         - name: postgres
           image: postgres:16
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 5432
           env:
@@ -305,7 +323,16 @@ spec:
     metadata:
       labels:
         app: bretter-backend
+        security.bretter-labs.io/enforce-admission: "true"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -331,6 +358,24 @@ spec:
         - name: wait-for-postgres
           image: postgres:16
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+              ephemeral-storage: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 256Mi
           command:
             - /bin/sh
             - -c
@@ -355,6 +400,15 @@ spec:
         - name: backend
           image: __BACKEND_IMAGE__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - containerPort: 8000
           resources:
@@ -542,7 +596,16 @@ spec:
     metadata:
       labels:
         app: bretter-frontend
+        security.bretter-labs.io/enforce-admission: "true"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
       affinity:
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -567,8 +630,17 @@ spec:
         - name: frontend
           image: __FRONTEND_IMAGE__
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
           ports:
-            - containerPort: 443
+            - containerPort: 8443
           resources:
             requests:
               cpu: 100m
@@ -580,19 +652,19 @@ spec:
               ephemeral-storage: 1Gi
           startupProbe:
             tcpSocket:
-              port: 443
+              port: 8443
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 60
           readinessProbe:
             tcpSocket:
-              port: 443
+              port: 8443
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
           livenessProbe:
             tcpSocket:
-              port: 443
+              port: 8443
             periodSeconds: 20
             timeoutSeconds: 2
             failureThreshold: 3
@@ -617,7 +689,7 @@ spec:
     app: bretter-frontend
   ports:
     - port: 443
-      targetPort: 443
+      targetPort: 8443
       nodePort: 30073
 ---
 apiVersion: networking.k8s.io/v1
@@ -644,8 +716,9 @@ spec:
     - Ingress
   ingress:
     - from:
-        - ipBlock:
-            cidr: 0.0.0.0/0
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: __NAMESPACE__
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
@@ -671,6 +744,74 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bretter-frontend-restrict-egress
+  namespace: __NAMESPACE__
+spec:
+  podSelector:
+    matchLabels:
+      app: bretter-frontend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: bretter-backend
+      ports:
+        - protocol: TCP
+          port: 8000
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: bretter-backend-restrict-egress
+  namespace: __NAMESPACE__
+spec:
+  podSelector:
+    matchLabels:
+      app: bretter-backend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: bretter-postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: __NAMESPACE__
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
       ports:
         - protocol: TCP
           port: 443

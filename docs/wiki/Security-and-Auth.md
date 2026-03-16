@@ -38,6 +38,11 @@ Security properties:
 - Grant/session cookies are path-scoped to connect routes.
 - Session TTL is server-enforced.
 
+## Internal API proxy TLS
+
+- Frontend proxies `/api`, `/auth`, and `/user` to backend over TLS when certs are mounted.
+- Backend certificate validation is enabled in the frontend proxy path (no insecure skip-verify fallback in hardened mode).
+
 ## RBAC model
 
 Roles:
