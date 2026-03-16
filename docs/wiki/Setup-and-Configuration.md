@@ -35,12 +35,16 @@ Storage:
 
 Auth/session/cors:
 
+- `ADMIN_BOOTSTRAP_PASSWORD`
 - `BLABS_AUTH_COOKIE_TTL_SECONDS`
 - `BLABS_CONNECT_GRANT_TTL_SECONDS`
 - `BLABS_CONNECT_SESSION_TTL_SECONDS`
 - `BLABS_AUTH_COOKIE_SECURE`, `BLABS_CONNECT_COOKIE_SECURE`
+- `BLABS_CORS_ENTERPRISE_PROFILE`
 - `BLABS_CORS_ALLOWED_ORIGINS`
-- `BLABS_CORS_ALLOWED_ORIGIN_REGEX`
+- `BLABS_CORS_ALLOWED_METHODS`
+- `BLABS_CORS_ALLOWED_HEADERS`
+- `BLABS_CORS_ALLOWED_ORIGIN_REGEX` (non-enterprise mode only)
 
 OIDC/SSO:
 
@@ -68,6 +72,7 @@ Monitoring/ops:
 - `ENABLE_AUTOCLEANUP`
 - `AUTOCLEANUP_NODEFS_WARN_PCT`, `AUTOCLEANUP_NODEFS_CRITICAL_PCT`, `AUTOCLEANUP_NODEFS_EMERGENCY_PCT`
 - `AUTOCLEANUP_PVC_WARN_PCT`, `AUTOCLEANUP_PVC_CRITICAL_PCT`, `AUTOCLEANUP_PVC_EMERGENCY_PCT`
+- `METRICS_SERVER_INSECURE_TLS` (default `0`; dev-only override)
 - `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL`
 - `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
@@ -87,6 +92,7 @@ NODE_EXTERNAL_HOST=<NODE_EXTERNAL_HOST_OR_FQDN> \
 PUBLIC_SCHEME=https \
 TLS_ENABLED=1 \
 VM_STORAGE_CLASS=longhorn-r1 \
+BLABS_CORS_ENTERPRISE_PROFILE=1 \
 BLABS_CORS_ALLOWED_ORIGINS="https://<UI_HOST>:30073,https://labs.example.edu" \
 ENABLE_MONITORING=1 \
 ./scripts/setup.sh
@@ -104,6 +110,9 @@ ENABLE_MONITORING=1 \
 ## Notes
 
 - Runtime settings page is read-only by design.
+- `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
+- Enterprise CORS (`BLABS_CORS_ENTERPRISE_PROFILE=1`) requires explicit `BLABS_CORS_ALLOWED_ORIGINS`, blocks `BLABS_CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
+- Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.
 - LDAP requires backend schema migration `0018` and current frontend bundle to render settings tile.

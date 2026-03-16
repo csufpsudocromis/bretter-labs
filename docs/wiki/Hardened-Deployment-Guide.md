@@ -1,22 +1,25 @@
 # Hardened Deployment Guide
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
 
 Use this as a production hardening checklist for Bretter Labs.
 
 ## 1) Restrict CORS
 
-Set explicit origins and avoid broad wildcards.
+Use enterprise CORS mode with an explicit allowlist.
 
 ```bash
+BLABS_CORS_ENTERPRISE_PROFILE=1
 BLABS_CORS_ALLOWED_ORIGINS="https://labs.example.edu,https://<UI_HOST>:30073"
-BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\.)*example\.edu(:[0-9]+)?$"
+BLABS_CORS_ALLOWED_METHODS="GET,POST,PUT,PATCH,DELETE,OPTIONS"
+BLABS_CORS_ALLOWED_HEADERS="Accept,Content-Type,Authorization"
 ```
 
 Rules:
 
 - Include the exact frontend origin(s).
-- Prefer explicit list + constrained regex.
+- Do not set `BLABS_CORS_ALLOWED_ORIGIN_REGEX` in enterprise mode.
+- Do not use wildcard methods/headers in enterprise mode.
 - Keep CORS changes versioned in deployment config.
 
 ## 2) Enforce secure cookie/session settings
@@ -137,6 +140,15 @@ kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | tail -n 10
 - Container launch/connect/delete path passes.
 - Idle timeout prompt appears on user page and connect page.
 - `kubectl get events` shows no new recurring failure patterns.
+
+## 11) Kubelet serving cert and metrics TLS posture
+
+Keep kubelet metrics scraping in strict TLS mode:
+
+- Run with `METRICS_SERVER_INSECURE_TLS=0` in production.
+- Enable kubelet serving cert bootstrap (`serverTLSBootstrap: true`) so certificates include valid node SANs.
+- Keep kubelet-serving CSR approval automated (`ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=1`) or enforce an equivalent signed approval process.
+- Verify metrics-server has no `--kubelet-insecure-tls` arg and `kubectl top nodes` returns data.
 
 ## Related pages
 

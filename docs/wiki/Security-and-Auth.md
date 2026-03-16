@@ -1,6 +1,6 @@
 # Security and Auth
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
 
 ## Authentication model
 
@@ -8,6 +8,13 @@ Last reviewed: March 9, 2026.
 - `/auth/login` sets auth cookie and returns user profile metadata.
 - `/auth/logout` revokes server token and clears auth cookie.
 - Optional LDAP authentication can be configured in `/admin/settings/ldap` (local auth attempted first, then LDAP).
+
+Bootstrap admin behavior:
+
+- Username defaults to `admin`.
+- Setup uses a one-time bootstrap secret (generated random unless `ADMIN_BOOTSTRAP_PASSWORD` is set).
+- Bootstrap secret is only used when no admin user exists.
+- First login requires password reset (`force_password_change=true`).
 
 Default cookie names:
 
@@ -79,18 +86,23 @@ Notes:
 ## CORS and login origin policy
 
 If login/API calls must work from LAN IPs and campus domains, set explicit allowed UI origins.
+For hardened deployments, use enterprise CORS mode.
 
 Examples:
 
 ```bash
+BLABS_CORS_ENTERPRISE_PROFILE=1
 BLABS_CORS_ALLOWED_ORIGINS="https://<UI_HOST>:30073,https://labs.example.edu"
-BLABS_CORS_ALLOWED_ORIGIN_REGEX="^https://([a-z0-9-]+\\.)?example\\.edu(:[0-9]+)?$"
+BLABS_CORS_ALLOWED_METHODS="GET,POST,PUT,PATCH,DELETE,OPTIONS"
+BLABS_CORS_ALLOWED_HEADERS="Accept,Content-Type,Authorization"
 ```
 
 Notes:
 
 - Include the **frontend origin** (for example `:30073`), not only API origin (`:30080`).
 - Keep `BLABS_AUTH_COOKIE_SECURE=1` and `BLABS_CONNECT_COOKIE_SECURE=1` when using HTTPS.
+- In enterprise mode, `BLABS_CORS_ALLOWED_ORIGIN_REGEX` is not allowed.
+- In non-enterprise mode, regex-based origins remain available for dev/legacy compatibility.
 
 ## API docs exposure
 
