@@ -24,10 +24,10 @@ jobs:
           sudo apt-get install -y shellcheck shfmt
 
       - name: Run shellcheck
-        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh frontend-vite/nginx-entrypoint.sh
+        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh frontend-vite/nginx-entrypoint.sh
 
       - name: Run shfmt
-        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
+        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
 
       - name: Run hadolint
         run: |

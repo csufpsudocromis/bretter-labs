@@ -11,6 +11,7 @@ SEMVER_RE = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 
 
 def _load_json(path: Path) -> dict:
@@ -24,12 +25,23 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _extract_yaml_scalar(text: str, key: str) -> str:
+    match = re.search(rf"^\s*{re.escape(key)}:\s*(.+?)\s*$", text, flags=re.MULTILINE)
+    if not match:
+        return ""
+    raw = match.group(1).strip()
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
+        return raw[1:-1].strip()
+    return raw
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     version_path = root / "VERSION"
     changelog_path = root / "CHANGELOG.md"
     frontend_pkg_path = root / "frontend-vite" / "package.json"
     frontend_lock_path = root / "frontend-vite" / "package-lock.json"
+    values_prod_path = root / "deploy" / "helm" / "values-production.yaml"
 
     errors: list[str] = []
 
@@ -68,6 +80,18 @@ def main() -> int:
     version_heading = f"## [{version}]"
     if version_heading not in changelog:
         errors.append(f"CHANGELOG.md missing heading for current version: {version_heading}")
+
+    values_production = _read_text(values_prod_path)
+    for key in ("BACKEND_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
+        image_ref = _extract_yaml_scalar(values_production, key)
+        if not image_ref:
+            errors.append(f"deploy/helm/values-production.yaml missing {key}.")
+            continue
+        if not DIGEST_PIN_RE.match(image_ref):
+            errors.append(
+                "deploy/helm/values-production.yaml must pin production images by digest: "
+                f"{key}={image_ref!r}"
+            )
 
     if errors:
         print("Release/version discipline checks failed:", file=sys.stderr)

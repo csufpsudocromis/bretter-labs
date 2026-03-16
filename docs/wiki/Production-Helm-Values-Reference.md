@@ -13,6 +13,9 @@ Use that file as the baseline and override per environment.
 - `appTemplateValues.CONTROL_NODE`
 - `appTemplateValues.NODE_EXTERNAL_HOST`
 - `appTemplateValues.VM_STORAGE_CLASS`
+- `appTemplateValues.BACKEND_IMAGE` (must be digest-pinned)
+- `appTemplateValues.FRONTEND_IMAGE` (must be digest-pinned)
+- `appTemplateValues.RUNNER_IMAGE` (must be digest-pinned)
 - `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.TLS_SECRET_NAME`
 - `ingress.host`

@@ -75,6 +75,7 @@ CORS_ALLOWED_HEADERS="${CORS_ALLOWED_HEADERS:-Accept,Content-Type,Authorization}
 AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS="${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS:-300}"
 AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS="${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS:-5}"
 AUTH_LOGIN_LOCKOUT_SECONDS="${AUTH_LOGIN_LOCKOUT_SECONDS:-300}"
+PRUNE_BOOTSTRAP_ADMIN_ENV="${PRUNE_BOOTSTRAP_ADMIN_ENV:-1}"
 VM_CONNECT_INSECURE_TLS="${VM_CONNECT_INSECURE_TLS:-0}"
 CONTAINER_CONNECT_INSECURE_TLS="${CONTAINER_CONNECT_INSECURE_TLS:-0}"
 SECRETS_ENCRYPTION_KEY="${SECRETS_ENCRYPTION_KEY:-}"
@@ -517,6 +518,10 @@ validate_auth_and_cors_config() {
   if ! is_uint "$AUTH_LOGIN_LOCKOUT_SECONDS" || [ "$AUTH_LOGIN_LOCKOUT_SECONDS" -lt 10 ]; then
     fail "AUTH_LOGIN_LOCKOUT_SECONDS must be an integer >= 10."
   fi
+  case "$PRUNE_BOOTSTRAP_ADMIN_ENV" in
+    0|1) ;;
+    *) fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be either 0 or 1." ;;
+  esac
 }
 
 validate_postgres_config() {
@@ -2973,6 +2978,42 @@ apply_manifests() {
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-postgres --timeout=300s
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
+
+  prune_bootstrap_admin_env
+}
+
+prune_bootstrap_admin_env() {
+  if [ "$PRUNE_BOOTSTRAP_ADMIN_ENV" -ne 1 ]; then
+    log "Skipping bootstrap env pruning (PRUNE_BOOTSTRAP_ADMIN_ENV=0)."
+    return
+  fi
+
+  local env_names patch_payload
+  env_names="$(
+    kubectl -n "$NAMESPACE" get deployment bretter-backend \
+      -o jsonpath='{range .spec.template.spec.containers[?(@.name=="backend")].env[*]}{.name}{"\n"}{end}' \
+      2>/dev/null || true
+  )"
+  if ! printf '%s\n' "$env_names" | grep -qx 'BLABS_ADMIN_DEFAULT_PASSWORD'; then
+    log "Bootstrap admin env already pruned from bretter-backend deployment."
+    return
+  fi
+
+  patch_payload="$(cat <<'EOF'
+spec:
+  template:
+    spec:
+      containers:
+      - name: backend
+        env:
+        - name: BLABS_ADMIN_DEFAULT_PASSWORD
+          $patch: delete
+EOF
+)"
+
+  log "Pruning bootstrap admin secret from bretter-backend deployment env..."
+  kubectl -n "$NAMESPACE" patch deployment bretter-backend --type=strategic --patch "$patch_payload" >/dev/null
+  kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s
 }
 
 run_post_deploy_api_health_check() {
@@ -3293,6 +3334,7 @@ log_runtime_configuration() {
   log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
   log "CORS enterprise profile: $CORS_ENTERPRISE_PROFILE (origins: ${CORS_ALLOWED_ORIGINS:-default})"
   log "Auth login rate limit window/max/lockout: ${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS}s/${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS}/${AUTH_LOGIN_LOCKOUT_SECONDS}s"
+  log "Bootstrap admin env pruning: $PRUNE_BOOTSTRAP_ADMIN_ENV"
   log "Strict upstream TLS defaults: VM insecure=$VM_CONNECT_INSECURE_TLS container insecure=$CONTAINER_CONNECT_INSECURE_TLS"
   log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"

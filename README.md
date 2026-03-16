@@ -138,6 +138,7 @@ When setup generates the secret, it is written to `~/.config/bretter-labs/bootst
 | `PUSH_IMAGES` | `0` | Build and push images to registry |
 | `CREATE_PULL_SECRET` | `0` | Create/update `ghcr-creds` pull secret |
 | `ALLOW_MUTABLE_IMAGE_TAGS` | `0` | Dev-only override to permit mutable image refs like `:latest` |
+| `PRUNE_BOOTSTRAP_ADMIN_ENV` | `1` | Remove `BLABS_ADMIN_DEFAULT_PASSWORD` from backend deployment after initial bootstrap rollout |
 | `SETUP_PHASES` | `prereqs,deploy,postdeploy` | Select setup phases (`prereqs`,`deploy`,`postdeploy`,`all`) |
 | `SETUP_DRY_RUN` | `0` | Validate and print phase plan without running cluster/package actions |
 | `CORS_ENTERPRISE_PROFILE` | `0` | Enforce explicit CORS allowlist mode (`1` recommended for prod) |
@@ -159,6 +160,7 @@ Metrics-server TLS guidance:
 - Use `METRICS_SERVER_INSECURE_TLS=1` only for local/dev clusters when proper kubelet PKI is unavailable.
 - `setup.sh` installs a kubelet-serving CSR auto-approver CronJob (default enabled) that only approves pending requests when requester/subject/SANs match the target node.
 - By default, `setup.sh` rejects mutable image refs (for example `:latest` or missing tag). Use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` only for dev workflows.
+- `deploy/helm/values-production.yaml` is digest-pinned and CI-enforced for `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE`.
 
 Setup phase guidance:
 

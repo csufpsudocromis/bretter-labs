@@ -41,6 +41,7 @@ Images:
 - `FRONTEND_IMAGE`
 - `RUNNER_IMAGE`
 - `ALLOW_MUTABLE_IMAGE_TAGS` (default `0`; production should stay `0`)
+- `PRUNE_BOOTSTRAP_ADMIN_ENV` (default `1`; removes bootstrap admin secret env from running backend deployment after initial rollout)
 
 Auth/session/cors:
 
@@ -127,9 +128,11 @@ ENABLE_MONITORING=1 \
 
 - Runtime settings page is read-only by design.
 - `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
+- By default, setup prunes `BLABS_ADMIN_DEFAULT_PASSWORD` from the backend deployment after rollout to avoid long-lived bootstrap secrets in pod specs.
 - Generated bootstrap secrets are written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - Enterprise CORS (`CORS_ENTERPRISE_PROFILE=1`) requires explicit `CORS_ALLOWED_ORIGINS`, blocks `CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
+- Production values (`deploy/helm/values-production.yaml`) are digest-pinned and CI-enforced for backend/frontend/runner image refs.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).

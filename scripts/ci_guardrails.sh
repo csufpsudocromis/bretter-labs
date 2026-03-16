@@ -22,3 +22,4 @@ fi
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 
 "$ROOT_DIR/scripts/smoke_setup.sh"
+"$ROOT_DIR/scripts/smoke_tls_login.sh"

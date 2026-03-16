@@ -48,4 +48,7 @@ run_failure "reject invalid admission policy toggle" \
 run_failure "reject invalid post-deploy API health check toggle" \
   env SETUP_DRY_RUN=1 RUN_POST_DEPLOY_API_HEALTH_CHECK=2 "$SETUP_SCRIPT"
 
+run_failure "reject invalid bootstrap env prune toggle" \
+  env SETUP_DRY_RUN=1 PRUNE_BOOTSTRAP_ADMIN_ENV=2 "$SETUP_SCRIPT"
+
 echo "[smoke] setup.sh smoke checks passed"
