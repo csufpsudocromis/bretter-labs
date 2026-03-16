@@ -52,6 +52,8 @@ Last reviewed: March 16, 2026.
 - Namespace-based scaling and quota controls in `/admin/scaling-quotas`
 - Default ingress NetworkPolicies with explicit app allow rules
 - Error log cap/rotation at 10MB with paging (50 entries/page)
+- Reusable production baseline values with site-overlay template (`values-production-site.template.yaml`)
+- Automatic production go-live proof in `postdeploy` when `PRODUCTION_PROFILE=1`
 
 ## Architecture diagram
 

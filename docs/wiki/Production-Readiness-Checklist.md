@@ -6,6 +6,7 @@ Use this checklist before first production deployment and for each release.
 
 ## Required configuration
 
+- Start from `deploy/helm/values-production-site.template.yaml` and copy it to your environment overlay file.
 - Keep `deploy/helm/values-production.yaml` as baseline and define site-specific values in an overlay (for example `deploy/helm/values-prod-site.yaml`).
 - Set `appTemplateValues.CONTROL_NODE` in site overlay.
 - Set `appTemplateValues.NODE_EXTERNAL_HOST` in site overlay.
@@ -51,3 +52,9 @@ Use this checklist before first production deployment and for each release.
 - Run post-deploy API health and synthetic checks.
 - Verify backup/restore path for Postgres before go-live.
 - Confirm rollback plan is documented for backend/frontend image digest rollbacks.
+
+## Related pages
+
+- [Production Helm Values Reference](Production-Helm-Values-Reference)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
+- [Operations Runbook](Operations-Runbook)

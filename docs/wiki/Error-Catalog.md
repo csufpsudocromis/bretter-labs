@@ -41,6 +41,7 @@ Checks:
 ```bash
 kubectl -n labs logs deploy/bretter-backend --tail=300 | rg -n 'Invalid production startup configuration|BLABS_'
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+# add -f deploy/helm/values-prod-site.yaml when using a site overlay
 ```
 
 Fix:

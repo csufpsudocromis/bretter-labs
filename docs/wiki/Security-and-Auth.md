@@ -135,6 +135,7 @@ OpenAPI/docs endpoints are disabled in non-dev by default.
 
 - [Production Architecture](Production-Architecture)
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
+- [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
 - [Operations Runbook](Operations-Runbook)
 - [Scaling and Quotas](Scaling-and-Quotas)
