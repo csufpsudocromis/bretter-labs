@@ -1,0 +1,16 @@
+# Site-specific production overrides for the live cluster.
+# Keep this file non-secret; provide runtime secret values via Kubernetes Secrets.
+
+appTemplateValues:
+  CONTROL_NODE: "cbekube1"
+  NODE_EXTERNAL_HOST: "10.68.49.250"
+  RUNNER_NODE_SELECTOR_VALUE: "cbekube2"
+  VM_STORAGE_CLASS: "longhorn-r1"
+  CORS_ALLOWED_ORIGINS: "https://10.68.49.250:30073"
+  TLS_SECRET_NAME: "bretter-tls"
+  SECRETS_ENCRYPTION_KEY: ""
+  RUNTIME_SECRETS_SECRET_NAME: "bretter-runtime-secrets"
+  RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: "secrets_encryption_key"
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED: "1"
+  CONTAINER_SIGNATURE_KEY_REF: "/etc/bretter-signing/cosign.pub"
+  CONTAINER_SIGNATURE_KEY_SECRET_NAME: "bretter-cosign-public-key"
