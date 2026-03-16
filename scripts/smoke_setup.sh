@@ -66,4 +66,22 @@ run_failure "strict production profile validation rejects placeholder overrides"
   python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
 rm -f "$tmp_values"
 
+tmp_values="$(mktemp)"
+cat >"$tmp_values" <<'EOF'
+appTemplateValues:
+  SECRETS_ENCRYPTION_KEY: "dont-commit-secrets-in-values"
+EOF
+run_failure "strict production profile validation rejects committed plaintext secrets key" \
+  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
+rm -f "$tmp_values"
+
+tmp_values="$(mktemp)"
+cat >"$tmp_values" <<'EOF'
+appTemplateValues:
+  RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: ""
+EOF
+run_failure "strict production profile validation requires runtime secret injection keys" \
+  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml" -f "$tmp_values"
+rm -f "$tmp_values"
+
 echo "[smoke] setup.sh smoke checks passed"

@@ -569,7 +569,11 @@ spec:
             - name: BLABS_CONTAINER_CONNECT_INSECURE_TLS
               value: "__CONTAINER_CONNECT_INSECURE_TLS__"
             - name: BLABS_SECRETS_ENCRYPTION_KEY
-              value: "__SECRETS_ENCRYPTION_KEY__"
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRETS_SECRET_NAME__
+                  key: __RUNTIME_SECRETS_ENCRYPTION_KEY_KEY__
+                  optional: true
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images
@@ -577,6 +581,9 @@ spec:
               mountPath: /data
             - name: tls-cert
               mountPath: /tls
+              readOnly: true
+            - name: container-signature-key
+              mountPath: /etc/bretter-signing
               readOnly: true
       volumes:
         - name: images
@@ -587,6 +594,10 @@ spec:
         - name: tls-cert
           secret:
             secretName: __TLS_SECRET_NAME__
+            optional: true
+        - name: container-signature-key
+          secret:
+            secretName: __CONTAINER_SIGNATURE_KEY_SECRET_NAME__
             optional: true
 ---
 apiVersion: v1

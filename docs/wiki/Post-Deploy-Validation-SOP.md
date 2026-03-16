@@ -38,6 +38,12 @@ kubectl -n labs get deploy bretter-backend -o yaml | rg BLABS_ADMIN_DEFAULT_PASS
 
 Expected: no output.
 
+Optional one-shot proof report:
+
+```bash
+NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
+
 ## Phase 2: Synthetic job (preferred)
 
 If setup synthetic check is enabled:

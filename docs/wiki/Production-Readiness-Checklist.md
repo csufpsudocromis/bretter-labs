@@ -12,9 +12,11 @@ Use this checklist before first production deployment and for each release.
 - Set `appTemplateValues.CORS_ALLOWED_ORIGINS` to your real UI origins (no localhost/127.0.0.1).
 - Set `appTemplateValues.VM_STORAGE_CLASS` to the intended production class.
 - Set `appTemplateValues.TLS_SECRET_NAME` to the production certificate secret.
-- Set a strong `SECRETS_ENCRYPTION_KEY` before production rollout.
+- Keep `appTemplateValues.SECRETS_ENCRYPTION_KEY` empty in committed production values.
+- Set `appTemplateValues.RUNTIME_SECRETS_SECRET_NAME` and `appTemplateValues.RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`.
+- Ensure runtime secret `bretter-runtime-secrets` exists with data key `secrets_encryption_key` (or your configured overrides) before/at rollout.
 - Set `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (required for production profile).
-- If possible, set `CONTAINER_SIGNATURE_KEY_REF` to a managed public key for non-keyless verification.
+- Set `CONTAINER_SIGNATURE_KEY_REF` and `CONTAINER_SIGNATURE_KEY_SECRET_NAME` for managed-key verification.
 
 ## Image and supply chain
 
@@ -41,6 +43,8 @@ Use this checklist before first production deployment and for each release.
 ## Validation and operations
 
 - Run CI guardrails (including TLS login smoke path) on release branch/PR.
+- Run strict production profile validation before rollout.
+- Run `scripts/production_go_live_proof.sh` after rollout and archive the generated report.
 - Run post-deploy API health and synthetic checks.
 - Verify backup/restore path for Postgres before go-live.
 - Confirm rollback plan is documented for backend/frontend image digest rollbacks.

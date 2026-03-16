@@ -23,9 +23,13 @@ Use that file as the baseline and override per environment.
 - `appTemplateValues.CORS_ALLOWED_ORIGINS`
 - `appTemplateValues.VM_STORAGE_CLASS`
 - `appTemplateValues.TLS_SECRET_NAME`
-- `appTemplateValues.SECRETS_ENCRYPTION_KEY`
+- `appTemplateValues.RUNTIME_SECRETS_SECRET_NAME`
+- `appTemplateValues.RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`
+- `appTemplateValues.CONTAINER_SIGNATURE_KEY_REF`
+- `appTemplateValues.CONTAINER_SIGNATURE_KEY_SECRET_NAME`
 - `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
+- `appTemplateValues.SECRETS_ENCRYPTION_KEY` should remain empty in committed production values (inject runtime secret at deploy time)
 
 ## Image pinning policy
 
@@ -44,9 +48,10 @@ Use that file as the baseline and override per environment.
 ## Usage pattern
 
 1. Copy production values into an environment overlay.
-2. Commit environment-specific override files (excluding secret material when using private overlays).
-3. Deploy with explicit values files in order.
-4. Run rollout status + post-deploy synthetic check (set `SYNTHETIC_CHECK_PASSWORD` explicitly on existing deployments).
+2. Commit environment-specific override files without raw secret values.
+3. Create/inject runtime secrets (`RUNTIME_SECRETS_SECRET_NAME`, signature key secret) at deploy time.
+4. Deploy with explicit values files in order.
+5. Run rollout status + post-deploy synthetic check (set `SYNTHETIC_CHECK_PASSWORD` explicitly on existing deployments).
 
 Example:
 

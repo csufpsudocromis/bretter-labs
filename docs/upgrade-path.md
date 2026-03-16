@@ -32,7 +32,12 @@ SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 ```
 
 3. Confirm rollout health and API health endpoint.
-4. Run post-deploy synthetic validation using explicit credentials for existing deployments:
+4. Generate a go-live proof report:
+
+```bash
+NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
+5. Run post-deploy synthetic validation using explicit credentials for existing deployments:
 
 ```bash
 SETUP_PHASES=postdeploy \

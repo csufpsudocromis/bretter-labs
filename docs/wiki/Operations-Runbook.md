@@ -45,6 +45,15 @@ kubectl -n labs get deploy bretter-backend -o yaml | rg BLABS_ADMIN_DEFAULT_PASS
 
 Expected: no output.
 
+Runtime secret wiring checks:
+
+```bash
+kubectl -n labs get secret bretter-runtime-secrets -o jsonpath="{.data['secrets_encryption_key']}" | wc -c
+kubectl -n labs get secret bretter-cosign-public-key -o jsonpath="{.data['cosign.pub']}" | wc -c
+```
+
+Expected: both commands print a value greater than `0`.
+
 ## VM and container workload visibility
 
 List only user runtime pods:
@@ -84,6 +93,14 @@ kubectl -n labs get pods -o wide | rg 'vm-|virt-launcher|ct-'
 6. Connect to container app and verify app response.
 7. Confirm idle prompt appears on both user page and connect tab.
 8. Confirm deleting the running lab clears single-lab-limit message.
+
+## Go-live proof artifact
+
+Generate and archive a single report covering rollout, production env checks, runtime/signature secret wiring, bootstrap pruning, and API health:
+
+```bash
+NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
 
 ## Quotas and scaling checks
 

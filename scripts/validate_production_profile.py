@@ -12,7 +12,6 @@ import yaml
 DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off", ""}
-WEAK_SECRET_VALUES = {"admin", "password", "changeme", "admin123", "secret", "default"}
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -155,20 +154,32 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             continue
         errors.append(f"{key} appears unset/placeholder and must be overridden for production.")
 
+    runtime_secret_name = get_text("RUNTIME_SECRETS_SECRET_NAME")
+    if _looks_placeholder(runtime_secret_name):
+        errors.append("RUNTIME_SECRETS_SECRET_NAME must be set for production secret injection.")
+    runtime_secret_key = get_text("RUNTIME_SECRETS_ENCRYPTION_KEY_KEY")
+    if _looks_placeholder(runtime_secret_key):
+        errors.append("RUNTIME_SECRETS_ENCRYPTION_KEY_KEY must be set for production secret injection.")
+    elif not re.match(r"^[A-Za-z0-9._-]+$", runtime_secret_key):
+        errors.append("RUNTIME_SECRETS_ENCRYPTION_KEY_KEY contains invalid characters.")
+
     secrets_encryption_key = get_text("SECRETS_ENCRYPTION_KEY")
-    if _looks_placeholder(secrets_encryption_key) or secrets_encryption_key.lower() in WEAK_SECRET_VALUES:
-        errors.append("SECRETS_ENCRYPTION_KEY must be set to a strong non-placeholder value for production.")
-    elif len(secrets_encryption_key) < 24:
-        errors.append("SECRETS_ENCRYPTION_KEY must be at least 24 characters for production.")
+    if secrets_encryption_key:
+        errors.append(
+            "SECRETS_ENCRYPTION_KEY must be empty in production values; inject via runtime secret "
+            "(RUNTIME_SECRETS_SECRET_NAME/RUNTIME_SECRETS_ENCRYPTION_KEY_KEY)."
+        )
 
     signature_verification_enabled = get_bool("CONTAINER_SIGNATURE_VERIFICATION_ENABLED", default=False)
     signature_key_ref = get_text("CONTAINER_SIGNATURE_KEY_REF")
+    signature_key_secret_name = get_text("CONTAINER_SIGNATURE_KEY_SECRET_NAME")
     if not signature_verification_enabled:
         errors.append("CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be enabled for production.")
     if signature_verification_enabled and not signature_key_ref:
-        warnings.append(
-            "CONTAINER_SIGNATURE_KEY_REF is empty; cosign keyless verification will be used. "
-            "Set CONTAINER_SIGNATURE_KEY_REF to a managed public key for stricter policy."
+        errors.append("CONTAINER_SIGNATURE_KEY_REF must be set when signature verification is enabled.")
+    if signature_key_ref.startswith("/etc/bretter-signing/") and _looks_placeholder(signature_key_secret_name):
+        errors.append(
+            "CONTAINER_SIGNATURE_KEY_SECRET_NAME must be set when CONTAINER_SIGNATURE_KEY_REF points to /etc/bretter-signing/."
         )
 
     if get_bool("CONTAINER_INGRESS_ENABLED", default=False):

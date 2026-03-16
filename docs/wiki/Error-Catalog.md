@@ -31,7 +31,7 @@ Meaning:
 
 Common causes:
 
-- `BLABS_SECRETS_ENCRYPTION_KEY` is empty/weak.
+- Runtime secret backing `BLABS_SECRETS_ENCRYPTION_KEY` is missing/weak.
 - `BLABS_CORS_ALLOWED_ORIGINS` contains localhost/127.0.0.1.
 - `BLABS_KUBE_NODE_SELECTOR_VALUE` is empty.
 - Insecure TLS toggles are enabled.

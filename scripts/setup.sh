@@ -89,6 +89,8 @@ PRUNE_BOOTSTRAP_ADMIN_ENV="${PRUNE_BOOTSTRAP_ADMIN_ENV:-1}"
 VM_CONNECT_INSECURE_TLS="${VM_CONNECT_INSECURE_TLS:-0}"
 CONTAINER_CONNECT_INSECURE_TLS="${CONTAINER_CONNECT_INSECURE_TLS:-0}"
 SECRETS_ENCRYPTION_KEY="${SECRETS_ENCRYPTION_KEY:-}"
+RUNTIME_SECRETS_SECRET_NAME="${RUNTIME_SECRETS_SECRET_NAME:-bretter-runtime-secrets}"
+RUNTIME_SECRETS_ENCRYPTION_KEY_KEY="${RUNTIME_SECRETS_ENCRYPTION_KEY_KEY:-secrets_encryption_key}"
 CONTAINER_INGRESS_ENABLED="${CONTAINER_INGRESS_ENABLED:-0}"
 CONTAINER_INGRESS_CLASS="${CONTAINER_INGRESS_CLASS:-}"
 CONTAINER_INGRESS_BASE_DOMAIN="${CONTAINER_INGRESS_BASE_DOMAIN:-}"
@@ -98,6 +100,9 @@ CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS="${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECON
 CONTAINER_ALLOWED_REGISTRIES="${CONTAINER_ALLOWED_REGISTRIES:-docker.io,ghcr.io,quay.io,mcr.microsoft.com,gcr.io,registry.k8s.io,lscr.io}"
 CONTAINER_SIGNATURE_VERIFICATION_ENABLED="${CONTAINER_SIGNATURE_VERIFICATION_ENABLED:-0}"
 CONTAINER_SIGNATURE_KEY_REF="${CONTAINER_SIGNATURE_KEY_REF:-}"
+CONTAINER_SIGNATURE_KEY_SECRET_NAME="${CONTAINER_SIGNATURE_KEY_SECRET_NAME:-bretter-cosign-public-key}"
+CONTAINER_SIGNATURE_PUBLIC_KEY="${CONTAINER_SIGNATURE_PUBLIC_KEY:-}"
+CONTAINER_SIGNATURE_PUBLIC_KEY_FILE="${CONTAINER_SIGNATURE_PUBLIC_KEY_FILE:-}"
 CONTAINER_SCAN_ENABLED="${CONTAINER_SCAN_ENABLED:-1}"
 CONTAINER_SCAN_INTERVAL_MINUTES="${CONTAINER_SCAN_INTERVAL_MINUTES:-360}"
 CONTAINER_SCAN_SEVERITY="${CONTAINER_SCAN_SEVERITY:-HIGH,CRITICAL}"
@@ -493,6 +498,20 @@ validate_container_runtime_config() {
     0|1) ;;
     *) fail "CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be either 0 or 1." ;;
   esac
+  if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY" ] && [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY_FILE" ]; then
+    fail "Set only one of CONTAINER_SIGNATURE_PUBLIC_KEY or CONTAINER_SIGNATURE_PUBLIC_KEY_FILE."
+  fi
+  if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY_FILE" ] && [ ! -f "$CONTAINER_SIGNATURE_PUBLIC_KEY_FILE" ]; then
+    fail "CONTAINER_SIGNATURE_PUBLIC_KEY_FILE does not exist: $CONTAINER_SIGNATURE_PUBLIC_KEY_FILE"
+  fi
+  if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -eq 1 ]; then
+    if [ -z "$CONTAINER_SIGNATURE_KEY_REF" ]; then
+      fail "CONTAINER_SIGNATURE_KEY_REF must be set when CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1."
+    fi
+    if [[ "$CONTAINER_SIGNATURE_KEY_REF" == /etc/bretter-signing/* ]] && [ -z "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" ]; then
+      fail "CONTAINER_SIGNATURE_KEY_SECRET_NAME is required when CONTAINER_SIGNATURE_KEY_REF uses /etc/bretter-signing/."
+    fi
+  fi
   case "$CONTAINER_SCAN_ENABLED" in
     0|1) ;;
     *) fail "CONTAINER_SCAN_ENABLED must be either 0 or 1." ;;
@@ -548,6 +567,26 @@ validate_auth_and_cors_config() {
     0|1) ;;
     *) fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be either 0 or 1." ;;
   esac
+  if [ -z "$RUNTIME_SECRETS_SECRET_NAME" ]; then
+    fail "RUNTIME_SECRETS_SECRET_NAME cannot be empty."
+  fi
+  if [ -z "$RUNTIME_SECRETS_ENCRYPTION_KEY_KEY" ]; then
+    fail "RUNTIME_SECRETS_ENCRYPTION_KEY_KEY cannot be empty."
+  fi
+  if [[ ! "$RUNTIME_SECRETS_ENCRYPTION_KEY_KEY" =~ ^[A-Za-z0-9._-]+$ ]]; then
+    fail "RUNTIME_SECRETS_ENCRYPTION_KEY_KEY contains invalid characters; use [A-Za-z0-9._-]."
+  fi
+  if [ -n "$SECRETS_ENCRYPTION_KEY" ]; then
+    if [ "${#SECRETS_ENCRYPTION_KEY}" -lt 24 ]; then
+      fail "SECRETS_ENCRYPTION_KEY must be at least 24 characters when provided."
+    fi
+    secrets_key_lower="${SECRETS_ENCRYPTION_KEY,,}"
+    case "$secrets_key_lower" in
+      admin|password|changeme|admin123|secret|default)
+        fail "SECRETS_ENCRYPTION_KEY uses a weak value; set a strong key."
+        ;;
+    esac
+  fi
   if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
     if [ "$PUBLIC_SCHEME" != "https" ]; then
       fail "PUBLIC_SCHEME must be https when PRODUCTION_PROFILE=1."
@@ -574,21 +613,15 @@ validate_auth_and_cors_config() {
     if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -ne 1 ]; then
       fail "CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be 1 when PRODUCTION_PROFILE=1."
     fi
+    if [ -z "$CONTAINER_SIGNATURE_KEY_REF" ]; then
+      fail "CONTAINER_SIGNATURE_KEY_REF must be set when PRODUCTION_PROFILE=1."
+    fi
+    if [[ "$CONTAINER_SIGNATURE_KEY_REF" == /etc/bretter-signing/* ]] && [ -z "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" ]; then
+      fail "CONTAINER_SIGNATURE_KEY_SECRET_NAME must be set when PRODUCTION_PROFILE=1 and using /etc/bretter-signing/."
+    fi
     if [ -z "$RUNNER_NODE_SELECTOR_VALUE" ]; then
       fail "RUNNER_NODE_SELECTOR_VALUE must be set when PRODUCTION_PROFILE=1."
     fi
-    if [ -z "$SECRETS_ENCRYPTION_KEY" ]; then
-      fail "SECRETS_ENCRYPTION_KEY must be set when PRODUCTION_PROFILE=1."
-    fi
-    if [ "${#SECRETS_ENCRYPTION_KEY}" -lt 24 ]; then
-      fail "SECRETS_ENCRYPTION_KEY must be at least 24 characters when PRODUCTION_PROFILE=1."
-    fi
-    secrets_key_lower="${SECRETS_ENCRYPTION_KEY,,}"
-    case "$secrets_key_lower" in
-      admin|password|changeme|admin123|secret|default)
-        fail "SECRETS_ENCRYPTION_KEY uses a weak value; set a strong key for production."
-        ;;
-    esac
   fi
 }
 
@@ -1847,13 +1880,13 @@ render_helm_values_override() {
   local backend_service_type backend_service_nodeport_line
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
-  local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
+  local container_allowed_registries container_signature_verification_enabled container_signature_key_ref container_signature_key_secret_name
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
   local production_profile
   local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
   local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
-  local vm_connect_insecure_tls container_connect_insecure_tls secrets_encryption_key
+  local vm_connect_insecure_tls container_connect_insecure_tls runtime_secrets_secret_name runtime_secrets_encryption_key_key secrets_encryption_key
   local backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
   local admin_bootstrap_password
 
@@ -1895,6 +1928,7 @@ render_helm_values_override() {
   container_allowed_registries="$(yaml_escape "$CONTAINER_ALLOWED_REGISTRIES")"
   container_signature_verification_enabled="$(yaml_escape "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED")"
   container_signature_key_ref="$(yaml_escape "$CONTAINER_SIGNATURE_KEY_REF")"
+  container_signature_key_secret_name="$(yaml_escape "$CONTAINER_SIGNATURE_KEY_SECRET_NAME")"
   container_scan_enabled="$(yaml_escape "$CONTAINER_SCAN_ENABLED")"
   container_scan_interval_minutes="$(yaml_escape "$CONTAINER_SCAN_INTERVAL_MINUTES")"
   container_scan_severity="$(yaml_escape "$CONTAINER_SCAN_SEVERITY")"
@@ -1912,6 +1946,8 @@ render_helm_values_override() {
   auth_login_lockout_seconds="$(yaml_escape "$AUTH_LOGIN_LOCKOUT_SECONDS")"
   vm_connect_insecure_tls="$(yaml_escape "$VM_CONNECT_INSECURE_TLS")"
   container_connect_insecure_tls="$(yaml_escape "$CONTAINER_CONNECT_INSECURE_TLS")"
+  runtime_secrets_secret_name="$(yaml_escape "$RUNTIME_SECRETS_SECRET_NAME")"
+  runtime_secrets_encryption_key_key="$(yaml_escape "$RUNTIME_SECRETS_ENCRYPTION_KEY_KEY")"
   secrets_encryption_key="$(yaml_escape "$SECRETS_ENCRYPTION_KEY")"
   backend_data_hostpath="$(yaml_escape "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(yaml_escape "$GOLDEN_IMAGES_HOSTPATH")"
@@ -1953,6 +1989,7 @@ appTemplateValues:
   CONTAINER_ALLOWED_REGISTRIES: "${container_allowed_registries}"
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED: "${container_signature_verification_enabled}"
   CONTAINER_SIGNATURE_KEY_REF: "${container_signature_key_ref}"
+  CONTAINER_SIGNATURE_KEY_SECRET_NAME: "${container_signature_key_secret_name}"
   CONTAINER_SCAN_ENABLED: "${container_scan_enabled}"
   CONTAINER_SCAN_INTERVAL_MINUTES: "${container_scan_interval_minutes}"
   CONTAINER_SCAN_SEVERITY: "${container_scan_severity}"
@@ -1970,6 +2007,8 @@ appTemplateValues:
   AUTH_LOGIN_LOCKOUT_SECONDS: "${auth_login_lockout_seconds}"
   VM_CONNECT_INSECURE_TLS: "${vm_connect_insecure_tls}"
   CONTAINER_CONNECT_INSECURE_TLS: "${container_connect_insecure_tls}"
+  RUNTIME_SECRETS_SECRET_NAME: "${runtime_secrets_secret_name}"
+  RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: "${runtime_secrets_encryption_key_key}"
   SECRETS_ENCRYPTION_KEY: "${secrets_encryption_key}"
   BACKEND_DATA_HOSTPATH: "${backend_data_hostpath}"
   GOLDEN_IMAGES_HOSTPATH: "${golden_images_hostpath}"
@@ -2322,6 +2361,85 @@ ensure_postgres_secret() {
     --from-literal=POSTGRES_DB="$POSTGRES_DB" \
     --from-literal=BLABS_DATABASE_URL="$database_url" \
     --dry-run=client -o yaml | kubectl apply -f -
+}
+
+generate_runtime_secrets_encryption_key() {
+  local generated
+  generated="$(head -c 32 /dev/urandom | base64 | tr -d '\n=' | tr '/+' '_-')"
+  printf '%s' "$generated"
+}
+
+ensure_runtime_secrets_secret() {
+  local current_b64 generated_key
+  current_b64="$(kubectl -n "$NAMESPACE" get secret "$RUNTIME_SECRETS_SECRET_NAME" \
+    -o "jsonpath={.data['$RUNTIME_SECRETS_ENCRYPTION_KEY_KEY']}" 2>/dev/null || true)"
+
+  if [ -n "$SECRETS_ENCRYPTION_KEY" ]; then
+    log "Applying runtime secret ${RUNTIME_SECRETS_SECRET_NAME} from SECRETS_ENCRYPTION_KEY."
+    kubectl -n "$NAMESPACE" create secret generic "$RUNTIME_SECRETS_SECRET_NAME" \
+      --from-literal="${RUNTIME_SECRETS_ENCRYPTION_KEY_KEY}=$SECRETS_ENCRYPTION_KEY" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    return
+  fi
+
+  if [ -n "$current_b64" ]; then
+    log "Using existing runtime secret ${RUNTIME_SECRETS_SECRET_NAME}."
+    return
+  fi
+
+  if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+    fail "Runtime secret ${RUNTIME_SECRETS_SECRET_NAME}/${RUNTIME_SECRETS_ENCRYPTION_KEY_KEY} is missing. Set SECRETS_ENCRYPTION_KEY for bootstrap, or pre-create the secret."
+  fi
+
+  generated_key="$(generate_runtime_secrets_encryption_key)"
+  log "Generating dev runtime secret ${RUNTIME_SECRETS_SECRET_NAME} (set SECRETS_ENCRYPTION_KEY to override)."
+  kubectl -n "$NAMESPACE" create secret generic "$RUNTIME_SECRETS_SECRET_NAME" \
+    --from-literal="${RUNTIME_SECRETS_ENCRYPTION_KEY_KEY}=$generated_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+}
+
+ensure_container_signature_key_secret() {
+  if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -ne 1 ]; then
+    return
+  fi
+  if [[ "$CONTAINER_SIGNATURE_KEY_REF" != /etc/bretter-signing/* ]]; then
+    log "Skipping signature key secret management (CONTAINER_SIGNATURE_KEY_REF is not under /etc/bretter-signing)."
+    return
+  fi
+
+  local key_file_name current_b64 tmp_key_file
+  key_file_name="$(basename "$CONTAINER_SIGNATURE_KEY_REF")"
+  if [ -z "$key_file_name" ] || [ "$key_file_name" = "." ] || [ "$key_file_name" = "/" ]; then
+    fail "Unable to derive signature key filename from CONTAINER_SIGNATURE_KEY_REF=$CONTAINER_SIGNATURE_KEY_REF"
+  fi
+
+  if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY_FILE" ]; then
+    log "Applying signature key secret ${CONTAINER_SIGNATURE_KEY_SECRET_NAME} from file ${CONTAINER_SIGNATURE_PUBLIC_KEY_FILE}."
+    kubectl -n "$NAMESPACE" create secret generic "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" \
+      --from-file="${key_file_name}=${CONTAINER_SIGNATURE_PUBLIC_KEY_FILE}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    return
+  fi
+
+  if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY" ]; then
+    tmp_key_file="$(mktemp /tmp/bretter-cosign-key.XXXXXX.pub)"
+    printf '%s\n' "$CONTAINER_SIGNATURE_PUBLIC_KEY" >"$tmp_key_file"
+    log "Applying signature key secret ${CONTAINER_SIGNATURE_KEY_SECRET_NAME} from CONTAINER_SIGNATURE_PUBLIC_KEY."
+    kubectl -n "$NAMESPACE" create secret generic "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" \
+      --from-file="${key_file_name}=${tmp_key_file}" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    rm -f "$tmp_key_file"
+    return
+  fi
+
+  current_b64="$(kubectl -n "$NAMESPACE" get secret "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" \
+    -o "jsonpath={.data['$key_file_name']}" 2>/dev/null || true)"
+  if [ -n "$current_b64" ]; then
+    log "Using existing signature key secret ${CONTAINER_SIGNATURE_KEY_SECRET_NAME}."
+    return
+  fi
+
+  fail "Signature verification is enabled but secret ${CONTAINER_SIGNATURE_KEY_SECRET_NAME}/${key_file_name} is missing. Provide CONTAINER_SIGNATURE_PUBLIC_KEY(_FILE) or pre-create the secret."
 }
 
 install_external_secrets_operator() {
@@ -3038,6 +3156,8 @@ apply_manifests() {
   reconcile_backend_data_pv
   reconcile_postgres_data_pv
   ensure_postgres_secret
+  ensure_runtime_secrets_secret
+  ensure_container_signature_key_secret
   ensure_pull_secret
   apply_vault_cluster_secret_store
   apply_external_secrets_bindings
@@ -3380,6 +3500,20 @@ ensure_cluster_runtime_context() {
 }
 
 log_runtime_configuration() {
+  local runtime_secret_key_present signature_key_inline_present signature_key_file_present
+  runtime_secret_key_present=0
+  if [ -n "$SECRETS_ENCRYPTION_KEY" ]; then
+    runtime_secret_key_present=1
+  fi
+  signature_key_inline_present=0
+  if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY" ]; then
+    signature_key_inline_present=1
+  fi
+  signature_key_file_present=0
+  if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY_FILE" ]; then
+    signature_key_file_present=1
+  fi
+
   log "Selected setup phases: $SETUP_PHASES (dry run: $SETUP_DRY_RUN)"
   log "Using control node: $CONTROL_NODE"
   log "Using node external host for API/UI: $NODE_EXTERNAL_HOST"
@@ -3418,7 +3552,10 @@ log_runtime_configuration() {
   log "Container ingress enabled: $CONTAINER_INGRESS_ENABLED (base domain: ${CONTAINER_INGRESS_BASE_DOMAIN:-disabled}, class: ${CONTAINER_INGRESS_CLASS:-default})"
   log "Container image pre-pull enabled: $CONTAINER_IMAGE_PREPULL_ENABLED (timeout: ${CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS}s)"
   log "Container allowed registries: $CONTAINER_ALLOWED_REGISTRIES"
-  log "Container signature verification enabled: $CONTAINER_SIGNATURE_VERIFICATION_ENABLED (key: ${CONTAINER_SIGNATURE_KEY_REF:-keyless})"
+  log "Runtime secrets secret: ${RUNTIME_SECRETS_SECRET_NAME}/${RUNTIME_SECRETS_ENCRYPTION_KEY_KEY}"
+  log "Runtime secrets bootstrap key provided via env: ${runtime_secret_key_present}"
+  log "Container signature verification enabled: $CONTAINER_SIGNATURE_VERIFICATION_ENABLED (key: ${CONTAINER_SIGNATURE_KEY_REF:-unset}, secret: ${CONTAINER_SIGNATURE_KEY_SECRET_NAME:-n/a})"
+  log "Container signature key source provided: inline=${signature_key_inline_present} file=${signature_key_file_present}"
   log "Container scanning enabled: $CONTAINER_SCAN_ENABLED (interval: ${CONTAINER_SCAN_INTERVAL_MINUTES}m severity: ${CONTAINER_SCAN_SEVERITY})"
   log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
   log "Backend production profile: $PRODUCTION_PROFILE"

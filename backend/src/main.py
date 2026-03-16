@@ -71,6 +71,8 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_CONTAINER_CONNECT_INSECURE_TLS must be false when BLABS_PRODUCTION_PROFILE=true.")
     if not bool(getattr(settings, "container_signature_verification_enabled", False)):
         errors.append("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be true when BLABS_PRODUCTION_PROFILE=true.")
+    if not str(getattr(settings, "container_signature_key_ref", "") or "").strip():
+        errors.append("BLABS_CONTAINER_SIGNATURE_KEY_REF must be set when BLABS_PRODUCTION_PROFILE=true.")
     if not bool(getattr(settings, "cors_enterprise_profile", False)):
         errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
     if not _configured_cors_origins():

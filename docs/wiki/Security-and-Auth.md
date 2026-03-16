@@ -94,7 +94,7 @@ Notes:
 - Keep skip-verify disabled unless troubleshooting non-production cert issues.
 - LDAP settings changes are dynamic in DB config; backend restart is not required after save.
 - LDAP bind password and SSO client secret are write-only in admin APIs and are not returned by read endpoints.
-- In production (`BLABS_PRODUCTION_PROFILE=1`), `BLABS_SECRETS_ENCRYPTION_KEY` is required and these stored secrets are encrypted at rest.
+- In production (`BLABS_PRODUCTION_PROFILE=1`), `BLABS_SECRETS_ENCRYPTION_KEY` must be present at runtime (typically via `BLABS_SECRETS_ENCRYPTION_KEY <- secretKeyRef`), and stored admin secrets are encrypted at rest.
 
 ## Login rate limiting and audit events
 

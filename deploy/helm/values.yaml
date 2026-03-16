@@ -34,7 +34,8 @@ appTemplateValues:
   CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS: "45"
   CONTAINER_ALLOWED_REGISTRIES: docker.io,ghcr.io,quay.io,mcr.microsoft.com,gcr.io,registry.k8s.io,lscr.io
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED: "0"
-  CONTAINER_SIGNATURE_KEY_REF: ""
+  CONTAINER_SIGNATURE_KEY_REF: /etc/bretter-signing/cosign.pub
+  CONTAINER_SIGNATURE_KEY_SECRET_NAME: bretter-cosign-public-key
   CONTAINER_SCAN_ENABLED: "1"
   CONTAINER_SCAN_INTERVAL_MINUTES: "360"
   CONTAINER_SCAN_SEVERITY: HIGH,CRITICAL
@@ -52,6 +53,9 @@ appTemplateValues:
   AUTH_LOGIN_LOCKOUT_SECONDS: "300"
   VM_CONNECT_INSECURE_TLS: "0"
   CONTAINER_CONNECT_INSECURE_TLS: "0"
+  # Setup/ops should inject runtime key material via Kubernetes secret refs.
+  RUNTIME_SECRETS_SECRET_NAME: bretter-runtime-secrets
+  RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: secrets_encryption_key
   SECRETS_ENCRYPTION_KEY: ""
   BACKEND_DATA_HOSTPATH: /var/lib/bretter-labs/backend-data
   GOLDEN_IMAGES_HOSTPATH: /var/lib/bretter-labs/golden-images

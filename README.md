@@ -154,9 +154,14 @@ After first login/reset, keep the bootstrap file in secure storage and verify `B
 | `AUTH_LOGIN_LOCKOUT_SECONDS` | `300` | Temporary lockout duration after too many failed attempts |
 | `VM_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip VM upstream TLS verification |
 | `CONTAINER_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip container upstream TLS verification |
-| `SECRETS_ENCRYPTION_KEY` | empty | Required when `PRODUCTION_PROFILE=1`; encrypts stored runtime secrets (`sso_client_secret`, `ldap_bind_password`) |
+| `SECRETS_ENCRYPTION_KEY` | empty | Optional bootstrap input for setup; when set, setup writes it into the runtime secret (`RUNTIME_SECRETS_SECRET_NAME`) and it is not committed in values files |
+| `RUNTIME_SECRETS_SECRET_NAME` | `bretter-runtime-secrets` | Kubernetes secret name that provides `BLABS_SECRETS_ENCRYPTION_KEY` to backend |
+| `RUNTIME_SECRETS_ENCRYPTION_KEY_KEY` | `secrets_encryption_key` | Data key inside `RUNTIME_SECRETS_SECRET_NAME` used for `BLABS_SECRETS_ENCRYPTION_KEY` |
 | `CONTAINER_SIGNATURE_VERIFICATION_ENABLED` | `0` | Must be `1` when `PRODUCTION_PROFILE=1`; enforces cosign verification for container image registration/update |
-| `CONTAINER_SIGNATURE_KEY_REF` | empty | Optional cosign public key path/ref; when empty, verification uses keyless mode |
+| `CONTAINER_SIGNATURE_KEY_REF` | `/etc/bretter-signing/cosign.pub` | Cosign public key path used for verification in hardened profiles |
+| `CONTAINER_SIGNATURE_KEY_SECRET_NAME` | `bretter-cosign-public-key` | Secret mounted at `/etc/bretter-signing` to provide the public key file referenced by `CONTAINER_SIGNATURE_KEY_REF` |
+| `CONTAINER_SIGNATURE_PUBLIC_KEY` | empty | Optional setup input: inline cosign public key content used to create/update `CONTAINER_SIGNATURE_KEY_SECRET_NAME` |
+| `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` | empty | Optional setup input: file path to a cosign public key used to create/update `CONTAINER_SIGNATURE_KEY_SECRET_NAME` |
 | `METRICS_SERVER_VERSION` | `v0.8.1` | Metrics-server release used to build default manifest URL |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
@@ -191,8 +196,15 @@ VM_STORAGE_CLASS=longhorn-r1 \
 CORS_ENTERPRISE_PROFILE=1 \
 CORS_ALLOWED_ORIGINS=https://10.68.49.250:30073 \
 SECRETS_ENCRYPTION_KEY='<32+ char secret>' \
+CONTAINER_SIGNATURE_PUBLIC_KEY_FILE=./cosign.pub \
 ./scripts/setup.sh
 ```
+
+Production note:
+
+- Keep `deploy/helm/values-production.yaml` non-secret (`SECRETS_ENCRYPTION_KEY` stays empty).
+- Provide `SECRETS_ENCRYPTION_KEY` only at deploy time (or pre-create `RUNTIME_SECRETS_SECRET_NAME`).
+- Provide signature key material via `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` (or pre-create `CONTAINER_SIGNATURE_KEY_SECRET_NAME`).
 
 ## Security and Session Model
 
@@ -264,6 +276,12 @@ Release guardrail check:
 python3 scripts/check_release_discipline.py
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
 ./scripts/ci_guardrails.sh
+```
+
+Post-rollout proof artifact:
+
+```bash
+NAMESPACE=labs ./scripts/production_go_live_proof.sh
 ```
 
 ## Operations

@@ -12,7 +12,6 @@ SEMVER_RE = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
-WEAK_SECRET_VALUES = {"admin", "password", "changeme", "admin123", "secret", "default"}
 
 
 def _load_json(path: Path) -> dict:
@@ -136,11 +135,23 @@ def main() -> int:
             "deploy/helm/values-production.yaml must not include localhost/127.0.0.1 in CORS_ALLOWED_ORIGINS."
         )
 
+    runtime_secret_name = _extract_yaml_scalar(values_production, "RUNTIME_SECRETS_SECRET_NAME").strip()
+    if _looks_placeholder(runtime_secret_name):
+        errors.append("deploy/helm/values-production.yaml must set RUNTIME_SECRETS_SECRET_NAME.")
+
+    runtime_secret_key = _extract_yaml_scalar(values_production, "RUNTIME_SECRETS_ENCRYPTION_KEY_KEY").strip()
+    if _looks_placeholder(runtime_secret_key):
+        errors.append("deploy/helm/values-production.yaml must set RUNTIME_SECRETS_ENCRYPTION_KEY_KEY.")
+    elif not re.match(r"^[A-Za-z0-9._-]+$", runtime_secret_key):
+        errors.append(
+            "deploy/helm/values-production.yaml RUNTIME_SECRETS_ENCRYPTION_KEY_KEY contains invalid characters."
+        )
+
     secrets_encryption_key = _extract_yaml_scalar(values_production, "SECRETS_ENCRYPTION_KEY")
-    if _looks_placeholder(secrets_encryption_key) or secrets_encryption_key.lower() in WEAK_SECRET_VALUES:
-        errors.append("deploy/helm/values-production.yaml must set a strong SECRETS_ENCRYPTION_KEY.")
-    elif len(secrets_encryption_key) < 24:
-        errors.append("deploy/helm/values-production.yaml SECRETS_ENCRYPTION_KEY must be at least 24 characters.")
+    if secrets_encryption_key.strip():
+        errors.append(
+            "deploy/helm/values-production.yaml must keep SECRETS_ENCRYPTION_KEY empty; use runtime secret injection."
+        )
 
     signature_verification_enabled = (
         _extract_yaml_scalar(values_production, "CONTAINER_SIGNATURE_VERIFICATION_ENABLED").strip().lower()
@@ -148,6 +159,14 @@ def main() -> int:
     if signature_verification_enabled not in {"1", "true", "yes", "on"}:
         errors.append(
             "deploy/helm/values-production.yaml must enable CONTAINER_SIGNATURE_VERIFICATION_ENABLED for production."
+        )
+    signature_key_ref = _extract_yaml_scalar(values_production, "CONTAINER_SIGNATURE_KEY_REF").strip()
+    if not signature_key_ref:
+        errors.append("deploy/helm/values-production.yaml must set CONTAINER_SIGNATURE_KEY_REF for production.")
+    signature_key_secret_name = _extract_yaml_scalar(values_production, "CONTAINER_SIGNATURE_KEY_SECRET_NAME").strip()
+    if signature_key_ref.startswith("/etc/bretter-signing/") and not signature_key_secret_name:
+        errors.append(
+            "deploy/helm/values-production.yaml must set CONTAINER_SIGNATURE_KEY_SECRET_NAME when using /etc/bretter-signing key refs."
         )
 
     setup_script = _read_text(setup_script_path)

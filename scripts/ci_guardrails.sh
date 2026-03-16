@@ -10,7 +10,7 @@ fi
 cd "$ROOT_DIR"
 
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_release_discipline.py"
-"$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml"
 if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
   echo "ERROR: pytest is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
   exit 1

@@ -14,6 +14,7 @@ def _set_valid_production_baseline(monkeypatch):
     monkeypatch.setattr(main_module.settings, "vm_connect_insecure_tls", False)
     monkeypatch.setattr(main_module.settings, "container_connect_insecure_tls", False)
     monkeypatch.setattr(main_module.settings, "container_signature_verification_enabled", True)
+    monkeypatch.setattr(main_module.settings, "container_signature_key_ref", "/etc/bretter-signing/cosign.pub")
     monkeypatch.setattr(main_module.settings, "cors_enterprise_profile", True)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://10.68.49.250:30073")
     monkeypatch.setattr(main_module.settings, "kube_node_selector_value", "cbekube2")
@@ -72,4 +73,11 @@ def test_startup_validation_rejects_localhost_cors_origins_in_production(monkeyp
     _set_valid_production_baseline(monkeypatch)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://localhost:30073")
     with pytest.raises(RuntimeError, match="must not include localhost/127.0.0.1"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_requires_signature_key_ref_in_production(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "container_signature_key_ref", "")
+    with pytest.raises(RuntimeError, match="BLABS_CONTAINER_SIGNATURE_KEY_REF must be set"):
         main_module._validate_startup_config()

@@ -544,6 +544,34 @@ spec:
               value: "__CONTAINER_START_QUEUE_BASE_DELAY_SECONDS__"
             - name: BLABS_CONTAINER_START_QUEUE_MAX_DELAY_SECONDS
               value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
+            - name: BLABS_PRODUCTION_PROFILE
+              value: "__PRODUCTION_PROFILE__"
+            - name: BLABS_CORS_ENTERPRISE_PROFILE
+              value: "__CORS_ENTERPRISE_PROFILE__"
+            - name: BLABS_CORS_ALLOWED_ORIGINS
+              value: "__CORS_ALLOWED_ORIGINS__"
+            - name: BLABS_CORS_ALLOWED_ORIGIN_REGEX
+              value: "__CORS_ALLOWED_ORIGIN_REGEX__"
+            - name: BLABS_CORS_ALLOWED_METHODS
+              value: "__CORS_ALLOWED_METHODS__"
+            - name: BLABS_CORS_ALLOWED_HEADERS
+              value: "__CORS_ALLOWED_HEADERS__"
+            - name: BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS
+              value: "__AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS__"
+            - name: BLABS_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS
+              value: "__AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS__"
+            - name: BLABS_AUTH_LOGIN_LOCKOUT_SECONDS
+              value: "__AUTH_LOGIN_LOCKOUT_SECONDS__"
+            - name: BLABS_VM_CONNECT_INSECURE_TLS
+              value: "__VM_CONNECT_INSECURE_TLS__"
+            - name: BLABS_CONTAINER_CONNECT_INSECURE_TLS
+              value: "__CONTAINER_CONNECT_INSECURE_TLS__"
+            - name: BLABS_SECRETS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: __RUNTIME_SECRETS_SECRET_NAME__
+                  key: __RUNTIME_SECRETS_ENCRYPTION_KEY_KEY__
+                  optional: true
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images
@@ -551,6 +579,9 @@ spec:
               mountPath: /data
             - name: tls-cert
               mountPath: /tls
+              readOnly: true
+            - name: container-signature-key
+              mountPath: /etc/bretter-signing
               readOnly: true
       volumes:
         - name: images
@@ -561,6 +592,10 @@ spec:
         - name: tls-cert
           secret:
             secretName: __TLS_SECRET_NAME__
+            optional: true
+        - name: container-signature-key
+          secret:
+            secretName: __CONTAINER_SIGNATURE_KEY_SECRET_NAME__
             optional: true
 ---
 apiVersion: v1
