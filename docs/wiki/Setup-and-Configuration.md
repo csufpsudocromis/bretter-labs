@@ -84,9 +84,11 @@ Monitoring/ops:
 - `AUTOCLEANUP_NODEFS_WARN_PCT`, `AUTOCLEANUP_NODEFS_CRITICAL_PCT`, `AUTOCLEANUP_NODEFS_EMERGENCY_PCT`
 - `AUTOCLEANUP_PVC_WARN_PCT`, `AUTOCLEANUP_PVC_CRITICAL_PCT`, `AUTOCLEANUP_PVC_EMERGENCY_PCT`
 - `METRICS_SERVER_INSECURE_TLS` (default `0`; dev-only override)
+- `METRICS_SERVER_VERSION` (default `v0.8.1`; used to pin manifest URL)
 - `ENABLE_ADMISSION_POLICIES` (default `1`)
 - `INSTALL_KYVERNO` (default `1`)
-- `KYVERNO_NAMESPACE`, `KYVERNO_RELEASE_NAME`, `KYVERNO_CHART_VERSION`
+- `KYVERNO_NAMESPACE`, `KYVERNO_RELEASE_NAME`, `KYVERNO_CHART_VERSION` (default `v3.7.1`)
+- `MONITORING_CHART_VERSION` (default `v82.10.4`)
 - `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL`
 - `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE`
 - `RUN_POST_DEPLOY_API_HEALTH_CHECK`
@@ -97,6 +99,7 @@ External secrets (optional):
 
 - `USE_EXTERNAL_SECRETS`
 - `EXTERNAL_SECRETS_NAMESPACE`, `EXTERNAL_SECRETS_RELEASE_NAME`
+- `EXTERNAL_SECRETS_CHART_VERSION` (default `v2.1.0`)
 - `EXTERNAL_SECRETS_STORE_NAME`
 - Vault settings (`VAULT_ADDR`, `VAULT_K8S_ROLE`, `VAULT_KV_MOUNT`, secret keys)
 
@@ -133,6 +136,7 @@ ENABLE_MONITORING=1 \
 - Generated bootstrap secrets are written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
 - Enterprise CORS (`CORS_ENTERPRISE_PROFILE=1`) requires explicit `CORS_ALLOWED_ORIGINS`, blocks `CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
+- Setup no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or set explicit immutable image refs.
 - Production values (`deploy/helm/values-production.yaml`) are digest-pinned and CI-enforced for backend/frontend/runner image refs.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.

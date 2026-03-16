@@ -6,7 +6,7 @@ ARG VITE_API_BASE=
 ENV VITE_API_BASE=${VITE_API_BASE}
 
 COPY frontend-vite/package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY frontend-vite/ ./
 RUN npm run build

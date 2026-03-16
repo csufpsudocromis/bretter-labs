@@ -1,13 +1,14 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../api';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../api";
 
 const UserPanel = () => {
-  const SINGLE_LAB_LIMIT_MESSAGE = 'You already have a virtual lab running. Delete the current lab before starting a new one.';
+  const SINGLE_LAB_LIMIT_MESSAGE =
+    "You already have a virtual lab running. Delete the current lab before starting a new one.";
   const [templates, setTemplates] = useState([]);
   const [instances, setInstances] = useState([]);
   const [containerTemplates, setContainerTemplates] = useState([]);
   const [containerInstances, setContainerInstances] = useState([]);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState("");
   const [polling, setPolling] = useState(null);
   const [showIdlePrompt, setShowIdlePrompt] = useState(false);
   const [idleCountdown, setIdleCountdown] = useState(null);
@@ -36,13 +37,13 @@ const UserPanel = () => {
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
   const VM_PRESENCE_GRACE_MS = 10000;
-  const ACTIVITY_STORAGE_KEY = 'blabs:last-activity-at';
+  const ACTIVITY_STORAGE_KEY = "blabs:last-activity-at";
 
   const normalizeOrigin = (value) => {
     try {
-      return new URL(String(value || ''), window.location.href).origin;
+      return new URL(String(value || ""), window.location.href).origin;
     } catch (err) {
-      return '';
+      return "";
     }
   };
 
@@ -78,10 +79,10 @@ const UserPanel = () => {
   const refresh = async () => {
     try {
       const [tmplRes, podsRes, ctTmplRes, ctInstRes] = await Promise.all([
-        api.get('/user/templates'),
-        api.get('/user/pods'),
-        api.get('/user/container-templates'),
-        api.get('/user/containers'),
+        api.get("/user/templates"),
+        api.get("/user/pods"),
+        api.get("/user/container-templates"),
+        api.get("/user/containers"),
       ]);
       const nextVmInstances = podsRes.data || [];
       const nextContainerInstances = ctInstRes.data || [];
@@ -95,8 +96,8 @@ const UserPanel = () => {
       });
 
       const hasActiveLab = [...nextVmInstances, ...nextContainerInstances].some((inst) => {
-        const statusText = String(inst?.status || '').toLowerCase();
-        return !['stopped', 'completed', 'failed'].includes(statusText);
+        const statusText = String(inst?.status || "").toLowerCase();
+        return !["stopped", "completed", "failed"].includes(statusText);
       });
       if (!hasActiveLab) {
         stickyLimitMessageRef.current = false;
@@ -104,10 +105,10 @@ const UserPanel = () => {
       if (stickyLimitMessageRef.current) {
         setMessage(SINGLE_LAB_LIMIT_MESSAGE);
       } else {
-        setMessage('');
+        setMessage("");
       }
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to load data');
+      setMessage(err.response?.data?.detail || "Failed to load data");
     }
   };
 
@@ -120,19 +121,19 @@ const UserPanel = () => {
 
   useEffect(() => {
     rememberAllowedOrigin(window.location.origin);
-    rememberAllowedOrigin(api?.defaults?.baseURL || '');
+    rememberAllowedOrigin(api?.defaults?.baseURL || "");
   }, []);
 
-  const ACTIVE_WORKLOAD_STATUSES = new Set(['queued', 'pending', 'building', 'starting', 'running']);
-  const workloadStatus = (inst) => String(inst?.status_stage || inst?.status || 'unknown').toLowerCase();
+  const ACTIVE_WORKLOAD_STATUSES = new Set(["queued", "pending", "building", "starting", "running"]);
+  const workloadStatus = (inst) => String(inst?.status_stage || inst?.status || "unknown").toLowerCase();
 
   const activeVmInstances = useMemo(
     () => instances.filter((i) => ACTIVE_WORKLOAD_STATUSES.has(workloadStatus(i))),
-    [instances],
+    [instances]
   );
   const activeContainerInstances = useMemo(
     () => containerInstances.filter((i) => ACTIVE_WORKLOAD_STATUSES.has(workloadStatus(i))),
-    [containerInstances],
+    [containerInstances]
   );
   const activeWorkloadCount = activeVmInstances.length + activeContainerInstances.length;
 
@@ -168,10 +169,10 @@ const UserPanel = () => {
   const start = async (templateId) => {
     try {
       const res = await api.post(`/user/templates/${templateId}/start`);
-      setMessage('');
+      setMessage("");
       refresh();
     } catch (err) {
-      const detail = err.response?.data?.detail || 'Failed to start VM';
+      const detail = err.response?.data?.detail || "Failed to start VM";
       if (detail === SINGLE_LAB_LIMIT_MESSAGE) {
         stickyLimitMessageRef.current = true;
       }
@@ -182,30 +183,30 @@ const UserPanel = () => {
   const stop = async (instanceId) => {
     try {
       await api.post(`/user/pods/${instanceId}/stop`);
-      setMessage('');
+      setMessage("");
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to stop VM');
+      setMessage(err.response?.data?.detail || "Failed to stop VM");
     }
   };
 
   const remove = async (instanceId) => {
     try {
       await api.delete(`/user/pods/${instanceId}`);
-      setMessage('');
+      setMessage("");
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to delete VM');
+      setMessage(err.response?.data?.detail || "Failed to delete VM");
     }
   };
 
   const startContainer = async (templateId) => {
     try {
       await api.post(`/user/container-templates/${templateId}/start`);
-      setMessage('');
+      setMessage("");
       refresh();
     } catch (err) {
-      const detail = err.response?.data?.detail || 'Failed to start container';
+      const detail = err.response?.data?.detail || "Failed to start container";
       if (detail === SINGLE_LAB_LIMIT_MESSAGE) {
         stickyLimitMessageRef.current = true;
       }
@@ -216,10 +217,10 @@ const UserPanel = () => {
   const removeContainer = async (instanceId) => {
     try {
       await api.delete(`/user/containers/${instanceId}`);
-      setMessage('');
+      setMessage("");
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to delete container');
+      setMessage(err.response?.data?.detail || "Failed to delete container");
     }
   };
 
@@ -227,10 +228,10 @@ const UserPanel = () => {
     if (!instance?.id) return;
     try {
       const res = await api.post(`/user/containers/${instance.id}/connect-token`);
-      const connectUrl = String(res?.data?.connect_url || '').trim();
-      const fallbackUrl = String(instance.access_url || '').trim();
+      const connectUrl = String(res?.data?.connect_url || "").trim();
+      const fallbackUrl = String(instance.access_url || "").trim();
       const launchUrl = connectUrl || fallbackUrl;
-      const win = window.open(launchUrl, '_blank');
+      const win = window.open(launchUrl, "_blank");
       if (win) {
         const preferredOrigin = rememberAllowedOrigin(connectUrl) || rememberAllowedOrigin(fallbackUrl);
         if (preferredOrigin) {
@@ -244,7 +245,7 @@ const UserPanel = () => {
         }
       }
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to open container');
+      setMessage(err.response?.data?.detail || "Failed to open container");
     }
   };
 
@@ -254,13 +255,13 @@ const UserPanel = () => {
       const results = await Promise.all(instanceIds.map((id) => api.post(`/user/pods/${id}/stop`).catch((err) => err)));
       const failures = results.filter((r) => r instanceof Error || r?.response?.status >= 400);
       if (failures.length) {
-        setMessage('Some idle VMs failed to stop; please check the labs list.');
+        setMessage("Some idle VMs failed to stop; please check the labs list.");
       } else {
-        setMessage('');
+        setMessage("");
       }
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to stop idle VM');
+      setMessage(err.response?.data?.detail || "Failed to stop idle VM");
     }
   };
 
@@ -279,24 +280,26 @@ const UserPanel = () => {
         return true;
       });
       if (failures.length) {
-        setMessage('Some idle VMs failed to delete; please check the labs list.');
+        setMessage("Some idle VMs failed to delete; please check the labs list.");
       } else if (!keepMessage) {
-        if (reason === 'idle-timeout') {
-          setMessage('Session ended due to inactivity.');
+        if (reason === "idle-timeout") {
+          setMessage("Session ended due to inactivity.");
         } else {
-          setMessage('');
+          setMessage("");
         }
       }
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to delete idle VM');
+      setMessage(err.response?.data?.detail || "Failed to delete idle VM");
     }
   };
 
   const deleteContainerInstances = async (instanceIds, reason, keepMessage = false) => {
     if (!instanceIds || instanceIds.length === 0) return;
     try {
-      const results = await Promise.all(instanceIds.map((id) => api.delete(`/user/containers/${id}`).catch((err) => err)));
+      const results = await Promise.all(
+        instanceIds.map((id) => api.delete(`/user/containers/${id}`).catch((err) => err))
+      );
       const failures = results.filter((result) => {
         if (result?.status && result.status < 400) {
           return false;
@@ -308,33 +311,33 @@ const UserPanel = () => {
         return true;
       });
       if (failures.length) {
-        setMessage('Some idle containers failed to delete; please check the labs list.');
+        setMessage("Some idle containers failed to delete; please check the labs list.");
       } else if (!keepMessage) {
-        if (reason === 'idle-timeout') {
-          setMessage('Session ended due to inactivity.');
+        if (reason === "idle-timeout") {
+          setMessage("Session ended due to inactivity.");
         } else {
-          setMessage('');
+          setMessage("");
         }
       }
       refresh();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to delete idle container');
+      setMessage(err.response?.data?.detail || "Failed to delete idle container");
     }
   };
 
   const connect = async (instance) => {
     if (!instance?.id) {
-      setMessage('Console URL not available yet');
+      setMessage("Console URL not available yet");
       return;
     }
     try {
       const res = await api.post(`/user/pods/${instance.id}/connect-token`);
-      const connectUrl = String(res?.data?.connect_url || '').trim() || String(instance.console_url || '').trim();
+      const connectUrl = String(res?.data?.connect_url || "").trim() || String(instance.console_url || "").trim();
       if (!connectUrl) {
-        setMessage('Console URL not available yet');
+        setMessage("Console URL not available yet");
         return;
       }
-      const win = window.open(connectUrl, '_blank');
+      const win = window.open(connectUrl, "_blank");
       if (win) {
         const origin = rememberAllowedOrigin(connectUrl);
         if (origin) {
@@ -345,71 +348,71 @@ const UserPanel = () => {
         startConsoleHandshake(instance.id, win);
         if (document.hasFocus()) {
           postToConsoleWindow(instance.id, win, {
-            type: 'idle-focus',
-            source: 'user',
+            type: "idle-focus",
+            source: "user",
             instanceId: instance.id,
             timestamp: Date.now(),
           });
         }
       }
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to open console');
+      setMessage(err.response?.data?.detail || "Failed to open console");
     }
   };
 
-  const templateName = (templateId) => templates.find((t) => t.id === templateId)?.name || 'VM';
+  const templateName = (templateId) => templates.find((t) => t.id === templateId)?.name || "VM";
   const podName = (instance) => `vm-${instance.owner}-${instance.id.slice(0, 8)}`;
-  const effectiveStatus = (instance) => instance?.status_stage || instance?.status || 'unknown';
+  const effectiveStatus = (instance) => instance?.status_stage || instance?.status || "unknown";
   const statusLabel = (instance) => {
     const status = effectiveStatus(instance);
     const labelMap = {
-      pending: 'Pending',
-      building: 'Building',
-      starting: 'Starting',
-      running: 'Running',
-      stopped: 'Stopped',
-      completed: 'Completed',
-      failed: 'Failed',
-      unknown: 'Unknown',
+      pending: "Pending",
+      building: "Building",
+      starting: "Starting",
+      running: "Running",
+      stopped: "Stopped",
+      completed: "Completed",
+      failed: "Failed",
+      unknown: "Unknown",
     };
-    return labelMap[status] || 'Unknown';
+    return labelMap[status] || "Unknown";
   };
-  const statusReason = (instance) =>
-    effectiveStatus(instance) === 'pending' ? 'waiting for available resources' : '';
-  const isRunning = (instance) => effectiveStatus(instance) === 'running';
-  const containerTemplateName = (templateId) => containerTemplates.find((t) => t.id === templateId)?.name || 'Container';
-  const effectiveContainerStatus = (instance) => instance?.status_stage || instance?.status || 'unknown';
+  const statusReason = (instance) => (effectiveStatus(instance) === "pending" ? "waiting for available resources" : "");
+  const isRunning = (instance) => effectiveStatus(instance) === "running";
+  const containerTemplateName = (templateId) =>
+    containerTemplates.find((t) => t.id === templateId)?.name || "Container";
+  const effectiveContainerStatus = (instance) => instance?.status_stage || instance?.status || "unknown";
   const containerStatusLabel = (instance) => {
     const status = effectiveContainerStatus(instance);
     const labelMap = {
-      queued: 'Queued',
-      pending: 'Pending',
-      building: 'Building',
-      starting: 'Starting',
-      running: 'Running',
-      stopped: 'Stopped',
-      completed: 'Completed',
-      failed: 'Failed',
-      unknown: 'Unknown',
+      queued: "Queued",
+      pending: "Pending",
+      building: "Building",
+      starting: "Starting",
+      running: "Running",
+      stopped: "Stopped",
+      completed: "Completed",
+      failed: "Failed",
+      unknown: "Unknown",
     };
-    return labelMap[status] || 'Unknown';
+    return labelMap[status] || "Unknown";
   };
-  const containerStatusReason = (instance) => instance?.status_detail || '';
+  const containerStatusReason = (instance) => instance?.status_detail || "";
   const containerDiagnostics = (instance) =>
     Array.isArray(instance?.launch_diagnostics) ? instance.launch_diagnostics.slice(0, 5) : [];
   const hasContainerStartupError = (instance) => {
     const status = effectiveContainerStatus(instance);
-    if (status === 'failed') {
+    if (status === "failed") {
       return true;
     }
     const errorPattern = /(error|failed|back-?off|imagepull|errimagepull|invalid|crashloop)/i;
-    const detail = String(instance?.status_detail || '');
+    const detail = String(instance?.status_detail || "");
     if (errorPattern.test(detail)) {
       return true;
     }
-    return containerDiagnostics(instance).some((line) => errorPattern.test(String(line || '')));
+    return containerDiagnostics(instance).some((line) => errorPattern.test(String(line || "")));
   };
-  const isContainerRunning = (instance) => effectiveContainerStatus(instance) === 'running';
+  const isContainerRunning = (instance) => effectiveContainerStatus(instance) === "running";
 
   const readStoredActivity = () => {
     try {
@@ -449,7 +452,7 @@ const UserPanel = () => {
     if (!instanceId || !win || win.closed) {
       return;
     }
-    const targetOrigin = consoleWindowOriginsRef.current[instanceId] || '*';
+    const targetOrigin = consoleWindowOriginsRef.current[instanceId] || "*";
     try {
       win.postMessage(payload, targetOrigin);
     } catch (err) {
@@ -488,11 +491,11 @@ const UserPanel = () => {
     if (!instanceId || !win || win.closed) {
       return;
     }
-    const apiBase = api?.defaults?.baseURL || '';
+    const apiBase = api?.defaults?.baseURL || "";
     rememberAllowedOrigin(window.location.origin);
     rememberAllowedOrigin(apiBase);
     const allowedOrigins = Array.from(allowedMessageOriginsRef.current);
-    postToConsoleWindow(instanceId, win, { type: 'idle-auth', source: 'user', instanceId, apiBase, allowedOrigins });
+    postToConsoleWindow(instanceId, win, { type: "idle-auth", source: "user", instanceId, apiBase, allowedOrigins });
   };
 
   const startConsoleHandshake = (instanceId, win) => {
@@ -506,7 +509,7 @@ const UserPanel = () => {
         stopConsoleHandshake(instanceId);
         return;
       }
-      postToConsoleWindow(instanceId, win, { type: 'idle-handshake', source: 'user', instanceId });
+      postToConsoleWindow(instanceId, win, { type: "idle-handshake", source: "user", instanceId });
       sendAuthToConsole(instanceId, win);
     };
     send();
@@ -547,7 +550,7 @@ const UserPanel = () => {
       if (containerWindowIdsRef.current.has(id)) {
         return;
       }
-      postToConsoleWindow(id, win, { type: 'idle-activity', source: 'user', timestamp });
+      postToConsoleWindow(id, win, { type: "idle-activity", source: "user", timestamp });
     });
   };
 
@@ -566,8 +569,8 @@ const UserPanel = () => {
         return;
       }
       postToConsoleWindow(id, win, {
-        type: focused ? 'idle-focus' : 'idle-blur',
-        source: 'user',
+        type: focused ? "idle-focus" : "idle-blur",
+        source: "user",
         instanceId: id,
         timestamp,
       });
@@ -590,16 +593,16 @@ const UserPanel = () => {
       }
       if (showPrompt) {
         postToConsoleWindow(id, win, {
-          type: 'idle-parent-prompt',
-          source: 'user',
+          type: "idle-parent-prompt",
+          source: "user",
           instanceId: id,
           endsAt,
           timestamp: Date.now(),
         });
       } else {
         postToConsoleWindow(id, win, {
-          type: 'idle-parent-clear',
-          source: 'user',
+          type: "idle-parent-clear",
+          source: "user",
           instanceId: id,
           timestamp: Date.now(),
         });
@@ -621,7 +624,7 @@ const UserPanel = () => {
       if (containerWindowIdsRef.current.has(id)) {
         return;
       }
-      postToConsoleWindow(id, win, { type, source: 'user', instanceId: id, timestamp, ...extra });
+      postToConsoleWindow(id, win, { type, source: "user", instanceId: id, timestamp, ...extra });
     });
   };
 
@@ -785,7 +788,7 @@ const UserPanel = () => {
     recordActivity({ emit: false, timestamp: now });
   };
 
-  const suspendIdle = (timestamp, reason = 'vm') => {
+  const suspendIdle = (timestamp, reason = "vm") => {
     idleSuspendedRef.current = true;
     idleSuspendReasonRef.current = reason;
     clearIdleTimers();
@@ -868,7 +871,7 @@ const UserPanel = () => {
 
   useEffect(() => {
     const interval = setInterval(() => {
-      if (idleSuspendReasonRef.current !== 'vm') {
+      if (idleSuspendReasonRef.current !== "vm") {
         return;
       }
       const lastPresence = vmPresenceAtRef.current;
@@ -930,16 +933,16 @@ const UserPanel = () => {
         syncIdleState();
       }
     };
-    const events = ['mousemove', 'keydown', 'mousedown', 'touchstart', 'scroll'];
+    const events = ["mousemove", "keydown", "mousedown", "touchstart", "scroll"];
     events.forEach((evt) => window.addEventListener(evt, onActivity, { passive: true }));
-    window.addEventListener('focus', onFocus);
-    window.addEventListener('blur', onBlur);
-    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       events.forEach((evt) => window.removeEventListener(evt, onActivity));
-      window.removeEventListener('focus', onFocus);
-      window.removeEventListener('blur', onBlur);
-      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("visibilitychange", onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeIdleMinutes, activeWorkloadCount]);
@@ -949,12 +952,20 @@ const UserPanel = () => {
       const payload = event.data || {};
       const sourceInstanceId = resolveConsoleSourceInstanceId(event.source);
       const messageOrigin = normalizeOrigin(event.origin);
-      const payloadInstanceId = typeof payload.instanceId === 'string' ? payload.instanceId : null;
+      const payloadInstanceId = typeof payload.instanceId === "string" ? payload.instanceId : null;
       const payloadSource = payload.source;
-      const isConsoleSource = payloadSource === 'vm' || payloadSource === 'container';
+      const isConsoleSource = payloadSource === "vm" || payloadSource === "container";
       const trustedByInstance =
-        isConsoleSource && payloadInstanceId && isKnownActiveInstanceId(payloadInstanceId) && isSameHostOrigin(messageOrigin);
-      if (messageOrigin && !allowedMessageOriginsRef.current.has(messageOrigin) && !sourceInstanceId && !trustedByInstance) {
+        isConsoleSource &&
+        payloadInstanceId &&
+        isKnownActiveInstanceId(payloadInstanceId) &&
+        isSameHostOrigin(messageOrigin);
+      if (
+        messageOrigin &&
+        !allowedMessageOriginsRef.current.has(messageOrigin) &&
+        !sourceInstanceId &&
+        !trustedByInstance
+      ) {
         return;
       }
       const resolvedInstanceId = sourceInstanceId || (trustedByInstance ? payloadInstanceId : null);
@@ -964,32 +975,32 @@ const UserPanel = () => {
           consoleWindowOriginsRef.current[resolvedInstanceId] = messageOrigin;
         }
       }
-      if (resolvedInstanceId && event.source && typeof event.source.postMessage === 'function') {
+      if (resolvedInstanceId && event.source && typeof event.source.postMessage === "function") {
         consoleWindowsRef.current[resolvedInstanceId] = event.source;
-        if (payload.source === 'container') {
+        if (payload.source === "container") {
           containerWindowIdsRef.current.add(resolvedInstanceId);
-        } else if (payload.source === 'vm') {
+        } else if (payload.source === "vm") {
           containerWindowIdsRef.current.delete(resolvedInstanceId);
         }
       }
-      const isVmSource = payload.source === 'vm';
-      const isContainerSource = payload.source === 'container';
-      if (payload.type === 'idle-parent-prompt' && isVmSource) {
+      const isVmSource = payload.source === "vm";
+      const isContainerSource = payload.source === "container";
+      if (payload.type === "idle-parent-prompt" && isVmSource) {
         showExternalIdlePrompt(Number(payload.endsAt));
         return;
       }
-      if (payload.type === 'idle-parent-clear' && isVmSource) {
+      if (payload.type === "idle-parent-clear" && isVmSource) {
         clearExternalIdlePrompt(payload.timestamp);
         return;
       }
-      if (payload.type === 'idle-parent-ended' && isVmSource) {
+      if (payload.type === "idle-parent-ended" && isVmSource) {
         vmParentPromptActiveRef.current = false;
         clearIdleTimers();
         clearIdlePrompt();
         setSessionEnded(true);
         return;
       }
-      if (payload.type === 'idle-focus' && isVmSource) {
+      if (payload.type === "idle-focus" && isVmSource) {
         if (vmParentPromptActiveRef.current) {
           return;
         }
@@ -998,14 +1009,14 @@ const UserPanel = () => {
         recordActivity({ emit: false, timestamp: ts });
         return;
       }
-      if (payload.type === 'idle-blur' && isVmSource) {
+      if (payload.type === "idle-blur" && isVmSource) {
         if (vmParentPromptActiveRef.current) {
           return;
         }
         vmPresenceAtRef.current = null;
         return;
       }
-      if (payload.type === 'idle-activity' && isVmSource) {
+      if (payload.type === "idle-activity" && isVmSource) {
         if (vmParentPromptActiveRef.current) {
           return;
         }
@@ -1013,15 +1024,15 @@ const UserPanel = () => {
         handleExternalActivity(ts);
         return;
       }
-      if ((payload.type === 'idle-focus' || payload.type === 'idle-activity') && isContainerSource) {
+      if ((payload.type === "idle-focus" || payload.type === "idle-activity") && isContainerSource) {
         const ts = Number.isFinite(payload.timestamp) ? payload.timestamp : Date.now();
         recordActivity({ emit: false, timestamp: ts });
         return;
       }
-      if (payload.type === 'idle-blur' && isContainerSource) {
+      if (payload.type === "idle-blur" && isContainerSource) {
         return;
       }
-      if (payload.type === 'idle-handshake-ack' && payload.source === 'vm' && payload.instanceId) {
+      if (payload.type === "idle-handshake-ack" && payload.source === "vm" && payload.instanceId) {
         stopConsoleHandshake(payload.instanceId);
         const win = consoleWindowsRef.current[payload.instanceId];
         if (win) {
@@ -1029,20 +1040,20 @@ const UserPanel = () => {
         }
         return;
       }
-      if (payload.type === 'idle-stop' && payload.instanceId) {
-        const isContainerSource = payload.source === 'container';
-        if (payload.source === 'vm' && (payload.reason === 'idle-timeout' || payload.reason === 'user-end')) {
+      if (payload.type === "idle-stop" && payload.instanceId) {
+        const isContainerSource = payload.source === "container";
+        if (payload.source === "vm" && (payload.reason === "idle-timeout" || payload.reason === "user-end")) {
           vmParentPromptActiveRef.current = false;
           clearIdleTimers();
           clearIdlePrompt();
           setSessionEnded(true);
-          setMessage(payload.reason === 'idle-timeout' ? 'Session ended due to inactivity.' : 'Session ended.');
+          setMessage(payload.reason === "idle-timeout" ? "Session ended due to inactivity." : "Session ended.");
         }
         delete consoleWindowsRef.current[payload.instanceId];
         delete consoleWindowOriginsRef.current[payload.instanceId];
         containerWindowIdsRef.current.delete(payload.instanceId);
         stopConsoleHandshake(payload.instanceId);
-        if (payload.action === 'delete') {
+        if (payload.action === "delete") {
           if (isContainerSource) {
             deleteContainerInstances([payload.instanceId], payload.reason);
           } else {
@@ -1055,12 +1066,12 @@ const UserPanel = () => {
         }
         return;
       }
-      if (payload.type === 'idle-continue' && (payload.source === 'vm' || payload.source === 'container')) {
+      if (payload.type === "idle-continue" && (payload.source === "vm" || payload.source === "container")) {
         continueSession();
       }
     };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1070,7 +1081,7 @@ const UserPanel = () => {
     setSessionEnded(false);
     idleSuspendedRef.current = false;
     idleSuspendReasonRef.current = null;
-    broadcastIdleControlToVmConsoles('idle-parent-clear');
+    broadcastIdleControlToVmConsoles("idle-parent-clear");
     recordActivity();
     refresh();
   };
@@ -1080,9 +1091,9 @@ const UserPanel = () => {
     clearIdleTimers();
     clearIdlePrompt();
     setSessionEnded(true);
-    setMessage(auto ? 'Session ended due to inactivity.' : 'Session ended.');
-    const reason = auto ? 'idle-timeout' : 'user-end';
-    broadcastIdleControlToVmConsoles('idle-parent-ended', { reason });
+    setMessage(auto ? "Session ended due to inactivity." : "Session ended.");
+    const reason = auto ? "idle-timeout" : "user-end";
+    broadcastIdleControlToVmConsoles("idle-parent-ended", { reason });
     deleteInstances(latestVmInstanceIdsRef.current, reason, true);
     deleteContainerInstances(latestContainerInstanceIdsRef.current, reason, true);
   };
@@ -1090,8 +1101,8 @@ const UserPanel = () => {
   const formatCountdown = (seconds) => {
     const mins = Math.floor((seconds || 0) / 60)
       .toString()
-      .padStart(2, '0');
-    const secs = ((seconds || 0) % 60).toString().padStart(2, '0');
+      .padStart(2, "0");
+    const secs = ((seconds || 0) % 60).toString().padStart(2, "0");
     return `${mins}:${secs}`;
   };
 
@@ -1104,8 +1115,8 @@ const UserPanel = () => {
           <div className="modal">
             <h3>Still using this lab?</h3>
             <p className="muted">
-              We have not seen activity for {activeIdleMinutes || DEFAULT_IDLE_MINUTES} minutes. Your running lab(s) will
-              stop in {formatCountdown(idleCountdown || PROMPT_COUNTDOWN_SECONDS)} unless you continue.
+              We have not seen activity for {activeIdleMinutes || DEFAULT_IDLE_MINUTES} minutes. Your running lab(s)
+              will stop in {formatCountdown(idleCountdown || PROMPT_COUNTDOWN_SECONDS)} unless you continue.
             </p>
             <div className="actions">
               <button className="ghost" onClick={() => endNow(false)}>
@@ -1140,7 +1151,7 @@ const UserPanel = () => {
                   <h4>{t.name}</h4>
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
-                <div style={{ marginTop: '0.75rem' }}>
+                <div style={{ marginTop: "0.75rem" }}>
                   <button onClick={() => start(t.id)}>Start Lab</button>
                 </div>
               </div>
@@ -1151,7 +1162,7 @@ const UserPanel = () => {
                   <h4>{t.name}</h4>
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
-                <div style={{ marginTop: '0.75rem' }}>
+                <div style={{ marginTop: "0.75rem" }}>
                   <button onClick={() => startContainer(t.id)}>Start Lab</button>
                 </div>
               </div>
@@ -1168,7 +1179,7 @@ const UserPanel = () => {
               <div key={p.id} className="tile pod-tile">
                 <div className="tile-header">
                   <h4>{templateName(p.template_id)}</h4>
-                  <span className={`badge ${isRunning(p) ? 'success' : 'warn'}`}>{statusLabel(p)}</span>
+                  <span className={`badge ${isRunning(p) ? "success" : "warn"}`}>{statusLabel(p)}</span>
                 </div>
                 <div className="specs">
                   <span>{podName(p)}</span>
@@ -1188,7 +1199,9 @@ const UserPanel = () => {
               <div key={`ci-${c.id}`} className="tile pod-tile">
                 <div className="tile-header">
                   <h4>{containerTemplateName(c.template_id)}</h4>
-                  <span className={`badge ${isContainerRunning(c) ? 'success' : 'warn'}`}>{containerStatusLabel(c)}</span>
+                  <span className={`badge ${isContainerRunning(c) ? "success" : "warn"}`}>
+                    {containerStatusLabel(c)}
+                  </span>
                 </div>
                 <div className="specs">
                   <span>{c.pod_name || `ct-${c.owner}-${c.id.slice(0, 8)}`}</span>

@@ -922,7 +922,9 @@ def _normalized_template_command(value: object) -> str | None:
     return raw
 
 
-def _container_launch_request(instance_id: str, owner: str, template: ContainerTemplateTable, image_ref: str) -> ContainerPodRequest:
+def _container_launch_request(
+    instance_id: str, owner: str, template: ContainerTemplateTable, image_ref: str
+) -> ContainerPodRequest:
     return ContainerPodRequest(
         instance_id=instance_id,
         owner=owner,
@@ -933,7 +935,9 @@ def _container_launch_request(instance_id: str, owner: str, template: ContainerT
         healthcheck_protocol=str(getattr(template, "healthcheck_protocol", "tcp") or "tcp"),
         healthcheck_path=str(getattr(template, "healthcheck_path", "/") or "/"),
         readiness_http_status=max(100, min(599, int(getattr(template, "readiness_http_status", 200) or 200))),
-        readiness_success_path=_normalize_http_path(getattr(template, "readiness_success_path", None), allow_blank=True),
+        readiness_success_path=_normalize_http_path(
+            getattr(template, "readiness_success_path", None), allow_blank=True
+        ),
         startup_timeout_seconds=max(10, int(getattr(template, "startup_timeout_seconds", 300) or 300)),
         dependency_checks=_parse_dependency_checks(getattr(template, "dependency_checks_json", "[]")),
         expose_strategy=str(getattr(template, "expose_strategy", "nodeport") or "nodeport"),
@@ -1230,7 +1234,9 @@ async def proxy_container_connect_ws(
     query_items = [(key, value) for key, value in websocket.query_params.multi_items() if key != "ct"]
     upstream_query = urlencode(query_items, doseq=True)
 
-    protocols = [part.strip() for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",") if part.strip()]
+    protocols = [
+        part.strip() for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",") if part.strip()
+    ]
     upstream_auth_header = _upstream_basic_auth_header(session, template)
     upstream_origin = str(websocket.headers.get("origin") or "").strip()
     if not upstream_origin:
@@ -1270,6 +1276,7 @@ async def proxy_container_connect_ws(
                 max_size=None,
                 ssl=ssl_context,
             ) as upstream:
+
                 async def client_to_upstream() -> None:
                     while True:
                         message = await websocket.receive()
@@ -1396,8 +1403,12 @@ def list_user_containers(
         container_port = max(1, int(getattr(tmpl, "container_port", 80) or 80)) if tmpl else 80
         healthcheck_protocol = str(getattr(tmpl, "healthcheck_protocol", "tcp") or "tcp") if tmpl else "tcp"
         healthcheck_path = str(getattr(tmpl, "healthcheck_path", "/") or "/") if tmpl else "/"
-        readiness_http_status = max(100, min(599, int(getattr(tmpl, "readiness_http_status", 200) or 200))) if tmpl else 200
-        readiness_success_path = _normalize_http_path(getattr(tmpl, "readiness_success_path", None), allow_blank=True) if tmpl else None
+        readiness_http_status = (
+            max(100, min(599, int(getattr(tmpl, "readiness_http_status", 200) or 200))) if tmpl else 200
+        )
+        readiness_success_path = (
+            _normalize_http_path(getattr(tmpl, "readiness_success_path", None), allow_blank=True) if tmpl else None
+        )
         expose_strategy = str(getattr(tmpl, "expose_strategy", "nodeport") or "nodeport") if tmpl else "nodeport"
         ingress_enabled = (
             expose_strategy == "ingress"
@@ -1408,7 +1419,10 @@ def list_user_containers(
         port_map[record.id] = container_port
         if record.status == "queued":
             if not settings.container_start_queue_enabled or not tmpl:
-                feedback[record.id] = ("queued", record.queue_reason or "Queued for retry when resources are available.")
+                feedback[record.id] = (
+                    "queued",
+                    record.queue_reason or "Queued for retry when resources are available.",
+                )
                 access_map[record.id] = None
             else:
                 now = utc_now()
@@ -1514,24 +1528,30 @@ def list_user_containers(
                             container_port,
                             service_type="NodePort",
                         )
-                if mapped == "running" and _container_service_ready(
-                    record.id,
-                    container_port,
-                    protocol=healthcheck_protocol,
-                    healthcheck_path=healthcheck_path,
-                    expected_http_status=readiness_http_status,
-                    success_path=readiness_success_path,
-                ) and (
-                    ingress_host is not None
-                    or _nodeport_ready(
-                        node_port,
+                if (
+                    mapped == "running"
+                    and _container_service_ready(
+                        record.id,
+                        container_port,
                         protocol=healthcheck_protocol,
                         healthcheck_path=healthcheck_path,
                         expected_http_status=readiness_http_status,
                         success_path=readiness_success_path,
                     )
+                    and (
+                        ingress_host is not None
+                        or _nodeport_ready(
+                            node_port,
+                            protocol=healthcheck_protocol,
+                            healthcheck_path=healthcheck_path,
+                            expected_http_status=readiness_http_status,
+                            success_path=readiness_success_path,
+                        )
+                    )
                 ):
-                    access_map[record.id] = _container_access_url_for_target(node_port=node_port, ingress_host=ingress_host)
+                    access_map[record.id] = _container_access_url_for_target(
+                        node_port=node_port, ingress_host=ingress_host
+                    )
                 elif mapped == "running":
                     feedback[record.id] = (
                         "starting",
@@ -1567,7 +1587,10 @@ def list_user_containers(
                     pass
                 _mark_queued(record, detail or "Waiting for available resources.")
                 mapped = "queued"
-                feedback[record.id] = ("queued", record.queue_reason or "Queued for retry when resources are available.")
+                feedback[record.id] = (
+                    "queued",
+                    record.queue_reason or "Queued for retry when resources are available.",
+                )
                 access_map[record.id] = None
                 session.add(record)
                 changed = True
@@ -1595,7 +1618,9 @@ def list_user_containers(
         for row in to_delete:
             session.delete(row)
         session.commit()
-        instances = session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.owner == user.username)).all()
+        instances = session.exec(
+            select(ContainerInstanceTable).where(ContainerInstanceTable.owner == user.username)
+        ).all()
 
     out: list[ContainerInstanceView] = []
     for row in instances:
@@ -1613,7 +1638,11 @@ def list_user_containers(
     return out
 
 
-@router.post("/container-templates/{template_id}/start", response_model=ContainerInstanceView, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/container-templates/{template_id}/start",
+    response_model=ContainerInstanceView,
+    status_code=status.HTTP_201_CREATED,
+)
 def start_container_template(
     template_id: str,
     user: User = Depends(require_user),
@@ -1832,7 +1861,9 @@ def restart_container(
     if cluster_full and settings.container_start_queue_enabled:
         record.status = "queued"
         record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
-        record.queue_reason = _humanize_queue_reason("Cluster concurrency limit reached. Waiting for available resources.")
+        record.queue_reason = _humanize_queue_reason(
+            "Cluster concurrency limit reached. Waiting for available resources."
+        )
         record.queue_not_before = utc_now() + timedelta(seconds=_queue_backoff_seconds(record.queue_attempts))
         record.last_active_at = utc_now()
         session.add(record)

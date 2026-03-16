@@ -1,29 +1,29 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import { api } from "../../api";
 
 const AdminTemplates = () => {
   const [templates, setTemplates] = useState([]);
   const [images, setImages] = useState([]);
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState("");
   const [form, setForm] = useState({
-    name: '',
-    description: '',
-    os_type: 'windows',
-    image_id: '',
+    name: "",
+    description: "",
+    os_type: "windows",
+    image_id: "",
     cpu_cores: 2,
     ram_mb: 4096,
     auto_delete_minutes: 30,
     idle_timeout_minutes: 30,
     preclone_pool_size: 0,
     preclone_pool_max: 0,
-    network_mode: 'bridge',
+    network_mode: "bridge",
   });
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({
-    name: '',
-    description: '',
-    os_type: 'windows',
-    image_id: '',
+    name: "",
+    description: "",
+    os_type: "windows",
+    image_id: "",
     cpu_cores: 2,
     ram_mb: 4096,
     auto_delete_minutes: 30,
@@ -31,16 +31,16 @@ const AdminTemplates = () => {
     preclone_pool_size: 0,
     preclone_pool_max: 0,
     enabled: false,
-    network_mode: 'bridge',
+    network_mode: "bridge",
   });
 
   const load = async () => {
     try {
-      const [tmplRes, imgRes] = await Promise.all([api.get('/admin/templates'), api.get('/admin/images')]);
+      const [tmplRes, imgRes] = await Promise.all([api.get("/admin/templates"), api.get("/admin/images")]);
       setTemplates(tmplRes.data);
       setImages(imgRes.data);
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to load templates/images');
+      setMessage(err.response?.data?.detail || "Failed to load templates/images");
     }
   };
 
@@ -50,55 +50,55 @@ const AdminTemplates = () => {
 
   const create = async () => {
     try {
-      await api.post('/admin/templates', { ...form, enabled: false });
-      setMessage('');
+      await api.post("/admin/templates", { ...form, enabled: false });
+      setMessage("");
       setForm({
-        name: '',
-        description: '',
-        os_type: 'windows',
-        image_id: '',
+        name: "",
+        description: "",
+        os_type: "windows",
+        image_id: "",
         cpu_cores: 2,
         ram_mb: 4096,
         auto_delete_minutes: 30,
         idle_timeout_minutes: 30,
         preclone_pool_size: 0,
         preclone_pool_max: 0,
-        network_mode: 'bridge',
+        network_mode: "bridge",
       });
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to create template');
+      setMessage(err.response?.data?.detail || "Failed to create template");
     }
   };
 
   const toggle = async (id, enabled) => {
     try {
       await api.patch(`/admin/templates/${id}`, { enabled });
-      setMessage('');
+      setMessage("");
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to toggle template');
+      setMessage(err.response?.data?.detail || "Failed to toggle template");
     }
   };
 
   const remove = async (id) => {
     try {
       await api.delete(`/admin/templates/${id}`);
-      setMessage('');
+      setMessage("");
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to delete template');
+      setMessage(err.response?.data?.detail || "Failed to delete template");
     }
   };
 
-  const imageName = (id) => images.find((img) => img.id === id)?.name || 'Image';
+  const imageName = (id) => images.find((img) => img.id === id)?.name || "Image";
 
   const startEdit = (tmpl) => {
     setEditingId(tmpl.id);
     setEditForm({
       name: tmpl.name,
-      description: tmpl.description || '',
-      os_type: tmpl.os_type || 'windows',
+      description: tmpl.description || "",
+      os_type: tmpl.os_type || "windows",
       image_id: tmpl.image_id,
       cpu_cores: tmpl.cpu_cores,
       ram_mb: tmpl.ram_mb,
@@ -107,18 +107,18 @@ const AdminTemplates = () => {
       preclone_pool_size: tmpl.preclone_pool_size || 0,
       preclone_pool_max: tmpl.preclone_pool_max ?? tmpl.preclone_pool_size ?? 0,
       enabled: tmpl.enabled,
-      network_mode: tmpl.network_mode || 'bridge',
+      network_mode: tmpl.network_mode || "bridge",
     });
   };
 
   const saveEdit = async () => {
     try {
       await api.patch(`/admin/templates/${editingId}`, { ...editForm });
-      setMessage('');
+      setMessage("");
       setEditingId(null);
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to update template');
+      setMessage(err.response?.data?.detail || "Failed to update template");
     }
   };
 
@@ -221,7 +221,7 @@ const AdminTemplates = () => {
                     ...prev,
                     preclone_pool_max: Math.max(
                       prev.preclone_pool_size || 0,
-                      Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                      Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0))
                     ),
                   }))
                 }
@@ -250,18 +250,22 @@ const AdminTemplates = () => {
               <div key={t.id} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{t.name}</h4>
-                  <span className={`badge ${t.enabled ? 'success' : 'warn'}`}>{t.enabled ? 'enabled' : 'disabled'}</span>
+                  <span className={`badge ${t.enabled ? "success" : "warn"}`}>
+                    {t.enabled ? "enabled" : "disabled"}
+                  </span>
                 </div>
                 <div className="specs">
                   <span>{t.cpu_cores} CPU</span>
                   <span>{Math.round(t.ram_mb / 1024)} GB RAM</span>
                 </div>
-                <div className="muted small">Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}</div>
+                <div className="muted small">
+                  Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
+                </div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">
                   <button className="ghost" onClick={() => toggle(t.id, !t.enabled)}>
-                    {t.enabled ? 'Disable' : 'Enable'}
+                    {t.enabled ? "Disable" : "Enable"}
                   </button>
                   <button className="ghost" onClick={() => startEdit(t)}>
                     Edit
@@ -274,7 +278,7 @@ const AdminTemplates = () => {
             ))}
           </div>
           {editingId && (
-            <div className="card" style={{ marginTop: '1rem' }}>
+            <div className="card" style={{ marginTop: "1rem" }}>
               <h4>Edit template</h4>
               <div className="form">
                 <label>
@@ -291,7 +295,10 @@ const AdminTemplates = () => {
                 </label>
                 <label>
                   Operating System Type
-                  <select value={editForm.os_type} onChange={(e) => setEditForm({ ...editForm, os_type: e.target.value })}>
+                  <select
+                    value={editForm.os_type}
+                    onChange={(e) => setEditForm({ ...editForm, os_type: e.target.value })}
+                  >
                     <option value="windows">Windows</option>
                     <option value="linux">Linux</option>
                   </select>
@@ -340,7 +347,10 @@ const AdminTemplates = () => {
                     onChange={(e) =>
                       setEditForm({
                         ...editForm,
-                        idle_timeout_minutes: Math.max(1, parseInt(e.target.value, 10) || editForm.idle_timeout_minutes),
+                        idle_timeout_minutes: Math.max(
+                          1,
+                          parseInt(e.target.value, 10) || editForm.idle_timeout_minutes
+                        ),
                       })
                     }
                   />
@@ -378,7 +388,7 @@ const AdminTemplates = () => {
                         ...prev,
                         preclone_pool_max: Math.max(
                           prev.preclone_pool_size || 0,
-                          Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0)),
+                          Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0))
                         ),
                       }))
                     }
@@ -400,8 +410,8 @@ const AdminTemplates = () => {
                 <label>
                   Enabled
                   <select
-                    value={editForm.enabled ? 'true' : 'false'}
-                    onChange={(e) => setEditForm({ ...editForm, enabled: e.target.value === 'true' })}
+                    value={editForm.enabled ? "true" : "false"}
+                    onChange={(e) => setEditForm({ ...editForm, enabled: e.target.value === "true" })}
                   >
                     <option value="true">Enabled</option>
                     <option value="false">Disabled</option>

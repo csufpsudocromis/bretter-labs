@@ -130,6 +130,9 @@ If no admin user exists and no bootstrap secret is configured, backend startup f
 | `BACKEND_NODEPORT_ENABLED` | `0` | Expose backend API as NodePort (`30080`) only when explicitly enabled |
 | `HELM_RELEASE_NAME` | `bretter-labs` | Helm release name for base app deploy |
 | `HELM_CHART_DIR` | `deploy/helm` | Chart path used by setup for base deploy |
+| `EXTERNAL_SECRETS_CHART_VERSION` | `v2.1.0` | External Secrets Helm chart version when operator install is enabled |
+| `MONITORING_CHART_VERSION` | `v82.10.4` | `kube-prometheus-stack` chart version |
+| `KYVERNO_CHART_VERSION` | `v3.7.1` | Kyverno chart version |
 | `APPLY_GOLDEN_HOSTPATH` | `1` | HostPath-backed golden image PVC |
 | `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` instead |
 | `BACKEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend:v<VERSION>` | Backend image reference |
@@ -150,6 +153,7 @@ If no admin user exists and no bootstrap secret is configured, backend startup f
 | `VM_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip VM upstream TLS verification |
 | `CONTAINER_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip container upstream TLS verification |
 | `SECRETS_ENCRYPTION_KEY` | empty | Optional key for encrypting stored runtime secrets (`sso_client_secret`, `ldap_bind_password`) |
+| `METRICS_SERVER_VERSION` | `v0.8.1` | Metrics-server release used to build default manifest URL |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
 | `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE` | `*/5 * * * *` | Cron schedule for kubelet-serving CSR auto-approver job |
@@ -161,6 +165,7 @@ Metrics-server TLS guidance:
 - Use `METRICS_SERVER_INSECURE_TLS=1` only for local/dev clusters when proper kubelet PKI is unavailable.
 - `setup.sh` installs a kubelet-serving CSR auto-approver CronJob (default enabled) that only approves pending requests when requester/subject/SANs match the target node.
 - By default, `setup.sh` rejects mutable image refs (for example `:latest` or missing tag). Use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` only for dev workflows.
+- `setup.sh` no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or pass explicit immutable image refs.
 - `deploy/helm/values-production.yaml` is digest-pinned and CI-enforced for `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE`.
 
 Setup phase guidance:

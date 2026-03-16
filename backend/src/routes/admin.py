@@ -638,9 +638,7 @@ def _build_storage_validation(
 
             if source_pvc_rows:
                 mismatched = [
-                    (name, sc or "unspecified")
-                    for name, sc in source_pvc_rows
-                    if (sc or "") != kube_vm_storage_class
+                    (name, sc or "unspecified") for name, sc in source_pvc_rows if (sc or "") != kube_vm_storage_class
                 ]
                 if mismatched:
                     examples = ", ".join(f"{name}({sc})" for name, sc in mismatched[:3])
@@ -655,9 +653,7 @@ def _build_storage_validation(
                             ),
                         )
                     )
-                    warnings.append(
-                        "Some image source PVCs use a different storage class than VM clone storage class."
-                    )
+                    warnings.append("Some image source PVCs use a different storage class than VM clone storage class.")
                 else:
                     checks.append(
                         StorageValidationCheck(
@@ -716,9 +712,7 @@ def _build_storage_validation(
                     detail=f"StorageClass {kube_vm_storage_class} check failed: {exc}",
                 )
             )
-            warnings.append(
-                f"StorageClass {kube_vm_storage_class} check failed due to Kubernetes API error."
-            )
+            warnings.append(f"StorageClass {kube_vm_storage_class} check failed due to Kubernetes API error.")
     else:
         checks.append(
             StorageValidationCheck(
@@ -847,7 +841,9 @@ def _paginate_lines(lines: list[str], page: int, per_page: int) -> tuple[list[st
     return page_lines, page, total_pages, total_lines, page > 1, page < total_pages
 
 
-def _build_error_log_view(source: str, lines: list[str], max_bytes: int, truncated: bool, page: int, per_page: int) -> ErrorLogView:
+def _build_error_log_view(
+    source: str, lines: list[str], max_bytes: int, truncated: bool, page: int, per_page: int
+) -> ErrorLogView:
     bounded_lines, bounded_truncated, bounded_bytes = _cap_lines_to_bytes(lines, max_bytes=max_bytes)
     page_lines, page, total_pages, total_lines, has_prev, has_next = _paginate_lines(
         bounded_lines, page=page, per_page=per_page
@@ -1121,7 +1117,9 @@ def _ensure_config_columns() -> None:
         if "theme_contrast_tile_border" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN theme_contrast_tile_border REAL DEFAULT 1.5")
         if "theme_font_family" not in cols:
-            to_add.append("ALTER TABLE config ADD COLUMN theme_font_family TEXT DEFAULT 'Inter, system-ui, -apple-system, sans-serif'")
+            to_add.append(
+                "ALTER TABLE config ADD COLUMN theme_font_family TEXT DEFAULT 'Inter, system-ui, -apple-system, sans-serif'"
+            )
         if "theme_font_size_base" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN theme_font_size_base REAL DEFAULT 16.0")
         if "theme_font_size_h1" not in cols:
@@ -1221,7 +1219,9 @@ def _ensure_template_columns() -> None:
             cur.execute("UPDATE template SET preclone_pool_size = 0 WHERE preclone_pool_size IS NULL")
             # Keep existing behavior for upgraded rows: max defaults to min.
             cur.execute("UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max IS NULL")
-            cur.execute("UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max < preclone_pool_size")
+            cur.execute(
+                "UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max < preclone_pool_size"
+            )
             cur.execute("UPDATE template SET max_active_instances = 2 WHERE max_active_instances IS NULL")
             conn.commit()
     except Exception:
@@ -1504,7 +1504,9 @@ def _ensure_fileserver(task: ImageUploadTask) -> str:
                 volumes=[
                     client.V1Volume(
                         name="images",
-                        persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=settings.kube_image_pvc),
+                        persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                            claim_name=settings.kube_image_pvc
+                        ),
                     )
                 ],
             ),
@@ -1536,7 +1538,7 @@ def _start_datavolume_import(task: ImageUploadTask, claim_name: str) -> str:
     custom = client.CustomObjectsApi()
     core = kube._client()
     required_bytes = int(task.size_bytes) + SOURCE_PVC_OVERHEAD_BYTES
-    requested_gi = max(1, math.ceil(required_bytes / (1024 ** 3)))
+    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
 
     # Remove existing PVC/DataVolume so the import can be recreated with the expected size.
     try:
@@ -1622,7 +1624,7 @@ def _create_direct_upload_datavolume(task: ImageUploadTask) -> str:
         raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for direct CDI upload")
     custom = client.CustomObjectsApi()
     required_bytes = int(task.size_bytes) + SOURCE_PVC_OVERHEAD_BYTES
-    requested_gi = max(1, math.ceil(required_bytes / (1024 ** 3)))
+    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
     name = _direct_upload_pvc_name(task.id)
 
     body = {
@@ -2355,8 +2357,8 @@ def _ensure_free_space(required_free_bytes: int, *, context: str) -> None:
     free_bytes = shutil.disk_usage(_image_dir()).free
     if free_bytes >= required_free_bytes:
         return
-    free_gib = free_bytes / (1024 ** 3)
-    required_gib = required_free_bytes / (1024 ** 3)
+    free_gib = free_bytes / (1024**3)
+    required_gib = required_free_bytes / (1024**3)
     raise HTTPException(
         status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
         detail=f"insufficient free storage for {context} (free={free_gib:.1f}Gi, required={required_gib:.1f}Gi)",
@@ -2418,21 +2420,19 @@ def _with_pvc_helper(
         )
         deadline = time.time() + POD_READY_WAIT_SECONDS
         while time.time() < deadline:
-            phase = (
-                _run(
-                    [
-                        "kubectl",
-                        "get",
-                        "pod",
-                        helper,
-                        "-n",
-                        settings.kube_namespace,
-                        "-o",
-                        "jsonpath={.status.phase}",
-                    ],
-                    check=False,
-                ).stdout.strip()
-            )
+            phase = _run(
+                [
+                    "kubectl",
+                    "get",
+                    "pod",
+                    helper,
+                    "-n",
+                    settings.kube_namespace,
+                    "-o",
+                    "jsonpath={.status.phase}",
+                ],
+                check=False,
+            ).stdout.strip()
             if phase.lower() in {"running", "succeeded"}:
                 break
             if phase.lower() in {"failed", "unknown"}:
@@ -2445,7 +2445,9 @@ def _with_pvc_helper(
             capture=capture_output,
         )
     finally:
-        _run(["kubectl", "delete", "pod", helper, "-n", settings.kube_namespace, "--ignore-not-found=true"], check=False)
+        _run(
+            ["kubectl", "delete", "pod", helper, "-n", settings.kube_namespace, "--ignore-not-found=true"], check=False
+        )
 
 
 def _copy_file_to_pvc(source_path: Path, filename: str, *, claim_name: str | None = None) -> None:
@@ -2588,7 +2590,7 @@ def _ensure_image_source_pvc_claim(image_id: str, size_bytes: int) -> str:
 
     claim_name = _source_pvc_name(image_id)
     required_bytes = size_bytes + SOURCE_PVC_OVERHEAD_BYTES
-    requested_gi = max(1, math.ceil(required_bytes / (1024 ** 3)))
+    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
     core = kube._client()
     existing_pvc = None
     try:
@@ -2854,7 +2856,9 @@ def list_users(session: Session = Depends(get_session)) -> list[UserOut]:
     return [_user_out(u) for u in users]
 
 
-@router.patch("/users/{username}", response_model=UserOut, dependencies=[Depends(require_permission(Permission.USERS_WRITE))])
+@router.patch(
+    "/users/{username}", response_model=UserOut, dependencies=[Depends(require_permission(Permission.USERS_WRITE))]
+)
 def update_user(username: str, payload: UserUpdate, session: Session = Depends(get_session)) -> UserOut:
     user = session.get(User, username)
     if not user:
@@ -2891,7 +2895,11 @@ def update_user(username: str, payload: UserUpdate, session: Session = Depends(g
     return _user_out(user)
 
 
-@router.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_permission(Permission.USERS_WRITE))])
+@router.delete(
+    "/users/{username}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
+)
 def remove_user(username: str, session: Session = Depends(get_session)) -> None:
     user = session.get(User, username)
     if not user:
@@ -2962,7 +2970,9 @@ def update_team_quota(quota_id: str, payload: TeamQuotaUpdate, session: Session 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
 
     team = normalize_team(payload.team) if payload.team is not None else normalize_team(row.team)
-    namespace = normalize_namespace(payload.namespace) if payload.namespace is not None else normalize_namespace(row.namespace)
+    namespace = (
+        normalize_namespace(payload.namespace) if payload.namespace is not None else normalize_namespace(row.namespace)
+    )
     conflict = session.exec(
         select(TeamQuota)
         .where(TeamQuota.team == team)
@@ -3223,7 +3233,9 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
             else:
                 converted_name = _convert_image_on_pvc(dest_path.name, output_format="qcow2", output_suffix="qcow2")
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"image conversion failed: {exc}") from exc
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"image conversion failed: {exc}"
+            ) from exc
         dest_path = _image_dir() / converted_name
         if not dest_path.exists():
             raise HTTPException(
@@ -3252,7 +3264,9 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
     try:
         source_pvc = _ensure_image_source_pvc(image_id, dest_path, size_bytes)
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc provision failed: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc provision failed: {exc}"
+        ) from exc
 
     record = Image(
         id=image_id,
@@ -3275,7 +3289,9 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
     )
 
 
-@router.get("/images", response_model=list[ImageMeta], dependencies=[Depends(require_permission(Permission.IMAGES_READ))])
+@router.get(
+    "/images", response_model=list[ImageMeta], dependencies=[Depends(require_permission(Permission.IMAGES_READ))]
+)
 def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
     pvc_files = {item["name"]: item for item in _list_pvc_files()}
     existing_records = session.exec(select(Image)).all()
@@ -3321,7 +3337,9 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
         try:
             dest_path.unlink()
         except OSError as exc:  # pragma: no cover
-            raise HTTPException(status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="failed to delete image") from exc
+            raise HTTPException(
+                status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="failed to delete image"
+            ) from exc
     if record.source_pvc:
         try:
             kube._client().delete_namespaced_persistent_volume_claim(
@@ -3366,12 +3384,18 @@ def rename_image(image_id: str, payload: ImageRename, session: Session = Depends
     if record.source_pvc and record.filename != new_filename:
         try:
             _with_pvc_helper(
-                ["/bin/sh", "-c", f"if [ -f /images/{record.filename} ]; then mv /images/{record.filename} /images/{new_filename}; fi"],
+                [
+                    "/bin/sh",
+                    "-c",
+                    f"if [ -f /images/{record.filename} ]; then mv /images/{record.filename} /images/{new_filename}; fi",
+                ],
                 capture_output=False,
                 claim_name=record.source_pvc,
             )
         except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc rename failed: {exc}") from exc
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc rename failed: {exc}"
+            ) from exc
 
     record.name = new_name
     record.filename = new_filename
@@ -3970,7 +3994,11 @@ def cluster_resources() -> dict:
             reason, detail = _pending_reason_for_pod(pod)
             pending_reasons[reason] += 1
             detail_trimmed = (detail[:220] + "...") if len(detail) > 220 else detail
-            if detail_trimmed and detail_trimmed not in pending_reason_examples[reason] and len(pending_reason_examples[reason]) < 3:
+            if (
+                detail_trimmed
+                and detail_trimmed not in pending_reason_examples[reason]
+                and len(pending_reason_examples[reason]) < 3
+            ):
                 pending_reason_examples[reason].append(detail_trimmed)
             created = pod.metadata.creation_timestamp
             age_seconds = int((now - created).total_seconds()) if created else 0
@@ -4010,7 +4038,9 @@ def cluster_resources() -> dict:
                 conditions[ctype] = cstatus
             if ctype.endswith("Pressure") and cstatus == "True":
                 pressures.append(ctype)
-        node_risk = _worst_risk([_risk_level_for_pct(cpu_pct), _risk_level_for_pct(mem_pct), _risk_level_for_pct(disk_pct)])
+        node_risk = _worst_risk(
+            [_risk_level_for_pct(cpu_pct), _risk_level_for_pct(mem_pct), _risk_level_for_pct(disk_pct)]
+        )
         if conditions.get("Ready") != "True":
             node_risk = _worst_risk([node_risk, "critical"])
         elif pressures:
@@ -4108,7 +4138,11 @@ def cluster_resources() -> dict:
 
     return {
         "fetched_at": datetime.now(timezone.utc),
-        "capacity": {"cpu_m": total_capacity_cpu, "memory_bytes": total_capacity_mem, "disk_bytes": total_capacity_disk},
+        "capacity": {
+            "cpu_m": total_capacity_cpu,
+            "memory_bytes": total_capacity_mem,
+            "disk_bytes": total_capacity_disk,
+        },
         "allocatable": {
             "cpu_m": total_allocatable_cpu,
             "memory_bytes": total_allocatable_mem,
@@ -4139,7 +4173,9 @@ def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
     log_file_path = _to_str(settings.error_log_file_path)
     if log_file_path:
         error_log = _read_error_log_file(Path(log_file_path), max_bytes=max_bytes, page=page, per_page=per_page)
-        if error_log.content.startswith("Log file not found.") or error_log.content.startswith("Failed to read log file:"):
+        if error_log.content.startswith("Log file not found.") or error_log.content.startswith(
+            "Failed to read log file:"
+        ):
             # Fall back to Kubernetes logs if file logging is not available.
             error_log = _collect_k8s_error_logs(max_bytes=max_bytes, page=page, per_page=per_page)
     else:
@@ -4167,7 +4203,9 @@ def clear_alerts_error_log() -> ErrorLogClearResult:
         return _clear_backend_error_logs(Path(log_file_path))
     except Exception as exc:
         logger.warning("Failed clearing error log file %s: %s", log_file_path, exc)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear error log: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear error log: {exc}"
+        )
 
 
 @router.post(
@@ -4175,7 +4213,9 @@ def clear_alerts_error_log() -> ErrorLogClearResult:
     response_model=ConcurrencySettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_concurrency(settings_payload: ConcurrencySettings, session: Session = Depends(get_session)) -> ConcurrencySettings:
+def update_concurrency(
+    settings_payload: ConcurrencySettings, session: Session = Depends(get_session)
+) -> ConcurrencySettings:
     config = session.get(Config, 1) or Config(id=1)
     config.max_concurrent_vms = settings_payload.max_concurrent_vms
     config.per_user_vm_limit = settings_payload.per_user_vm_limit
@@ -4189,7 +4229,9 @@ def update_concurrency(settings_payload: ConcurrencySettings, session: Session =
     response_model=IdleTimeoutSettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_idle_timeout(settings_payload: IdleTimeoutSettings, session: Session = Depends(get_session)) -> IdleTimeoutSettings:
+def update_idle_timeout(
+    settings_payload: IdleTimeoutSettings, session: Session = Depends(get_session)
+) -> IdleTimeoutSettings:
     config = session.get(Config, 1) or Config(id=1)
     config.idle_timeout_minutes = settings_payload.idle_timeout_minutes
     session.add(config)
@@ -4275,7 +4317,9 @@ def update_runtime_storage_settings(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def upload_site_background(file: UploadFile = File(...), session: Session = Depends(get_session)) -> SiteBackgroundAsset:
+def upload_site_background(
+    file: UploadFile = File(...), session: Session = Depends(get_session)
+) -> SiteBackgroundAsset:
     original_name = Path(str(file.filename or "")).name
     suffix = Path(original_name).suffix.lower()
     if not suffix and file.content_type:

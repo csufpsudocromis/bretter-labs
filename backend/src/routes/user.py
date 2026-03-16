@@ -327,7 +327,9 @@ def _tls_client_context() -> ssl.SSLContext:
 
 
 @router.get("/templates", response_model=list[VMTemplate])
-def list_available_templates(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[VMTemplate]:
+def list_available_templates(
+    user: User = Depends(require_user), session: Session = Depends(get_session)
+) -> list[VMTemplate]:
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
     templates = session.exec(select(Template).where(Template.enabled == True)).all()  # noqa: E712
     return [
@@ -341,7 +343,13 @@ def list_available_templates(user: User = Depends(require_user), session: Sessio
             ram_mb=record.ram_mb,
             auto_delete_minutes=record.auto_delete_minutes,
             idle_timeout_minutes=min(
-                max(1, int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes)),
+                max(
+                    1,
+                    int(
+                        getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes)
+                        or settings.idle_timeout_minutes
+                    ),
+                ),
                 team_idle_cap if team_idle_cap is not None else 1440,
             ),
             preclone_pool_size=getattr(record, "preclone_pool_size", 0),
@@ -446,7 +454,10 @@ def issue_vm_connect_token(
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
     template = session.get(Template, record.template_id)
-    idle_minutes = max(1, int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes))
+    idle_minutes = max(
+        1,
+        int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
+    )
     idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
     if idle_cap is not None:
         idle_minutes = min(idle_minutes, idle_cap)
@@ -557,7 +568,10 @@ async def proxy_vm_console(
         template = session.get(Template, record.template_id)
         idle_minutes = max(
             1,
-            int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
+            int(
+                getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes)
+                or settings.idle_timeout_minutes
+            ),
         )
         idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
         if idle_cap is not None:
@@ -577,13 +591,21 @@ async def proxy_vm_console(
 
     upstream_host = _vm_service_host(instance_id)
     upstream_path = f"/{normalized_path}"
-    query_items = [(key, value) for key, value in request.query_params.multi_items() if key not in {"vt", "connect_token"}]
+    query_items = [
+        (key, value) for key, value in request.query_params.multi_items() if key not in {"vt", "connect_token"}
+    ]
     upstream_query = urlencode(query_items, doseq=True)
 
     forwarded_headers: dict[str, str] = {}
     for key, value in request.headers.items():
         lowered = key.lower()
-        if lowered in _HOP_BY_HOP_HEADERS or lowered in {"host", "authorization", "cookie", "content-length", "accept-encoding"}:
+        if lowered in _HOP_BY_HOP_HEADERS or lowered in {
+            "host",
+            "authorization",
+            "cookie",
+            "content-length",
+            "accept-encoding",
+        }:
             continue
         forwarded_headers[key] = value
     forwarded_headers["X-Forwarded-Proto"] = "https"
@@ -677,16 +699,16 @@ async def proxy_vm_console_ws(
     session.add(record)
     session.commit()
     protocols = [
-        part.strip()
-        for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",")
-        if part.strip()
+        part.strip() for part in str(websocket.headers.get("sec-websocket-protocol") or "").split(",") if part.strip()
     ]
     selected_subprotocol = protocols[0] if protocols else None
     await websocket.accept(subprotocol=selected_subprotocol)
 
     upstream_host = _vm_service_host(instance_id)
     upstream_path = "/" + proxy_path.lstrip("/")
-    query_items = [(key, value) for key, value in websocket.query_params.multi_items() if key not in {"cs", "ct", "connect_token"}]
+    query_items = [
+        (key, value) for key, value in websocket.query_params.multi_items() if key not in {"cs", "ct", "connect_token"}
+    ]
     upstream_query = urlencode(query_items, doseq=True)
 
     upstream_ws_headers = None
@@ -710,6 +732,7 @@ async def proxy_vm_console_ws(
                 max_size=None,
                 ssl=ssl_context,
             ) as upstream:
+
                 async def client_to_upstream() -> None:
                     while True:
                         message = await websocket.receive()
@@ -862,7 +885,9 @@ def start_vm(
             )
     # Enforce per-user limit against any non-stopped labs.
     active_count = sum(
-        1 for inst in [*user_vm_instances, *user_container_instances] if inst.status not in {"stopped", "completed", "failed"}
+        1
+        for inst in [*user_vm_instances, *user_container_instances]
+        if inst.status not in {"stopped", "completed", "failed"}
     )
     if active_count >= config.per_user_vm_limit:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="per-user concurrency limit reached")
@@ -917,7 +942,9 @@ def start_vm(
         raise
     # Keep VM console service internal; browser access goes through authenticated backend proxy.
     service_name = f"svc-{instance_id[:8]}"
-    kube.create_service_for_pod(pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP")
+    kube.create_service_for_pod(
+        pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
+    )
     console_url = _vm_console_embed_url(
         instance_id=instance_id,
         title=template.name,
@@ -953,7 +980,9 @@ def start_vm(
 
 
 @router.post("/pods/{instance_id}/stop", response_model=VMInstance)
-def stop_vm(instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)) -> VMInstance:
+def stop_vm(
+    instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+) -> VMInstance:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
@@ -978,7 +1007,9 @@ def stop_vm(instance_id: str, user: User = Depends(require_user), session: Sessi
 
 
 @router.post("/pods/{instance_id}/start", response_model=VMInstance, status_code=status.HTTP_200_OK)
-def restart_vm(instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)) -> VMInstance:
+def restart_vm(
+    instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+) -> VMInstance:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
@@ -1058,7 +1089,9 @@ def restart_vm(instance_id: str, user: User = Depends(require_user), session: Se
                 pass
         raise
     service_name = f"svc-{instance_id[:8]}"
-    kube.create_service_for_pod(pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP")
+    kube.create_service_for_pod(
+        pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
+    )
     console_url = _vm_console_embed_url(
         instance_id=record.id,
         title=template.name,

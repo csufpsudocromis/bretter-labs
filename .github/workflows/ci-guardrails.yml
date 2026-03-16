@@ -71,6 +71,9 @@ jobs:
           .venv/bin/pip install -r backend/requirements-dev.txt
           .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 
+      - name: Check Python formatting
+        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py
+
       - name: Run pip-audit
         run: |
           .venv/bin/pip install pip-audit
@@ -94,6 +97,9 @@ jobs:
 
       - name: Lint frontend
         run: npm --prefix frontend-vite run lint
+
+      - name: Check frontend formatting
+        run: npm --prefix frontend-vite run format:check
 
       - name: Build frontend
         run: npm --prefix frontend-vite run build

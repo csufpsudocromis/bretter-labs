@@ -1,21 +1,21 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { api } from "../../api";
 
 const DEFAULT_THEME = {
-  site_title: 'Bretter Labs',
-  site_tagline: 'Run Virtual Labs and Software',
-  theme_bg_color: '#f5f5f5',
-  theme_text_color: '#111111',
-  theme_button_color: '#2563eb',
-  theme_button_text_color: '#ffffff',
-  theme_bg_image: '',
+  site_title: "Bretter Labs",
+  site_tagline: "Run Virtual Labs and Software",
+  theme_bg_color: "#f5f5f5",
+  theme_text_color: "#111111",
+  theme_button_color: "#2563eb",
+  theme_button_text_color: "#ffffff",
+  theme_bg_image: "",
   theme_bg_image_overlay_opacity: 0,
-  theme_font_family: 'Inter, system-ui, -apple-system, sans-serif',
+  theme_font_family: "Inter, system-ui, -apple-system, sans-serif",
   theme_font_size_base: 16,
   theme_font_size_h1: 32,
   theme_font_size_h2: 24,
-  theme_tile_bg: '#f8fafc',
-  theme_tile_border: '#e2e8f0',
+  theme_tile_bg: "#f8fafc",
+  theme_tile_border: "#e2e8f0",
   theme_tile_opacity: 1,
   theme_tile_border_opacity: 1,
 };
@@ -28,12 +28,12 @@ const DEFAULT_CONTRAST_TARGETS = {
 };
 
 const FONT_FAMILY_OPTIONS = [
-  { label: 'Inter', value: 'Inter, system-ui, -apple-system, sans-serif' },
-  { label: 'System UI', value: 'system-ui, -apple-system, sans-serif' },
-  { label: 'Roboto', value: 'Roboto, Arial, sans-serif' },
-  { label: 'Arial', value: 'Arial, sans-serif' },
-  { label: 'Georgia', value: 'Georgia, serif' },
-  { label: 'Monospace', value: 'JetBrains Mono, SFMono-Regular, Consolas, monospace' },
+  { label: "Inter", value: "Inter, system-ui, -apple-system, sans-serif" },
+  { label: "System UI", value: "system-ui, -apple-system, sans-serif" },
+  { label: "Roboto", value: "Roboto, Arial, sans-serif" },
+  { label: "Arial", value: "Arial, sans-serif" },
+  { label: "Georgia", value: "Georgia, serif" },
+  { label: "Monospace", value: "JetBrains Mono, SFMono-Regular, Consolas, monospace" },
 ];
 
 const THEME_KEYS = Object.keys(DEFAULT_THEME);
@@ -59,17 +59,29 @@ const normalizeTheme = (payload) => {
   const h1Size = Number(merged.theme_font_size_h1 || DEFAULT_THEME.theme_font_size_h1);
   const h2Size = Number(merged.theme_font_size_h2 || DEFAULT_THEME.theme_font_size_h2);
   merged.theme_font_family = String(merged.theme_font_family || DEFAULT_THEME.theme_font_family).trim();
-  merged.theme_font_size_base = Math.min(24, Math.max(12, Number.isFinite(baseSize) ? baseSize : DEFAULT_THEME.theme_font_size_base));
-  merged.theme_font_size_h1 = Math.min(64, Math.max(20, Number.isFinite(h1Size) ? h1Size : DEFAULT_THEME.theme_font_size_h1));
-  merged.theme_font_size_h2 = Math.min(48, Math.max(16, Number.isFinite(h2Size) ? h2Size : DEFAULT_THEME.theme_font_size_h2));
+  merged.theme_font_size_base = Math.min(
+    24,
+    Math.max(12, Number.isFinite(baseSize) ? baseSize : DEFAULT_THEME.theme_font_size_base)
+  );
+  merged.theme_font_size_h1 = Math.min(
+    64,
+    Math.max(20, Number.isFinite(h1Size) ? h1Size : DEFAULT_THEME.theme_font_size_h1)
+  );
+  merged.theme_font_size_h2 = Math.min(
+    48,
+    Math.max(16, Number.isFinite(h2Size) ? h2Size : DEFAULT_THEME.theme_font_size_h2)
+  );
   const tileOpacity = Number(merged.theme_tile_opacity ?? DEFAULT_THEME.theme_tile_opacity);
-  merged.theme_tile_opacity = Math.min(1, Math.max(0.1, Number.isFinite(tileOpacity) ? tileOpacity : DEFAULT_THEME.theme_tile_opacity));
+  merged.theme_tile_opacity = Math.min(
+    1,
+    Math.max(0.1, Number.isFinite(tileOpacity) ? tileOpacity : DEFAULT_THEME.theme_tile_opacity)
+  );
   merged.theme_tile_border_opacity = 1;
   return merged;
 };
 
 const hexToRgb = (hex) => {
-  const clean = String(hex || '').replace('#', '');
+  const clean = String(hex || "").replace("#", "");
   if (clean.length !== 6) return null;
   const parsed = Number.parseInt(clean, 16);
   if (Number.isNaN(parsed)) return null;
@@ -99,9 +111,9 @@ const contrastRatio = (foreground, background) => {
   return (bright + 0.05) / (dark + 0.05);
 };
 
-const ratioLabel = (ratio) => (ratio ? ratio.toFixed(2) : 'n/a');
+const ratioLabel = (ratio) => (ratio ? ratio.toFixed(2) : "n/a");
 
-const colorWithAlpha = (hex, alpha, fallback = '#f8fafc') => {
+const colorWithAlpha = (hex, alpha, fallback = "#f8fafc") => {
   const rgb = hexToRgb(hex) || hexToRgb(fallback);
   if (!rgb) return fallback;
   const clamped = Math.min(1, Math.max(0, Number(alpha || 1)));
@@ -109,14 +121,14 @@ const colorWithAlpha = (hex, alpha, fallback = '#f8fafc') => {
 };
 
 const resolveThemeImageUrl = (value) => {
-  const raw = String(value || '').trim();
-  if (!raw) return '';
-  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith('data:') || raw.startsWith('blob:')) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^(https?:)?\/\//i.test(raw) || raw.startsWith("data:") || raw.startsWith("blob:")) {
     return raw;
   }
-  const apiBase = String(api?.defaults?.baseURL || '').replace(/\/$/, '');
+  const apiBase = String(api?.defaults?.baseURL || "").replace(/\/$/, "");
   if (!apiBase) return raw;
-  if (raw.startsWith('/')) return `${apiBase}${raw}`;
+  if (raw.startsWith("/")) return `${apiBase}${raw}`;
   return `${apiBase}/${raw}`;
 };
 
@@ -124,26 +136,26 @@ const contrastChecks = (theme, targets) => {
   const thresholds = normalizeContrastTargets(targets);
   const checks = [
     {
-      key: 'body',
-      label: 'Text on page background',
+      key: "body",
+      label: "Text on page background",
       ratio: contrastRatio(theme.theme_text_color, theme.theme_bg_color),
       min: thresholds.body,
     },
     {
-      key: 'button',
-      label: 'Button text contrast',
+      key: "button",
+      label: "Button text contrast",
       ratio: contrastRatio(theme.theme_button_text_color, theme.theme_button_color),
       min: thresholds.button,
     },
     {
-      key: 'tile',
-      label: 'Tile text contrast',
+      key: "tile",
+      label: "Tile text contrast",
       ratio: contrastRatio(theme.theme_text_color, theme.theme_tile_bg),
       min: thresholds.tile,
     },
     {
-      key: 'tile_border',
-      label: 'Tile border visibility',
+      key: "tile_border",
+      label: "Tile border visibility",
       ratio: contrastRatio(theme.theme_tile_border, theme.theme_tile_bg),
       min: thresholds.tile_border,
     },
@@ -151,13 +163,10 @@ const contrastChecks = (theme, targets) => {
 
   const warnings = checks
     .filter((check) => check.ratio !== null && check.ratio < check.min)
-    .map(
-      (check) =>
-        `${check.label} is low (${ratioLabel(check.ratio)}:1, target ${check.min}:1).`,
-    );
+    .map((check) => `${check.label} is low (${ratioLabel(check.ratio)}:1, target ${check.min}:1).`);
 
   if (theme.theme_bg_image && Number(theme.theme_bg_image_overlay_opacity || 0) < 0.25) {
-    warnings.push('Background image overlay is low; readability may suffer on bright images.');
+    warnings.push("Background image overlay is low; readability may suffer on bright images.");
   }
 
   return { checks, warnings };
@@ -166,7 +175,7 @@ const contrastChecks = (theme, targets) => {
 const applyThemeToRoot = (next) => {
   const root = document.documentElement;
   const toRgb = (hex, fallback) => {
-    const clean = (hex || fallback).replace('#', '');
+    const clean = (hex || fallback).replace("#", "");
     if (clean.length === 6) {
       return [
         Number.parseInt(clean.slice(0, 2), 16),
@@ -176,38 +185,41 @@ const applyThemeToRoot = (next) => {
     }
     return [248, 250, 252];
   };
-  const [br, bg, bb] = toRgb(next.theme_tile_bg, '#f8fafc');
-  const [cr, cg, cb] = toRgb(next.theme_tile_border, '#e2e8f0');
+  const [br, bg, bb] = toRgb(next.theme_tile_bg, "#f8fafc");
+  const [cr, cg, cb] = toRgb(next.theme_tile_border, "#e2e8f0");
   const overlay = Math.min(0.85, Math.max(0, Number(next.theme_bg_image_overlay_opacity || 0)));
   const tileOpacity = Math.min(1, Math.max(0.1, Number(next.theme_tile_opacity || DEFAULT_THEME.theme_tile_opacity)));
 
-  root.style.setProperty('--bg-color', next.theme_bg_color || '#f5f5f5');
-  root.style.setProperty('--text-color', next.theme_text_color || '#111111');
-  root.style.setProperty('--button-bg', next.theme_button_color || '#2563eb');
-  root.style.setProperty('--button-text', next.theme_button_text_color || '#ffffff');
-  root.style.setProperty('--tile-bg', next.theme_tile_bg || '#f8fafc');
-  root.style.setProperty('--tile-border', next.theme_tile_border || '#e2e8f0');
-  root.style.setProperty('--tile-opacity', String(tileOpacity));
-  root.style.setProperty('--tile-bg-rgba', `rgba(${br}, ${bg}, ${bb}, ${tileOpacity})`);
-  root.style.setProperty('--tile-border-rgba', `rgba(${cr}, ${cg}, ${cb}, 1)`);
-  root.style.setProperty('--bg-overlay-opacity', String(overlay));
-  root.style.setProperty('--bg-overlay', `linear-gradient(rgba(0,0,0,${overlay}), rgba(0,0,0,${overlay}))`);
-  root.style.setProperty('--app-font-family', next.theme_font_family || DEFAULT_THEME.theme_font_family);
-  root.style.setProperty('--app-font-size-base', `${next.theme_font_size_base || DEFAULT_THEME.theme_font_size_base}px`);
-  root.style.setProperty('--app-font-size-h1', `${next.theme_font_size_h1 || DEFAULT_THEME.theme_font_size_h1}px`);
-  root.style.setProperty('--app-font-size-h2', `${next.theme_font_size_h2 || DEFAULT_THEME.theme_font_size_h2}px`);
+  root.style.setProperty("--bg-color", next.theme_bg_color || "#f5f5f5");
+  root.style.setProperty("--text-color", next.theme_text_color || "#111111");
+  root.style.setProperty("--button-bg", next.theme_button_color || "#2563eb");
+  root.style.setProperty("--button-text", next.theme_button_text_color || "#ffffff");
+  root.style.setProperty("--tile-bg", next.theme_tile_bg || "#f8fafc");
+  root.style.setProperty("--tile-border", next.theme_tile_border || "#e2e8f0");
+  root.style.setProperty("--tile-opacity", String(tileOpacity));
+  root.style.setProperty("--tile-bg-rgba", `rgba(${br}, ${bg}, ${bb}, ${tileOpacity})`);
+  root.style.setProperty("--tile-border-rgba", `rgba(${cr}, ${cg}, ${cb}, 1)`);
+  root.style.setProperty("--bg-overlay-opacity", String(overlay));
+  root.style.setProperty("--bg-overlay", `linear-gradient(rgba(0,0,0,${overlay}), rgba(0,0,0,${overlay}))`);
+  root.style.setProperty("--app-font-family", next.theme_font_family || DEFAULT_THEME.theme_font_family);
+  root.style.setProperty(
+    "--app-font-size-base",
+    `${next.theme_font_size_base || DEFAULT_THEME.theme_font_size_base}px`
+  );
+  root.style.setProperty("--app-font-size-h1", `${next.theme_font_size_h1 || DEFAULT_THEME.theme_font_size_h1}px`);
+  root.style.setProperty("--app-font-size-h2", `${next.theme_font_size_h2 || DEFAULT_THEME.theme_font_size_h2}px`);
   const resolvedImage = resolveThemeImageUrl(next.theme_bg_image);
   if (resolvedImage) {
-    root.style.setProperty('--bg-image', `url('${resolvedImage}')`);
+    root.style.setProperty("--bg-image", `url('${resolvedImage}')`);
   } else {
-    root.style.removeProperty('--bg-image');
+    root.style.removeProperty("--bg-image");
   }
 };
 
 const sanitizeImportedTheme = (payload) => {
-  const source = payload?.settings && typeof payload.settings === 'object' ? payload.settings : payload;
-  if (!source || typeof source !== 'object') {
-    throw new Error('Invalid JSON: expected a theme object or { settings: { ... } }.');
+  const source = payload?.settings && typeof payload.settings === "object" ? payload.settings : payload;
+  if (!source || typeof source !== "object") {
+    throw new Error("Invalid JSON: expected a theme object or { settings: { ... } }.");
   }
   const filtered = {};
   for (const key of THEME_KEYS) {
@@ -221,13 +233,13 @@ const sanitizeImportedTheme = (payload) => {
 const Swatch = ({ color }) => (
   <span
     style={{
-      display: 'inline-block',
-      width: '24px',
-      height: '24px',
-      borderRadius: '4px',
-      border: '1px solid #ccc',
-      marginLeft: '8px',
-      backgroundColor: color || '#ffffff',
+      display: "inline-block",
+      width: "24px",
+      height: "24px",
+      borderRadius: "4px",
+      border: "1px solid #ccc",
+      marginLeft: "8px",
+      backgroundColor: color || "#ffffff",
     }}
   />
 );
@@ -238,12 +250,12 @@ const AdminAppearanceSettings = () => {
   const [contrastTargets, setContrastTargets] = useState(DEFAULT_CONTRAST_TARGETS);
   const [draftContrastTargets, setDraftContrastTargets] = useState(DEFAULT_CONTRAST_TARGETS);
   const [savedContrastTargets, setSavedContrastTargets] = useState(DEFAULT_CONTRAST_TARGETS);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploadingBackground, setUploadingBackground] = useState(false);
-  const [bgTestStatus, setBgTestStatus] = useState('');
+  const [bgTestStatus, setBgTestStatus] = useState("");
   const fileRef = useRef(null);
   const backgroundFileRef = useRef(null);
 
@@ -266,7 +278,7 @@ const AdminAppearanceSettings = () => {
       normalizeContrastTargets({
         ...prev,
         [key]: value,
-      }),
+      })
     );
   };
 
@@ -278,7 +290,7 @@ const AdminAppearanceSettings = () => {
     });
     setContrastTargets(nextTargets);
     setSaving(true);
-    setError('');
+    setError("");
     try {
       const payload = {
         ...normalizeTheme(savedSite),
@@ -287,7 +299,7 @@ const AdminAppearanceSettings = () => {
         theme_contrast_tile: nextTargets.tile,
         theme_contrast_tile_border: nextTargets.tile_border,
       };
-      const res = await api.patch('/admin/settings/site', payload);
+      const res = await api.patch("/admin/settings/site", payload);
       const nextRaw = res.data || payload;
       const persistedTargets = normalizeContrastTargets({
         body: nextRaw.theme_contrast_body,
@@ -300,7 +312,7 @@ const AdminAppearanceSettings = () => {
       setSavedContrastTargets(persistedTargets);
       setMessage(`Saved target contrast for ${key}.`);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save target contrast');
+      setError(err.response?.data?.detail || "Failed to save target contrast");
     } finally {
       setSaving(false);
     }
@@ -310,7 +322,7 @@ const AdminAppearanceSettings = () => {
     const load = async () => {
       setLoading(true);
       try {
-        const siteRes = await api.get('/admin/settings/site');
+        const siteRes = await api.get("/admin/settings/site");
         const next = normalizeTheme(siteRes.data || {});
         const loadedTargets = normalizeContrastTargets({
           body: siteRes.data?.theme_contrast_body,
@@ -325,7 +337,7 @@ const AdminAppearanceSettings = () => {
         setSavedContrastTargets(loadedTargets);
         applyThemeToRoot(next);
       } catch (err) {
-        setError(err.response?.data?.detail || 'Failed to load appearance settings');
+        setError(err.response?.data?.detail || "Failed to load appearance settings");
       } finally {
         setLoading(false);
       }
@@ -335,8 +347,8 @@ const AdminAppearanceSettings = () => {
 
   const saveSite = async () => {
     setSaving(true);
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
       const payload = {
         ...normalizeTheme(site),
@@ -345,7 +357,7 @@ const AdminAppearanceSettings = () => {
         theme_contrast_tile: contrastTargets.tile,
         theme_contrast_tile_border: contrastTargets.tile_border,
       };
-      const res = await api.patch('/admin/settings/site', payload);
+      const res = await api.patch("/admin/settings/site", payload);
       const nextRaw = res.data || payload;
       const next = normalizeTheme(nextRaw);
       const nextTargets = normalizeContrastTargets({
@@ -359,10 +371,10 @@ const AdminAppearanceSettings = () => {
       setContrastTargets(nextTargets);
       setDraftContrastTargets(nextTargets);
       setSavedContrastTargets(nextTargets);
-      setMessage('Appearance updated.');
+      setMessage("Appearance updated.");
       applyThemeToRoot(next);
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save appearance');
+      setError(err.response?.data?.detail || "Failed to save appearance");
     } finally {
       setSaving(false);
     }
@@ -372,16 +384,16 @@ const AdminAppearanceSettings = () => {
     const file = event.target.files?.[0];
     if (!file) return;
     setUploadingBackground(true);
-    setError('');
-    setMessage('');
-    setBgTestStatus('');
+    setError("");
+    setMessage("");
+    setBgTestStatus("");
     try {
       const form = new FormData();
-      form.append('file', file);
-      const res = await api.post('/admin/settings/site/background', form);
-      const uploadedPath = String(res.data?.theme_bg_image || '').trim();
+      form.append("file", file);
+      const res = await api.post("/admin/settings/site/background", form);
+      const uploadedPath = String(res.data?.theme_bg_image || "").trim();
       if (!uploadedPath) {
-        throw new Error('background upload response missing theme_bg_image');
+        throw new Error("background upload response missing theme_bg_image");
       }
       const nextSite = normalizeTheme({ ...site, theme_bg_image: uploadedPath });
       setSite(nextSite);
@@ -389,9 +401,9 @@ const AdminAppearanceSettings = () => {
       setMessage(`Background uploaded: ${file.name}`);
       applyThemeToRoot(nextSite);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to upload background image');
+      setError(err.response?.data?.detail || err.message || "Failed to upload background image");
     } finally {
-      event.target.value = '';
+      event.target.value = "";
       setUploadingBackground(false);
     }
   };
@@ -399,20 +411,20 @@ const AdminAppearanceSettings = () => {
   const testBackgroundImage = async () => {
     const url = resolveThemeImageUrl(site.theme_bg_image);
     if (!url) {
-      setBgTestStatus('No background image URL set. Fallback color will be used.');
+      setBgTestStatus("No background image URL set. Fallback color will be used.");
       return;
     }
-    setBgTestStatus('Testing image URL...');
+    setBgTestStatus("Testing image URL...");
     try {
       await new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => resolve();
-        img.onerror = () => reject(new Error('Image failed to load.'));
+        img.onerror = () => reject(new Error("Image failed to load."));
         img.src = url;
       });
-      setBgTestStatus('Background image loaded successfully in browser preview.');
+      setBgTestStatus("Background image loaded successfully in browser preview.");
     } catch (err) {
-      setBgTestStatus('Image test failed. Check URL, SSL, or host accessibility.');
+      setBgTestStatus("Image test failed. Check URL, SSL, or host accessibility.");
     }
   };
 
@@ -423,16 +435,16 @@ const AdminAppearanceSettings = () => {
       settings: normalizeTheme(site),
       contrast_targets: normalizeContrastTargets(contrastTargets),
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
-    a.download = `bretter-theme-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    a.download = `bretter-theme-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    setMessage('Theme JSON exported.');
+    setMessage("Theme JSON exported.");
   };
 
   const handleImportFile = async (event) => {
@@ -447,11 +459,11 @@ const AdminAppearanceSettings = () => {
       setContrastTargets(importedTargets);
       setDraftContrastTargets(importedTargets);
       setMessage(`Imported theme from ${file.name}. Save to apply globally.`);
-      setError('');
+      setError("");
     } catch (err) {
-      setError(`Import failed: ${err.message || 'invalid JSON file'}`);
+      setError(`Import failed: ${err.message || "invalid JSON file"}`);
     } finally {
-      event.target.value = '';
+      event.target.value = "";
     }
   };
 
@@ -468,7 +480,7 @@ const AdminAppearanceSettings = () => {
       {error && <div className="error">{error}</div>}
       {message && <div className="info">{message}</div>}
 
-      <div className="actions" style={{ marginBottom: '1rem', flexWrap: 'wrap' }}>
+      <div className="actions" style={{ marginBottom: "1rem", flexWrap: "wrap" }}>
         <button className="ghost" onClick={exportThemeJson} disabled={loading || saving}>
           Export Theme JSON
         </button>
@@ -479,14 +491,14 @@ const AdminAppearanceSettings = () => {
           ref={fileRef}
           type="file"
           accept="application/json,.json"
-          style={{ display: 'none' }}
+          style={{ display: "none" }}
           onChange={handleImportFile}
         />
       </div>
 
-      <div className="card" style={{ marginBottom: '1rem' }}>
+      <div className="card" style={{ marginBottom: "1rem" }}>
         <h3>Accessibility Checks</h3>
-        <div className="actions" style={{ marginTop: '0.5rem', flexWrap: 'wrap' }}>
+        <div className="actions" style={{ marginTop: "0.5rem", flexWrap: "wrap" }}>
           <button
             className="ghost"
             onClick={() => {
@@ -498,19 +510,19 @@ const AdminAppearanceSettings = () => {
             Reset Contrast Targets
           </button>
         </div>
-        <div className="tile-grid" style={{ marginTop: '0.75rem' }}>
+        <div className="tile-grid" style={{ marginTop: "0.75rem" }}>
           {contrast.checks.map((check) => {
             const ok = check.ratio !== null && check.ratio >= check.min;
             return (
               <div key={check.key} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{check.label}</h4>
-                  <span className={ok ? 'badge success' : 'badge warn'}>{ok ? 'OK' : 'Warn'}</span>
+                  <span className={ok ? "badge success" : "badge warn"}>{ok ? "OK" : "Warn"}</span>
                 </div>
                 <div className="muted small">
                   Contrast: {ratioLabel(check.ratio)}:1 (target {check.min}:1)
                 </div>
-                <label className="muted small" style={{ marginTop: '0.45rem', display: 'block' }}>
+                <label className="muted small" style={{ marginTop: "0.45rem", display: "block" }}>
                   Target ratio
                   <input
                     type="number"
@@ -518,12 +530,19 @@ const AdminAppearanceSettings = () => {
                     max="21"
                     step="0.1"
                     value={draftContrastTargets[check.key]}
-                    onChange={(e) => setDraftTarget(check.key, Number(e.target.value || DEFAULT_CONTRAST_TARGETS[check.key]))}
-                    style={{ marginTop: '0.25rem' }}
+                    onChange={(e) =>
+                      setDraftTarget(check.key, Number(e.target.value || DEFAULT_CONTRAST_TARGETS[check.key]))
+                    }
+                    style={{ marginTop: "0.25rem" }}
                   />
                 </label>
-                <div className="actions" style={{ marginTop: '0.35rem' }}>
-                  <button className="ghost" type="button" onClick={() => applyTarget(check.key)} disabled={loading || saving}>
+                <div className="actions" style={{ marginTop: "0.35rem" }}>
+                  <button
+                    className="ghost"
+                    type="button"
+                    onClick={() => applyTarget(check.key)}
+                    disabled={loading || saving}
+                  >
                     Set Target Contrast
                   </button>
                 </div>
@@ -532,7 +551,7 @@ const AdminAppearanceSettings = () => {
           })}
         </div>
         {contrast.warnings.length > 0 && (
-          <div style={{ marginTop: '0.8rem' }}>
+          <div style={{ marginTop: "0.8rem" }}>
             {contrast.warnings.map((warn, idx) => (
               <div key={`warn-${idx}`} className="muted small">
                 - {warn}
@@ -544,7 +563,7 @@ const AdminAppearanceSettings = () => {
 
       <div className="grid">
         <div className="card">
-          <div className="form" style={{ maxWidth: '640px' }}>
+          <div className="form" style={{ maxWidth: "640px" }}>
             <label>
               Title
               <input value={site.site_title} onChange={(e) => setTheme({ ...site, site_title: e.target.value })} />
@@ -556,9 +575,13 @@ const AdminAppearanceSettings = () => {
             <label>
               Font Family
               <select
-                value={FONT_FAMILY_OPTIONS.some((item) => item.value === site.theme_font_family) ? site.theme_font_family : '__custom__'}
+                value={
+                  FONT_FAMILY_OPTIONS.some((item) => item.value === site.theme_font_family)
+                    ? site.theme_font_family
+                    : "__custom__"
+                }
                 onChange={(e) => {
-                  if (e.target.value === '__custom__') return;
+                  if (e.target.value === "__custom__") return;
                   setTheme({ ...site, theme_font_family: e.target.value });
                 }}
               >
@@ -687,20 +710,20 @@ const AdminAppearanceSettings = () => {
 
             <label>
               Login Background (cluster-hosted)
-              <input value={site.theme_bg_image || ''} readOnly placeholder="No image uploaded" />
+              <input value={site.theme_bg_image || ""} readOnly placeholder="No image uploaded" />
             </label>
-            <div className="actions" style={{ flexWrap: 'wrap' }}>
+            <div className="actions" style={{ flexWrap: "wrap" }}>
               <button
                 className="ghost"
                 onClick={() => backgroundFileRef.current?.click()}
                 type="button"
                 disabled={loading || saving || uploadingBackground}
               >
-                {uploadingBackground ? 'Uploading...' : 'Upload Background Image'}
+                {uploadingBackground ? "Uploading..." : "Upload Background Image"}
               </button>
               <button
                 className="ghost"
-                onClick={() => setTheme({ ...site, theme_bg_image: '' })}
+                onClick={() => setTheme({ ...site, theme_bg_image: "" })}
                 type="button"
                 disabled={loading || saving || uploadingBackground || !site.theme_bg_image}
               >
@@ -710,7 +733,7 @@ const AdminAppearanceSettings = () => {
                 ref={backgroundFileRef}
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                style={{ display: 'none' }}
+                style={{ display: "none" }}
                 onChange={handleBackgroundUpload}
               />
             </div>
@@ -747,7 +770,7 @@ const AdminAppearanceSettings = () => {
 
             <div className="actions">
               <button onClick={saveSite} disabled={saving || loading || !hasUnsaved}>
-                {saving ? 'Saving...' : 'Save'}
+                {saving ? "Saving..." : "Save"}
               </button>
             </div>
           </div>
@@ -757,36 +780,38 @@ const AdminAppearanceSettings = () => {
           <h3>Live Preview</h3>
           <div
             style={{
-              marginTop: '0.75rem',
-              borderRadius: '12px',
+              marginTop: "0.75rem",
+              borderRadius: "12px",
               border: `1px solid ${site.theme_tile_border}`,
-              padding: '1rem',
+              padding: "1rem",
               color: site.theme_text_color,
               fontFamily: site.theme_font_family,
               fontSize: `${site.theme_font_size_base}px`,
               backgroundColor: site.theme_bg_color,
               backgroundImage: previewBackground,
-              backgroundSize: 'cover',
-              backgroundPosition: 'center',
-              minHeight: '260px',
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+              minHeight: "260px",
             }}
           >
-            <div style={{ marginBottom: '0.75rem' }}>
-              <h3 style={{ margin: 0, fontSize: `${site.theme_font_size_h1}px` }}>{site.site_title || 'Title Preview'}</h3>
+            <div style={{ marginBottom: "0.75rem" }}>
+              <h3 style={{ margin: 0, fontSize: `${site.theme_font_size_h1}px` }}>
+                {site.site_title || "Title Preview"}
+              </h3>
               <div className="muted small" style={{ color: site.theme_text_color }}>
-                {site.site_tagline || 'Tagline Preview'}
+                {site.site_tagline || "Tagline Preview"}
               </div>
             </div>
 
-            <div style={{ marginBottom: '0.75rem' }}>
+            <div style={{ marginBottom: "0.75rem" }}>
               <button
                 type="button"
                 style={{
                   background: site.theme_button_color,
                   color: site.theme_button_text_color,
-                  border: 'none',
-                  borderRadius: '8px',
-                  padding: '0.45rem 0.75rem',
+                  border: "none",
+                  borderRadius: "8px",
+                  padding: "0.45rem 0.75rem",
                 }}
               >
                 Primary Button
@@ -797,7 +822,7 @@ const AdminAppearanceSettings = () => {
               <div
                 className="tile"
                 style={{
-                  background: colorWithAlpha(site.theme_tile_bg, site.theme_tile_opacity, '#f8fafc'),
+                  background: colorWithAlpha(site.theme_tile_bg, site.theme_tile_opacity, "#f8fafc"),
                   borderColor: site.theme_tile_border,
                   color: site.theme_text_color,
                 }}

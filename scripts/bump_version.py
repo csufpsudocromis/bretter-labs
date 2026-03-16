@@ -56,9 +56,7 @@ def _insert_changelog_section(changelog: str, new_version: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(
-        description="Bump project semantic version and keep release files in sync."
-    )
+    parser = argparse.ArgumentParser(description="Bump project semantic version and keep release files in sync.")
     parser.add_argument(
         "target",
         help="major|minor|patch or an explicit semantic version (X.Y.Z)",

@@ -61,9 +61,13 @@ def client(monkeypatch, reset_db):
     monkeypatch.setattr(kube, "create_service_for_pod", lambda *args, **kwargs: _next_port())
     monkeypatch.setattr(kube, "stop_pod", lambda *args, **kwargs: None)
     monkeypatch.setattr(kube, "delete_pod", lambda *args, **kwargs: None)
-    monkeypatch.setattr(kube, "get_status", lambda *args, **kwargs: PodStatus(instance_id="", phase="running", ready=True))
+    monkeypatch.setattr(
+        kube, "get_status", lambda *args, **kwargs: PodStatus(instance_id="", phase="running", ready=True)
+    )
 
-    monkeypatch.setattr(kube, "create_container_pod", lambda req: PodStatus(instance_id=req.instance_id, phase="pending"))
+    monkeypatch.setattr(
+        kube, "create_container_pod", lambda req: PodStatus(instance_id=req.instance_id, phase="pending")
+    )
     monkeypatch.setattr(kube, "ensure_container_service", lambda *args, **kwargs: _next_port())
     monkeypatch.setattr(kube, "ensure_container_ingress", lambda *args, **kwargs: None)
     monkeypatch.setattr(kube, "delete_container_pod", lambda *args, **kwargs: None)

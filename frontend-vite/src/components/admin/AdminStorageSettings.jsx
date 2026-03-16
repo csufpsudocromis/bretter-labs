@@ -1,43 +1,43 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import { api } from "../../api";
 
 const fields = [
-  { key: 'storage_root', label: 'Storage Root' },
-  { key: 'kube_image_pvc', label: 'Image PVC' },
-  { key: 'kube_vm_storage_class', label: 'VM Clone StorageClass' },
-  { key: 'kube_namespace', label: 'Namespace (read-only)', readOnly: true },
+  { key: "storage_root", label: "Storage Root" },
+  { key: "kube_image_pvc", label: "Image PVC" },
+  { key: "kube_vm_storage_class", label: "VM Clone StorageClass" },
+  { key: "kube_namespace", label: "Namespace (read-only)", readOnly: true },
 ];
 
 const statusMeta = (status) => {
-  const normalized = String(status || '').toLowerCase();
-  if (normalized === 'error') return { label: 'Error', className: 'badge warn' };
-  if (normalized === 'warn') return { label: 'Warn', className: 'badge warn' };
-  if (normalized === 'ok') return { label: 'OK', className: 'badge success' };
-  return { label: 'Info', className: 'badge' };
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "error") return { label: "Error", className: "badge warn" };
+  if (normalized === "warn") return { label: "Warn", className: "badge warn" };
+  if (normalized === "ok") return { label: "OK", className: "badge success" };
+  return { label: "Info", className: "badge" };
 };
 
 const AdminStorageSettings = () => {
   const [data, setData] = useState({
-    storage_root: '',
-    kube_image_pvc: '',
-    kube_vm_storage_class: '',
-    kube_namespace: '',
+    storage_root: "",
+    kube_image_pvc: "",
+    kube_vm_storage_class: "",
+    kube_namespace: "",
   });
   const [sources, setSources] = useState({});
   const [checks, setChecks] = useState([]);
   const [warnings, setWarnings] = useState([]);
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
 
   const applyResponse = (payload) => {
     setData({
-      storage_root: payload?.storage_root || '',
-      kube_image_pvc: payload?.kube_image_pvc || '',
-      kube_vm_storage_class: payload?.kube_vm_storage_class || '',
-      kube_namespace: payload?.kube_namespace || '',
+      storage_root: payload?.storage_root || "",
+      kube_image_pvc: payload?.kube_image_pvc || "",
+      kube_vm_storage_class: payload?.kube_vm_storage_class || "",
+      kube_namespace: payload?.kube_namespace || "",
     });
     setSources(payload?.sources || {});
     setChecks(payload?.checks || []);
@@ -46,12 +46,12 @@ const AdminStorageSettings = () => {
 
   const load = async () => {
     setLoading(true);
-    setError('');
+    setError("");
     try {
-      const res = await api.get('/admin/settings/storage');
+      const res = await api.get("/admin/settings/storage");
       applyResponse(res.data || {});
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load storage settings');
+      setError(err.response?.data?.detail || "Failed to load storage settings");
     } finally {
       setLoading(false);
     }
@@ -63,18 +63,18 @@ const AdminStorageSettings = () => {
 
   const save = async () => {
     setSaving(true);
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
-      const res = await api.patch('/admin/settings/storage', {
+      const res = await api.patch("/admin/settings/storage", {
         storage_root: data.storage_root,
         kube_image_pvc: data.kube_image_pvc,
         kube_vm_storage_class: data.kube_vm_storage_class,
       });
       applyResponse(res.data || {});
-      setMessage('Storage settings saved and applied.');
+      setMessage("Storage settings saved and applied.");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save storage settings');
+      setError(err.response?.data?.detail || "Failed to save storage settings");
     } finally {
       setSaving(false);
     }
@@ -82,14 +82,14 @@ const AdminStorageSettings = () => {
 
   const clearOverrides = async () => {
     setClearing(true);
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     try {
-      const res = await api.patch('/admin/settings/storage', { clear_overrides: true });
+      const res = await api.patch("/admin/settings/storage", { clear_overrides: true });
       applyResponse(res.data || {});
-      setMessage('Storage overrides cleared; environment defaults are active.');
+      setMessage("Storage overrides cleared; environment defaults are active.");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to clear storage overrides');
+      setError(err.response?.data?.detail || "Failed to clear storage overrides");
     } finally {
       setClearing(false);
     }
@@ -99,21 +99,21 @@ const AdminStorageSettings = () => {
     <div>
       <h2>Storage Options</h2>
       <p className="muted small">Configure image storage and verify cluster readiness for clone-based VM launches.</p>
-      <div className="actions" style={{ marginBottom: '1rem' }}>
+      <div className="actions" style={{ marginBottom: "1rem" }}>
         <button className="ghost" onClick={load} disabled={loading || saving || clearing}>
-          {loading ? 'Refreshing...' : 'Refresh'}
+          {loading ? "Refreshing..." : "Refresh"}
         </button>
       </div>
       {error && <div className="error">{error}</div>}
       {message && <div className="info">{message}</div>}
 
       <div className="card">
-        <div className="form" style={{ maxWidth: '640px' }}>
+        <div className="form" style={{ maxWidth: "640px" }}>
           {fields.map((f) => (
             <label key={f.key}>
               {f.label}
               <input
-                value={data[f.key] || ''}
+                value={data[f.key] || ""}
                 onChange={(e) => setData({ ...data, [f.key]: e.target.value })}
                 disabled={Boolean(f.readOnly)}
               />
@@ -122,10 +122,10 @@ const AdminStorageSettings = () => {
           ))}
           <div className="actions">
             <button onClick={save} disabled={saving || clearing || loading}>
-              {saving ? 'Saving...' : 'Save'}
+              {saving ? "Saving..." : "Save"}
             </button>
             <button className="ghost" onClick={clearOverrides} disabled={saving || clearing || loading}>
-              {clearing ? 'Clearing...' : 'Use Env Defaults'}
+              {clearing ? "Clearing..." : "Use Env Defaults"}
             </button>
           </div>
         </div>
@@ -136,7 +136,7 @@ const AdminStorageSettings = () => {
         {checks.length === 0 ? (
           <div className="muted small">No validation checks yet.</div>
         ) : (
-          <div className="tile-grid" style={{ marginTop: '0.75rem' }}>
+          <div className="tile-grid" style={{ marginTop: "0.75rem" }}>
             {checks.map((check) => {
               const badge = statusMeta(check.status);
               return (
@@ -152,10 +152,10 @@ const AdminStorageSettings = () => {
           </div>
         )}
         {warnings.length > 0 && (
-          <div style={{ marginTop: '1rem' }}>
-            <h4 style={{ marginBottom: '0.5rem' }}>Warnings</h4>
+          <div style={{ marginTop: "1rem" }}>
+            <h4 style={{ marginBottom: "0.5rem" }}>Warnings</h4>
             {warnings.map((item, idx) => (
-              <div key={`warn-${idx}`} className="muted small" style={{ marginBottom: '0.35rem' }}>
+              <div key={`warn-${idx}`} className="muted small" style={{ marginBottom: "0.35rem" }}>
                 - {item}
               </div>
             ))}

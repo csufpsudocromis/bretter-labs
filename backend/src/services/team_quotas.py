@@ -70,9 +70,7 @@ def _active_team_usage(
     username_list = list(usernames)
 
     vm_rows = session.exec(
-        select(Instance)
-        .where(Instance.owner.in_(username_list))
-        .where(Instance.status.in_(ACTIVE_STATUSES))
+        select(Instance).where(Instance.owner.in_(username_list)).where(Instance.status.in_(ACTIVE_STATUSES))
     ).all()
     if exclude_vm_instance_id:
         vm_rows = [row for row in vm_rows if row.id != exclude_vm_instance_id]
@@ -81,8 +79,7 @@ def _active_team_usage(
     vm_templates: dict[str, Template] = {}
     if vm_template_ids:
         vm_templates = {
-            tmpl.id: tmpl
-            for tmpl in session.exec(select(Template).where(Template.id.in_(list(vm_template_ids)))).all()
+            tmpl.id: tmpl for tmpl in session.exec(select(Template).where(Template.id.in_(list(vm_template_ids)))).all()
         }
     image_ids = {tmpl.image_id for tmpl in vm_templates.values()}
     images: dict[str, Image] = {}
@@ -101,7 +98,9 @@ def _active_team_usage(
     if container_template_ids:
         container_templates = {
             tmpl.id: tmpl
-            for tmpl in session.exec(select(ContainerTemplate).where(ContainerTemplate.id.in_(list(container_template_ids)))).all()
+            for tmpl in session.exec(
+                select(ContainerTemplate).where(ContainerTemplate.id.in_(list(container_template_ids)))
+            ).all()
         }
 
     active_labs = len(vm_rows) + len(container_rows)
@@ -125,7 +124,9 @@ def _active_team_usage(
         tmpl = container_templates.get(row.template_id)
         cpu_millicores += max(1, int(getattr(tmpl, "cpu_millicores", 500) or 500))
         memory_mb += max(1, int(getattr(tmpl, "memory_mb", 512) or 512))
-        storage_gib += max(1, int(getattr(tmpl, "storage_gib", DEFAULT_CONTAINER_STORAGE_GIB) or DEFAULT_CONTAINER_STORAGE_GIB))
+        storage_gib += max(
+            1, int(getattr(tmpl, "storage_gib", DEFAULT_CONTAINER_STORAGE_GIB) or DEFAULT_CONTAINER_STORAGE_GIB)
+        )
 
     return active_labs, cpu_millicores, memory_mb, storage_gib
 

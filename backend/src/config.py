@@ -92,7 +92,9 @@ class Settings(BaseSettings):
     container_connect_insecure_tls: bool = False
     secrets_encryption_key: str = ""
     site_assets_dir: str = "/data/site-assets"
-    alertmanager_api_url: str = "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
+    alertmanager_api_url: str = (
+        "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
+    )
     alertmanager_timeout_seconds: int = 5
     error_log_file_path: str = "/data/error.log"
     error_log_max_bytes: int = 10 * 1024 * 1024

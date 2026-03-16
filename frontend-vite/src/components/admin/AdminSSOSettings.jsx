@@ -1,29 +1,29 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import { api } from "../../api";
 
 const AdminSSOSettings = () => {
   const [data, setData] = useState({
     sso_enabled: false,
-    sso_provider: '',
-    sso_client_id: '',
+    sso_provider: "",
+    sso_client_id: "",
     sso_client_secret_configured: false,
-    sso_authorize_url: '',
-    sso_token_url: '',
-    sso_userinfo_url: '',
-    sso_redirect_url: '',
+    sso_authorize_url: "",
+    sso_token_url: "",
+    sso_userinfo_url: "",
+    sso_redirect_url: "",
   });
-  const [secretInput, setSecretInput] = useState('');
-  const [error, setError] = useState('');
-  const [message, setMessage] = useState('');
+  const [secretInput, setSecretInput] = useState("");
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await api.get('/admin/settings/sso');
+        const res = await api.get("/admin/settings/sso");
         setData(res.data || {});
       } catch (err) {
-        setError(err.response?.data?.detail || 'Failed to load SSO settings');
+        setError(err.response?.data?.detail || "Failed to load SSO settings");
       }
     };
     load();
@@ -31,8 +31,8 @@ const AdminSSOSettings = () => {
 
   const save = async () => {
     setSaving(true);
-    setError('');
-    setMessage('');
+    setError("");
+    setMessage("");
     const payload = {
       sso_enabled: data.sso_enabled,
       sso_provider: data.sso_provider,
@@ -46,12 +46,12 @@ const AdminSSOSettings = () => {
       payload.sso_client_secret = secretInput;
     }
     try {
-      const res = await api.patch('/admin/settings/sso', payload);
+      const res = await api.patch("/admin/settings/sso", payload);
       setData(res.data || {});
-      setSecretInput('');
-      setMessage('SSO settings updated.');
+      setSecretInput("");
+      setMessage("SSO settings updated.");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to save SSO settings');
+      setError(err.response?.data?.detail || "Failed to save SSO settings");
     } finally {
       setSaving(false);
     }
@@ -67,8 +67,8 @@ const AdminSSOSettings = () => {
           <label>
             Enable SSO
             <select
-              value={data.sso_enabled ? 'true' : 'false'}
-              onChange={(e) => setData({ ...data, sso_enabled: e.target.value === 'true' })}
+              value={data.sso_enabled ? "true" : "false"}
+              onChange={(e) => setData({ ...data, sso_enabled: e.target.value === "true" })}
             >
               <option value="false">Disabled</option>
               <option value="true">Enabled</option>
@@ -87,7 +87,9 @@ const AdminSSOSettings = () => {
             <input
               type="password"
               value={secretInput}
-              placeholder={data.sso_client_secret_configured ? 'Configured (leave blank to keep current)' : 'Not configured'}
+              placeholder={
+                data.sso_client_secret_configured ? "Configured (leave blank to keep current)" : "Not configured"
+              }
               onChange={(e) => setSecretInput(e.target.value)}
             />
           </label>
@@ -118,7 +120,7 @@ const AdminSSOSettings = () => {
           </label>
           <div className="actions">
             <button onClick={save} disabled={saving}>
-              {saving ? 'Saving…' : 'Save'}
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
           {message && <div className="info">{message}</div>}

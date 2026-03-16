@@ -1,3 +1,4 @@
+import hashlib
 import secrets
 from datetime import timedelta
 from typing import Callable, Optional
@@ -12,6 +13,10 @@ from .rbac import Permission, ensure_user_role_fields, has_permission
 from .tables import ConnectToken, Token, User
 from .time_utils import utc_now
 
+_SESSION_TOKEN_DOMAIN = "session"
+_CONNECT_TOKEN_DOMAIN = "connect"
+_TOKEN_HASH_PREFIX = "sha256:"
+
 
 def hash_password(password: str) -> str:
     return bcrypt.hash(password)
@@ -24,9 +29,60 @@ def verify_password(password: str, hashed: str) -> bool:
         return False
 
 
+def _token_storage_key(token_value: str, *, domain: str) -> str:
+    normalized = str(token_value or "").strip()
+    if not normalized:
+        return ""
+    digest = hashlib.sha256(f"{domain}:{normalized}".encode("utf-8")).hexdigest()
+    return f"{_TOKEN_HASH_PREFIX}{digest}"
+
+
+def _is_token_storage_key(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized.startswith(_TOKEN_HASH_PREFIX) and len(normalized) == len(_TOKEN_HASH_PREFIX) + 64
+
+
+def session_token_storage_key(token_value: str) -> str:
+    return _token_storage_key(token_value, domain=_SESSION_TOKEN_DOMAIN)
+
+
+def connect_token_storage_key(token_value: str) -> str:
+    return _token_storage_key(token_value, domain=_CONNECT_TOKEN_DOMAIN)
+
+
+def lookup_session_token(session: Session, token_value: str) -> Token | None:
+    normalized = str(token_value or "").strip()
+    if not normalized:
+        return None
+    hashed_key = session_token_storage_key(normalized)
+    if hashed_key:
+        token = session.get(Token, hashed_key)
+        if token:
+            return token
+    if _is_token_storage_key(normalized):
+        return None
+    # Backward compatibility for legacy plaintext rows.
+    return session.get(Token, normalized)
+
+
+def _lookup_connect_token(session: Session, token_value: str) -> ConnectToken | None:
+    normalized = str(token_value or "").strip()
+    if not normalized:
+        return None
+    hashed_key = connect_token_storage_key(normalized)
+    if hashed_key:
+        token = session.get(ConnectToken, hashed_key)
+        if token:
+            return token
+    if _is_token_storage_key(normalized):
+        return None
+    # Backward compatibility for legacy plaintext rows.
+    return session.get(ConnectToken, normalized)
+
+
 def issue_token(session: Session, username: str) -> str:
-    token_value = secrets.token_hex(32)
-    session.add(Token(token=token_value, username=username))
+    token_value = secrets.token_urlsafe(48)
+    session.add(Token(token=session_token_storage_key(token_value), username=username))
     session.commit()
     return token_value
 
@@ -89,9 +145,22 @@ def extract_auth_token(authorization: Optional[str], request: Request) -> str:
 
 
 def revoke_token_value(session: Session, token_value: str) -> None:
-    token = session.get(Token, token_value)
-    if token:
-        session.delete(token)
+    normalized = str(token_value or "").strip()
+    if not normalized:
+        return
+    deleted = False
+    hashed_key = session_token_storage_key(normalized)
+    if hashed_key:
+        token = session.get(Token, hashed_key)
+        if token:
+            session.delete(token)
+            deleted = True
+    if normalized != hashed_key and not _is_token_storage_key(normalized):
+        legacy_token = session.get(Token, normalized)
+        if legacy_token:
+            session.delete(legacy_token)
+            deleted = True
+    if deleted:
         session.commit()
 
 
@@ -113,7 +182,7 @@ def issue_connect_token(
     token_value = secrets.token_urlsafe(48)
     now = utc_now()
     row = ConnectToken(
-        token=token_value,
+        token=connect_token_storage_key(token_value),
         username=username,
         instance_id=instance_id,
         resource_type=resource_type,
@@ -133,7 +202,7 @@ def consume_connect_grant(
     instance_id: str,
     resource_type: str = "container",
 ) -> User:
-    row = session.get(ConnectToken, token_value)
+    row = _lookup_connect_token(session, token_value)
     now = utc_now()
     if (
         not row
@@ -160,7 +229,7 @@ def validate_connect_session(
     instance_id: str,
     resource_type: str = "container",
 ) -> User:
-    row = session.get(ConnectToken, token_value)
+    row = _lookup_connect_token(session, token_value)
     now = utc_now()
     if (
         not row
@@ -182,7 +251,7 @@ def require_user(
     session: Session = Depends(get_session),
 ) -> User:
     token_value = extract_auth_token(authorization, request)
-    token = session.get(Token, token_value)
+    token = lookup_session_token(session, token_value)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
     if _is_auth_token_expired(token):

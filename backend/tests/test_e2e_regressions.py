@@ -4,10 +4,10 @@ from urllib.parse import parse_qs, urlparse
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
-from src.auth import hash_password
+from src.auth import connect_token_storage_key, hash_password, lookup_session_token
 from src.db import engine
 from src.rbac import Role
-from src.tables import Config, ContainerImage, ContainerTemplate, Image, TeamQuota, Template, Token, User
+from src.tables import Config, ConnectToken, ContainerImage, ContainerTemplate, Image, TeamQuota, Template, User
 from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
@@ -344,8 +344,9 @@ def test_cookie_auth_session_ttl_is_enforced(client: TestClient, monkeypatch):
     assert token_value
 
     with Session(engine) as session:
-        token = session.get(Token, token_value)
+        token = lookup_session_token(session, token_value)
         assert token is not None
+        assert token.token != token_value
         token.issued_at = utc_now() - timedelta(seconds=120)
         session.add(token)
         session.commit()
@@ -355,7 +356,7 @@ def test_cookie_auth_session_ttl_is_enforced(client: TestClient, monkeypatch):
     assert expired.json()["detail"] == "session expired"
 
     with Session(engine) as session:
-        assert session.get(Token, token_value) is None
+        assert lookup_session_token(session, token_value) is None
 
 
 def test_vm_and_container_lifecycle_with_single_active_lab_enforced(login_user: TestClient):
@@ -439,6 +440,10 @@ def test_container_connect_tokens_are_one_time_and_not_url_based(login_user: Tes
 
     grant_cookie = login_user.cookies.get("blabs_connect_grant")
     assert grant_cookie
+    with Session(engine) as session:
+        stored_grant = session.get(ConnectToken, connect_token_storage_key(grant_cookie))
+        assert stored_grant is not None
+        assert stored_grant.token != grant_cookie
 
     with TestClient(login_user.app) as first_use_client:
         first_use_client.cookies.set(

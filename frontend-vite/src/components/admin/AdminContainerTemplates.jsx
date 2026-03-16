@@ -1,45 +1,45 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import { api } from "../../api";
 
 const DEFAULT_FORM = {
-  name: '',
-  description: '',
-  container_image_id: '',
+  name: "",
+  description: "",
+  container_image_id: "",
   cpu_cores: 1,
   memory_mb: 512,
   container_port: 80,
-  healthcheck_protocol: 'tcp',
-  healthcheck_path: '/',
+  healthcheck_protocol: "tcp",
+  healthcheck_path: "/",
   readiness_http_status: 200,
-  readiness_success_path: '',
+  readiness_success_path: "",
   startup_timeout_seconds: 300,
-  dependency_checks_text: '',
-  expose_strategy: 'nodeport',
-  network_mode: 'bridge',
+  dependency_checks_text: "",
+  expose_strategy: "nodeport",
+  network_mode: "bridge",
   run_as_non_root: false,
   read_only_root_filesystem: false,
-  command: '',
-  args_text: '',
-  env_text: '',
+  command: "",
+  args_text: "",
+  env_text: "",
   auto_delete_minutes: 60,
   idle_timeout_minutes: 30,
   enabled: false,
 };
 
 const parseArgs = (raw) =>
-  String(raw || '')
-    .split(',')
+  String(raw || "")
+    .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
 
 const parseEnv = (raw) => {
   const env = {};
-  const lines = String(raw || '')
-    .split('\n')
+  const lines = String(raw || "")
+    .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
   for (const line of lines) {
-    const idx = line.indexOf('=');
+    const idx = line.indexOf("=");
     if (idx <= 0) {
       throw new Error(`Invalid env line: ${line}. Use KEY=value format.`);
     }
@@ -53,16 +53,16 @@ const parseEnv = (raw) => {
 const formatEnv = (env) =>
   Object.entries(env || {})
     .map(([key, value]) => `${key}=${value}`)
-    .join('\n');
+    .join("\n");
 
-const formatArgs = (args) => (args || []).join(', ');
+const formatArgs = (args) => (args || []).join(", ");
 const parseDependencyChecks = (raw) =>
-  String(raw || '')
-    .split('\n')
+  String(raw || "")
+    .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line) => {
-      const parts = line.split(':').map((p) => p.trim());
+      const parts = line.split(":").map((p) => p.trim());
       if (parts.length < 2) {
         throw new Error(`Invalid dependency line: ${line}. Use host:port[:timeoutSeconds].`);
       }
@@ -74,29 +74,29 @@ const parseDependencyChecks = (raw) =>
     })
     .filter((item) => item.host && item.port > 0);
 const formatDependencyChecks = (items) =>
-  (items || []).map((item) => `${item.host}:${item.port}:${item.timeout_seconds || 90}`).join('\n');
+  (items || []).map((item) => `${item.host}:${item.port}:${item.timeout_seconds || 90}`).join("\n");
 const toCpuCores = (millicores) => Math.max(1, Math.round((Number(millicores) || 1000) / 1000));
 const toMillicores = (cores) => Math.max(1, parseInt(cores, 10) || 1) * 1000;
 
 const AdminContainerTemplates = () => {
   const [templates, setTemplates] = useState([]);
   const [images, setImages] = useState([]);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
 
   const load = async () => {
     try {
       const [tmplRes, imgRes] = await Promise.all([
-        api.get('/admin/container-templates'),
-        api.get('/admin/container-images'),
+        api.get("/admin/container-templates"),
+        api.get("/admin/container-images"),
       ]);
       setTemplates(tmplRes.data || []);
       setImages(imgRes.data || []);
-      setError('');
+      setError("");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load container templates');
+      setError(err.response?.data?.detail || "Failed to load container templates");
     }
   };
 
@@ -111,16 +111,16 @@ const AdminContainerTemplates = () => {
     cpu_millicores: toMillicores(source.cpu_cores),
     memory_mb: Number(source.memory_mb) || 512,
     container_port: Math.max(1, Math.min(65535, Number(source.container_port) || 80)),
-    healthcheck_protocol: source.healthcheck_protocol === 'http' ? 'http' : 'tcp',
-    healthcheck_path: String(source.healthcheck_path || '/').trim() || '/',
+    healthcheck_protocol: source.healthcheck_protocol === "http" ? "http" : "tcp",
+    healthcheck_path: String(source.healthcheck_path || "/").trim() || "/",
     readiness_http_status: Math.max(100, Math.min(599, Number(source.readiness_http_status) || 200)),
-    readiness_success_path: String(source.readiness_success_path || '').trim() || null,
+    readiness_success_path: String(source.readiness_success_path || "").trim() || null,
     startup_timeout_seconds: Math.max(10, Number(source.startup_timeout_seconds) || 300),
     dependency_checks: parseDependencyChecks(source.dependency_checks_text),
-    expose_strategy: source.expose_strategy === 'ingress' ? 'ingress' : 'nodeport',
-    network_mode: ['bridge', 'none', 'isolated', 'unrestricted'].includes(String(source.network_mode || 'bridge'))
-      ? String(source.network_mode || 'bridge')
-      : 'bridge',
+    expose_strategy: source.expose_strategy === "ingress" ? "ingress" : "nodeport",
+    network_mode: ["bridge", "none", "isolated", "unrestricted"].includes(String(source.network_mode || "bridge"))
+      ? String(source.network_mode || "bridge")
+      : "bridge",
     run_as_non_root: Boolean(source.run_as_non_root),
     read_only_root_filesystem: Boolean(source.read_only_root_filesystem),
     command: source.command || null,
@@ -133,35 +133,35 @@ const AdminContainerTemplates = () => {
 
   const create = async () => {
     try {
-      await api.post('/admin/container-templates', toPayload(form));
+      await api.post("/admin/container-templates", toPayload(form));
       setForm({ ...DEFAULT_FORM });
-      setMessage('Container template created');
-      setError('');
+      setMessage("Container template created");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to create container template');
+      setError(err.response?.data?.detail || err.message || "Failed to create container template");
     }
   };
 
   const remove = async (templateId) => {
     try {
       await api.delete(`/admin/container-templates/${templateId}`);
-      setMessage('Container template deleted');
-      setError('');
+      setMessage("Container template deleted");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to delete container template');
+      setError(err.response?.data?.detail || "Failed to delete container template");
     }
   };
 
   const toggle = async (templateId, enabled) => {
     try {
       await api.patch(`/admin/container-templates/${templateId}`, { enabled });
-      setMessage('Container template updated');
-      setError('');
+      setMessage("Container template updated");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to update container template');
+      setError(err.response?.data?.detail || "Failed to update container template");
     }
   };
 
@@ -169,30 +169,30 @@ const AdminContainerTemplates = () => {
     setEditingId(tmpl.id);
     setForm({
       name: tmpl.name,
-      description: tmpl.description || '',
+      description: tmpl.description || "",
       container_image_id: tmpl.container_image_id,
       cpu_cores: toCpuCores(tmpl.cpu_millicores),
       memory_mb: tmpl.memory_mb || 512,
       container_port: tmpl.container_port || 80,
-      healthcheck_protocol: tmpl.healthcheck_protocol || 'tcp',
-      healthcheck_path: tmpl.healthcheck_path || '/',
+      healthcheck_protocol: tmpl.healthcheck_protocol || "tcp",
+      healthcheck_path: tmpl.healthcheck_path || "/",
       readiness_http_status: tmpl.readiness_http_status || 200,
-      readiness_success_path: tmpl.readiness_success_path || '',
+      readiness_success_path: tmpl.readiness_success_path || "",
       startup_timeout_seconds: tmpl.startup_timeout_seconds || 300,
       dependency_checks_text: formatDependencyChecks(tmpl.dependency_checks || []),
-      expose_strategy: tmpl.expose_strategy || 'nodeport',
-      network_mode: tmpl.network_mode || 'bridge',
+      expose_strategy: tmpl.expose_strategy || "nodeport",
+      network_mode: tmpl.network_mode || "bridge",
       run_as_non_root: Boolean(tmpl.run_as_non_root),
       read_only_root_filesystem: Boolean(tmpl.read_only_root_filesystem),
-      command: tmpl.command || '',
+      command: tmpl.command || "",
       args_text: formatArgs(tmpl.args || []),
       env_text: formatEnv(tmpl.env || {}),
       auto_delete_minutes: tmpl.auto_delete_minutes || 60,
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
       enabled: Boolean(tmpl.enabled),
     });
-    setMessage('');
-    setError('');
+    setMessage("");
+    setError("");
   };
 
   const saveEdit = async () => {
@@ -200,21 +200,21 @@ const AdminContainerTemplates = () => {
       await api.patch(`/admin/container-templates/${editingId}`, toPayload(form));
       setEditingId(null);
       setForm({ ...DEFAULT_FORM });
-      setMessage('Container template saved');
-      setError('');
+      setMessage("Container template saved");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Failed to update container template');
+      setError(err.response?.data?.detail || err.message || "Failed to update container template");
     }
   };
 
   const cancelEdit = () => {
     setEditingId(null);
     setForm({ ...DEFAULT_FORM });
-    setError('');
+    setError("");
   };
 
-  const imageRef = (imageId) => images.find((img) => img.id === imageId)?.image_ref || '-';
+  const imageRef = (imageId) => images.find((img) => img.id === imageId)?.image_ref || "-";
   return (
     <div className="container-templates-page">
       <h2>Container Templates</h2>
@@ -222,7 +222,7 @@ const AdminContainerTemplates = () => {
       {error && <div className="error">{error}</div>}
       <div className="grid">
         <div className="card">
-          <h3>{editingId ? 'Edit container template' : 'Create container template'}</h3>
+          <h3>{editingId ? "Edit container template" : "Create container template"}</h3>
           <div className="form container-template-form">
             <label>
               Name
@@ -363,7 +363,7 @@ const AdminContainerTemplates = () => {
                 }
               />
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <input
                 type="checkbox"
                 checked={form.run_as_non_root}
@@ -371,7 +371,7 @@ const AdminContainerTemplates = () => {
               />
               Run as non-root
             </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
               <input
                 type="checkbox"
                 checked={form.read_only_root_filesystem}
@@ -384,7 +384,7 @@ const AdminContainerTemplates = () => {
               <textarea
                 rows={4}
                 value={form.dependency_checks_text}
-                placeholder={'db.<namespace>.svc.cluster.local:5432:120\\ncache.<namespace>.svc.cluster.local:6379:60'}
+                placeholder={"db.<namespace>.svc.cluster.local:5432:120\\ncache.<namespace>.svc.cluster.local:6379:60"}
                 onChange={(e) => setForm((prev) => ({ ...prev, dependency_checks_text: e.target.value }))}
               />
             </label>
@@ -409,7 +409,7 @@ const AdminContainerTemplates = () => {
               <textarea
                 rows={4}
                 value={form.env_text}
-                placeholder={'KEY=value\\nKEY2=value2'}
+                placeholder={"KEY=value\\nKEY2=value2"}
                 onChange={(e) => setForm((prev) => ({ ...prev, env_text: e.target.value }))}
               />
             </label>
@@ -432,8 +432,8 @@ const AdminContainerTemplates = () => {
               <label>
                 Enabled
                 <select
-                  value={form.enabled ? 'true' : 'false'}
-                  onChange={(e) => setForm((prev) => ({ ...prev, enabled: e.target.value === 'true' }))}
+                  value={form.enabled ? "true" : "false"}
+                  onChange={(e) => setForm((prev) => ({ ...prev, enabled: e.target.value === "true" }))}
                 >
                   <option value="true">Enabled</option>
                   <option value="false">Disabled</option>
@@ -464,8 +464,8 @@ const AdminContainerTemplates = () => {
               <div key={tmpl.id} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{tmpl.name}</h4>
-                  <span className={`badge ${tmpl.enabled ? 'success' : 'warn'}`}>
-                    {tmpl.enabled ? 'enabled' : 'disabled'}
+                  <span className={`badge ${tmpl.enabled ? "success" : "warn"}`}>
+                    {tmpl.enabled ? "enabled" : "disabled"}
                   </span>
                 </div>
                 <div className="specs">
@@ -476,7 +476,7 @@ const AdminContainerTemplates = () => {
                 <div className="muted small template-image-ref">Image: {imageRef(tmpl.container_image_id)}</div>
                 <div className="actions">
                   <button className="ghost" onClick={() => toggle(tmpl.id, !tmpl.enabled)}>
-                    {tmpl.enabled ? 'Disable' : 'Enable'}
+                    {tmpl.enabled ? "Disable" : "Enable"}
                   </button>
                   <button className="ghost" onClick={() => startEdit(tmpl)}>
                     Edit

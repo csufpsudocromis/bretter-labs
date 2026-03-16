@@ -178,7 +178,9 @@ class KubernetesService:
             if exc.status != 404:
                 raise
 
-        source = core.read_namespaced_persistent_volume_claim(name=req.image_source_pvc, namespace=settings.kube_namespace)
+        source = core.read_namespaced_persistent_volume_claim(
+            name=req.image_source_pvc, namespace=settings.kube_namespace
+        )
         source_request = None
         if source.spec and source.spec.resources and source.spec.resources.requests:
             source_request = source.spec.resources.requests.get("storage")
@@ -207,7 +209,9 @@ class KubernetesService:
     def reserve_warm_pool_pvc(self, template_id: str, instance_id: str, owner: str) -> Optional[str]:
         core = self._client()
         selector = f"blabs-pool=true,template-id={template_id},pool-state=ready"
-        items = core.list_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, label_selector=selector).items
+        items = core.list_namespaced_persistent_volume_claim(
+            namespace=settings.kube_namespace, label_selector=selector
+        ).items
         for pvc in items:
             if (pvc.status.phase or "").lower() != "bound":
                 continue
@@ -341,7 +345,9 @@ class KubernetesService:
                 if str(existing_spec.external_traffic_policy or "") != external_traffic_policy:
                     needs_patch = True
             if needs_patch:
-                core.patch_namespaced_service(name=service_name, namespace=settings.kube_namespace, body={"spec": desired_patch})
+                core.patch_namespaced_service(
+                    name=service_name, namespace=settings.kube_namespace, body={"spec": desired_patch}
+                )
                 existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
             if normalized_service_type == "NodePort":
                 return existing.spec.ports[0].node_port
@@ -593,7 +599,9 @@ class KubernetesService:
                 if phase in {"running", "succeeded", "failed"}:
                     break
                 wait_reason = ""
-                for status in list(pod.status.init_container_statuses or []) + list(pod.status.container_statuses or []):
+                for status in list(pod.status.init_container_statuses or []) + list(
+                    pod.status.container_statuses or []
+                ):
                     state = status.state
                     if state and state.waiting:
                         wait_reason = (state.waiting.reason or "").lower()
@@ -773,7 +781,9 @@ class KubernetesService:
                 failure_threshold=3,
             ),
             security_context=client.V1SecurityContext(
-                privileged=(settings.vm_runner_privileged or settings.kube_use_kvm or settings.vm_net_backend == "tap-nat")
+                privileged=(
+                    settings.vm_runner_privileged or settings.kube_use_kvm or settings.vm_net_backend == "tap-nat"
+                )
             ),
         )
         if settings.kube_spice_embed_configmap:
@@ -833,9 +843,7 @@ class KubernetesService:
                     max_skew=1,
                     topology_key="kubernetes.io/hostname",
                     when_unsatisfiable="ScheduleAnyway",
-                    label_selector=client.V1LabelSelector(
-                        match_labels={"app.kubernetes.io/component": "vm-runner"}
-                    ),
+                    label_selector=client.V1LabelSelector(match_labels={"app.kubernetes.io/component": "vm-runner"}),
                 )
             ]
         if settings.image_pull_secret:
@@ -1008,8 +1016,8 @@ class KubernetesService:
                         f"  if nslookup {safe_host} >/dev/null 2>&1 && nc -z -w 2 {safe_host} {dep_port} >/dev/null 2>&1; then",
                         "    break",
                         "  fi",
-                        "  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then",
-                        f'    echo \"Dependency {host}:{dep_port} not reachable before timeout\"',
+                        '  if [ "$(date +%s)" -ge "$deadline" ]; then',
+                        f'    echo "Dependency {host}:{dep_port} not reachable before timeout"',
                         "    exit 1",
                         "  fi",
                         "  sleep 2",
@@ -1101,7 +1109,10 @@ class KubernetesService:
                 raise
         try:
             core.delete_namespaced_pod(
-                name=pod_name, namespace=settings.kube_namespace, grace_period_seconds=0, propagation_policy="Foreground"
+                name=pod_name,
+                namespace=settings.kube_namespace,
+                grace_period_seconds=0,
+                propagation_policy="Foreground",
             )
         except ApiException as exc:
             if exc.status == 404:
@@ -1397,9 +1408,7 @@ class KubernetesService:
         # When CIDR allowlists are enabled, always allow backend pods so proxy-based console access
         # keeps working even if pod CIDRs are not part of the external source ranges.
         peers: list[client.V1NetworkPolicyPeer] = [
-            client.V1NetworkPolicyPeer(
-                pod_selector=client.V1LabelSelector(match_labels={"app": "bretter-backend"})
-            )
+            client.V1NetworkPolicyPeer(pod_selector=client.V1LabelSelector(match_labels={"app": "bretter-backend"}))
         ]
         for entry in raw.split(","):
             cidr = entry.strip()
@@ -1413,7 +1422,9 @@ class KubernetesService:
             peers.append(client.V1NetworkPolicyPeer(ip_block=client.V1IPBlock(cidr=normalized)))
         return peers or None
 
-    def apply_container_network_policy(self, instance_id: str, pod_name: str, app_port: int, mode: str = "bridge") -> None:
+    def apply_container_network_policy(
+        self, instance_id: str, pod_name: str, app_port: int, mode: str = "bridge"
+    ) -> None:
         networking = self._networking_client()
         normalized_mode = str(mode or "bridge").strip().lower()
         policy_name = self._container_netpol_name(instance_id)

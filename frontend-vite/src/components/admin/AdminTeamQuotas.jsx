@@ -1,20 +1,20 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import { api } from "../../api";
 
-const DEFAULT_TEAM = 'default';
+const DEFAULT_TEAM = "default";
 
 const emptyForm = {
-  namespace: 'labs',
-  max_concurrent_labs: '',
-  max_cpu_millicores: '',
-  max_memory_mb: '',
-  max_storage_gib: '',
-  idle_timeout_minutes_cap: '',
+  namespace: "labs",
+  max_concurrent_labs: "",
+  max_cpu_millicores: "",
+  max_memory_mb: "",
+  max_storage_gib: "",
+  idle_timeout_minutes_cap: "",
   enabled: true,
 };
 
 const normalizeNumber = (value) => {
-  const raw = String(value ?? '').trim();
+  const raw = String(value ?? "").trim();
   if (!raw) return null;
   const parsed = Number(raw);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : null;
@@ -22,31 +22,49 @@ const normalizeNumber = (value) => {
 
 const AdminTeamQuotas = () => {
   const [quotas, setQuotas] = useState([]);
-  const [namespaces, setNamespaces] = useState(['labs']);
+  const [namespaces, setNamespaces] = useState(["labs"]);
   const [form, setForm] = useState({ ...emptyForm });
-  const [editingId, setEditingId] = useState('');
-  const [message, setMessage] = useState('');
+  const [editingId, setEditingId] = useState("");
+  const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   const load = async () => {
     let loadedQuotas = [];
     try {
-      const res = await api.get('/admin/team-quotas');
+      const res = await api.get("/admin/team-quotas");
       loadedQuotas = (res.data || []).filter((row) => String(row?.team || DEFAULT_TEAM).toLowerCase() === DEFAULT_TEAM);
       setQuotas(loadedQuotas);
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to load team quotas');
+      setMessage(err.response?.data?.detail || "Failed to load team quotas");
     }
     try {
-      const res = await api.get('/admin/quota-namespaces');
+      const res = await api.get("/admin/quota-namespaces");
       const values = Array.isArray(res.data) ? res.data : [];
-      const merged = new Set(['labs', String(form.namespace || '').trim() || 'labs']);
-      values.forEach((item) => merged.add(String(item || '').trim().toLowerCase()));
-      loadedQuotas.forEach((row) => merged.add(String(row.namespace || '').trim().toLowerCase()));
+      const merged = new Set(["labs", String(form.namespace || "").trim() || "labs"]);
+      values.forEach((item) =>
+        merged.add(
+          String(item || "")
+            .trim()
+            .toLowerCase()
+        )
+      );
+      loadedQuotas.forEach((row) =>
+        merged.add(
+          String(row.namespace || "")
+            .trim()
+            .toLowerCase()
+        )
+      );
       setNamespaces(Array.from(merged).filter(Boolean).sort());
     } catch {
-      const merged = new Set(['labs', String(form.namespace || '').trim() || 'labs']);
-      loadedQuotas.forEach((row) => merged.add(String(row.namespace || '').trim().toLowerCase()));
+      const merged = new Set(["labs", String(form.namespace || "").trim() || "labs"]);
+      loadedQuotas.forEach((row) =>
+        merged.add(
+          String(row.namespace || "")
+            .trim()
+            .toLowerCase()
+        )
+      );
       setNamespaces(Array.from(merged).filter(Boolean).sort());
     }
   };
@@ -58,13 +76,13 @@ const AdminTeamQuotas = () => {
   const updateField = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
 
   const startCreate = () => {
-    setEditingId('');
+    setEditingId("");
     setForm({ ...emptyForm });
-    setMessage('');
+    setMessage("");
   };
 
   const startEdit = (row) => {
-    const namespace = row.namespace || 'labs';
+    const namespace = row.namespace || "labs";
     setNamespaces((prev) => {
       const merged = new Set([...(prev || []), namespace]);
       return Array.from(merged).filter(Boolean).sort();
@@ -72,20 +90,20 @@ const AdminTeamQuotas = () => {
     setEditingId(row.id);
     setForm({
       namespace,
-      max_concurrent_labs: row.max_concurrent_labs ?? '',
-      max_cpu_millicores: row.max_cpu_millicores ?? '',
-      max_memory_mb: row.max_memory_mb ?? '',
-      max_storage_gib: row.max_storage_gib ?? '',
-      idle_timeout_minutes_cap: row.idle_timeout_minutes_cap ?? '',
+      max_concurrent_labs: row.max_concurrent_labs ?? "",
+      max_cpu_millicores: row.max_cpu_millicores ?? "",
+      max_memory_mb: row.max_memory_mb ?? "",
+      max_storage_gib: row.max_storage_gib ?? "",
+      idle_timeout_minutes_cap: row.idle_timeout_minutes_cap ?? "",
       enabled: Boolean(row.enabled),
     });
-    setMessage('');
+    setMessage("");
   };
 
   const buildPayload = (forUpdate = false) => {
     const payload = {
       team: DEFAULT_TEAM,
-      namespace: String(form.namespace || '').trim() || 'labs',
+      namespace: String(form.namespace || "").trim() || "labs",
       enabled: Boolean(form.enabled),
     };
     const maxConcurrent = normalizeNumber(form.max_concurrent_labs);
@@ -115,25 +133,25 @@ const AdminTeamQuotas = () => {
   };
 
   const save = async () => {
-    const namespace = String(form.namespace || '').trim();
+    const namespace = String(form.namespace || "").trim();
     if (!namespace) {
-      setMessage('Namespace is required');
+      setMessage("Namespace is required");
       return;
     }
     setSaving(true);
     try {
       if (editingId) {
         await api.patch(`/admin/team-quotas/${editingId}`, buildPayload(true));
-        setMessage('Quota updated');
+        setMessage("Quota updated");
       } else {
-        await api.post('/admin/team-quotas', buildPayload(false));
-        setMessage('Quota created');
+        await api.post("/admin/team-quotas", buildPayload(false));
+        setMessage("Quota created");
       }
-      setEditingId('');
-      setForm({ ...emptyForm, namespace: namespace || 'labs' });
+      setEditingId("");
+      setForm({ ...emptyForm, namespace: namespace || "labs" });
       await load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to save team quota');
+      setMessage(err.response?.data?.detail || "Failed to save team quota");
     } finally {
       setSaving(false);
     }
@@ -144,20 +162,20 @@ const AdminTeamQuotas = () => {
     try {
       await api.delete(`/admin/team-quotas/${id}`);
       if (editingId === id) {
-        setEditingId('');
+        setEditingId("");
         setForm({ ...emptyForm });
       }
-      setMessage('Quota deleted');
+      setMessage("Quota deleted");
       await load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to delete team quota');
+      setMessage(err.response?.data?.detail || "Failed to delete team quota");
     } finally {
       setSaving(false);
     }
   };
 
-  const limitLabel = (value, suffix = '') => {
-    if (!value) return 'Unlimited';
+  const limitLabel = (value, suffix = "") => {
+    if (!value) return "Unlimited";
     return `${value}${suffix}`;
   };
 
@@ -168,11 +186,11 @@ const AdminTeamQuotas = () => {
       {message && <div className="info">{message}</div>}
       <div className="grid">
         <div>
-          <h3>{editingId ? 'Edit quota' : 'Create quota'}</h3>
+          <h3>{editingId ? "Edit quota" : "Create quota"}</h3>
           <div className="form">
             <label>
               Namespace
-              <select value={form.namespace} onChange={(e) => updateField('namespace', e.target.value)}>
+              <select value={form.namespace} onChange={(e) => updateField("namespace", e.target.value)}>
                 {namespaces.map((namespace) => (
                   <option key={namespace} value={namespace}>
                     {namespace}
@@ -186,7 +204,7 @@ const AdminTeamQuotas = () => {
                 type="number"
                 min="1"
                 value={form.max_concurrent_labs}
-                onChange={(e) => updateField('max_concurrent_labs', e.target.value)}
+                onChange={(e) => updateField("max_concurrent_labs", e.target.value)}
                 placeholder="Unlimited"
               />
             </label>
@@ -196,7 +214,7 @@ const AdminTeamQuotas = () => {
                 type="number"
                 min="100"
                 value={form.max_cpu_millicores}
-                onChange={(e) => updateField('max_cpu_millicores', e.target.value)}
+                onChange={(e) => updateField("max_cpu_millicores", e.target.value)}
                 placeholder="Unlimited"
               />
             </label>
@@ -206,7 +224,7 @@ const AdminTeamQuotas = () => {
                 type="number"
                 min="128"
                 value={form.max_memory_mb}
-                onChange={(e) => updateField('max_memory_mb', e.target.value)}
+                onChange={(e) => updateField("max_memory_mb", e.target.value)}
                 placeholder="Unlimited"
               />
             </label>
@@ -216,7 +234,7 @@ const AdminTeamQuotas = () => {
                 type="number"
                 min="1"
                 value={form.max_storage_gib}
-                onChange={(e) => updateField('max_storage_gib', e.target.value)}
+                onChange={(e) => updateField("max_storage_gib", e.target.value)}
                 placeholder="Unlimited"
               />
             </label>
@@ -227,13 +245,16 @@ const AdminTeamQuotas = () => {
                 min="1"
                 max="1440"
                 value={form.idle_timeout_minutes_cap}
-                onChange={(e) => updateField('idle_timeout_minutes_cap', e.target.value)}
+                onChange={(e) => updateField("idle_timeout_minutes_cap", e.target.value)}
                 placeholder="No cap"
               />
             </label>
             <label>
               Enabled
-              <select value={form.enabled ? 'yes' : 'no'} onChange={(e) => updateField('enabled', e.target.value === 'yes')}>
+              <select
+                value={form.enabled ? "yes" : "no"}
+                onChange={(e) => updateField("enabled", e.target.value === "yes")}
+              >
                 <option value="yes">Enabled</option>
                 <option value="no">Disabled</option>
               </select>
@@ -245,7 +266,7 @@ const AdminTeamQuotas = () => {
                 </button>
               )}
               <button type="button" onClick={save} disabled={saving}>
-                {editingId ? 'Save quota' : 'Add quota'}
+                {editingId ? "Save quota" : "Add quota"}
               </button>
             </div>
           </div>
@@ -258,13 +279,15 @@ const AdminTeamQuotas = () => {
               <div key={row.id} className="tile">
                 <div className="tile-header">
                   <h4>{row.namespace}</h4>
-                  <span className={`badge ${row.enabled ? 'success' : 'warn'}`}>{row.enabled ? 'Enabled' : 'Disabled'}</span>
+                  <span className={`badge ${row.enabled ? "success" : "warn"}`}>
+                    {row.enabled ? "Enabled" : "Disabled"}
+                  </span>
                 </div>
                 <div className="small muted">Max labs: {limitLabel(row.max_concurrent_labs)}</div>
-                <div className="small muted">CPU cap: {limitLabel(row.max_cpu_millicores, 'm')}</div>
-                <div className="small muted">RAM cap: {limitLabel(row.max_memory_mb, ' MB')}</div>
-                <div className="small muted">Storage cap: {limitLabel(row.max_storage_gib, ' GiB')}</div>
-                <div className="small muted">Idle cap: {limitLabel(row.idle_timeout_minutes_cap, ' min')}</div>
+                <div className="small muted">CPU cap: {limitLabel(row.max_cpu_millicores, "m")}</div>
+                <div className="small muted">RAM cap: {limitLabel(row.max_memory_mb, " MB")}</div>
+                <div className="small muted">Storage cap: {limitLabel(row.max_storage_gib, " GiB")}</div>
+                <div className="small muted">Idle cap: {limitLabel(row.idle_timeout_minutes_cap, " min")}</div>
                 <div className="actions">
                   <button type="button" className="ghost" onClick={() => startEdit(row)}>
                     Edit

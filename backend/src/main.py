@@ -138,29 +138,22 @@ def _resolve_cors_policy() -> tuple[list[str], str | None, list[str], list[str]]
             "Use explicit BLABS_CORS_ALLOWED_ORIGINS."
         )
     if not configured_origins:
-        raise RuntimeError(
-            "BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_CORS_ENTERPRISE_PROFILE=true."
-        )
+        raise RuntimeError("BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_CORS_ENTERPRISE_PROFILE=true.")
 
     configured_methods = _configured_cors_methods()
     methods = configured_methods or ENTERPRISE_CORS_DEFAULT_METHODS
     if "*" in methods:
-        raise RuntimeError(
-            "Wildcard methods are not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true."
-        )
+        raise RuntimeError("Wildcard methods are not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true.")
     invalid_methods = [method for method in methods if method not in ENTERPRISE_CORS_ALLOWED_METHODS]
     if invalid_methods:
         raise RuntimeError(
-            "Unsupported BLABS_CORS_ALLOWED_METHODS values in enterprise profile: "
-            + ", ".join(invalid_methods)
+            "Unsupported BLABS_CORS_ALLOWED_METHODS values in enterprise profile: " + ", ".join(invalid_methods)
         )
 
     configured_headers = _configured_cors_headers()
     headers = configured_headers or ENTERPRISE_CORS_DEFAULT_HEADERS
     if "*" in headers:
-        raise RuntimeError(
-            "Wildcard headers are not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true."
-        )
+        raise RuntimeError("Wildcard headers are not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true.")
 
     logger.info(
         "Enterprise CORS profile enabled with explicit origin allowlist (%d origins).",

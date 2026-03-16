@@ -42,6 +42,9 @@ def main() -> int:
     frontend_pkg_path = root / "frontend-vite" / "package.json"
     frontend_lock_path = root / "frontend-vite" / "package-lock.json"
     values_prod_path = root / "deploy" / "helm" / "values-production.yaml"
+    setup_script_path = root / "scripts" / "setup.sh"
+    frontend_dockerfile_path = root / "frontend-vite" / "Dockerfile"
+    backend_dockerfile_path = root / "backend" / "Dockerfile"
 
     errors: list[str] = []
 
@@ -89,8 +92,7 @@ def main() -> int:
             continue
         if not DIGEST_PIN_RE.match(image_ref):
             errors.append(
-                "deploy/helm/values-production.yaml must pin production images by digest: "
-                f"{key}={image_ref!r}"
+                "deploy/helm/values-production.yaml must pin production images by digest: " f"{key}={image_ref!r}"
             )
 
     expected_neutral_defaults = {
@@ -105,6 +107,22 @@ def main() -> int:
                 "deploy/helm/values-production.yaml should keep neutral repo defaults "
                 f"for {key}: expected {expected!r}, found {actual!r}"
             )
+
+    setup_script = _read_text(setup_script_path)
+    if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:
+        errors.append("scripts/setup.sh must not fall back to DEFAULT_IMAGE_TAG=latest.")
+    if re.search(r"METRICS_SERVER_MANIFEST_URL=.*releases/latest", setup_script):
+        errors.append("scripts/setup.sh must not default metrics-server manifest URL to releases/latest.")
+
+    frontend_dockerfile = _read_text(frontend_dockerfile_path)
+    if "RUN npm ci" not in frontend_dockerfile:
+        errors.append("frontend-vite/Dockerfile must use `npm ci` for deterministic installs.")
+    if "RUN npm install" in frontend_dockerfile:
+        errors.append("frontend-vite/Dockerfile must not use `npm install` in build stage.")
+
+    backend_dockerfile = _read_text(backend_dockerfile_path)
+    if "releases/latest" in backend_dockerfile or "contrib/install.sh" in backend_dockerfile:
+        errors.append("backend/Dockerfile must pin cosign/trivy downloads to explicit versions.")
 
     if errors:
         print("Release/version discipline checks failed:", file=sys.stderr)

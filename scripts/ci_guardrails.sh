@@ -18,6 +18,12 @@ if ! "$PYTHON_BIN" -c "import fastapi" >/dev/null 2>&1; then
   echo "ERROR: fastapi is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
   exit 1
 fi
+if ! "$PYTHON_BIN" -c "import black" >/dev/null 2>&1; then
+  echo "ERROR: black is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
+  exit 1
+fi
+
+"$PYTHON_BIN" -m black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 

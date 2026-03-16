@@ -145,9 +145,7 @@ class VMTemplateCreate(BaseModel):
     preclone_pool_max: int = Field(default=0, ge=0, le=50)
     max_active_instances: int = Field(default=2, ge=0, le=200)
     enabled: bool = False
-    network_mode: str = Field(
-        default="bridge", pattern="^(bridge|host|none|unrestricted|isolated)$"
-    )
+    network_mode: str = Field(default="bridge", pattern="^(bridge|host|none|unrestricted|isolated)$")
 
 
 class VMTemplateUpdate(BaseModel):
@@ -163,9 +161,7 @@ class VMTemplateUpdate(BaseModel):
     preclone_pool_max: Optional[int] = Field(default=None, ge=0, le=50)
     max_active_instances: Optional[int] = Field(default=None, ge=0, le=200)
     enabled: Optional[bool] = None
-    network_mode: Optional[str] = Field(
-        default=None, pattern="^(bridge|host|none|unrestricted|isolated)$"
-    )
+    network_mode: Optional[str] = Field(default=None, pattern="^(bridge|host|none|unrestricted|isolated)$")
 
 
 class VMTemplate(BaseModel):

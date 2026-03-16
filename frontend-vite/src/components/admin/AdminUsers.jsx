@@ -1,36 +1,36 @@
-import React, { useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import { api } from "../../api";
 
 const ROLE_OPTIONS = [
-  { value: 'user', label: 'User' },
-  { value: 'viewer', label: 'Viewer (read-only)' },
-  { value: 'image_manager', label: 'Image Manager' },
-  { value: 'template_manager', label: 'Template Manager' },
-  { value: 'lab_operator', label: 'Lab Operator' },
-  { value: 'platform_admin', label: 'Platform Admin' },
+  { value: "user", label: "User" },
+  { value: "viewer", label: "Viewer (read-only)" },
+  { value: "image_manager", label: "Image Manager" },
+  { value: "template_manager", label: "Template Manager" },
+  { value: "lab_operator", label: "Lab Operator" },
+  { value: "platform_admin", label: "Platform Admin" },
 ];
 
 const roleLabel = (value) => ROLE_OPTIONS.find((item) => item.value === value)?.label || value;
 
 const AdminUsers = () => {
   const [users, setUsers] = useState([]);
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [role, setRole] = useState('user');
-  const [team, setTeam] = useState('default');
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("user");
+  const [team, setTeam] = useState("default");
   const [editingUser, setEditingUser] = useState(null);
-  const [editPassword, setEditPassword] = useState('');
-  const [editUsername, setEditUsername] = useState('');
-  const [editRole, setEditRole] = useState('user');
-  const [editTeam, setEditTeam] = useState('default');
-  const [message, setMessage] = useState('');
+  const [editPassword, setEditPassword] = useState("");
+  const [editUsername, setEditUsername] = useState("");
+  const [editRole, setEditRole] = useState("user");
+  const [editTeam, setEditTeam] = useState("default");
+  const [message, setMessage] = useState("");
 
   const load = async () => {
     try {
-      const res = await api.get('/admin/users');
+      const res = await api.get("/admin/users");
       setUsers(res.data);
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to load users');
+      setMessage(err.response?.data?.detail || "Failed to load users");
     }
   };
 
@@ -40,31 +40,31 @@ const AdminUsers = () => {
 
   const create = async () => {
     try {
-      await api.post('/admin/users', {
+      await api.post("/admin/users", {
         username,
         password,
         role,
         team,
-        is_admin: role !== 'user',
+        is_admin: role !== "user",
       });
-      setUsername('');
-      setPassword('');
-      setRole('user');
-      setTeam('default');
-      setMessage('User created');
+      setUsername("");
+      setPassword("");
+      setRole("user");
+      setTeam("default");
+      setMessage("User created");
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to create user');
+      setMessage(err.response?.data?.detail || "Failed to create user");
     }
   };
 
   const selectUser = (user) => {
     setEditingUser(user.username);
     setEditUsername(user.username);
-    setEditPassword('');
-    setEditRole(user.role || (user.is_admin ? 'platform_admin' : 'user'));
-    setEditTeam(user.team || 'default');
-    setMessage('');
+    setEditPassword("");
+    setEditRole(user.role || (user.is_admin ? "platform_admin" : "user"));
+    setEditTeam(user.team || "default");
+    setMessage("");
   };
 
   const saveUser = async () => {
@@ -74,14 +74,14 @@ const AdminUsers = () => {
         password: editPassword || undefined,
         role: editRole,
         team: editTeam,
-        is_admin: editRole !== 'user',
+        is_admin: editRole !== "user",
       });
-      setMessage('User updated');
+      setMessage("User updated");
       setEditingUser(null);
-      setEditPassword('');
+      setEditPassword("");
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || 'Failed to update user');
+      setMessage(err.response?.data?.detail || "Failed to update user");
     }
   };
 
@@ -128,14 +128,14 @@ const AdminUsers = () => {
               <button type="button" key={u.username} className="tile tile-button" onClick={() => selectUser(u)}>
                 <div className="tile-header">
                   <h4>{u.username}</h4>
-                  <span className="badge">{roleLabel(u.role || (u.is_admin ? 'platform_admin' : 'user'))}</span>
+                  <span className="badge">{roleLabel(u.role || (u.is_admin ? "platform_admin" : "user"))}</span>
                 </div>
-                <div className="small muted">Team: {u.team || 'default'}</div>
+                <div className="small muted">Team: {u.team || "default"}</div>
               </button>
             ))}
           </div>
           {editingUser && (
-            <div className="card" style={{ marginTop: '1rem' }}>
+            <div className="card" style={{ marginTop: "1rem" }}>
               <h4>Edit user</h4>
               <div className="form">
                 <label>

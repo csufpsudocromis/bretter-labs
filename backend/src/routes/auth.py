@@ -19,6 +19,7 @@ from ..auth import (
     extract_auth_token,
     hash_password,
     issue_token,
+    lookup_session_token,
     require_user,
     revoke_token_value,
     set_auth_cookie,
@@ -29,9 +30,13 @@ from ..db import get_session
 from ..models import Credentials, UserOut
 from ..rbac import Role, can_access_admin, list_permissions_for_role, role_for_user
 from ..secret_codec import decrypt_secret
-from ..services.ldap_auth import LDAPRuntimeConfig, authenticate as ldap_authenticate, missing_required_fields as ldap_missing_required_fields
+from ..services.ldap_auth import (
+    LDAPRuntimeConfig,
+    authenticate as ldap_authenticate,
+    missing_required_fields as ldap_missing_required_fields,
+)
 from ..services.team_quotas import normalize_team
-from ..tables import Config, OIDCLoginState, Token, User
+from ..tables import Config, OIDCLoginState, User
 from ..time_utils import utc_now
 
 router = APIRouter()
@@ -256,7 +261,9 @@ def _oidc_exchange_token(cfg: Config, code: str, code_verifier: str) -> dict:
         "redirect_uri": str(cfg.sso_redirect_url),
         "code_verifier": code_verifier,
     }
-    client_secret = _decrypt_runtime_secret_or_raise(str(cfg.sso_client_secret or ""), field_name="sso_client_secret").strip()
+    client_secret = _decrypt_runtime_secret_or_raise(
+        str(cfg.sso_client_secret or ""), field_name="sso_client_secret"
+    ).strip()
     if client_secret:
         payload["client_secret"] = client_secret
     try:
@@ -267,7 +274,9 @@ def _oidc_exchange_token(cfg: Config, code: str, code_verifier: str) -> dict:
             timeout=OIDC_HTTP_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OIDC token request failed: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OIDC token request failed: {exc}"
+        ) from exc
     if resp.status_code >= 400:
         detail = (resp.text or "").strip()[:300]
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OIDC token exchange failed: {detail}")
@@ -288,14 +297,18 @@ def _oidc_userinfo(cfg: Config, access_token: str) -> dict:
             timeout=OIDC_HTTP_TIMEOUT_SECONDS,
         )
     except requests.RequestException as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OIDC userinfo request failed: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OIDC userinfo request failed: {exc}"
+        ) from exc
     if resp.status_code >= 400:
         detail = (resp.text or "").strip()[:300]
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"OIDC userinfo failed: {detail}")
     try:
         body = resp.json()
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="OIDC userinfo response was not JSON") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail="OIDC userinfo response was not JSON"
+        ) from exc
     if not isinstance(body, dict):
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="OIDC userinfo payload invalid")
     return body
@@ -307,7 +320,9 @@ def _redirect_with_auth_error(target: str, message: str) -> RedirectResponse:
 
 
 @router.post("/login")
-def login(credentials: Credentials, request: Request, response: Response, session: Session = Depends(get_session)) -> dict:
+def login(
+    credentials: Credentials, request: Request, response: Response, session: Session = Depends(get_session)
+) -> dict:
     username = str(credentials.username or "").strip()
     password = str(credentials.password or "")
     rate_key = _rate_limit_key(request, username)
@@ -361,7 +376,9 @@ def login(credentials: Credentials, request: Request, response: Response, sessio
         enabled=bool(cfg.ldap_enabled),
         server_uri=str(cfg.ldap_server_uri or "").strip(),
         bind_dn=str(cfg.ldap_bind_dn or "").strip(),
-        bind_password=_decrypt_runtime_secret_or_raise(str(cfg.ldap_bind_password or ""), field_name="ldap_bind_password"),
+        bind_password=_decrypt_runtime_secret_or_raise(
+            str(cfg.ldap_bind_password or ""), field_name="ldap_bind_password"
+        ),
         user_base_dn=str(cfg.ldap_user_base_dn or "").strip(),
         user_filter=str(cfg.ldap_user_filter or "").strip() or "(uid={username})",
         start_tls=bool(cfg.ldap_start_tls),
@@ -378,9 +395,13 @@ def login(credentials: Credentials, request: Request, response: Response, sessio
     try:
         ldap_ok, _ = ldap_authenticate(username, password, ldap_cfg)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"LDAP configuration error: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"LDAP configuration error: {exc}"
+        ) from exc
     except RuntimeError as exc:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LDAP authentication backend error: {exc}") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LDAP authentication backend error: {exc}"
+        ) from exc
     if not ldap_ok:
         lockout = _record_login_failure(rate_key, time.time())
         _audit_auth_event(
@@ -568,7 +589,7 @@ def logout(
     except HTTPException:
         token_value = ""
     if token_value:
-        token_row = session.get(Token, token_value)
+        token_row = lookup_session_token(session, token_value)
         if token_row:
             username = str(token_row.username or "")
         revoke_token_value(session, token_value)

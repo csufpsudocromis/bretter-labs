@@ -6,13 +6,22 @@ APP_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION" 2>/dev/null || true)"
 if [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){2}$ ]]; then
   DEFAULT_IMAGE_TAG="v${APP_VERSION}"
 else
-  DEFAULT_IMAGE_TAG="latest"
+  DEFAULT_IMAGE_TAG=""
 fi
 
 NAMESPACE="${NAMESPACE:-labs}"
-BACKEND_IMAGE="${BACKEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-backend:${DEFAULT_IMAGE_TAG}}"
-FRONTEND_IMAGE="${FRONTEND_IMAGE:-ghcr.io/csufpsudocromis/bretter-frontend:${DEFAULT_IMAGE_TAG}}"
-RUNNER_IMAGE="${RUNNER_IMAGE:-ghcr.io/csufpsudocromis/win-vm-runner:${DEFAULT_IMAGE_TAG}}"
+if [ -n "$DEFAULT_IMAGE_TAG" ]; then
+  DEFAULT_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend:${DEFAULT_IMAGE_TAG}"
+  DEFAULT_FRONTEND_IMAGE="ghcr.io/csufpsudocromis/bretter-frontend:${DEFAULT_IMAGE_TAG}"
+  DEFAULT_RUNNER_IMAGE="ghcr.io/csufpsudocromis/win-vm-runner:${DEFAULT_IMAGE_TAG}"
+else
+  DEFAULT_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend"
+  DEFAULT_FRONTEND_IMAGE="ghcr.io/csufpsudocromis/bretter-frontend"
+  DEFAULT_RUNNER_IMAGE="ghcr.io/csufpsudocromis/win-vm-runner"
+fi
+BACKEND_IMAGE="${BACKEND_IMAGE:-$DEFAULT_BACKEND_IMAGE}"
+FRONTEND_IMAGE="${FRONTEND_IMAGE:-$DEFAULT_FRONTEND_IMAGE}"
+RUNNER_IMAGE="${RUNNER_IMAGE:-$DEFAULT_RUNNER_IMAGE}"
 ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
 SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
 SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
@@ -104,7 +113,7 @@ USE_EXTERNAL_SECRETS="${USE_EXTERNAL_SECRETS:-0}"
 INSTALL_EXTERNAL_SECRETS_OPERATOR="${INSTALL_EXTERNAL_SECRETS_OPERATOR:-1}"
 EXTERNAL_SECRETS_NAMESPACE="${EXTERNAL_SECRETS_NAMESPACE:-external-secrets}"
 EXTERNAL_SECRETS_RELEASE_NAME="${EXTERNAL_SECRETS_RELEASE_NAME:-external-secrets}"
-EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-}"
+EXTERNAL_SECRETS_CHART_VERSION="${EXTERNAL_SECRETS_CHART_VERSION:-v2.1.0}"
 EXTERNAL_SECRETS_STORE_NAME="${EXTERNAL_SECRETS_STORE_NAME:-corp-secrets}"
 CREATE_VAULT_CLUSTER_SECRET_STORE="${CREATE_VAULT_CLUSTER_SECRET_STORE:-0}"
 VAULT_ADDR="${VAULT_ADDR:-}"
@@ -130,7 +139,7 @@ CPU_MANAGER_STATIC="${CPU_MANAGER_STATIC:-0}"
 ENABLE_MONITORING="${ENABLE_MONITORING:-1}"
 MONITORING_NAMESPACE="${MONITORING_NAMESPACE:-monitoring}"
 MONITORING_RELEASE_NAME="${MONITORING_RELEASE_NAME:-kube-prometheus-stack}"
-MONITORING_CHART_VERSION="${MONITORING_CHART_VERSION:-}"
+MONITORING_CHART_VERSION="${MONITORING_CHART_VERSION:-v82.10.4}"
 MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
 MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
 MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
@@ -140,13 +149,14 @@ HELM_VERSION="${HELM_VERSION:-v3.15.4}"
 HELM_RELEASE_NAME="${HELM_RELEASE_NAME:-bretter-labs}"
 HELM_CHART_DIR="${HELM_CHART_DIR:-$ROOT_DIR/deploy/helm}"
 ENABLE_METRICS_SERVER="${ENABLE_METRICS_SERVER:-1}"
-METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml}"
+METRICS_SERVER_VERSION="${METRICS_SERVER_VERSION:-v0.8.1}"
+METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/download/${METRICS_SERVER_VERSION}/components.yaml}"
 METRICS_SERVER_INSECURE_TLS="${METRICS_SERVER_INSECURE_TLS:-0}"
 ENABLE_ADMISSION_POLICIES="${ENABLE_ADMISSION_POLICIES:-1}"
 INSTALL_KYVERNO="${INSTALL_KYVERNO:-1}"
 KYVERNO_NAMESPACE="${KYVERNO_NAMESPACE:-kyverno}"
 KYVERNO_RELEASE_NAME="${KYVERNO_RELEASE_NAME:-kyverno}"
-KYVERNO_CHART_VERSION="${KYVERNO_CHART_VERSION:-}"
+KYVERNO_CHART_VERSION="${KYVERNO_CHART_VERSION:-v3.7.1}"
 ADMISSION_POLICY_TEMPLATE="${ADMISSION_POLICY_TEMPLATE:-$ROOT_DIR/deploy/policies/kyverno/clusterpolicies.yaml.tpl}"
 RUN_POST_DEPLOY_API_HEALTH_CHECK="${RUN_POST_DEPLOY_API_HEALTH_CHECK:-1}"
 POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS="${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS:-120}"
@@ -236,6 +246,10 @@ validate_preload_config() {
 
 is_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+is_semver_tag() {
+  [[ "$1" =~ ^v?[0-9]+(\.[0-9]+){2}$ ]]
 }
 
 phase_enabled() {
@@ -550,6 +564,9 @@ validate_external_secrets_config() {
   if ! is_uint "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS" || [ "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS" -lt 30 ]; then
     fail "EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS must be an integer >= 30."
   fi
+  if [ "$INSTALL_EXTERNAL_SECRETS_OPERATOR" -eq 1 ] && ! is_semver_tag "$EXTERNAL_SECRETS_CHART_VERSION"; then
+    fail "EXTERNAL_SECRETS_CHART_VERSION must look like X.Y.Z."
+  fi
   if [ "$USE_EXTERNAL_SECRETS" -ne 1 ]; then
     return
   fi
@@ -602,8 +619,8 @@ validate_monitoring_config() {
 
   [ -n "$MONITORING_NAMESPACE" ] || fail "MONITORING_NAMESPACE cannot be empty when ENABLE_MONITORING=1."
   [ -n "$MONITORING_RELEASE_NAME" ] || fail "MONITORING_RELEASE_NAME cannot be empty when ENABLE_MONITORING=1."
-  if [ -n "$MONITORING_CHART_VERSION" ] && ! [[ "$MONITORING_CHART_VERSION" =~ ^v?[0-9]+(\.[0-9]+){2}$ ]]; then
-    fail "MONITORING_CHART_VERSION must look like X.Y.Z (or be empty for latest chart)."
+  if ! is_semver_tag "$MONITORING_CHART_VERSION"; then
+    fail "MONITORING_CHART_VERSION must look like X.Y.Z."
   fi
   if ! is_uint "$MONITORING_RESTART_ALERT_COUNT" || [ "$MONITORING_RESTART_ALERT_COUNT" -lt 1 ]; then
     fail "MONITORING_RESTART_ALERT_COUNT must be an integer >= 1."
@@ -631,6 +648,9 @@ validate_metrics_server_config() {
     0|1) ;;
     *) fail "METRICS_SERVER_INSECURE_TLS must be either 0 or 1." ;;
   esac
+  if ! is_semver_tag "$METRICS_SERVER_VERSION"; then
+    fail "METRICS_SERVER_VERSION must look like X.Y.Z."
+  fi
   if [ "$ENABLE_METRICS_SERVER" -eq 1 ] && [ -z "$METRICS_SERVER_MANIFEST_URL" ]; then
     fail "METRICS_SERVER_MANIFEST_URL cannot be empty when ENABLE_METRICS_SERVER=1."
   fi
@@ -650,8 +670,8 @@ validate_admission_policy_config() {
   fi
   [ -n "$KYVERNO_NAMESPACE" ] || fail "KYVERNO_NAMESPACE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
   [ -n "$KYVERNO_RELEASE_NAME" ] || fail "KYVERNO_RELEASE_NAME cannot be empty when ENABLE_ADMISSION_POLICIES=1."
-  if [ -n "$KYVERNO_CHART_VERSION" ] && ! [[ "$KYVERNO_CHART_VERSION" =~ ^v?[0-9]+(\.[0-9]+){2}$ ]]; then
-    fail "KYVERNO_CHART_VERSION must look like X.Y.Z (or be empty for latest chart)."
+  if ! is_semver_tag "$KYVERNO_CHART_VERSION"; then
+    fail "KYVERNO_CHART_VERSION must look like X.Y.Z."
   fi
   [ -n "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
   [ -f "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE does not exist: $ADMISSION_POLICY_TEMPLATE"
@@ -3339,9 +3359,9 @@ log_runtime_configuration() {
   log "CPU manager static on all nodes: $CPU_MANAGER_STATIC"
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
-  log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
+  log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION})"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
-  log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION:-latest})"
+  log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"

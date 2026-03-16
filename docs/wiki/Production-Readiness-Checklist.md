@@ -18,6 +18,7 @@ Use this checklist before first production deployment and for each release.
 - Keep `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` digest-pinned (`@sha256:...`).
 - Verify digest refs exist in your registry before rollout.
 - Keep mutable-tag override disabled (`ALLOW_MUTABLE_IMAGE_TAGS=0`).
+- Keep chart/tool versions pinned (for example `MONITORING_CHART_VERSION`, `KYVERNO_CHART_VERSION`, `EXTERNAL_SECRETS_CHART_VERSION`, `METRICS_SERVER_VERSION`).
 
 ## Auth/bootstrap
 

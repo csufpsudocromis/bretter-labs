@@ -1,29 +1,29 @@
-import React, { useEffect, useState } from 'react';
-import axios from 'axios';
-import { api } from '../../api';
+import React, { useEffect, useState } from "react";
+import axios from "axios";
+import { api } from "../../api";
 
 const AdminImages = () => {
   const [images, setImages] = useState([]);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadStage, setUploadStage] = useState('idle');
+  const [uploadStage, setUploadStage] = useState("idle");
   const [progress, setProgress] = useState(0);
-  const [uploadTaskId, setUploadTaskId] = useState('');
-  const [uploadDetail, setUploadDetail] = useState('');
+  const [uploadTaskId, setUploadTaskId] = useState("");
+  const [uploadDetail, setUploadDetail] = useState("");
   const [editId, setEditId] = useState(null);
-  const [editName, setEditName] = useState('');
-  const [editFilename, setEditFilename] = useState('');
+  const [editName, setEditName] = useState("");
+  const [editFilename, setEditFilename] = useState("");
 
   const load = async () => {
     try {
-      const res = await api.get('/admin/images');
+      const res = await api.get("/admin/images");
       setImages(res.data);
-      setMessage('');
-      setError('');
+      setMessage("");
+      setError("");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load images');
+      setError(err.response?.data?.detail || "Failed to load images");
     }
   };
 
@@ -40,10 +40,10 @@ const AdminImages = () => {
     for (;;) {
       const res = await api.get(`/admin/images/upload-tasks/${taskId}`);
       const task = res.data;
-      setUploadDetail(task.detail || '');
-      if (task.status === 'completed') return task;
-      if (task.status === 'failed') {
-        throw new Error(task.error || 'Upload finalize failed');
+      setUploadDetail(task.detail || "");
+      if (task.status === "completed") return task;
+      if (task.status === "failed") {
+        throw new Error(task.error || "Upload finalize failed");
       }
       await sleep(2000);
     }
@@ -52,51 +52,51 @@ const AdminImages = () => {
   const upload = async () => {
     if (!file) return;
     setUploading(true);
-    setUploadStage('uploading');
+    setUploadStage("uploading");
     setProgress(0);
-    setUploadTaskId('');
-    setUploadDetail('');
-    setMessage('');
-    setError('');
+    setUploadTaskId("");
+    setUploadDetail("");
+    setMessage("");
+    setError("");
 
     const waitForTaskAndFinish = async (taskId) => {
       setUploadTaskId(taskId);
-      setUploadStage('finalizing');
-      setUploadDetail('Finalizing on cluster storage');
+      setUploadStage("finalizing");
+      setUploadDetail("Finalizing on cluster storage");
       await waitForUploadTask(taskId);
       setFile(null);
       setProgress(0);
-      setUploadStage('idle');
-      setUploadTaskId('');
-      setUploadDetail('');
-      setMessage('Upload complete');
+      setUploadStage("idle");
+      setUploadTaskId("");
+      setUploadDetail("");
+      setMessage("Upload complete");
       load();
     };
 
     const uploadLegacy = async () => {
       const formData = new FormData();
-      formData.append('file', file);
-      const kickoff = await api.post('/admin/images', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      formData.append("file", file);
+      const kickoff = await api.post("/admin/images", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
         onUploadProgress: (evt) => {
           if (evt.total) {
             const percent = Math.min(100, Math.round((evt.loaded / evt.total) * 100));
             setProgress(percent);
             if (percent >= 100) {
-              setUploadStage('finalizing');
+              setUploadStage("finalizing");
             }
           }
         },
       });
       const taskId = kickoff.data?.task_id;
       if (!taskId) {
-        throw new Error('Upload task did not start');
+        throw new Error("Upload task did not start");
       }
       await waitForTaskAndFinish(taskId);
     };
 
     try {
-      const direct = await api.post('/admin/images/direct-upload/start', {
+      const direct = await api.post("/admin/images/direct-upload/start", {
         filename: file.name,
         size_bytes: file.size,
       });
@@ -104,14 +104,14 @@ const AdminImages = () => {
       const uploadToken = direct.data?.upload_token;
       const taskId = direct.data?.task?.task_id;
       if (!uploadUrl || !uploadToken || !taskId) {
-        throw new Error('Direct upload did not initialize');
+        throw new Error("Direct upload did not initialize");
       }
       setUploadTaskId(taskId);
-      setUploadDetail('Uploading image directly to cluster storage');
+      setUploadDetail("Uploading image directly to cluster storage");
       await axios.post(uploadUrl, file, {
         headers: {
           Authorization: `Bearer ${uploadToken}`,
-          'Content-Type': 'application/octet-stream',
+          "Content-Type": "application/octet-stream",
         },
         maxBodyLength: Infinity,
         maxContentLength: Infinity,
@@ -120,7 +120,7 @@ const AdminImages = () => {
             const percent = Math.min(100, Math.round((evt.loaded / evt.total) * 100));
             setProgress(percent);
             if (percent >= 100) {
-              setUploadStage('finalizing');
+              setUploadStage("finalizing");
             }
           }
         },
@@ -132,13 +132,13 @@ const AdminImages = () => {
         try {
           await uploadLegacy();
         } catch (legacyErr) {
-          setError(legacyErr.response?.data?.detail || legacyErr.message || 'Upload failed');
+          setError(legacyErr.response?.data?.detail || legacyErr.message || "Upload failed");
         }
       } else {
-        setError(err.response?.data?.detail || err.message || 'Upload failed');
+        setError(err.response?.data?.detail || err.message || "Upload failed");
       }
     } finally {
-      setUploadStage('idle');
+      setUploadStage("idle");
       setUploading(false);
     }
   };
@@ -146,10 +146,10 @@ const AdminImages = () => {
   const remove = async (id) => {
     try {
       await api.delete(`/admin/images/${id}`);
-      setMessage('Deleted');
+      setMessage("Deleted");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Delete failed');
+      setError(err.response?.data?.detail || "Delete failed");
     }
   };
 
@@ -163,17 +163,17 @@ const AdminImages = () => {
     try {
       await api.patch(`/admin/images/${editId}`, { name: editName, filename: editFilename });
       setEditId(null);
-      setMessage('Updated');
+      setMessage("Updated");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Update failed');
+      setError(err.response?.data?.detail || "Update failed");
     }
   };
 
   const cancelEdit = () => {
     setEditId(null);
-    setEditName('');
-    setEditFilename('');
+    setEditName("");
+    setEditFilename("");
   };
 
   return (
@@ -186,16 +186,16 @@ const AdminImages = () => {
           <h3>Upload image</h3>
           <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           <button onClick={upload} disabled={!file || uploading}>
-            {!uploading && 'Upload'}
-            {uploading && uploadStage === 'uploading' && `Uploading (${progress}%)`}
-            {uploading && uploadStage === 'finalizing' && 'Finalizing on cluster...'}
+            {!uploading && "Upload"}
+            {uploading && uploadStage === "uploading" && `Uploading (${progress}%)`}
+            {uploading && uploadStage === "finalizing" && "Finalizing on cluster..."}
           </button>
-          {uploading && uploadStage === 'uploading' && <p>Uploading from browser: {progress}%</p>}
-          {uploading && uploadStage === 'finalizing' && (
+          {uploading && uploadStage === "uploading" && <p>Uploading from browser: {progress}%</p>}
+          {uploading && uploadStage === "finalizing" && (
             <p>
               Upload complete. Finalizing on cluster (copy/normalize). This can take a few minutes.
-              {uploadDetail ? ` ${uploadDetail}` : ''}
-              {uploadTaskId ? ` (task ${uploadTaskId.slice(0, 8)})` : ''}
+              {uploadDetail ? ` ${uploadDetail}` : ""}
+              {uploadTaskId ? ` (task ${uploadTaskId.slice(0, 8)})` : ""}
             </p>
           )}
           <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>

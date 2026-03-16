@@ -116,7 +116,9 @@ def _verify_image_signature(image_ref: str) -> None:
             detail="cosign is required for signature verification but is not installed",
         ) from exc
     except subprocess.TimeoutExpired as exc:
-        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="image signature verification timed out") from exc
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="image signature verification timed out"
+        ) from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "signature verification failed").strip()
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail[:500])
@@ -280,7 +282,12 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         args=_parse_json_list(record.args_json),
         env=_parse_json_map(record.env_json),
         auto_delete_minutes=record.auto_delete_minutes,
-        idle_timeout_minutes=max(1, int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes)),
+        idle_timeout_minutes=max(
+            1,
+            int(
+                getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
+            ),
+        ),
         max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
         enabled=record.enabled,
         created_at=record.created_at,
@@ -491,7 +498,9 @@ def delete_container_image(image_id: str, session: Session = Depends(get_session
                 detail=f"container image is still used by active container templates: {sample}",
             )
 
-        for instance in session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.template_id.in_(template_ids))).all():
+        for instance in session.exec(
+            select(ContainerInstanceTable).where(ContainerInstanceTable.template_id.in_(template_ids))
+        ).all():
             session.delete(instance)
         for template in template_refs:
             session.delete(template)
@@ -606,7 +615,9 @@ def create_container_template(
     dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
 )
 def list_container_templates(session: Session = Depends(get_session)) -> list[ContainerTemplate]:
-    rows = session.exec(select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)).all()  # noqa: E712
+    rows = session.exec(
+        select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)
+    ).all()  # noqa: E712
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
 
@@ -667,7 +678,9 @@ def update_container_template(
     if "startup_timeout_seconds" in updates:
         record.startup_timeout_seconds = max(10, int(updates.get("startup_timeout_seconds") or 300))
     if "dependency_checks" in updates:
-        dependency_checks = [ContainerDependencyCheck.model_validate(item) for item in (updates.get("dependency_checks") or [])]
+        dependency_checks = [
+            ContainerDependencyCheck.model_validate(item) for item in (updates.get("dependency_checks") or [])
+        ]
         record.dependency_checks_json = _serialize_dependency_checks(dependency_checks)
     if "expose_strategy" in updates:
         record.expose_strategy = str(updates.get("expose_strategy") or "nodeport").strip().lower()
@@ -738,7 +751,9 @@ def delete_container_template(template_id: str, session: Session = Depends(get_s
             detail="container template has active container instances",
         )
 
-    for instance in session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.template_id.in_(template_ids))).all():
+    for instance in session.exec(
+        select(ContainerInstanceTable).where(ContainerInstanceTable.template_id.in_(template_ids))
+    ).all():
         session.delete(instance)
     for row in template_rows:
         session.delete(row)

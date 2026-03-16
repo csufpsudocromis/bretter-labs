@@ -38,6 +38,7 @@ Security properties:
 - Grant token is one-time use.
 - Grant/session cookies are path-scoped to connect routes.
 - Session TTL is server-enforced.
+- Session and connect tokens are hashed before database storage (raw token values are not persisted).
 
 ## Internal API proxy TLS
 

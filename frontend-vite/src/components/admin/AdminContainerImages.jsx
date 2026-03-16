@@ -1,56 +1,63 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { api } from '../../api';
+import React, { useCallback, useEffect, useState } from "react";
+import { api } from "../../api";
 
 const DEFAULT_FORM = {
-  name: '',
-  source: 'docker_hub',
-  registry: 'docker.io',
-  repository: '',
-  tag: 'latest',
-  image_ref: '',
+  name: "",
+  source: "docker_hub",
+  registry: "docker.io",
+  repository: "",
+  tag: "latest",
+  image_ref: "",
 };
 
-const normalizeRegistry = (value) => String(value || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+const normalizeRegistry = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
 
 const inferNameFromRef = (imageRef) => {
-  const raw = String(imageRef || '').trim();
-  if (!raw) return '';
-  const withoutDigest = raw.split('@')[0];
-  const lastSlash = withoutDigest.lastIndexOf('/');
-  const lastColon = withoutDigest.lastIndexOf(':');
+  const raw = String(imageRef || "").trim();
+  if (!raw) return "";
+  const withoutDigest = raw.split("@")[0];
+  const lastSlash = withoutDigest.lastIndexOf("/");
+  const lastColon = withoutDigest.lastIndexOf(":");
   const withoutTag = lastColon > lastSlash ? withoutDigest.slice(0, lastColon) : withoutDigest;
-  const tail = withoutTag.split('/').filter(Boolean).pop();
+  const tail = withoutTag.split("/").filter(Boolean).pop();
   return tail || raw;
 };
 
 const buildImageRef = (form) => {
-  const source = String(form.source || 'docker_hub');
-  if (source === 'direct') {
-    return String(form.image_ref || '').trim();
+  const source = String(form.source || "docker_hub");
+  if (source === "direct") {
+    return String(form.image_ref || "").trim();
   }
 
-  const repository = String(form.repository || '').trim().replace(/^\/+/, '').replace(/\/+$/, '');
-  if (!repository) return '';
+  const repository = String(form.repository || "")
+    .trim()
+    .replace(/^\/+/, "")
+    .replace(/\/+$/, "");
+  if (!repository) return "";
 
-  const tag = String(form.tag || '').trim();
-  const suffix = tag ? `:${tag}` : '';
-  if (source === 'docker_hub') {
+  const tag = String(form.tag || "").trim();
+  const suffix = tag ? `:${tag}` : "";
+  if (source === "docker_hub") {
     return `${repository}${suffix}`;
   }
 
   const registry = normalizeRegistry(form.registry);
-  if (!registry) return '';
+  if (!registry) return "";
   return `${registry}/${repository}${suffix}`;
 };
 
 const AdminContainerImages = () => {
   const [images, setImages] = useState([]);
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ name: '', image_ref: '' });
-  const [busyAction, setBusyAction] = useState('');
+  const [editForm, setEditForm] = useState({ name: "", image_ref: "" });
+  const [busyAction, setBusyAction] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
   const actionKey = (imageId, action) => `${imageId}:${action}`;
@@ -59,11 +66,11 @@ const AdminContainerImages = () => {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.get('/admin/container-images');
+      const res = await api.get("/admin/container-images");
       setImages(res.data || []);
-      setError('');
+      setError("");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to load container images');
+      setError(err.response?.data?.detail || "Failed to load container images");
     }
   }, []);
 
@@ -71,7 +78,7 @@ const AdminContainerImages = () => {
     load();
   }, [load]);
 
-  const hasQueuedScans = images.some((img) => String(img.last_scan_status || '').toLowerCase() === 'queued');
+  const hasQueuedScans = images.some((img) => String(img.last_scan_status || "").toLowerCase() === "queued");
 
   useEffect(() => {
     if (!hasQueuedScans) return undefined;
@@ -85,28 +92,28 @@ const AdminContainerImages = () => {
     if (isCreating) return;
     const imageRef = buildImageRef(form);
     const payload = {
-      name: String(form.name || '').trim() || inferNameFromRef(imageRef),
+      name: String(form.name || "").trim() || inferNameFromRef(imageRef),
       image_ref: imageRef,
     };
     if (!payload.name || !payload.image_ref) {
-      setError('Name and image source are required');
+      setError("Name and image source are required");
       return;
     }
     setIsCreating(true);
-    setMessage('Adding image...');
+    setMessage("Adding image...");
     try {
-      const res = await api.post('/admin/container-images', payload);
+      const res = await api.post("/admin/container-images", payload);
       const created = res.data;
       setForm({ ...DEFAULT_FORM });
       if (created && created.id) {
         setImages((prev) => [created, ...prev.filter((img) => img.id !== created.id)]);
       }
-      setMessage('Container image added. Pre-pull/scan running in background.');
-      setError('');
+      setMessage("Container image added. Pre-pull/scan running in background.");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to add container image');
-      setMessage('');
+      setError(err.response?.data?.detail || "Failed to add container image");
+      setMessage("");
     } finally {
       setIsCreating(false);
     }
@@ -114,78 +121,79 @@ const AdminContainerImages = () => {
 
   const startEdit = (row) => {
     setEditingId(row.id);
-    setEditForm({ name: row.name || '', image_ref: row.image_ref || '' });
+    setEditForm({ name: row.name || "", image_ref: row.image_ref || "" });
   };
 
   const saveEdit = async () => {
     const imageId = editingId;
     if (!imageId || isImageBusy(imageId)) return;
-    setBusyAction(actionKey(imageId, 'save'));
+    setBusyAction(actionKey(imageId, "save"));
     try {
       await api.patch(`/admin/container-images/${imageId}`, editForm);
       setEditingId(null);
-      setEditForm({ name: '', image_ref: '' });
-      setMessage('Container image updated');
-      setError('');
+      setEditForm({ name: "", image_ref: "" });
+      setMessage("Container image updated");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to update container image');
+      setError(err.response?.data?.detail || "Failed to update container image");
     } finally {
-      setBusyAction('');
+      setBusyAction("");
     }
   };
 
   const remove = async (imageId) => {
     if (isImageBusy(imageId)) return;
-    setBusyAction(actionKey(imageId, 'delete'));
+    setBusyAction(actionKey(imageId, "delete"));
     try {
       await api.delete(`/admin/container-images/${imageId}`);
-      setMessage('Container image deleted');
-      setError('');
+      setMessage("Container image deleted");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to delete container image');
+      setError(err.response?.data?.detail || "Failed to delete container image");
     } finally {
-      setBusyAction('');
+      setBusyAction("");
     }
   };
 
   const prepull = async (imageId) => {
     if (isImageBusy(imageId)) return;
-    setBusyAction(actionKey(imageId, 'prepull'));
-    setMessage('Queueing pre-pull...');
+    setBusyAction(actionKey(imageId, "prepull"));
+    setMessage("Queueing pre-pull...");
     try {
       const res = await api.post(`/admin/container-images/${imageId}/prepull`);
-      setMessage(res.data?.detail || 'Pre-pull triggered');
-      setError('');
+      setMessage(res.data?.detail || "Pre-pull triggered");
+      setError("");
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to trigger pre-pull');
+      setError(err.response?.data?.detail || "Failed to trigger pre-pull");
     } finally {
-      setBusyAction('');
+      setBusyAction("");
     }
   };
 
   const scan = async (imageId) => {
     if (isImageBusy(imageId)) return;
-    setBusyAction(actionKey(imageId, 'scan'));
-    setMessage('Queueing scan...');
+    setBusyAction(actionKey(imageId, "scan"));
+    setMessage("Queueing scan...");
     try {
       await api.post(`/admin/container-images/${imageId}/scan`);
-      setMessage('Scan queued');
-      setError('');
+      setMessage("Scan queued");
+      setError("");
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to scan image');
+      setError(err.response?.data?.detail || "Failed to scan image");
     } finally {
-      setBusyAction('');
+      setBusyAction("");
     }
   };
 
   const sourceImageRef = buildImageRef(form);
-  const canCreate = Boolean(
-    String(form.name || '').trim() ||
-      (form.source === 'direct' ? String(form.image_ref || '').trim() : String(form.repository || '').trim())
-  ) && Boolean(sourceImageRef);
+  const canCreate =
+    Boolean(
+      String(form.name || "").trim() ||
+      (form.source === "direct" ? String(form.image_ref || "").trim() : String(form.repository || "").trim())
+    ) && Boolean(sourceImageRef);
 
   return (
     <div>
@@ -212,7 +220,7 @@ const AdminContainerImages = () => {
                 <option value="direct">Direct image reference</option>
               </select>
             </label>
-            {form.source === 'direct' ? (
+            {form.source === "direct" ? (
               <label>
                 Image reference
                 <input
@@ -223,7 +231,7 @@ const AdminContainerImages = () => {
               </label>
             ) : (
               <>
-                {form.source === 'registry' && (
+                {form.source === "registry" && (
                   <label>
                     Registry host
                     <input
@@ -237,7 +245,7 @@ const AdminContainerImages = () => {
                   Repository
                   <input
                     value={form.repository}
-                    placeholder={form.source === 'docker_hub' ? 'library/nginx' : 'owner/app'}
+                    placeholder={form.source === "docker_hub" ? "library/nginx" : "owner/app"}
                     onChange={(e) => setForm((prev) => ({ ...prev, repository: e.target.value }))}
                   />
                 </label>
@@ -251,9 +259,11 @@ const AdminContainerImages = () => {
                 </label>
               </>
             )}
-            <div className="muted small">Resolved reference: <code>{sourceImageRef || '-'}</code></div>
+            <div className="muted small">
+              Resolved reference: <code>{sourceImageRef || "-"}</code>
+            </div>
             <button onClick={create} disabled={!canCreate || isCreating}>
-              {isCreating ? 'Adding...' : 'Add image'}
+              {isCreating ? "Adding..." : "Add image"}
             </button>
             <p className="muted small">
               Supports Docker Hub, GHCR, Quay, ECR, GCR, ACR, and any OCI registry reachable by the cluster.
@@ -262,7 +272,9 @@ const AdminContainerImages = () => {
         </div>
         <div>
           <h3>Registered container images</h3>
-          {hasQueuedScans && <div className="muted small">A scan is running in the background. Refreshing status...</div>}
+          {hasQueuedScans && (
+            <div className="muted small">A scan is running in the background. Refreshing status...</div>
+          )}
           <div className="tile-grid">
             {images.length === 0 && <div className="muted">No container images yet.</div>}
             {images.map((img) => (
@@ -287,14 +299,13 @@ const AdminContainerImages = () => {
                       />
                     </label>
                     <div className="actions container-image-actions">
-                      <button
-                        className="ghost"
-                        onClick={() => setEditingId(null)}
-                        disabled={isBusy(img.id, 'save')}
-                      >
+                      <button className="ghost" onClick={() => setEditingId(null)} disabled={isBusy(img.id, "save")}>
                         Cancel
                       </button>
-                      <button onClick={saveEdit} disabled={!editForm.name || !editForm.image_ref || isBusy(img.id, 'save')}>
+                      <button
+                        onClick={saveEdit}
+                        disabled={!editForm.name || !editForm.image_ref || isBusy(img.id, "save")}
+                      >
                         Save
                       </button>
                     </div>
@@ -303,22 +314,22 @@ const AdminContainerImages = () => {
                   <>
                     <div className="muted small">{img.image_ref}</div>
                     <div className="muted small">
-                      Scan: {img.last_scan_status || 'never'}
-                      {img.last_scan_at ? ` (${new Date(img.last_scan_at).toLocaleString()})` : ''}
+                      Scan: {img.last_scan_status || "never"}
+                      {img.last_scan_at ? ` (${new Date(img.last_scan_at).toLocaleString()})` : ""}
                     </div>
                     {img.last_scan_summary && <div className="muted small">{img.last_scan_summary}</div>}
                     <div className="actions container-image-actions">
                       <button className="ghost" onClick={() => scan(img.id)} disabled={isImageBusy(img.id)}>
-                        {isBusy(img.id, 'scan') ? 'Scanning...' : 'Scan'}
+                        {isBusy(img.id, "scan") ? "Scanning..." : "Scan"}
                       </button>
                       <button className="ghost" onClick={() => prepull(img.id)} disabled={isImageBusy(img.id)}>
-                        {isBusy(img.id, 'prepull') ? 'Queueing...' : 'Pre-pull'}
+                        {isBusy(img.id, "prepull") ? "Queueing..." : "Pre-pull"}
                       </button>
                       <button className="ghost" onClick={() => startEdit(img)} disabled={isImageBusy(img.id)}>
                         Edit
                       </button>
                       <button className="danger" onClick={() => remove(img.id)} disabled={isImageBusy(img.id)}>
-                        {isBusy(img.id, 'delete') ? 'Deleting...' : 'Delete'}
+                        {isBusy(img.id, "delete") ? "Deleting..." : "Delete"}
                       </button>
                     </div>
                   </>
