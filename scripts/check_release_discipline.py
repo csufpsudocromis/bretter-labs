@@ -142,6 +142,14 @@ def main() -> int:
     elif len(secrets_encryption_key) < 24:
         errors.append("deploy/helm/values-production.yaml SECRETS_ENCRYPTION_KEY must be at least 24 characters.")
 
+    signature_verification_enabled = (
+        _extract_yaml_scalar(values_production, "CONTAINER_SIGNATURE_VERIFICATION_ENABLED").strip().lower()
+    )
+    if signature_verification_enabled not in {"1", "true", "yes", "on"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must enable CONTAINER_SIGNATURE_VERIFICATION_ENABLED for production."
+        )
+
     setup_script = _read_text(setup_script_path)
     if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:
         errors.append("scripts/setup.sh must not fall back to DEFAULT_IMAGE_TAG=latest.")

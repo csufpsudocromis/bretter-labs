@@ -155,6 +155,8 @@ After first login/reset, keep the bootstrap file in secure storage and verify `B
 | `VM_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip VM upstream TLS verification |
 | `CONTAINER_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip container upstream TLS verification |
 | `SECRETS_ENCRYPTION_KEY` | empty | Required when `PRODUCTION_PROFILE=1`; encrypts stored runtime secrets (`sso_client_secret`, `ldap_bind_password`) |
+| `CONTAINER_SIGNATURE_VERIFICATION_ENABLED` | `0` | Must be `1` when `PRODUCTION_PROFILE=1`; enforces cosign verification for container image registration/update |
+| `CONTAINER_SIGNATURE_KEY_REF` | empty | Optional cosign public key path/ref; when empty, verification uses keyless mode |
 | `METRICS_SERVER_VERSION` | `v0.8.1` | Metrics-server release used to build default manifest URL |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |

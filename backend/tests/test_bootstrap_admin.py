@@ -13,6 +13,7 @@ def _set_valid_production_baseline(monkeypatch):
     monkeypatch.setattr(main_module.settings, "api_docs_enabled", False)
     monkeypatch.setattr(main_module.settings, "vm_connect_insecure_tls", False)
     monkeypatch.setattr(main_module.settings, "container_connect_insecure_tls", False)
+    monkeypatch.setattr(main_module.settings, "container_signature_verification_enabled", True)
     monkeypatch.setattr(main_module.settings, "cors_enterprise_profile", True)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://10.68.49.250:30073")
     monkeypatch.setattr(main_module.settings, "kube_node_selector_value", "cbekube2")
@@ -53,6 +54,7 @@ def test_startup_validation_enforces_production_profile(monkeypatch):
     monkeypatch.setattr(main_module.settings, "api_docs_enabled", True)
     monkeypatch.setattr(main_module.settings, "vm_connect_insecure_tls", True)
     monkeypatch.setattr(main_module.settings, "container_connect_insecure_tls", True)
+    monkeypatch.setattr(main_module.settings, "container_signature_verification_enabled", False)
     monkeypatch.setattr(main_module.settings, "cors_enterprise_profile", False)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "")
     with pytest.raises(RuntimeError, match="Invalid production startup configuration"):

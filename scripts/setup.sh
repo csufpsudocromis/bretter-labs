@@ -571,6 +571,9 @@ validate_auth_and_cors_config() {
     if [ "$VM_CONNECT_INSECURE_TLS" -ne 0 ] || [ "$CONTAINER_CONNECT_INSECURE_TLS" -ne 0 ]; then
       fail "VM/CONTAINER_CONNECT_INSECURE_TLS must be 0 when PRODUCTION_PROFILE=1."
     fi
+    if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -ne 1 ]; then
+      fail "CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be 1 when PRODUCTION_PROFILE=1."
+    fi
     if [ -z "$RUNNER_NODE_SELECTOR_VALUE" ]; then
       fail "RUNNER_NODE_SELECTOR_VALUE must be set when PRODUCTION_PROFILE=1."
     fi

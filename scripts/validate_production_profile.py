@@ -163,12 +163,12 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
 
     signature_verification_enabled = get_bool("CONTAINER_SIGNATURE_VERIFICATION_ENABLED", default=False)
     signature_key_ref = get_text("CONTAINER_SIGNATURE_KEY_REF")
-    if signature_verification_enabled and not signature_key_ref:
-        errors.append("CONTAINER_SIGNATURE_KEY_REF is required when CONTAINER_SIGNATURE_VERIFICATION_ENABLED is true.")
     if not signature_verification_enabled:
+        errors.append("CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be enabled for production.")
+    if signature_verification_enabled and not signature_key_ref:
         warnings.append(
-            "CONTAINER_SIGNATURE_VERIFICATION_ENABLED is disabled; enable and configure CONTAINER_SIGNATURE_KEY_REF "
-            "if your production threat model requires image signature verification."
+            "CONTAINER_SIGNATURE_KEY_REF is empty; cosign keyless verification will be used. "
+            "Set CONTAINER_SIGNATURE_KEY_REF to a managed public key for stricter policy."
         )
 
     if get_bool("CONTAINER_INGRESS_ENABLED", default=False):

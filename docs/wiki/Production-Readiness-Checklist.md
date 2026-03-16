@@ -13,6 +13,8 @@ Use this checklist before first production deployment and for each release.
 - Set `appTemplateValues.VM_STORAGE_CLASS` to the intended production class.
 - Set `appTemplateValues.TLS_SECRET_NAME` to the production certificate secret.
 - Set a strong `SECRETS_ENCRYPTION_KEY` before production rollout.
+- Set `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (required for production profile).
+- If possible, set `CONTAINER_SIGNATURE_KEY_REF` to a managed public key for non-keyless verification.
 
 ## Image and supply chain
 

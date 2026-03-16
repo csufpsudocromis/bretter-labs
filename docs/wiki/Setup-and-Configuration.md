@@ -139,6 +139,8 @@ ENABLE_MONITORING=1 \
 - Enterprise CORS (`CORS_ENTERPRISE_PROFILE=1`) requires explicit `CORS_ALLOWED_ORIGINS`, blocks `CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - Production profile rejects localhost/127.0.0.1 CORS origins; set real UI origins.
 - Production profile requires `RUNNER_NODE_SELECTOR_VALUE` and a strong `SECRETS_ENCRYPTION_KEY`.
+- Production profile requires `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1`.
+- If `CONTAINER_SIGNATURE_KEY_REF` is empty, signature verification runs in keyless mode.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
 - Setup no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or set explicit immutable image refs.
 - Production values (`deploy/helm/values-production.yaml`) are digest-pinned and CI-enforced for backend/frontend/runner image refs.
