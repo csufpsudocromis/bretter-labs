@@ -28,6 +28,15 @@ Fail if:
 - Any control-plane deployment is unavailable.
 - Pods are crashlooping or not ready.
 - `/api/health` does not return `{"status":"ok"}`.
+- Backend deployment env still includes `BLABS_ADMIN_DEFAULT_PASSWORD` after prune step.
+
+Bootstrap env prune check:
+
+```bash
+kubectl -n labs get deploy bretter-backend -o yaml | rg BLABS_ADMIN_DEFAULT_PASSWORD
+```
+
+Expected: no output.
 
 ## Phase 2: Synthetic job (preferred)
 

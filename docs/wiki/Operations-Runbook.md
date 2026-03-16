@@ -1,6 +1,23 @@
 # Operations Runbook
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 16, 2026.
+
+## Production pre-rollout gate
+
+Validate production profile values before deployment:
+
+```bash
+python3 scripts/check_release_discipline.py
+python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+```
+
+If you use environment overlays, include them in validation order:
+
+```bash
+python3 scripts/validate_production_profile.py --strict \
+  -f deploy/helm/values-production.yaml \
+  -f deploy/helm/values-prod-site.yaml
+```
 
 ## Baseline checks
 
@@ -19,6 +36,14 @@ kubectl -n labs get pods -o wide
 kubectl -n labs logs deploy/bretter-backend --tail=200
 kubectl -n labs logs deploy/bretter-frontend --tail=200
 ```
+
+Bootstrap env pruning check (after first bootstrap rollout):
+
+```bash
+kubectl -n labs get deploy bretter-backend -o yaml | rg BLABS_ADMIN_DEFAULT_PASSWORD
+```
+
+Expected: no output.
 
 ## VM and container workload visibility
 

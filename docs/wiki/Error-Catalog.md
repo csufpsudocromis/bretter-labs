@@ -23,6 +23,31 @@ Fix:
 - Set `ADMIN_BOOTSTRAP_PASSWORD` during initial deploy (`scripts/setup.sh` handles this automatically by default).
 - Re-run deploy phase, then verify backend rollout.
 
+### `Invalid production startup configuration`
+
+Meaning:
+
+- `BLABS_PRODUCTION_PROFILE=true` is set and one or more required production settings are unsafe or missing.
+
+Common causes:
+
+- `BLABS_SECRETS_ENCRYPTION_KEY` is empty/weak.
+- `BLABS_CORS_ALLOWED_ORIGINS` contains localhost/127.0.0.1.
+- `BLABS_KUBE_NODE_SELECTOR_VALUE` is empty.
+- Insecure TLS toggles are enabled.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=300 | rg -n 'Invalid production startup configuration|BLABS_'
+python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+```
+
+Fix:
+
+- Set required production values and redeploy.
+- Keep `PRODUCTION_PROFILE=1` and use strict validator output as the source of truth.
+
 ### `Login failed`
 
 Likely causes:
@@ -42,6 +67,10 @@ Fix:
 - Add correct frontend origin to `BLABS_CORS_ALLOWED_ORIGINS`
 - Keep scheme/origin consistent (`https://...`)
 - Re-run deployment and test in a fresh browser profile
+
+If using production profile:
+
+- Remove localhost/127.0.0.1 origins from `BLABS_CORS_ALLOWED_ORIGINS`.
 
 ## VM/image ingest
 
