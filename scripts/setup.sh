@@ -1300,6 +1300,8 @@ apply_monitoring_alert_rules() {
   fi
 
   log "Applying monitoring alert rules..."
+  # Replace in place for PrometheusRule to avoid API update failures that require resourceVersion on this CRD.
+  kubectl -n "$MONITORING_NAMESPACE" delete prometheusrule bretter-labs-alerts --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$MONITORING_NAMESPACE" apply -f - <<EOF
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
