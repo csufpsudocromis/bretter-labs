@@ -3,7 +3,8 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     admin_default_username: str = "admin"
-    admin_default_password: str = "admin"
+    # Empty means "generate one-time random bootstrap secret at first startup".
+    admin_default_password: str = ""
     max_concurrent_vms: int = 50
     per_user_vm_limit: int = 2
     idle_timeout_minutes: int = 30
@@ -73,6 +74,9 @@ class Settings(BaseSettings):
     cors_allow_http: bool = False
     cors_allowed_origins: str = ""
     cors_allowed_origin_regex: str = ""
+    cors_enterprise_profile: bool = False
+    cors_allowed_methods: str = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    cors_allowed_headers: str = "Accept,Content-Type,Authorization"
     auth_cookie_name: str = "blabs_session"
     auth_cookie_ttl_seconds: int = 86400
     auth_cookie_secure: bool = True

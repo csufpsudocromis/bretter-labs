@@ -110,20 +110,26 @@ MONITORING_CHART_VERSION="${MONITORING_CHART_VERSION:-}"
 MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
 MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
 MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
+ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL="${ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL:-1}"
+KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE="${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE:-*/5 * * * *}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
 HELM_RELEASE_NAME="${HELM_RELEASE_NAME:-bretter-labs}"
 HELM_CHART_DIR="${HELM_CHART_DIR:-$ROOT_DIR/deploy/helm}"
 ENABLE_METRICS_SERVER="${ENABLE_METRICS_SERVER:-1}"
 METRICS_SERVER_MANIFEST_URL="${METRICS_SERVER_MANIFEST_URL:-https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml}"
+METRICS_SERVER_INSECURE_TLS="${METRICS_SERVER_INSECURE_TLS:-0}"
 RUN_POST_DEPLOY_SYNTHETIC_CHECK="${RUN_POST_DEPLOY_SYNTHETIC_CHECK:-1}"
 SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
-SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-admin}"
+SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-}"
 SYNTHETIC_CHECK_TIMEOUT_SECONDS="${SYNTHETIC_CHECK_TIMEOUT_SECONDS:-420}"
 SYNTHETIC_CHECK_REQUIRE_TEMPLATES="${SYNTHETIC_CHECK_REQUIRE_TEMPLATES:-0}"
+ADMIN_BOOTSTRAP_PASSWORD="${ADMIN_BOOTSTRAP_PASSWORD:-}"
 
 RENDERED_GOLDEN_HOSTPATH_MANIFEST=""
 RENDERED_GOLDEN_PVC_MANIFEST=""
 RENDERED_HELM_VALUES=""
+ADMIN_BOOTSTRAP_PASSWORD_GENERATED=0
+SYNTHETIC_CHECK_PASSWORD_AUTOSET=0
 
 log() {
   echo "==> $*"
@@ -132,6 +138,23 @@ log() {
 fail() {
   echo "ERROR: $*" >&2
   exit 1
+}
+
+generate_random_bootstrap_secret() {
+  local generated
+  generated="$(head -c 24 /dev/urandom | base64 | tr -d '\n=' | tr '/+' '_-')"
+  printf '%s' "$generated"
+}
+
+configure_admin_bootstrap_credentials() {
+  if [ -z "$ADMIN_BOOTSTRAP_PASSWORD" ]; then
+    ADMIN_BOOTSTRAP_PASSWORD="$(generate_random_bootstrap_secret)"
+    ADMIN_BOOTSTRAP_PASSWORD_GENERATED=1
+  fi
+  if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 1 ] && [ -z "$SYNTHETIC_CHECK_PASSWORD" ]; then
+    SYNTHETIC_CHECK_PASSWORD="$ADMIN_BOOTSTRAP_PASSWORD"
+    SYNTHETIC_CHECK_PASSWORD_AUTOSET=1
+  fi
 }
 
 validate_public_scheme() {
@@ -233,6 +256,19 @@ validate_autocleanup_config() {
   if [ "$AUTOCLEANUP_PVC_WARN_PCT" -gt "$AUTOCLEANUP_PVC_CRITICAL_PCT" ] || \
      [ "$AUTOCLEANUP_PVC_CRITICAL_PCT" -gt "$AUTOCLEANUP_PVC_EMERGENCY_PCT" ]; then
     fail "PVC alert thresholds must be non-decreasing (warn <= critical <= emergency)."
+  fi
+}
+
+validate_kubelet_serving_csr_autoapproval_config() {
+  case "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" in
+    0|1) ;;
+    *) fail "ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" -eq 0 ]; then
+    return
+  fi
+  if [ -z "$KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE" ]; then
+    fail "KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE cannot be empty when ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=1."
   fi
 }
 
@@ -412,6 +448,10 @@ validate_metrics_server_config() {
   case "$ENABLE_METRICS_SERVER" in
     0|1) ;;
     *) fail "ENABLE_METRICS_SERVER must be either 0 or 1." ;;
+  esac
+  case "$METRICS_SERVER_INSECURE_TLS" in
+    0|1) ;;
+    *) fail "METRICS_SERVER_INSECURE_TLS must be either 0 or 1." ;;
   esac
   if [ "$ENABLE_METRICS_SERVER" -eq 1 ] && [ -z "$METRICS_SERVER_MANIFEST_URL" ]; then
     fail "METRICS_SERVER_MANIFEST_URL cannot be empty when ENABLE_METRICS_SERVER=1."
@@ -898,12 +938,73 @@ install_metrics_server() {
   log "Installing metrics-server from ${METRICS_SERVER_MANIFEST_URL}..."
   kubectl apply -f "$METRICS_SERVER_MANIFEST_URL"
 
-  local args
-  args="$(kubectl -n kube-system get deployment metrics-server -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || true)"
-  if ! grep -q -- "--kubelet-insecure-tls" <<<"$args"; then
-    kubectl -n kube-system patch deployment metrics-server --type='json' \
-      -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+  local waited_seconds
+  waited_seconds=0
+  until kubectl -n kube-system get deployment metrics-server >/dev/null 2>&1; do
+    if [ "$waited_seconds" -ge 120 ]; then
+      fail "metrics-server deployment was not created in kube-system after apply."
+    fi
+    sleep 2
+    waited_seconds=$((waited_seconds + 2))
+  done
+
+  if [ "$METRICS_SERVER_INSECURE_TLS" -eq 1 ]; then
+    log "Configuring metrics-server with --kubelet-insecure-tls (dev-only mode)."
+  else
+    log "Ensuring metrics-server verifies kubelet TLS certificates (production default)."
   fi
+
+  local patch_payload
+  patch_payload="$(
+    python3 - "$METRICS_SERVER_INSECURE_TLS" <<'PY'
+import json
+import subprocess
+import sys
+
+flag = "--kubelet-insecure-tls"
+desired_insecure = str(sys.argv[1]) == "1"
+obj = json.loads(
+    subprocess.check_output(
+        ["kubectl", "-n", "kube-system", "get", "deployment", "metrics-server", "-o", "json"],
+        text=True,
+    )
+)
+containers = (obj.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or [])
+if not containers:
+    print("[]")
+    raise SystemExit(0)
+
+container_index = 0
+for idx, container in enumerate(containers):
+    if str(container.get("name") or "") == "metrics-server":
+        container_index = idx
+        break
+
+container = containers[container_index]
+args_present = "args" in container
+args = list(container.get("args") or [])
+path_base = f"/spec/template/spec/containers/{container_index}/args"
+ops = []
+
+if desired_insecure:
+    if flag not in args:
+        if args_present:
+            ops.append({"op": "add", "path": f"{path_base}/-", "value": flag})
+        else:
+            ops.append({"op": "add", "path": path_base, "value": [flag]})
+else:
+    if args_present:
+        remove_indices = [idx for idx, value in enumerate(args) if value == flag]
+        for idx in sorted(remove_indices, reverse=True):
+            ops.append({"op": "remove", "path": f"{path_base}/{idx}"})
+
+print(json.dumps(ops, separators=(",", ":")))
+PY
+  )"
+  if [ "$patch_payload" != "[]" ]; then
+    kubectl -n kube-system patch deployment metrics-server --type='json' -p="$patch_payload" >/dev/null
+  fi
+
   kubectl -n kube-system rollout status deployment/metrics-server --timeout=600s
 }
 
@@ -1407,6 +1508,7 @@ render_helm_values_override() {
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
   local backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
+  local admin_bootstrap_password
 
   control_node="$(yaml_escape "$CONTROL_NODE")"
   node_external_host="$(yaml_escape "$NODE_EXTERNAL_HOST")"
@@ -1447,6 +1549,7 @@ render_helm_values_override() {
   golden_images_hostpath="$(yaml_escape "$GOLDEN_IMAGES_HOSTPATH")"
   postgres_data_hostpath="$(yaml_escape "$POSTGRES_DATA_HOSTPATH")"
   cdi_upload_proxy_url="$(yaml_escape "$CDI_UPLOAD_PROXY_URL")"
+  admin_bootstrap_password="$(yaml_escape "$ADMIN_BOOTSTRAP_PASSWORD")"
 
   cat >"$output_file" <<EOF
 appTemplateValues:
@@ -1459,6 +1562,7 @@ appTemplateValues:
   RUNNER_IMAGE: "${runner_image}"
   PUBLIC_SCHEME: "${public_scheme}"
   TLS_SECRET_NAME: "${tls_secret_name}"
+  ADMIN_BOOTSTRAP_PASSWORD: "${admin_bootstrap_password}"
   WINDOWS_MACHINE_TYPE: "${windows_machine_type}"
   WINDOWS_EFI_ENABLED: "${windows_efi_enabled}"
   WINDOWS_CPU_MODEL: "${windows_cpu_model}"
@@ -2313,6 +2417,233 @@ spec:
 EOF
 }
 
+apply_kubelet_serving_csr_autoapproval() {
+  if [ "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" -ne 1 ]; then
+    log "Skipping kubelet-serving CSR auto-approval automation (ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=0)."
+    return
+  fi
+
+  log "Applying kubelet-serving CSR auto-approval CronJob (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bretter-kubelet-serving-csr-approver
+  namespace: ${NAMESPACE}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: bretter-kubelet-serving-csr-approver
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests/approval"]
+    verbs: ["update", "patch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["signers"]
+    resourceNames: ["kubernetes.io/kubelet-serving"]
+    verbs: ["approve"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: bretter-kubelet-serving-csr-approver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: bretter-kubelet-serving-csr-approver
+subjects:
+  - kind: ServiceAccount
+    name: bretter-kubelet-serving-csr-approver
+    namespace: ${NAMESPACE}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-kubelet-serving-csr-approver
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 600
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: bretter-kubelet-serving-csr-approver
+          nodeSelector:
+            kubernetes.io/hostname: ${CONTROL_NODE}
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: approver
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/bash
+                - -lc
+                - |
+                  set -euo pipefail
+                  python3 - <<'PY'
+                  import base64
+                  import json
+                  import subprocess
+                  import sys
+
+                  from cryptography import x509
+                  from cryptography.x509.oid import NameOID
+
+                  SIGNER_NAME = "kubernetes.io/kubelet-serving"
+                  approved_count = 0
+                  skipped_count = 0
+
+
+                  def run_json(cmd):
+                    output = subprocess.check_output(cmd, text=True)
+                    return json.loads(output)
+
+
+                  def skip(message: str) -> None:
+                    global skipped_count
+                    skipped_count += 1
+                    print(f"SKIP: {message}")
+
+
+                  def allowed_names_for_node(node_name: str) -> tuple[set[str], set[str]]:
+                    node = run_json(["kubectl", "get", "node", node_name, "-o", "json"])
+                    allowed_dns = {node_name.lower()}
+                    allowed_ips: set[str] = set()
+                    for row in node.get("status", {}).get("addresses") or []:
+                      addr_type = str(row.get("type") or "")
+                      addr_value = str(row.get("address") or "").strip()
+                      if not addr_value:
+                        continue
+                      if addr_type == "Hostname":
+                        allowed_dns.add(addr_value.lower())
+                      elif addr_type in {"InternalIP", "ExternalIP"}:
+                        allowed_ips.add(addr_value)
+                    return allowed_dns, allowed_ips
+
+
+                  def approve_csr(csr_name: str) -> None:
+                    global approved_count
+                    subprocess.check_call(
+                      ["kubectl", "certificate", "approve", csr_name],
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
+                    )
+                    approved_count += 1
+
+
+                  try:
+                    csr_list = run_json(["kubectl", "get", "csr", "-o", "json"]).get("items") or []
+                  except Exception as exc:
+                    print(f"ERROR: unable to fetch CSRs: {exc}", file=sys.stderr)
+                    sys.exit(1)
+
+                  for item in csr_list:
+                    metadata = item.get("metadata") or {}
+                    spec = item.get("spec") or {}
+                    status = item.get("status") or {}
+                    csr_name = str(metadata.get("name") or "")
+                    signer_name = str(spec.get("signerName") or "")
+                    if signer_name != SIGNER_NAME:
+                      continue
+                    if status.get("conditions"):
+                      continue
+                    username = str(spec.get("username") or "")
+                    if not username.startswith("system:node:"):
+                      skip(f"{csr_name}: unexpected requester {username!r}")
+                      continue
+                    node_name = username.split(":", 2)[-1]
+
+                    try:
+                      allowed_dns, allowed_ips = allowed_names_for_node(node_name)
+                    except Exception as exc:
+                      skip(f"{csr_name}: cannot fetch node {node_name!r}: {exc}")
+                      continue
+
+                    request_b64 = str(spec.get("request") or "")
+                    if not request_b64:
+                      skip(f"{csr_name}: empty request payload")
+                      continue
+
+                    try:
+                      request_der = base64.b64decode(request_b64)
+                      csr = x509.load_der_x509_csr(request_der)
+                    except Exception as exc:
+                      skip(f"{csr_name}: CSR parse failure: {exc}")
+                      continue
+
+                    cn_values = [attr.value for attr in csr.subject.get_attributes_for_oid(NameOID.COMMON_NAME)]
+                    common_name = cn_values[0] if cn_values else ""
+                    org_values = {attr.value for attr in csr.subject.get_attributes_for_oid(NameOID.ORGANIZATION_NAME)}
+                    expected_cn = f"system:node:{node_name}"
+                    if common_name != expected_cn or "system:nodes" not in org_values:
+                      skip(
+                        f"{csr_name}: subject mismatch cn={common_name!r} org={sorted(org_values)} expected_cn={expected_cn!r}"
+                      )
+                      continue
+
+                    usages = {str(v).strip().lower() for v in (spec.get("usages") or [])}
+                    if "server auth" not in usages:
+                      skip(f"{csr_name}: missing 'server auth' usage ({sorted(usages)})")
+                      continue
+
+                    try:
+                      san = csr.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+                    except x509.ExtensionNotFound:
+                      skip(f"{csr_name}: missing SAN extension")
+                      continue
+
+                    dns_sans = {str(name).strip().lower() for name in san.get_values_for_type(x509.DNSName)}
+                    ip_sans = {str(ip) for ip in san.get_values_for_type(x509.IPAddress)}
+                    uri_sans = list(san.get_values_for_type(x509.UniformResourceIdentifier))
+                    email_sans = list(san.get_values_for_type(x509.RFC822Name))
+
+                    if not dns_sans and not ip_sans:
+                      skip(f"{csr_name}: SAN has no DNS/IP entries")
+                      continue
+                    if uri_sans or email_sans:
+                      skip(f"{csr_name}: SAN contains unsupported URI/email entries")
+                      continue
+                    if any(name not in allowed_dns for name in dns_sans):
+                      skip(
+                        f"{csr_name}: DNS SAN not allowed dns={sorted(dns_sans)} allowed={sorted(allowed_dns)}"
+                      )
+                      continue
+                    if any(ip not in allowed_ips for ip in ip_sans):
+                      skip(
+                        f"{csr_name}: IP SAN not allowed ip={sorted(ip_sans)} allowed={sorted(allowed_ips)}"
+                      )
+                      continue
+
+                    try:
+                      approve_csr(csr_name)
+                      print(
+                        f"APPROVED: {csr_name} node={node_name} dns={sorted(dns_sans)} ip={sorted(ip_sans)}"
+                      )
+                    except Exception as exc:
+                      skip(f"{csr_name}: approval command failed: {exc}")
+
+                  print(f"SUMMARY: approved={approved_count} skipped={skipped_count}")
+                  PY
+EOF
+}
+
 apply_manifests() {
   log "Ensuring namespace $NAMESPACE"
   kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE"
@@ -2326,6 +2657,7 @@ apply_manifests() {
   apply_vault_cluster_secret_store
   apply_external_secrets_bindings
   apply_cleanup_automation
+  apply_kubelet_serving_csr_autoapproval
 
   if [ -f "$ROOT_DIR/runner/spice-embed.html" ]; then
     log "Updating spice-embed ConfigMap"
@@ -2573,6 +2905,8 @@ main() {
   validate_cpu_manager_config
   validate_monitoring_config
   validate_metrics_server_config
+  validate_kubelet_serving_csr_autoapproval_config
+  configure_admin_bootstrap_credentials
   validate_synthetic_check_config
   validate_helm_deploy_config
   require_apt
@@ -2597,6 +2931,11 @@ main() {
   fi
   log "Using public scheme: $PUBLIC_SCHEME"
   log "Using TLS secret: $TLS_SECRET_NAME (enabled=$TLS_ENABLED)"
+  if [ "$ADMIN_BOOTSTRAP_PASSWORD_GENERATED" -eq 1 ]; then
+    log "Generated one-time bootstrap admin secret for username 'admin' (used only if no admin user exists): $ADMIN_BOOTSTRAP_PASSWORD"
+  else
+    log "Using provided ADMIN_BOOTSTRAP_PASSWORD for bootstrap admin (applies only when no admin user exists)."
+  fi
   log "Using Helm release: $HELM_RELEASE_NAME (chart: $HELM_CHART_DIR)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
@@ -2623,8 +2962,12 @@ main() {
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION:-latest})"
-  log "Metrics-server enabled: $ENABLE_METRICS_SERVER"
+  log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
+  log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
+  if [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
+    log "Synthetic check password was auto-set to the bootstrap admin secret."
+  fi
   log "Longhorn tuning enabled: $LONGHORN_TUNE"
   if [ -n "$LONGHORN_DEFAULT_DATA_PATH" ]; then
     log "Longhorn default data path override: $LONGHORN_DEFAULT_DATA_PATH"

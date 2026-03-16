@@ -12,6 +12,7 @@ appTemplateValues:
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:latest
   PUBLIC_SCHEME: https
   TLS_SECRET_NAME: bretter-tls
+  ADMIN_BOOTSTRAP_PASSWORD: ""
   WINDOWS_MACHINE_TYPE: q35
   WINDOWS_EFI_ENABLED: "true"
   WINDOWS_CPU_MODEL: host

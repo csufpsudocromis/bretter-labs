@@ -2,6 +2,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+import secrets
 from urllib.parse import urlparse
 
 from fastapi import FastAPI
@@ -24,6 +25,18 @@ configure_capped_error_file_logging(settings.error_log_file_path, settings.error
 logger = logging.getLogger(__name__)
 
 _reaper_task: asyncio.Task | None = None
+ENTERPRISE_CORS_DEFAULT_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+ENTERPRISE_CORS_DEFAULT_HEADERS = ["Accept", "Content-Type", "Authorization"]
+ENTERPRISE_CORS_ALLOWED_METHODS = set(ENTERPRISE_CORS_DEFAULT_METHODS)
+
+
+def _resolve_admin_bootstrap_password() -> tuple[str, bool]:
+    configured = str(getattr(settings, "admin_default_password", "") or "").strip()
+    if configured:
+        return configured, False
+    # 32+ chars from URL-safe alphabet keeps copy/paste simple while avoiding static defaults.
+    return secrets.token_urlsafe(24), True
+
 
 def _normalize_origin(origin: str) -> str | None:
     value = str(origin or "").strip()
@@ -35,13 +48,26 @@ def _normalize_origin(origin: str) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _split_csv_values(raw: str) -> list[str]:
+    seen: set[str] = set()
+    values: list[str] = []
+    for item in str(raw or "").split(","):
+        normalized = str(item or "").strip()
+        if not normalized:
+            continue
+        key = normalized.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        values.append(normalized)
+    return values
+
+
 def _configured_cors_origins() -> list[str]:
-    configured = str(getattr(settings, "cors_allowed_origins", "") or "").strip()
-    if not configured:
-        return []
+    configured = _split_csv_values(str(getattr(settings, "cors_allowed_origins", "") or ""))
     allowlist: list[str] = []
     seen: set[str] = set()
-    for raw in configured.split(","):
+    for raw in configured:
         normalized = _normalize_origin(raw)
         if not normalized or normalized in seen:
             continue
@@ -53,6 +79,18 @@ def _configured_cors_origins() -> list[str]:
 def _configured_cors_origin_regex() -> str | None:
     raw = str(getattr(settings, "cors_allowed_origin_regex", "") or "").strip()
     return raw or None
+
+
+def _configured_cors_methods() -> list[str]:
+    configured = _split_csv_values(str(getattr(settings, "cors_allowed_methods", "") or ""))
+    methods: list[str] = []
+    for method in configured:
+        methods.append(method.upper())
+    return methods
+
+
+def _configured_cors_headers() -> list[str]:
+    return _split_csv_values(str(getattr(settings, "cors_allowed_headers", "") or ""))
 
 
 def _default_cors_origins() -> list[str]:
@@ -78,8 +116,53 @@ def _default_cors_origins() -> list[str]:
     return allowlist
 
 
-ALLOWED_ORIGINS = _configured_cors_origins() or _default_cors_origins()
-ALLOWED_ORIGIN_REGEX = _configured_cors_origin_regex()
+def _resolve_cors_policy() -> tuple[list[str], str | None, list[str], list[str]]:
+    configured_origins = _configured_cors_origins()
+    configured_regex = _configured_cors_origin_regex()
+    enterprise_profile = bool(getattr(settings, "cors_enterprise_profile", False))
+
+    if not enterprise_profile:
+        origins = configured_origins or _default_cors_origins()
+        return origins, configured_regex, ["*"], ["*"]
+
+    if configured_regex:
+        raise RuntimeError(
+            "BLABS_CORS_ALLOWED_ORIGIN_REGEX is not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true. "
+            "Use explicit BLABS_CORS_ALLOWED_ORIGINS."
+        )
+    if not configured_origins:
+        raise RuntimeError(
+            "BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_CORS_ENTERPRISE_PROFILE=true."
+        )
+
+    configured_methods = _configured_cors_methods()
+    methods = configured_methods or ENTERPRISE_CORS_DEFAULT_METHODS
+    if "*" in methods:
+        raise RuntimeError(
+            "Wildcard methods are not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true."
+        )
+    invalid_methods = [method for method in methods if method not in ENTERPRISE_CORS_ALLOWED_METHODS]
+    if invalid_methods:
+        raise RuntimeError(
+            "Unsupported BLABS_CORS_ALLOWED_METHODS values in enterprise profile: "
+            + ", ".join(invalid_methods)
+        )
+
+    configured_headers = _configured_cors_headers()
+    headers = configured_headers or ENTERPRISE_CORS_DEFAULT_HEADERS
+    if "*" in headers:
+        raise RuntimeError(
+            "Wildcard headers are not permitted when BLABS_CORS_ENTERPRISE_PROFILE=true."
+        )
+
+    logger.info(
+        "Enterprise CORS profile enabled with explicit origin allowlist (%d origins).",
+        len(configured_origins),
+    )
+    return configured_origins, None, methods, headers
+
+
+ALLOWED_ORIGINS, ALLOWED_ORIGIN_REGEX, ALLOWED_METHODS, ALLOWED_HEADERS = _resolve_cors_policy()
 
 
 def _apply_storage_overrides(config: Config) -> None:
@@ -145,15 +228,29 @@ async def lifespan(_: FastAPI):
         _apply_storage_overrides(config)
         admin_user = session.get(User, settings.admin_default_username)
         if not admin_user:
+            bootstrap_password, generated_password = _resolve_admin_bootstrap_password()
             session.add(
                 User(
                     username=settings.admin_default_username,
-                    password_hash=hash_password(settings.admin_default_password),
+                    password_hash=hash_password(bootstrap_password),
                     role=Role.PLATFORM_ADMIN,
                     is_admin=True,
                     force_password_change=True,
                 )
             )
+            if generated_password:
+                logger.warning(
+                    "Bootstrap admin created with one-time random secret. username=%s password=%s. "
+                    "Reset password immediately after first login.",
+                    settings.admin_default_username,
+                    bootstrap_password,
+                )
+            else:
+                logger.info(
+                    "Bootstrap admin created for username=%s using configured bootstrap secret. "
+                    "force_password_change=true",
+                    settings.admin_default_username,
+                )
         session.commit()
     global _reaper_task
     _reaper_task = asyncio.create_task(reaper_loop())
@@ -182,8 +279,8 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=ALLOWED_METHODS,
+    allow_headers=ALLOWED_HEADERS,
 )
 
 

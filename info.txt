@@ -5,7 +5,7 @@ Overview
 - Cluster: control plane and worker nodes (example names: kub1, kube2, kub3).
 - Storage: local PVC-backed repo for VM images (.vhd/.qcow).
 - Networking: labs/pods get internet egress; pods cannot reach each other (network policies).
-- Access: local username/password (testing); default admin `admin`/`admin` but must be changed on first login.
+- Access: local username/password (testing); bootstrap admin username is `admin` with a one-time setup secret and forced password reset on first login.
 - Console: SPICE/websockify for user access to VMs.
 - Deployment: `scripts/setup.sh` installs prerequisites and deploys to Kubernetes (GHCR optional).
 - No persistence between sessions; VM disks are ephemeral per pod.

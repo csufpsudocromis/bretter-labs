@@ -408,6 +408,8 @@ spec:
                 secretKeyRef:
                   name: bretter-postgres
                   key: BLABS_DATABASE_URL
+            - name: BLABS_ADMIN_DEFAULT_PASSWORD
+              value: "__ADMIN_BOOTSTRAP_PASSWORD__"
             - name: BLABS_ERROR_LOG_FILE_PATH
               value: /data/error.log
             - name: BLABS_ERROR_LOG_MAX_BYTES
