@@ -69,15 +69,15 @@ run_failure "reject invalid production go-live proof health timeout" \
 
 run_failure "reject production profile with missing explicit control-node override" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-    RUNNER_NODE_SELECTOR_VALUE=runner-pool NODE_EXTERNAL_HOST=prod-labs.internal VM_STORAGE_CLASS=prod-vm-storage \
-    CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
-    "$SETUP_SCRIPT"
+  RUNNER_NODE_SELECTOR_VALUE=runner-pool NODE_EXTERNAL_HOST=prod-labs.internal VM_STORAGE_CLASS=prod-vm-storage \
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
+  "$SETUP_SCRIPT"
 
 run_success "allow production dry-run with explicit hardened overrides" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-    CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
-    CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
-    "$SETUP_SCRIPT"
+  CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
+  "$SETUP_SCRIPT"
 
 tmp_values="$(mktemp)"
 cat >"$tmp_values" <<'EOF'
