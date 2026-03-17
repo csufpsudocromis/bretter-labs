@@ -3370,14 +3370,34 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
             status_code=status.HTTP_409_CONFLICT,
             detail=f"image is in use by templates: {', '.join(names)}{suffix}",
         )
-    dest_path = _image_dir() / Path(record.filename).name
+    safe_filename = Path(record.filename).name
+    dest_path = _image_dir() / safe_filename
     if dest_path.exists():
         try:
             dest_path.unlink()
-        except OSError as exc:  # pragma: no cover
-            raise HTTPException(
-                status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="failed to delete image"
-            ) from exc
+        except OSError as local_exc:
+            # In hardened deployments backend may run as non-root while image files are root-owned.
+            # Fall back to PVC helper deletion so users can still remove images.
+            try:
+                quoted_name = shlex.quote(safe_filename)
+                _with_pvc_helper(
+                    ["/bin/sh", "-c", f"rm -f /images/{quoted_name}"],
+                    capture_output=False,
+                )
+            except Exception as helper_exc:  # pragma: no cover
+                logger.warning(
+                    "Failed to delete image file via local unlink and helper fallback: %s",
+                    safe_filename,
+                    exc_info=True,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="failed to delete image"
+                ) from helper_exc
+            logger.info(
+                "Deleted image %s via helper fallback after local unlink failed: %s",
+                safe_filename,
+                local_exc,
+            )
     if record.source_pvc:
         try:
             kube._client().delete_namespaced_persistent_volume_claim(
@@ -3385,11 +3405,12 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
                 namespace=settings.kube_namespace,
             )
         except ApiException as exc:
-            if exc.status != 404:
+            if exc.status not in {404, 409, 422}:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"failed to delete source pvc: {exc.reason}",
                 ) from exc
+            logger.info("Source PVC delete skipped for %s: status=%s", record.source_pvc, exc.status)
     session.delete(record)
     session.commit()
 
