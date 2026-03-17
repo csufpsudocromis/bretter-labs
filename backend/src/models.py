@@ -146,7 +146,7 @@ class VMTemplateCreate(BaseModel):
     max_active_instances: int = Field(default=2, ge=0, le=200)
     enabled: bool = False
     network_mode: str = Field(default="bridge", pattern="^(bridge|host|none|unrestricted|isolated)$")
-    console_provider: str = Field(default="spice", pattern="^(spice|guacamole)$")
+    console_provider: str = Field(default="spice", pattern="^(spice|guacamole|guacamole_rdp)$")
 
 
 class VMTemplateUpdate(BaseModel):
@@ -163,7 +163,7 @@ class VMTemplateUpdate(BaseModel):
     max_active_instances: Optional[int] = Field(default=None, ge=0, le=200)
     enabled: Optional[bool] = None
     network_mode: Optional[str] = Field(default=None, pattern="^(bridge|host|none|unrestricted|isolated)$")
-    console_provider: Optional[str] = Field(default=None, pattern="^(spice|guacamole)$")
+    console_provider: Optional[str] = Field(default=None, pattern="^(spice|guacamole|guacamole_rdp)$")
 
 
 class VMTemplate(BaseModel):

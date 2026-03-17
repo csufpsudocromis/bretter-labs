@@ -28,6 +28,7 @@ Use these defaults to reduce failed launches and improve startup consistency.
 
 - Default to `spice` for Windows-focused labs and SPICE agent features.
 - Use `guacamole` (VNC transport) when you want a simpler VNC console path.
+- Use `guacamole_rdp` when guest-native RDP is enabled and you want browser RDP via Guacamole.
 - Keep one provider per template to simplify troubleshooting and operator runbooks.
 
 ### Warm pool and launch limits

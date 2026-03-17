@@ -717,7 +717,7 @@ class KubernetesService:
         drive_if = "virtio" if is_linux else "ide"
         # SPICE works best with qxl on Windows images; keep std on Linux guests.
         vga = "std" if is_linux else "qxl"
-        if console_provider == "guacamole" and vga == "qxl":
+        if console_provider in {"guacamole", "guacamole_rdp"} and vga == "qxl":
             vga = "std"
         suffix = Path(req.image_path).suffix.lower()
         # Use the native disk format for both Linux and Windows.

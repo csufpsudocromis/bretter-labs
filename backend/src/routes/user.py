@@ -277,6 +277,8 @@ def _extract_spice_password(console_url: str | None) -> str:
 
 def _console_provider_from_url(console_url: str | None) -> str:
     raw = str(console_url or "").strip().lower()
+    if "/rdp.html" in raw:
+        return "guacamole_rdp"
     if "/vnc.html" in raw:
         return "guacamole"
     return "spice"
@@ -332,6 +334,28 @@ def _vm_console_vnc_url(
     return f"{base}/user/pods/{instance_id}/connect/vnc.html?{query}"
 
 
+def _vm_console_rdp_url(
+    instance_id: str,
+    title: str,
+    idle_minutes: int,
+    request: Request | None = None,
+) -> str:
+    base, host, port = _request_console_base(request)
+    encrypt = "true" if base.startswith("https://") else "false"
+    query = urlencode(
+        {
+            "host": host,
+            "port": port,
+            "encrypt": encrypt,
+            "title": title,
+            "instance_id": instance_id,
+            "idle_minutes": str(max(1, int(idle_minutes))),
+            "path": f"user/pods/{instance_id}/connect/rdp-tunnel",
+        }
+    )
+    return f"{base}/user/pods/{instance_id}/connect/rdp.html?{query}"
+
+
 def _vm_console_connect_url(
     instance_id: str,
     title: str,
@@ -341,6 +365,13 @@ def _vm_console_connect_url(
     spice_password: str = "",
 ) -> str:
     provider = normalize_vm_console_provider(console_provider)
+    if provider == "guacamole_rdp":
+        return _vm_console_rdp_url(
+            instance_id=instance_id,
+            title=title,
+            idle_minutes=idle_minutes,
+            request=request,
+        )
     if provider == "guacamole":
         return _vm_console_vnc_url(
             instance_id=instance_id,

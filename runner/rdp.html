@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RDP Console</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: #0f172a;
+        color: #e2e8f0;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+      .layout {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .toolbar {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) auto auto;
+        gap: 0.5rem;
+        align-items: end;
+        padding: 0.65rem;
+        background: rgba(15, 23, 42, 0.96);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+      }
+      .field {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+      label {
+        font-size: 0.72rem;
+        color: #94a3b8;
+        margin-bottom: 0.2rem;
+      }
+      input {
+        border: 1px solid rgba(148, 163, 184, 0.36);
+        border-radius: 0.4rem;
+        background: #0b1220;
+        color: #f8fafc;
+        height: 2rem;
+        padding: 0 0.5rem;
+      }
+      button {
+        border: 0;
+        border-radius: 0.4rem;
+        height: 2rem;
+        padding: 0 0.8rem;
+        color: #0f172a;
+        background: #f8fafc;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: #334155;
+        color: #f8fafc;
+      }
+      #status {
+        margin: 0;
+        padding: 0.45rem 0.65rem;
+        font-size: 0.82rem;
+        color: #cbd5e1;
+        background: rgba(15, 23, 42, 0.85);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+      }
+      #display {
+        position: relative;
+        flex: 1;
+        overflow: hidden;
+      }
+      #display > div {
+        width: 100%;
+        height: 100%;
+      }
+      #display canvas {
+        width: 100% !important;
+        height: 100% !important;
+      }
+      @media (max-width: 980px) {
+        .toolbar {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+    <script src="./guacamole/all.min.js"></script>
+  </head>
+  <body>
+    <div class="layout">
+      <div class="toolbar">
+        <div class="field">
+          <label for="username">Username (optional)</label>
+          <input id="username" autocomplete="username" />
+        </div>
+        <div class="field">
+          <label for="password">Password (optional)</label>
+          <input id="password" type="password" autocomplete="current-password" />
+        </div>
+        <div class="field">
+          <label for="domain">Domain (optional)</label>
+          <input id="domain" autocomplete="organization" />
+        </div>
+        <div class="field">
+          <label for="initialProgram">Initial Program (optional)</label>
+          <input id="initialProgram" />
+        </div>
+        <button id="connectBtn" type="button">Connect</button>
+        <button id="disconnectBtn" type="button" class="secondary">Disconnect</button>
+      </div>
+      <p id="status">Ready.</p>
+      <div id="display"></div>
+    </div>
+    <script>
+      (function () {
+        const statusEl = document.getElementById("status");
+        const displayEl = document.getElementById("display");
+        const connectBtn = document.getElementById("connectBtn");
+        const disconnectBtn = document.getElementById("disconnectBtn");
+        const usernameEl = document.getElementById("username");
+        const passwordEl = document.getElementById("password");
+        const domainEl = document.getElementById("domain");
+        const initialProgramEl = document.getElementById("initialProgram");
+
+        const params = new URLSearchParams(window.location.search);
+        const host = params.get("host") || window.location.hostname;
+        const rawPort = params.get("port") || window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+        const encrypt = (params.get("encrypt") || String(window.location.protocol === "https:")).toLowerCase() === "true";
+        const path = (params.get("path") || "").replace(/^\/+/, "");
+        const title = params.get("title");
+        if (title) document.title = title;
+
+        let client = null;
+        let keyboard = null;
+        let mouse = null;
+
+        function setStatus(message) {
+          statusEl.textContent = message;
+        }
+
+        function cleanup() {
+          try {
+            if (keyboard) {
+              keyboard.onkeydown = null;
+              keyboard.onkeyup = null;
+            }
+          } catch (_err) {}
+          keyboard = null;
+          mouse = null;
+          if (client) {
+            try {
+              client.disconnect();
+            } catch (_err) {}
+          }
+          client = null;
+          displayEl.replaceChildren();
+        }
+
+        async function fetchToken() {
+          const payload = {
+            username: usernameEl.value || "",
+            password: passwordEl.value || "",
+            domain: domainEl.value || "",
+            initial_program: initialProgramEl.value || "",
+          };
+          const response = await fetch("rdp-token", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify(payload),
+          });
+          if (!response.ok) {
+            const details = await response.text();
+            throw new Error(details || `failed to get token (${response.status})`);
+          }
+          const data = await response.json();
+          if (!data.token) {
+            throw new Error("missing token in response");
+          }
+          return data.token;
+        }
+
+        async function connect() {
+          connectBtn.disabled = true;
+          setStatus("Connecting...");
+          cleanup();
+          try {
+            const token = await fetchToken();
+            const scheme = encrypt ? "wss" : "ws";
+            const tunnelUrl = `${scheme}://${host}:${rawPort}/${path}`;
+            const tunnel = new Guacamole.WebSocketTunnel(tunnelUrl);
+            client = new Guacamole.Client(tunnel);
+            client.onerror = (error) => {
+              const msg = (error && error.message) || "connection failed";
+              setStatus(`Error: ${msg}`);
+            };
+            tunnel.onerror = (error) => {
+              const msg = (error && error.message) || "tunnel error";
+              setStatus(`Error: ${msg}`);
+            };
+            tunnel.onstatechange = (state) => {
+              if (state === 2) setStatus("Connected.");
+              if (state === 3 || state === 5) setStatus("Disconnected.");
+            };
+            const display = client.getDisplay().getElement();
+            displayEl.replaceChildren(display);
+
+            mouse = new Guacamole.Mouse(display);
+            mouse.onmousemove = mouse.onmousedown = mouse.onmouseup = (state) => {
+              if (client) client.sendMouseState(state);
+            };
+
+            keyboard = new Guacamole.Keyboard(window);
+            keyboard.onkeydown = (keysym) => {
+              if (client) client.sendKeyEvent(1, keysym);
+            };
+            keyboard.onkeyup = (keysym) => {
+              if (client) client.sendKeyEvent(0, keysym);
+            };
+
+            const width = Math.max(1024, window.innerWidth);
+            const height = Math.max(768, window.innerHeight - 140);
+            client.connect(
+              `token=${encodeURIComponent(token)}&width=${width}&height=${height}&dpi=96&audio=audio/L16;rate=44100`
+            );
+          } catch (err) {
+            setStatus(`Error: ${err.message || err}`);
+            cleanup();
+          } finally {
+            connectBtn.disabled = false;
+          }
+        }
+
+        connectBtn.addEventListener("click", connect);
+        disconnectBtn.addEventListener("click", () => {
+          cleanup();
+          setStatus("Disconnected.");
+        });
+        window.addEventListener("beforeunload", cleanup);
+        setStatus("Ready. Enter credentials if your guest requires them, then connect.");
+      })();
+    </script>
+  </body>
+</html>

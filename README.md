@@ -34,7 +34,7 @@ Users launch labs with staged status feedback and connect in the browser.
 
 - VM image upload and normalization
 - VM templates and container templates
-- Per-template VM console provider selection (`spice` or `guacamole`/VNC)
+- Per-template VM console provider selection (`spice`, `guacamole`/VNC, or `guacamole_rdp`)
 - Container image registry management
 - Runtime, storage, appearance, and alert/error settings
 - Resource, pod, and health visibility in admin pages
@@ -76,7 +76,7 @@ Core components:
 
 - `frontend-vite/`: UI for admin and user workflows
 - `backend/`: API, auth/session, orchestration, migrations
-- `runner/`: VM runtime image (QEMU with SPICE or VNC console modes)
+- `runner/`: VM runtime image (QEMU with SPICE, Guacamole VNC, or Guacamole RDP console modes)
 - `deploy/helm/`: Helm chart and production values used by setup
 - `scripts/setup.sh`: bootstrap, deploy (Helm), and tuning automation
 
@@ -356,7 +356,7 @@ Common issues:
 ```text
 backend/         FastAPI app, models, routes, migrations, services
 frontend-vite/   React app (Vite)
-runner/          VM runner image (QEMU/SPICE)
+runner/          VM runner image (QEMU + SPICE/Guacamole console paths)
 scripts/         Setup/bootstrap automation
 deploy/          Kubernetes manifests/templates
 docs/            Architecture and wiki source docs

@@ -14,6 +14,10 @@ VM_NET_MULTIQUEUE_ENABLED="${VM_NET_MULTIQUEUE_ENABLED:-true}"
 CONSOLE_PROVIDER="${CONSOLE_PROVIDER:-spice}"
 SPICE_TICKETING="${SPICE_TICKETING:-true}"
 SPICE_PASSWORD="${SPICE_PASSWORD:-}"
+RDP_FORWARD_PORT="${RDP_FORWARD_PORT:-33890}"
+GUAC_TOKEN_KEY="${GUAC_TOKEN_KEY:-}"
+GUAC_RDP_SECURITY="${GUAC_RDP_SECURITY:-any}"
+GUAC_RDP_IGNORE_CERT="${GUAC_RDP_IGNORE_CERT:-true}"
 TAP_EGRESS_IF=""
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
@@ -49,6 +53,9 @@ RAM_MB="${RAM_MB:-4096}"
 VM_NET_QUEUES="${VM_NET_QUEUES:-${CPU_CORES}}"
 CONSOLE_PROVIDER="$(printf '%s' "$CONSOLE_PROVIDER" | tr '[:upper:]' '[:lower:]')"
 case "$CONSOLE_PROVIDER" in
+  guacamole_rdp|guacamole-rdp|guac-rdp|rdp)
+    CONSOLE_PROVIDER="guacamole_rdp"
+    ;;
   guacamole|guac|novnc|vnc)
     CONSOLE_PROVIDER="guacamole"
     ;;
@@ -71,7 +78,17 @@ fi
 if [[ "${VM_NET_MULTIQUEUE_ENABLED,,}" != "true" ]]; then
   VM_NET_QUEUES=1
 fi
-if [[ "$CONSOLE_PROVIDER" == "guacamole" && "${VGA_TYPE}" == "qxl" ]]; then
+if ! [[ "$RDP_FORWARD_PORT" =~ ^[0-9]+$ ]]; then
+  RDP_FORWARD_PORT=33890
+fi
+if (( RDP_FORWARD_PORT < 1024 || RDP_FORWARD_PORT > 65535 )); then
+  RDP_FORWARD_PORT=33890
+fi
+if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" && "${VM_NET_BACKEND,,}" != "user" ]]; then
+  echo "CONSOLE_PROVIDER=guacamole_rdp requires VM_NET_BACKEND=user for deterministic local RDP forwarding" >&2
+  exit 1
+fi
+if [[ "$CONSOLE_PROVIDER" != "spice" && "${VGA_TYPE}" == "qxl" ]]; then
   VGA_TYPE="std"
 fi
 
@@ -121,6 +138,8 @@ PY
 
 if [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
   WEBROOT="/usr/share/novnc"
+elif [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
+  WEBROOT="/opt/runner/guac-web"
 else
   WEBROOT="/usr/share/spice-html5"
 fi
@@ -137,11 +156,44 @@ CONSOLE_TARGET_PORT="$SPICE_PORT"
 if [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
   CONSOLE_TARGET_PORT="$VNC_PORT"
 fi
-WEBSOCKIFY_ARGS=(--web="$WEBROOT")
-if [[ -n "${TLS_CERT_FILE:-}" && -n "${TLS_KEY_FILE:-}" && -f "${TLS_CERT_FILE}" && -f "${TLS_KEY_FILE}" ]]; then
-  WEBSOCKIFY_ARGS+=(--cert="$TLS_CERT_FILE" --key="$TLS_KEY_FILE")
+if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
+  mkdir -p "$WEBROOT/guacamole"
+  cp /opt/runner/rdp.html "$WEBROOT/rdp.html"
+  if [[ -f /opt/runner/node_modules/guacamole-common-js/dist/all.min.js ]]; then
+    cp /opt/runner/node_modules/guacamole-common-js/dist/all.min.js "$WEBROOT/guacamole/all.min.js"
+  elif [[ -f /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js ]]; then
+    cp /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js "$WEBROOT/guacamole/all.min.js"
+  else
+    echo "Missing guacamole-common-js assets in runner image" >&2
+    exit 1
+  fi
+  if [[ -z "$GUAC_TOKEN_KEY" ]]; then
+    GUAC_TOKEN_KEY="$(python3 - <<'PY'
+import secrets
+alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+print("".join(secrets.choice(alphabet) for _ in range(48)))
+PY
+)"
+  fi
+  guacd -b 127.0.0.1 -l 4822 &
+  GUACD_HOST="127.0.0.1" \
+  GUACD_PORT="4822" \
+  GUAC_HTTP_PORT="$WS_PORT" \
+  GUAC_WEB_ROOT="$WEBROOT" \
+  GUAC_TUNNEL_PATH="/rdp-tunnel" \
+  GUAC_TOKEN_KEY="$GUAC_TOKEN_KEY" \
+  GUAC_RDP_HOST="127.0.0.1" \
+  GUAC_RDP_PORT="$RDP_FORWARD_PORT" \
+  GUAC_RDP_SECURITY="$GUAC_RDP_SECURITY" \
+  GUAC_RDP_IGNORE_CERT="$GUAC_RDP_IGNORE_CERT" \
+  node /opt/runner/guac-rdp-server.js &
+else
+  WEBSOCKIFY_ARGS=(--web="$WEBROOT")
+  if [[ -n "${TLS_CERT_FILE:-}" && -n "${TLS_KEY_FILE:-}" && -f "${TLS_CERT_FILE}" && -f "${TLS_KEY_FILE}" ]]; then
+    WEBSOCKIFY_ARGS+=(--cert="$TLS_CERT_FILE" --key="$TLS_KEY_FILE")
+  fi
+  websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$CONSOLE_TARGET_PORT" --daemon
 fi
-websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$CONSOLE_TARGET_PORT" --daemon
 
 if [[ "$CONSOLE_PROVIDER" == "spice" ]]; then
   SPICE_ARGS="port=${SPICE_PORT},addr=0.0.0.0"
@@ -180,7 +232,7 @@ if [[ "$CONSOLE_PROVIDER" == "spice" ]]; then
     -chardev spicevmc,id=vdagent,debug=0,name=vdagent
     -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
   )
-else
+elif [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
   QEMU_ARGS+=(-vnc "${QEMU_VNC_BIND}")
 fi
 
@@ -290,12 +342,16 @@ if [[ "${VM_NET_BACKEND,,}" == "tap-nat" ]]; then
     -device "${NET_DEVICE}"
   )
 else
+  USER_NETDEV="user,id=net0"
+  if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
+    USER_NETDEV="${USER_NETDEV},hostfwd=tcp:127.0.0.1:${RDP_FORWARD_PORT}-:3389"
+  fi
   NET_DEVICE="virtio-net-pci,netdev=net0"
   if (( VM_NET_QUEUES > 1 )); then
     NET_DEVICE="${NET_DEVICE},mq=on,vectors=$((2 * VM_NET_QUEUES + 2))"
   fi
   QEMU_ARGS+=(
-    -netdev user,id=net0
+    -netdev "${USER_NETDEV}"
     -device "${NET_DEVICE}"
   )
 fi
@@ -333,6 +389,9 @@ echo "Starting QEMU with disk=${DISK}, cpu=${CPU_CORES}, ram=${RAM_MB}MB, provid
 echo "Console target: localhost:${CONSOLE_TARGET_PORT}"
 if [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
   echo "VNC bind address: ${QEMU_VNC_BIND}"
+fi
+if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
+  echo "RDP forward target: 127.0.0.1:${RDP_FORWARD_PORT} -> guest:3389"
 fi
 echo "Disk format: ${DISK_FORMAT}"
 echo "VM networking: backend=${VM_NET_BACKEND}, queues=${VM_NET_QUEUES}, vhost_net=${VM_VHOST_NET_ENABLED}"

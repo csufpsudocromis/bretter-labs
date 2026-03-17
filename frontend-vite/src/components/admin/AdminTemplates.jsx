@@ -1,6 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../../api";
 
+const consoleProviderLabel = (provider) => {
+  if (provider === "guacamole") return "Guacamole (VNC)";
+  if (provider === "guacamole_rdp") return "Guacamole (RDP)";
+  return "SPICE";
+};
+
 const AdminTemplates = () => {
   const [templates, setTemplates] = useState([]);
   const [images, setImages] = useState([]);
@@ -249,6 +255,7 @@ const AdminTemplates = () => {
               >
                 <option value="spice">SPICE</option>
                 <option value="guacamole">Guacamole (VNC)</option>
+                <option value="guacamole_rdp">Guacamole (RDP)</option>
               </select>
             </label>
             <button onClick={create} disabled={!form.image_id || !form.name}>
@@ -276,7 +283,7 @@ const AdminTemplates = () => {
                   Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
                 </div>
                 <div className="muted small">
-                  Console: {t.console_provider === "guacamole" ? "Guacamole (VNC)" : "SPICE"}
+                  Console: {consoleProviderLabel(t.console_provider)}
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
@@ -432,6 +439,7 @@ const AdminTemplates = () => {
                   >
                     <option value="spice">SPICE</option>
                     <option value="guacamole">Guacamole (VNC)</option>
+                    <option value="guacamole_rdp">Guacamole (RDP)</option>
                   </select>
                 </label>
                 <label>

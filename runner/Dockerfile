@@ -12,7 +12,7 @@
 #
 # The web client can connect to ws://${runner-host}:${WS_PORT} (VNC/SPICE over WebSocket).
 
-FROM debian:12-slim
+FROM ubuntu:24.04
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -21,18 +21,31 @@ RUN apt-get update && \
       websockify \
       novnc \
       spice-html5 \
+      guacd \
       ovmf \
       dnsmasq-base \
       iproute2 \
       iptables \
+      nodejs \
+      npm \
       python3 \
       ca-certificates && \
+    if apt-cache show libguac-client-rdp0t64 >/dev/null 2>&1; then \
+      apt-get install -y --no-install-recommends libguac-client-rdp0t64; \
+    elif apt-cache show libguac-client-rdp0 >/dev/null 2>&1; then \
+      apt-get install -y --no-install-recommends libguac-client-rdp0; \
+    else \
+      echo "Missing guacd RDP plugin package in apt repositories" >&2; \
+      exit 1; \
+    fi && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/runner
 
-COPY entrypoint.sh /opt/runner/entrypoint.sh
+RUN npm install --prefix /opt/runner --omit=dev guacamole-lite@1.2.0 guacamole-common-js@1.5.0
+
+COPY entrypoint.sh guac-rdp-server.js rdp.html /opt/runner/
 
 ENV WS_PORT=6080 \
     VNC_DISPLAY=":0" \

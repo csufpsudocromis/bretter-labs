@@ -423,6 +423,20 @@ def test_vm_connect_token_uses_vnc_console_for_guacamole_templates(login_user: T
     assert "password=" not in connect_url
 
 
+def test_vm_connect_token_uses_rdp_console_for_guacamole_rdp_templates(login_user: TestClient):
+    _seed_vm_template(console_provider="guacamole_rdp")
+
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    vm_id = started.json()["id"]
+
+    token_response = login_user.post(f"/user/pods/{vm_id}/connect-token")
+    assert token_response.status_code == 200, token_response.text
+    connect_url = token_response.json()["connect_url"]
+    assert "/connect/rdp.html" in connect_url
+    assert "password=" not in connect_url
+
+
 def test_admin_template_console_provider_round_trip(login_admin: TestClient):
     with Session(engine) as session:
         session.add(
@@ -462,6 +476,10 @@ def test_admin_template_console_provider_round_trip(login_admin: TestClient):
     updated = login_admin.patch(f"/admin/templates/{template_id}", json={"console_provider": "spice"})
     assert updated.status_code == 200, updated.text
     assert updated.json()["console_provider"] == "spice"
+
+    rdp_updated = login_admin.patch(f"/admin/templates/{template_id}", json={"console_provider": "guacamole_rdp"})
+    assert rdp_updated.status_code == 200, rdp_updated.text
+    assert rdp_updated.json()["console_provider"] == "guacamole_rdp"
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):

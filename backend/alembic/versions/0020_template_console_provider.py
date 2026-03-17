@@ -43,6 +43,7 @@ def upgrade() -> None:
         UPDATE template
         SET console_provider = CASE
             WHEN console_provider IS NULL OR trim(console_provider) = '' THEN 'spice'
+            WHEN lower(trim(console_provider)) IN ('guacamole_rdp', 'guacamole-rdp', 'guac-rdp', 'rdp') THEN 'guacamole_rdp'
             WHEN lower(trim(console_provider)) IN ('guacamole', 'guac', 'novnc', 'vnc') THEN 'guacamole'
             WHEN lower(trim(console_provider)) = 'spice' THEN 'spice'
             ELSE 'spice'
