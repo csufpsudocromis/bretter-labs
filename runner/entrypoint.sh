@@ -249,9 +249,30 @@ elif [[ "${CPU_MODEL}" == "host" ]]; then
 fi
 
 # Optional UEFI pflash.
-OVMF_CODE="/usr/share/OVMF/OVMF_CODE.fd"
-OVMF_VARS_TEMPLATE="/usr/share/OVMF/OVMF_VARS.fd"
-if [[ "${EFI_ENABLED,,}" == "true" && -f "$OVMF_CODE" && -f "$OVMF_VARS_TEMPLATE" ]]; then
+OVMF_CODE=""
+OVMF_VARS_TEMPLATE=""
+
+for candidate_code in \
+  "/usr/share/OVMF/OVMF_CODE.fd" \
+  "/usr/share/OVMF/OVMF_CODE_4M.fd" \
+  "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
+  "/usr/share/edk2/ovmf/OVMF_CODE_4M.fd"; do
+  case "$candidate_code" in
+    */OVMF_CODE_4M.fd)
+      candidate_vars="${candidate_code%OVMF_CODE_4M.fd}OVMF_VARS_4M.fd"
+      ;;
+    *)
+      candidate_vars="${candidate_code%OVMF_CODE.fd}OVMF_VARS.fd"
+      ;;
+  esac
+  if [[ -f "$candidate_code" && -f "$candidate_vars" ]]; then
+    OVMF_CODE="$candidate_code"
+    OVMF_VARS_TEMPLATE="$candidate_vars"
+    break
+  fi
+done
+
+if [[ "${EFI_ENABLED,,}" == "true" && -n "$OVMF_CODE" && -n "$OVMF_VARS_TEMPLATE" ]]; then
   OVMF_VARS="/tmp/OVMF_VARS.fd"
   cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS" 2>/dev/null || true
   QEMU_ARGS+=(-drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE")
