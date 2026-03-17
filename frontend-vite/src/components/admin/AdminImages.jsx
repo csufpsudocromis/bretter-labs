@@ -95,7 +95,9 @@ const AdminImages = () => {
       await waitForTaskAndFinish(taskId);
     };
 
+    let attemptedDirect = false;
     try {
+      attemptedDirect = true;
       const direct = await api.post("/admin/images/direct-upload/start", {
         filename: file.name,
         size_bytes: file.size,
@@ -128,9 +130,17 @@ const AdminImages = () => {
       await waitForTaskAndFinish(taskId);
     } catch (err) {
       const status = err?.response?.status;
-      if (status === 404 || status === 409) {
+      const shouldFallbackToLegacy =
+        status === 404 || status === 409 || status >= 500 || status == null || err?.code === "ERR_NETWORK";
+      if (shouldFallbackToLegacy) {
         try {
+          if (attemptedDirect) {
+            setUploadDetail("Direct upload unavailable; retrying with legacy upload path");
+          }
           await uploadLegacy();
+          if (attemptedDirect) {
+            setMessage("Upload complete (legacy path)");
+          }
         } catch (legacyErr) {
           setError(legacyErr.response?.data?.detail || legacyErr.message || "Upload failed");
         }

@@ -22,10 +22,13 @@ server {
   server_name _;
   ssl_certificate /tls/tls.crt;
   ssl_certificate_key /tls/tls.key;
+  client_max_body_size 0;
   root /usr/share/nginx/html;
 
   location /api/ {
     proxy_pass https://bretter-backend:8000/;
+    proxy_request_buffering off;
+    proxy_buffering off;
     proxy_ssl_trusted_certificate /tmp/backend-upstream-ca.pem;
     proxy_ssl_verify on;
     proxy_ssl_verify_depth 3;
@@ -82,10 +85,13 @@ else
 server {
   listen 8443;
   server_name _;
+  client_max_body_size 0;
   root /usr/share/nginx/html;
 
   location /api/ {
     proxy_pass http://bretter-backend:8000/;
+    proxy_request_buffering off;
+    proxy_buffering off;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
