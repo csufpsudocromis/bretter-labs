@@ -1743,7 +1743,7 @@ def _create_finalize_job(task: ImageUploadTask) -> str:
         command=["/bin/sh", "-c"],
         args=[
             r"""
-set -euo pipefail
+set -eu
 in="/images/${INPUT_FILENAME}"
 if [ ! -f "${in}" ]; then
   echo "BLABS_ERROR=input missing: ${INPUT_FILENAME}"
@@ -1868,7 +1868,7 @@ def _create_finalize_from_upload_job(task: ImageUploadTask) -> str:
         command=["/bin/sh", "-c"],
         args=[
             r"""
-set -euo pipefail
+set -eu
 src="/upload/${UPLOAD_SOURCE_FILENAME}"
 if [ ! -f "${src}" ]; then
   fallback="$(find /upload -maxdepth 2 -type f | head -n 1 || true)"
@@ -2019,7 +2019,7 @@ def _create_task_copy_job(task: ImageUploadTask) -> tuple[str, str]:
         command=["/bin/sh", "-c"],
         args=[
             r"""
-set -euo pipefail
+set -eu
 src="/source/${FILENAME}"
 dst="/target/${FILENAME}"
 if [ ! -f "${src}" ]; then
@@ -2514,7 +2514,7 @@ def _copy_file_to_pvc(source_path: Path, filename: str, *, claim_name: str | Non
         command=["/bin/sh", "-c"],
         args=[
             r"""
-set -euo pipefail
+set -eu
 src="/source/${FILENAME}"
 dst="/target/${FILENAME}"
 if [ ! -f "${src}" ]; then
