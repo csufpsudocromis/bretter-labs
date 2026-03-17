@@ -434,6 +434,7 @@ def test_vm_connect_token_uses_rdp_console_for_guacamole_rdp_templates(login_use
     assert token_response.status_code == 200, token_response.text
     connect_url = token_response.json()["connect_url"]
     assert "/connect/rdp.html" in connect_url
+    assert "autoconnect=true" in connect_url
     assert "password=" not in connect_url
 
 

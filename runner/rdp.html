@@ -132,6 +132,7 @@
         const rawPort = params.get("port") || window.location.port || (window.location.protocol === "https:" ? "443" : "80");
         const encrypt = (params.get("encrypt") || String(window.location.protocol === "https:")).toLowerCase() === "true";
         const path = (params.get("path") || "").replace(/^\/+/, "");
+        const autoConnect = (params.get("autoconnect") || "true").toLowerCase() !== "false";
         const title = params.get("title");
         if (title) document.title = title;
 
@@ -242,7 +243,12 @@
           setStatus("Disconnected.");
         });
         window.addEventListener("beforeunload", cleanup);
-        setStatus("Ready. Enter credentials if your guest requires them, then connect.");
+        if (autoConnect) {
+          setStatus("Connecting... Enter guest OS credentials only if your VM requires RDP auth.");
+          void connect();
+        } else {
+          setStatus("Ready. Enter guest OS credentials if required, then connect.");
+        }
       })();
     </script>
   </body>

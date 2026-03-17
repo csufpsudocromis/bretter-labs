@@ -350,6 +350,7 @@ def _vm_console_rdp_url(
             "title": title,
             "instance_id": instance_id,
             "idle_minutes": str(max(1, int(idle_minutes))),
+            "autoconnect": "true",
             "path": f"user/pods/{instance_id}/connect/rdp-tunnel",
         }
     )

@@ -21,6 +21,8 @@ const rdpHost = process.env.GUAC_RDP_HOST || "127.0.0.1";
 const rdpPort = parseInt(process.env.GUAC_RDP_PORT || "33890", 10);
 const rdpSecurity = process.env.GUAC_RDP_SECURITY || "any";
 const rdpIgnoreCert = String(process.env.GUAC_RDP_IGNORE_CERT || "true").toLowerCase() !== "false";
+const maxInactivityMsRaw = parseInt(process.env.GUAC_MAX_INACTIVITY_MS || "0", 10);
+const maxInactivityMs = Number.isFinite(maxInactivityMsRaw) && maxInactivityMsRaw >= 0 ? maxInactivityMsRaw : 0;
 
 const cryptSeed = process.env.GUAC_TOKEN_KEY || "bretter-labs-guac-rdp";
 const cryptCipher = "aes-256-cbc";
@@ -179,6 +181,7 @@ new GuacamoleLite(
   { server, path: tunnelPath },
   { host: guacdHost, port: guacdPort },
   {
+    maxInactivityTime: maxInactivityMs,
     crypt: {
       cypher: cryptCipher,
       key: cryptKey,
