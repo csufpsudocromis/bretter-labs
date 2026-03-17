@@ -89,7 +89,6 @@
         }
       }
     </style>
-    <script src="./guacamole/all.min.js"></script>
   </head>
   <body>
     <div class="layout">
@@ -116,7 +115,8 @@
       <p id="status">Ready.</p>
       <div id="display"></div>
     </div>
-    <script>
+    <script type="module">
+      import Guacamole from "./guacamole/all.min.js";
       (function () {
         const statusEl = document.getElementById("status");
         const displayEl = document.getElementById("display");
