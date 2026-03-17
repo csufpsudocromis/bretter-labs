@@ -1741,10 +1741,10 @@ def _create_finalize_job(task: ImageUploadTask) -> str:
             client.V1EnvVar(name="OUTPUT_SUFFIX", value=output_suffix),
             client.V1EnvVar(name="TASK_SHORT_ID", value=short_id),
         ],
-        command=["/bin/sh", "-c"],
+        command=["/bin/bash", "-lc"],
         args=[
             r"""
-set -eu
+set -euo pipefail
 in="/images/${INPUT_FILENAME}"
 if [ ! -f "${in}" ]; then
   echo "BLABS_ERROR=input missing: ${INPUT_FILENAME}"
@@ -1757,7 +1757,7 @@ if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
   if [ -f "${out}" ]; then
     out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
   fi
-  qemu-img convert -p -O "${CONVERT_FORMAT}" "${in}" "${out}"
+  qemu-img convert -p -O "${CONVERT_FORMAT}" "${in}" "${out}" 2>&1 | tr '\r' '\n'
   rm -f "${in}"
 fi
 sync
@@ -1866,10 +1866,10 @@ def _create_finalize_from_upload_job(task: ImageUploadTask) -> str:
             client.V1EnvVar(name="TASK_SHORT_ID", value=short_id),
             client.V1EnvVar(name="UPLOAD_SOURCE_FILENAME", value=settings.cdi_upload_source_filename or "disk.img"),
         ],
-        command=["/bin/sh", "-c"],
+        command=["/bin/bash", "-lc"],
         args=[
             r"""
-set -eu
+set -euo pipefail
 src="/upload/${UPLOAD_SOURCE_FILENAME}"
 if [ ! -f "${src}" ]; then
   fallback="$(find /upload -maxdepth 2 -type f | head -n 1 || true)"
@@ -1889,7 +1889,7 @@ if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
   if [ -f "${out}" ]; then
     out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
   fi
-  qemu-img convert -p -O "${CONVERT_FORMAT}" "${stage}" "${out}"
+  qemu-img convert -p -O "${CONVERT_FORMAT}" "${stage}" "${out}" 2>&1 | tr '\r' '\n'
   rm -f "${stage}"
 fi
 sync
@@ -2210,9 +2210,9 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             if task.finalize_job:
                 progress = _parse_finalize_progress_percent(_read_job_log(task.finalize_job, tail_lines=300))
             if progress is None:
-                task.detail = "Finalizing image format/checksum on cluster (100% left)"
+                task.detail = "Finalizing image format/checksum on cluster (0% complete)"
             else:
-                task.detail = f"Finalizing image format/checksum on cluster ({max(0, 100 - progress)}% left)"
+                task.detail = f"Finalizing image format/checksum on cluster ({progress}% complete)"
             task.updated_at = utc_now()
             session.add(task)
             session.commit()
