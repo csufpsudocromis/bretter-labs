@@ -29,6 +29,11 @@ server {
     proxy_pass https://bretter-backend:8000/;
     proxy_request_buffering off;
     proxy_buffering off;
+    proxy_connect_timeout 30s;
+    proxy_send_timeout 3600s;
+    proxy_read_timeout 3600s;
+    send_timeout 3600s;
+    client_body_timeout 3600s;
     proxy_ssl_trusted_certificate /tmp/backend-upstream-ca.pem;
     proxy_ssl_verify on;
     proxy_ssl_verify_depth 3;
@@ -92,6 +97,11 @@ server {
     proxy_pass http://bretter-backend:8000/;
     proxy_request_buffering off;
     proxy_buffering off;
+    proxy_connect_timeout 30s;
+    proxy_send_timeout 3600s;
+    proxy_read_timeout 3600s;
+    send_timeout 3600s;
+    client_body_timeout 3600s;
     proxy_http_version 1.1;
     proxy_set_header Host $http_host;
     proxy_set_header X-Forwarded-Host $http_host;
