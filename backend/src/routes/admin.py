@@ -2200,6 +2200,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             return task
 
     if task.status == "finalizing":
+        finalize_log = ""
         try:
             job = batch.read_namespaced_job(name=task.finalize_job, namespace=settings.kube_namespace)
             phase = _job_phase(job)
@@ -2216,22 +2217,26 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             raise
 
         if phase in {"running", "pending"}:
-            progress_log = ""
             if task.finalize_job:
-                progress_log = _read_job_log(task.finalize_job, tail_lines=300)
-            progress = _parse_finalize_progress_percent(progress_log)
-            if progress is None:
-                task.detail = "Finalizing image format/checksum on cluster (0% complete)"
-            elif progress >= 100 and _finalize_in_checksum_phase(progress_log):
-                task.detail = "Finalizing image format/checksum on cluster (100% complete; computing checksum)"
-            else:
-                task.detail = f"Finalizing image format/checksum on cluster ({progress}% complete)"
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
-            return task
-
+                finalize_log = _read_job_log(task.finalize_job, tail_lines=300)
+            # In some clusters the job status can lag behind pod completion.
+            # If finalize output markers are present, treat it as succeeded now.
+            try:
+                _parse_finalize_log(finalize_log)
+                phase = "succeeded"
+            except Exception:
+                progress = _parse_finalize_progress_percent(finalize_log)
+                if progress is None:
+                    task.detail = "Finalizing image format/checksum on cluster (0% complete)"
+                elif progress >= 100 and _finalize_in_checksum_phase(finalize_log):
+                    task.detail = "Finalizing image format/checksum on cluster (100% complete; computing checksum)"
+                else:
+                    task.detail = f"Finalizing image format/checksum on cluster ({progress}% complete)"
+                task.updated_at = utc_now()
+                session.add(task)
+                session.commit()
+                session.refresh(task)
+                return task
         if phase == "failed":
             task.status = "failed"
             task.detail = "Finalize job failed"
@@ -2243,7 +2248,9 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             return task
 
         try:
-            out_name, out_size, out_sha = _parse_finalize_log(_read_job_log(task.finalize_job, tail_lines=200))
+            if not finalize_log and task.finalize_job:
+                finalize_log = _read_job_log(task.finalize_job, tail_lines=200)
+            out_name, out_size, out_sha = _parse_finalize_log(finalize_log)
             task.filename = out_name
             task.size_bytes = out_size
             task.checksum = out_sha
