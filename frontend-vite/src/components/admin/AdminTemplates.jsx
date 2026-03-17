@@ -282,9 +282,7 @@ const AdminTemplates = () => {
                 <div className="muted small">
                   Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
                 </div>
-                <div className="muted small">
-                  Console: {consoleProviderLabel(t.console_provider)}
-                </div>
+                <div className="muted small">Console: {consoleProviderLabel(t.console_provider)}</div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">

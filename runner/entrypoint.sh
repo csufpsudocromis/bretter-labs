@@ -161,6 +161,10 @@ if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
   cp /opt/runner/rdp.html "$WEBROOT/rdp.html"
   if [[ -f /opt/runner/node_modules/guacamole-common-js/dist/all.min.js ]]; then
     cp /opt/runner/node_modules/guacamole-common-js/dist/all.min.js "$WEBROOT/guacamole/all.min.js"
+  elif [[ -f /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js ]]; then
+    cp /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js "$WEBROOT/guacamole/all.min.js"
+  elif [[ -f /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js ]]; then
+    cp /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js "$WEBROOT/guacamole/all.min.js"
   elif [[ -f /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js ]]; then
     cp /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js "$WEBROOT/guacamole/all.min.js"
   else
