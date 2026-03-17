@@ -159,18 +159,32 @@ fi
 if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
   mkdir -p "$WEBROOT/guacamole"
   cp /opt/runner/rdp.html "$WEBROOT/rdp.html"
-  if [[ -f /opt/runner/node_modules/guacamole-common-js/dist/all.min.js ]]; then
-    cp /opt/runner/node_modules/guacamole-common-js/dist/all.min.js "$WEBROOT/guacamole/all.min.js"
-  elif [[ -f /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js ]]; then
-    cp /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js "$WEBROOT/guacamole/all.min.js"
-  elif [[ -f /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js ]]; then
-    cp /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js "$WEBROOT/guacamole/all.min.js"
-  elif [[ -f /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js ]]; then
-    cp /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js "$WEBROOT/guacamole/all.min.js"
-  else
+  GUAC_JS_SOURCE=""
+  for candidate in \
+    /opt/runner/node_modules/guacamole-common-js/dist/all.min.js \
+    /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js \
+    /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js \
+    /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js; do
+    if [[ -f "$candidate" ]]; then
+      GUAC_JS_SOURCE="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$GUAC_JS_SOURCE" ]]; then
     echo "Missing guacamole-common-js assets in runner image" >&2
     exit 1
   fi
+  python3 - "$GUAC_JS_SOURCE" "$WEBROOT/guacamole/all.min.js" <<'PY'
+import pathlib
+import re
+import sys
+
+src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+# Normalize module/CJS package outputs into a browser-global script.
+src = re.sub(r"\s*export\s+default\s+Guacamole;\s*$", "", src, flags=re.S)
+src = re.sub(r"\s*module\.exports\s*=\s*Guacamole;\s*$", "", src, flags=re.S)
+pathlib.Path(sys.argv[2]).write_text(src, encoding="utf-8")
+PY
   if [[ -z "$GUAC_TOKEN_KEY" ]]; then
     GUAC_TOKEN_KEY="$(python3 - <<'PY'
 import secrets
