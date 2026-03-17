@@ -100,6 +100,7 @@ COPY_JOB_TIMEOUT_SECONDS = 3 * 60 * 60
 TASK_RETENTION_HOURS = 24
 
 _CDI_AVAILABLE: bool | None = None
+FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%")
 ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
 ERROR_LOG_PAGE_SIZE = 50
 ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
@@ -1756,7 +1757,7 @@ if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
   if [ -f "${out}" ]; then
     out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
   fi
-  qemu-img convert -O "${CONVERT_FORMAT}" "${in}" "${out}"
+  qemu-img convert -p -O "${CONVERT_FORMAT}" "${in}" "${out}"
   rm -f "${in}"
 fi
 sync
@@ -1888,7 +1889,7 @@ if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
   if [ -f "${out}" ]; then
     out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
   fi
-  qemu-img convert -O "${CONVERT_FORMAT}" "${stage}" "${out}"
+  qemu-img convert -p -O "${CONVERT_FORMAT}" "${stage}" "${out}"
   rm -f "${stage}"
 fi
 sync
@@ -1964,6 +1965,19 @@ def _parse_finalize_log(log_data: str) -> tuple[str, int, str]:
     if not name_match or not size_match or not sha_match:
         raise RuntimeError("missing finalize output markers")
     return (name_match.group(1).strip(), int(size_match.group(1)), sha_match.group(1).lower())
+
+
+def _parse_finalize_progress_percent(log_data: str) -> int | None:
+    if not log_data:
+        return None
+    matches = FINALIZE_PROGRESS_RE.findall(log_data.replace("\r", "\n"))
+    if not matches:
+        return None
+    try:
+        progress = float(matches[-1])
+    except ValueError:
+        return None
+    return max(0, min(100, int(progress)))
 
 
 def _read_job_log(job_name: str, *, tail_lines: int = 200) -> str:
@@ -2192,7 +2206,13 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             raise
 
         if phase in {"running", "pending"}:
-            task.detail = "Finalizing image format/checksum on cluster"
+            progress = None
+            if task.finalize_job:
+                progress = _parse_finalize_progress_percent(_read_job_log(task.finalize_job, tail_lines=300))
+            if progress is None:
+                task.detail = "Finalizing image format/checksum on cluster"
+            else:
+                task.detail = f"Finalizing image format/checksum on cluster ({max(0, 100 - progress)}% left)"
             task.updated_at = utc_now()
             session.add(task)
             session.commit()
