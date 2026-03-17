@@ -1259,6 +1259,18 @@ def delete_vm(instance_id: str, user: User = Depends(require_user), session: Ses
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc)
+    try:
+        kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc)
+    except ApiException as exc:
+        # VM teardown can race with Kubernetes garbage collection.
+        # Treat not-found/conflict during delete as best-effort success.
+        if exc.status not in {404, 409, 422}:
+            raise
+        logger.warning(
+            "Best-effort VM delete fallback for instance %s (owner=%s): %s",
+            instance_id,
+            record.owner,
+            exc,
+        )
     session.delete(record)
     session.commit()

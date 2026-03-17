@@ -2,6 +2,7 @@ from datetime import timedelta
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
+from kubernetes.client import ApiException
 from sqlmodel import Session
 
 from src.auth import connect_token_storage_key, hash_password, lookup_session_token
@@ -401,6 +402,25 @@ def test_vm_and_container_lifecycle_with_single_active_lab_enforced(login_user: 
     assert container_restart.status_code == 200
     container_delete = login_user.delete(f"/user/containers/{container_id}")
     assert container_delete.status_code == 204
+
+
+def test_vm_delete_tolerates_kubernetes_conflict_and_clears_record(login_user: TestClient, monkeypatch):
+    _seed_vm_template()
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    vm_id = started.json()["id"]
+
+    def _delete_conflict(*_args, **_kwargs):
+        raise ApiException(status=409, reason="Conflict")
+
+    monkeypatch.setattr("src.routes.user.kube.delete_pod", _delete_conflict)
+
+    deleted = login_user.delete(f"/user/pods/{vm_id}")
+    assert deleted.status_code == 204, deleted.text
+
+    listed = login_user.get("/user/pods")
+    assert listed.status_code == 200, listed.text
+    assert all(item["id"] != vm_id for item in listed.json())
 
 
 def test_vm_connect_token_uses_spice_embed_for_spice_templates(login_user: TestClient):
