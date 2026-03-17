@@ -1757,10 +1757,13 @@ if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
   if [ -f "${out}" ]; then
     out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
   fi
+  echo "BLABS_PHASE=convert"
   qemu-img convert -p -O "${CONVERT_FORMAT}" "${in}" "${out}" 2>&1 | tr '\r' '\n'
   rm -f "${in}"
 fi
+echo "BLABS_PHASE=sync"
 sync
+echo "BLABS_PHASE=checksum"
 size="$(wc -c < "${out}")"
 sha="$(sha256sum "${out}" | awk '{print $1}')"
 echo "BLABS_OUTPUT_FILENAME=$(basename "${out}")"
@@ -1889,10 +1892,13 @@ if [ -n "${CONVERT_FORMAT}" ] && [ -n "${OUTPUT_SUFFIX}" ]; then
   if [ -f "${out}" ]; then
     out="/images/${stem}-${TASK_SHORT_ID}.${OUTPUT_SUFFIX}"
   fi
+  echo "BLABS_PHASE=convert"
   qemu-img convert -p -O "${CONVERT_FORMAT}" "${stage}" "${out}" 2>&1 | tr '\r' '\n'
   rm -f "${stage}"
 fi
+echo "BLABS_PHASE=sync"
 sync
+echo "BLABS_PHASE=checksum"
 size="$(wc -c < "${out}")"
 sha="$(sha256sum "${out}" | awk '{print $1}')"
 echo "BLABS_OUTPUT_FILENAME=$(basename "${out}")"
@@ -1978,6 +1984,10 @@ def _parse_finalize_progress_percent(log_data: str) -> int | None:
     except ValueError:
         return None
     return max(0, min(100, int(progress)))
+
+
+def _finalize_in_checksum_phase(log_data: str) -> bool:
+    return "BLABS_PHASE=checksum" in (log_data or "")
 
 
 def _read_job_log(job_name: str, *, tail_lines: int = 200) -> str:
@@ -2206,11 +2216,14 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             raise
 
         if phase in {"running", "pending"}:
-            progress = None
+            progress_log = ""
             if task.finalize_job:
-                progress = _parse_finalize_progress_percent(_read_job_log(task.finalize_job, tail_lines=300))
+                progress_log = _read_job_log(task.finalize_job, tail_lines=300)
+            progress = _parse_finalize_progress_percent(progress_log)
             if progress is None:
                 task.detail = "Finalizing image format/checksum on cluster (0% complete)"
+            elif progress >= 100 and _finalize_in_checksum_phase(progress_log):
+                task.detail = "Finalizing image format/checksum on cluster (100% complete; computing checksum)"
             else:
                 task.detail = f"Finalizing image format/checksum on cluster ({progress}% complete)"
             task.updated_at = utc_now()
