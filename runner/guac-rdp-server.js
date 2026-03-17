@@ -4,6 +4,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const http = require("http");
+const net = require("net");
 const path = require("path");
 const { URL } = require("url");
 
@@ -150,8 +151,35 @@ function serveStatic(req, res) {
   });
 }
 
+function checkRdpReady(timeoutMs = 1000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = net.createConnection({ host: rdpHost, port: rdpPort });
+    const finish = (ready) => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch (_err) {}
+      resolve(Boolean(ready));
+    };
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    socket.setTimeout(timeoutMs, () => finish(false));
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url, "http://localhost");
+  if (requestUrl.pathname === "/rdp-ready") {
+    if (req.method !== "GET") {
+      sendJson(res, 405, { detail: "method not allowed" });
+      return;
+    }
+    const ready = await checkRdpReady();
+    sendJson(res, 200, { ready });
+    return;
+  }
   if (requestUrl.pathname === "/rdp-token") {
     try {
       let payload = {};

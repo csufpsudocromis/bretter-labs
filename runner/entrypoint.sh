@@ -162,8 +162,8 @@ if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
   GUAC_JS_SOURCE=""
   for candidate in \
     /opt/runner/node_modules/guacamole-common-js/dist/all.min.js \
-    /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js \
     /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js \
+    /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js \
     /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js; do
     if [[ -f "$candidate" ]]; then
       GUAC_JS_SOURCE="$candidate"
@@ -181,8 +181,10 @@ import sys
 
 src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 # Normalize module/CJS package outputs into a browser-global script.
+src = re.sub(r",\s*module\.exports\s*=\s*Guacamole;?\s*$", ";", src, flags=re.S)
 src = re.sub(r"\s*export\s+default\s+Guacamole;\s*$", "", src, flags=re.S)
 src = re.sub(r"\s*module\.exports\s*=\s*Guacamole;\s*$", "", src, flags=re.S)
+src = re.sub(r",\s*$", ";", src, flags=re.S)
 pathlib.Path(sys.argv[2]).write_text(src, encoding="utf-8")
 PY
   if [[ -z "$GUAC_TOKEN_KEY" ]]; then

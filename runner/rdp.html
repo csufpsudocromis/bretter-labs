@@ -139,9 +139,16 @@
         let client = null;
         let keyboard = null;
         let mouse = null;
+        let isBootstrapping = false;
+        let readinessPoll = null;
+        let pageActive = true;
 
         function setStatus(message) {
           statusEl.textContent = message;
+        }
+
+        function setConnectVisible(visible) {
+          connectBtn.style.display = visible ? "" : "none";
         }
 
         function cleanup() {
@@ -160,6 +167,21 @@
           }
           client = null;
           displayEl.replaceChildren();
+        }
+
+        async function isRdpReady() {
+          try {
+            const response = await fetch("rdp-ready", {
+              method: "GET",
+              credentials: "same-origin",
+              cache: "no-store",
+            });
+            if (!response.ok) return false;
+            const data = await response.json();
+            return Boolean(data && data.ready);
+          } catch (_err) {
+            return false;
+          }
         }
 
         async function fetchToken() {
@@ -199,10 +221,12 @@
             client.onerror = (error) => {
               const msg = (error && error.message) || "connection failed";
               setStatus(`Error: ${msg}`);
+              setConnectVisible(true);
             };
             tunnel.onerror = (error) => {
               const msg = (error && error.message) || "tunnel error";
               setStatus(`Error: ${msg}`);
+              setConnectVisible(true);
             };
             tunnel.onstatechange = (state) => {
               if (state === 2) setStatus("Connected.");
@@ -231,10 +255,35 @@
             );
           } catch (err) {
             setStatus(`Error: ${err.message || err}`);
+            setConnectVisible(true);
             cleanup();
           } finally {
             connectBtn.disabled = false;
           }
+        }
+
+        async function waitForRdpAndConnect() {
+          if (isBootstrapping) return;
+          isBootstrapping = true;
+          setConnectVisible(false);
+          let attempts = 0;
+          while (pageActive && attempts < 240) {
+            attempts += 1;
+            const ready = await isRdpReady();
+            if (ready) {
+              setStatus("RDP detected. Connecting...");
+              await connect();
+              isBootstrapping = false;
+              return;
+            }
+            setStatus("Waiting for VM RDP service...");
+            await new Promise((resolve) => {
+              readinessPoll = window.setTimeout(resolve, 1500);
+            });
+          }
+          isBootstrapping = false;
+          setStatus("RDP service is still starting. You can try manual connect.");
+          setConnectVisible(true);
         }
 
         connectBtn.addEventListener("click", connect);
@@ -242,12 +291,17 @@
           cleanup();
           setStatus("Disconnected.");
         });
-        window.addEventListener("beforeunload", cleanup);
+        window.addEventListener("beforeunload", () => {
+          pageActive = false;
+          if (readinessPoll) window.clearTimeout(readinessPoll);
+          cleanup();
+        });
         if (autoConnect) {
-          setStatus("Connecting... Enter guest OS credentials only if your VM requires RDP auth.");
-          void connect();
+          setStatus("Waiting for VM RDP service...");
+          void waitForRdpAndConnect();
         } else {
           setStatus("Ready. Enter guest OS credentials if required, then connect.");
+          setConnectVisible(true);
         }
       })();
     </script>
