@@ -24,7 +24,7 @@ from ..config import settings
 from ..db import get_session
 from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
 from ..network_modes import normalize_vm_network_mode
-from ..secret_codec import secret_is_configured
+from ..secret_codec import decrypt_secret, secret_is_configured
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import PodRequest, PodStatus, kube
 from ..services.resource_guard import check_launch_headroom
@@ -59,6 +59,22 @@ def _generate_spice_password() -> str:
     length = max(12, min(64, int(getattr(settings, "vm_console_ticket_length", 24) or 24)))
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
     return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def _resolve_template_rdp_defaults(template: Template) -> tuple[str | None, str | None]:
+    username = str(getattr(template, "rdp_default_username", "") or "").strip()[:128]
+    encrypted_password = str(getattr(template, "rdp_default_password", "") or "")
+    password = ""
+    if encrypted_password:
+        try:
+            password = decrypt_secret(encrypted_password).strip()
+        except Exception as exc:
+            logger.error("Failed to decrypt template RDP password for template %s", template.id, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="template RDP credentials are unavailable",
+            ) from exc
+    return username or None, (password or None)
 
 
 def _phase_to_instance_status(phase: str) -> str:
@@ -1017,6 +1033,9 @@ def start_vm(
         warm_pool_pvc = None
     console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
     spice_password = _generate_spice_password() if console_provider == "spice" else ""
+    rdp_default_username, rdp_default_password = (None, None)
+    if console_provider == "guacamole_rdp":
+        rdp_default_username, rdp_default_password = _resolve_template_rdp_defaults(template)
     pod_request = PodRequest(
         instance_id=instance_id,
         template_id=template.id,
@@ -1030,6 +1049,8 @@ def start_vm(
         instance_disk_pvc=warm_pool_pvc,
         console_provider=console_provider,
         spice_password=(spice_password or None),
+        rdp_default_username=rdp_default_username,
+        rdp_default_password=rdp_default_password,
     )
     try:
         pod_status = kube.create_pod(pod_request)
@@ -1168,6 +1189,9 @@ def restart_vm(
         warm_pool_pvc = None
     console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
     spice_password = _generate_spice_password() if console_provider == "spice" else ""
+    rdp_default_username, rdp_default_password = (None, None)
+    if console_provider == "guacamole_rdp":
+        rdp_default_username, rdp_default_password = _resolve_template_rdp_defaults(template)
     pod_request = PodRequest(
         instance_id=record.id,
         template_id=template.id,
@@ -1181,6 +1205,8 @@ def restart_vm(
         instance_disk_pvc=warm_pool_pvc,
         console_provider=console_provider,
         spice_password=(spice_password or None),
+        rdp_default_username=rdp_default_username,
+        rdp_default_password=rdp_default_password,
     )
     try:
         pod_status = kube.create_pod(pod_request)

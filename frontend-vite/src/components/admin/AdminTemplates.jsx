@@ -24,6 +24,8 @@ const AdminTemplates = () => {
     preclone_pool_max: 0,
     network_mode: "bridge",
     console_provider: "spice",
+    rdp_default_username: "",
+    rdp_default_password: "",
   });
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -40,6 +42,9 @@ const AdminTemplates = () => {
     enabled: false,
     network_mode: "bridge",
     console_provider: "spice",
+    rdp_default_username: "",
+    rdp_default_password: "",
+    rdp_default_password_configured: false,
   });
 
   const load = async () => {
@@ -58,7 +63,11 @@ const AdminTemplates = () => {
 
   const create = async () => {
     try {
-      await api.post("/admin/templates", { ...form, enabled: false });
+      const payload = { ...form, enabled: false };
+      if (!payload.rdp_default_password) {
+        delete payload.rdp_default_password;
+      }
+      await api.post("/admin/templates", payload);
       setMessage("");
       setForm({
         name: "",
@@ -73,6 +82,8 @@ const AdminTemplates = () => {
         preclone_pool_max: 0,
         network_mode: "bridge",
         console_provider: "spice",
+        rdp_default_username: "",
+        rdp_default_password: "",
       });
       load();
     } catch (err) {
@@ -118,12 +129,20 @@ const AdminTemplates = () => {
       enabled: tmpl.enabled,
       network_mode: tmpl.network_mode || "bridge",
       console_provider: tmpl.console_provider || "spice",
+      rdp_default_username: tmpl.rdp_default_username || "",
+      rdp_default_password: "",
+      rdp_default_password_configured: !!tmpl.rdp_default_password_configured,
     });
   };
 
   const saveEdit = async () => {
     try {
-      await api.patch(`/admin/templates/${editingId}`, { ...editForm });
+      const payload = { ...editForm };
+      delete payload.rdp_default_password_configured;
+      if (!payload.rdp_default_password) {
+        delete payload.rdp_default_password;
+      }
+      await api.patch(`/admin/templates/${editingId}`, payload);
       setMessage("");
       setEditingId(null);
       load();
@@ -258,6 +277,27 @@ const AdminTemplates = () => {
                 <option value="guacamole_rdp">Guacamole (RDP)</option>
               </select>
             </label>
+            {form.console_provider === "guacamole_rdp" && (
+              <>
+                <label>
+                  RDP default username (optional)
+                  <input
+                    value={form.rdp_default_username}
+                    onChange={(e) => setForm({ ...form, rdp_default_username: e.target.value })}
+                  />
+                </label>
+                <label>
+                  RDP default password (optional)
+                  <input
+                    type="password"
+                    value={form.rdp_default_password}
+                    onChange={(e) => setForm({ ...form, rdp_default_password: e.target.value })}
+                    autoComplete="new-password"
+                  />
+                  <span className="muted small">Stored encrypted per template and used for auto-connect.</span>
+                </label>
+              </>
+            )}
             <button onClick={create} disabled={!form.image_id || !form.name}>
               Create
             </button>
@@ -283,6 +323,12 @@ const AdminTemplates = () => {
                   Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
                 </div>
                 <div className="muted small">Console: {consoleProviderLabel(t.console_provider)}</div>
+                {t.console_provider === "guacamole_rdp" && (
+                  <div className="muted small">
+                    RDP defaults: {t.rdp_default_username ? `user ${t.rdp_default_username}` : "no username"},{" "}
+                    {t.rdp_default_password_configured ? "password configured" : "no password"}
+                  </div>
+                )}
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">
@@ -440,6 +486,31 @@ const AdminTemplates = () => {
                     <option value="guacamole_rdp">Guacamole (RDP)</option>
                   </select>
                 </label>
+                {editForm.console_provider === "guacamole_rdp" && (
+                  <>
+                    <label>
+                      RDP default username (optional)
+                      <input
+                        value={editForm.rdp_default_username}
+                        onChange={(e) => setEditForm({ ...editForm, rdp_default_username: e.target.value })}
+                      />
+                    </label>
+                    <label>
+                      RDP default password (optional)
+                      <input
+                        type="password"
+                        value={editForm.rdp_default_password}
+                        onChange={(e) => setEditForm({ ...editForm, rdp_default_password: e.target.value })}
+                        autoComplete="new-password"
+                      />
+                      <span className="muted small">
+                        {editForm.rdp_default_password_configured
+                          ? "Password is configured. Leave blank to keep the current password."
+                          : "No password configured yet."}
+                      </span>
+                    </label>
+                  </>
+                )}
                 <label>
                   Enabled
                   <select

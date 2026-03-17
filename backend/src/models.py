@@ -147,6 +147,8 @@ class VMTemplateCreate(BaseModel):
     enabled: bool = False
     network_mode: str = Field(default="bridge", pattern="^(bridge|host|none|unrestricted|isolated)$")
     console_provider: str = Field(default="spice", pattern="^(spice|guacamole|guacamole_rdp)$")
+    rdp_default_username: Optional[str] = Field(default=None, max_length=128)
+    rdp_default_password: Optional[str] = Field(default=None, max_length=256)
 
 
 class VMTemplateUpdate(BaseModel):
@@ -164,6 +166,8 @@ class VMTemplateUpdate(BaseModel):
     enabled: Optional[bool] = None
     network_mode: Optional[str] = Field(default=None, pattern="^(bridge|host|none|unrestricted|isolated)$")
     console_provider: Optional[str] = Field(default=None, pattern="^(spice|guacamole|guacamole_rdp)$")
+    rdp_default_username: Optional[str] = Field(default=None, max_length=128)
+    rdp_default_password: Optional[str] = Field(default=None, max_length=256)
 
 
 class VMTemplate(BaseModel):
@@ -182,6 +186,8 @@ class VMTemplate(BaseModel):
     enabled: bool
     network_mode: str = "bridge"
     console_provider: str = "spice"
+    rdp_default_username: Optional[str] = None
+    rdp_default_password_configured: bool = False
     created_at: datetime
 
 

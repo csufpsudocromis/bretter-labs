@@ -22,6 +22,8 @@ const rdpHost = process.env.GUAC_RDP_HOST || "127.0.0.1";
 const rdpPort = parseInt(process.env.GUAC_RDP_PORT || "33890", 10);
 const rdpSecurity = process.env.GUAC_RDP_SECURITY || "any";
 const rdpIgnoreCert = String(process.env.GUAC_RDP_IGNORE_CERT || "true").toLowerCase() !== "false";
+const defaultRdpUsername = String(process.env.RDP_DEFAULT_USERNAME || "").trim().slice(0, 128);
+const defaultRdpPassword = String(process.env.RDP_DEFAULT_PASSWORD || "").trim().slice(0, 256);
 const maxInactivityMsRaw = parseInt(process.env.GUAC_MAX_INACTIVITY_MS || "0", 10);
 const maxInactivityMs = Number.isFinite(maxInactivityMsRaw) && maxInactivityMsRaw >= 0 ? maxInactivityMsRaw : 0;
 
@@ -85,8 +87,8 @@ function coerceString(value, maxLength = 128) {
 }
 
 function buildConnectionSettings(payload) {
-  const username = coerceString(payload.username, 128);
-  const password = coerceString(payload.password, 256);
+  const username = coerceString(payload.username, 128) || defaultRdpUsername;
+  const password = coerceString(payload.password, 256) || defaultRdpPassword;
   const domain = coerceString(payload.domain, 128);
   const initialProgram = coerceString(payload.initial_program, 256);
 

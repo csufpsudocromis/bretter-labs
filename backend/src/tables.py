@@ -86,6 +86,8 @@ class Template(SQLModel, table=True):
     enabled: bool = False
     network_mode: str = "bridge"
     console_provider: str = "spice"
+    rdp_default_username: str = ""
+    rdp_default_password: str = ""
     created_at: datetime = Field(default_factory=utc_now)
 
 

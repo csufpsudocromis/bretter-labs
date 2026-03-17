@@ -7,13 +7,19 @@ from sqlmodel import Session
 from src.auth import connect_token_storage_key, hash_password, lookup_session_token
 from src.db import engine
 from src.rbac import Role
+from src.services.kubernetes import PodStatus, kube
 from src.tables import Config, ConnectToken, ContainerImage, ContainerTemplate, Image, TeamQuota, Template, User
 from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
 
 
-def _seed_vm_template(*, console_provider: str = "spice") -> None:
+def _seed_vm_template(
+    *,
+    console_provider: str = "spice",
+    rdp_default_username: str = "",
+    rdp_default_password: str = "",
+) -> None:
     with Session(engine) as session:
         session.add(
             Image(
@@ -39,6 +45,8 @@ def _seed_vm_template(*, console_provider: str = "spice") -> None:
                 enabled=True,
                 network_mode="bridge",
                 console_provider=console_provider,
+                rdp_default_username=rdp_default_username,
+                rdp_default_password=rdp_default_password,
             )
         )
         session.commit()
@@ -462,17 +470,23 @@ def test_admin_template_console_provider_round_trip(login_admin: TestClient):
         "auto_delete_minutes": 30,
         "idle_timeout_minutes": 30,
         "console_provider": "guacamole",
+        "rdp_default_username": "vm-user",
+        "rdp_default_password": "vm-pass-123",
     }
     created = login_admin.post("/admin/templates", json=payload)
     assert created.status_code == 201, created.text
     template_id = created.json()["id"]
     assert created.json()["console_provider"] == "guacamole"
+    assert created.json()["rdp_default_username"] == "vm-user"
+    assert created.json()["rdp_default_password_configured"] is True
 
     listed = login_admin.get("/admin/templates")
     assert listed.status_code == 200, listed.text
     matched = [item for item in listed.json() if item["id"] == template_id]
     assert matched
     assert matched[0]["console_provider"] == "guacamole"
+    assert matched[0]["rdp_default_username"] == "vm-user"
+    assert matched[0]["rdp_default_password_configured"] is True
 
     updated = login_admin.patch(f"/admin/templates/{template_id}", json={"console_provider": "spice"})
     assert updated.status_code == 200, updated.text
@@ -481,6 +495,65 @@ def test_admin_template_console_provider_round_trip(login_admin: TestClient):
     rdp_updated = login_admin.patch(f"/admin/templates/{template_id}", json={"console_provider": "guacamole_rdp"})
     assert rdp_updated.status_code == 200, rdp_updated.text
     assert rdp_updated.json()["console_provider"] == "guacamole_rdp"
+    assert rdp_updated.json()["rdp_default_username"] == "vm-user"
+    assert rdp_updated.json()["rdp_default_password_configured"] is True
+
+
+def test_guacamole_rdp_template_defaults_are_passed_to_runner(login_user: TestClient, monkeypatch):
+    _seed_vm_template(
+        console_provider="guacamole_rdp",
+        rdp_default_username="student",
+        rdp_default_password="rdp-pass-123",
+    )
+    captured = {}
+
+    def _create_pod(req):
+        captured["req"] = req
+        return PodStatus(instance_id=req.instance_id, phase="pending", disk_pvc=f"pvc-{req.instance_id[:8]}")
+
+    monkeypatch.setattr(kube, "create_pod", _create_pod)
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    req = captured.get("req")
+    assert req is not None
+    assert req.console_provider == "guacamole_rdp"
+    assert req.rdp_default_username == "student"
+    assert req.rdp_default_password == "rdp-pass-123"
+
+
+def test_admin_delete_image_rejects_when_template_references_it(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-delete-check-1",
+                name="Delete Check Image",
+                filename="delete-check.qcow2",
+                checksum="sha256:delete-check",
+                size_bytes=2048,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-delete-check-1",
+                name="Delete Check Template",
+                description="linked template",
+                os_type="windows",
+                image_id="img-delete-check-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.commit()
+
+    deleted = login_admin.delete("/admin/images/img-delete-check-1")
+    assert deleted.status_code == 409, deleted.text
+    assert "image is in use by templates" in deleted.json()["detail"]
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):

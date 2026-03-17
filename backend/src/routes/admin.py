@@ -1208,6 +1208,10 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN max_active_instances INTEGER DEFAULT 2")
         if "console_provider" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN console_provider TEXT DEFAULT 'spice'")
+        if "rdp_default_username" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN rdp_default_username TEXT DEFAULT ''")
+        if "rdp_default_password" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN rdp_default_password TEXT DEFAULT ''")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1226,6 +1230,8 @@ def _ensure_template_columns() -> None:
                 "UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max < preclone_pool_size"
             )
             cur.execute("UPDATE template SET max_active_instances = 2 WHERE max_active_instances IS NULL")
+            cur.execute("UPDATE template SET rdp_default_username = '' WHERE rdp_default_username IS NULL")
+            cur.execute("UPDATE template SET rdp_default_password = '' WHERE rdp_default_password IS NULL")
             conn.commit()
         cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
         if "console_provider" in cols:
@@ -1241,6 +1247,12 @@ def _ensure_template_columns() -> None:
                 END
                 """
             )
+            conn.commit()
+        if "rdp_default_username" in cols:
+            cur.execute("UPDATE template SET rdp_default_username = '' WHERE rdp_default_username IS NULL")
+        if "rdp_default_password" in cols:
+            cur.execute("UPDATE template SET rdp_default_password = '' WHERE rdp_default_password IS NULL")
+        if "rdp_default_username" in cols or "rdp_default_password" in cols:
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -3350,6 +3362,14 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
     record = session.get(Image, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+    in_use_by_templates = session.exec(select(Template).where(Template.image_id == image_id)).all()
+    if in_use_by_templates:
+        names = [str(template.name or template.id) for template in in_use_by_templates[:3]]
+        suffix = "" if len(in_use_by_templates) <= 3 else ", ..."
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"image is in use by templates: {', '.join(names)}{suffix}",
+        )
     dest_path = _image_dir() / Path(record.filename).name
     if dest_path.exists():
         try:
@@ -3429,6 +3449,33 @@ def rename_image(image_id: str, payload: ImageRename, session: Session = Depends
     )
 
 
+def _normalized_template_rdp_username(value: str | None) -> str:
+    return str(value or "").strip()[:128]
+
+
+def _template_to_model(record: Template) -> VMTemplate:
+    return VMTemplate(
+        id=record.id,
+        name=record.name,
+        description=record.description,
+        os_type=record.os_type,
+        image_id=record.image_id,
+        cpu_cores=record.cpu_cores,
+        ram_mb=record.ram_mb,
+        auto_delete_minutes=record.auto_delete_minutes,
+        idle_timeout_minutes=record.idle_timeout_minutes,
+        preclone_pool_size=record.preclone_pool_size,
+        preclone_pool_max=record.preclone_pool_max,
+        max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
+        enabled=record.enabled,
+        network_mode=normalize_vm_network_mode(record.network_mode),
+        console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
+        rdp_default_username=_normalized_template_rdp_username(getattr(record, "rdp_default_username", "")) or None,
+        rdp_default_password_configured=secret_is_configured(getattr(record, "rdp_default_password", "")),
+        created_at=record.created_at,
+    )
+
+
 @router.post(
     "/templates",
     response_model=VMTemplate,
@@ -3467,29 +3514,18 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         enabled=payload.enabled,
         network_mode=normalize_vm_network_mode(payload.network_mode),
         console_provider=normalize_vm_console_provider(payload.console_provider),
+        rdp_default_username=_normalized_template_rdp_username(payload.rdp_default_username),
+        rdp_default_password=(
+            encrypt_secret(str(payload.rdp_default_password).strip())
+            if payload.rdp_default_password is not None and str(payload.rdp_default_password).strip()
+            else ""
+        ),
         created_at=utc_now(),
     )
     session.add(record)
     session.commit()
     session.refresh(record)
-    return VMTemplate(
-        id=record.id,
-        name=record.name,
-        description=record.description,
-        os_type=record.os_type,
-        image_id=record.image_id,
-        cpu_cores=record.cpu_cores,
-        ram_mb=record.ram_mb,
-        auto_delete_minutes=record.auto_delete_minutes,
-        idle_timeout_minutes=record.idle_timeout_minutes,
-        preclone_pool_size=record.preclone_pool_size,
-        preclone_pool_max=record.preclone_pool_max,
-        max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
-        enabled=record.enabled,
-        network_mode=normalize_vm_network_mode(record.network_mode),
-        console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
-        created_at=record.created_at,
-    )
+    return _template_to_model(record)
 
 
 @router.get(
@@ -3499,27 +3535,7 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
 )
 def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
     templates = session.exec(select(Template)).all()
-    return [
-        VMTemplate(
-            id=record.id,
-            name=record.name,
-            description=record.description,
-            os_type=record.os_type,
-            image_id=record.image_id,
-            cpu_cores=record.cpu_cores,
-            ram_mb=record.ram_mb,
-            auto_delete_minutes=record.auto_delete_minutes,
-            idle_timeout_minutes=record.idle_timeout_minutes,
-            preclone_pool_size=record.preclone_pool_size,
-            preclone_pool_max=record.preclone_pool_max,
-            max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
-            enabled=record.enabled,
-            network_mode=normalize_vm_network_mode(record.network_mode),
-            console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
-            created_at=record.created_at,
-        )
-        for record in templates
-    ]
+    return [_template_to_model(record) for record in templates]
 
 
 @router.patch(
@@ -3576,27 +3592,14 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         record.network_mode = normalize_vm_network_mode(payload.network_mode)
     if payload.console_provider is not None:
         record.console_provider = normalize_vm_console_provider(payload.console_provider)
+    if payload.rdp_default_username is not None:
+        record.rdp_default_username = _normalized_template_rdp_username(payload.rdp_default_username)
+    if payload.rdp_default_password is not None and str(payload.rdp_default_password).strip():
+        record.rdp_default_password = encrypt_secret(str(payload.rdp_default_password).strip())
     session.add(record)
     session.commit()
     session.refresh(record)
-    return VMTemplate(
-        id=record.id,
-        name=record.name,
-        description=record.description,
-        os_type=record.os_type,
-        image_id=record.image_id,
-        cpu_cores=record.cpu_cores,
-        ram_mb=record.ram_mb,
-        auto_delete_minutes=record.auto_delete_minutes,
-        idle_timeout_minutes=record.idle_timeout_minutes,
-        preclone_pool_size=record.preclone_pool_size,
-        preclone_pool_max=record.preclone_pool_max,
-        max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
-        enabled=record.enabled,
-        network_mode=normalize_vm_network_mode(record.network_mode),
-        console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
-        created_at=record.created_at,
-    )
+    return _template_to_model(record)
 
 
 @router.delete(

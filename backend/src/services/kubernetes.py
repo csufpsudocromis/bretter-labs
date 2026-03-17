@@ -47,6 +47,8 @@ class PodRequest:
     instance_disk_pvc: Optional[str] = None
     console_provider: str = "spice"
     spice_password: Optional[str] = None
+    rdp_default_username: Optional[str] = None
+    rdp_default_password: Optional[str] = None
 
 
 @dataclass
@@ -754,6 +756,11 @@ class KubernetesService:
                 env_vars.append(client.V1EnvVar(name="SPICE_PASSWORD", value=req.spice_password))
         else:
             env_vars.append(client.V1EnvVar(name="SPICE_TICKETING", value="false"))
+        if console_provider == "guacamole_rdp":
+            if req.rdp_default_username:
+                env_vars.append(client.V1EnvVar(name="RDP_DEFAULT_USERNAME", value=req.rdp_default_username))
+            if req.rdp_default_password:
+                env_vars.append(client.V1EnvVar(name="RDP_DEFAULT_PASSWORD", value=req.rdp_default_password))
         if tls_secret_name:
             env_vars.extend(
                 [
