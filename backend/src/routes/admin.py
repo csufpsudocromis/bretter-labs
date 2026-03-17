@@ -2210,7 +2210,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             if task.finalize_job:
                 progress = _parse_finalize_progress_percent(_read_job_log(task.finalize_job, tail_lines=300))
             if progress is None:
-                task.detail = "Finalizing image format/checksum on cluster"
+                task.detail = "Finalizing image format/checksum on cluster (100% left)"
             else:
                 task.detail = f"Finalizing image format/checksum on cluster ({max(0, 100 - progress)}% left)"
             task.updated_at = utc_now()
