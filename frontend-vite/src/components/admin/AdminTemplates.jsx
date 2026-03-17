@@ -17,6 +17,7 @@ const AdminTemplates = () => {
     preclone_pool_size: 0,
     preclone_pool_max: 0,
     network_mode: "bridge",
+    console_provider: "spice",
   });
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -32,6 +33,7 @@ const AdminTemplates = () => {
     preclone_pool_max: 0,
     enabled: false,
     network_mode: "bridge",
+    console_provider: "spice",
   });
 
   const load = async () => {
@@ -64,6 +66,7 @@ const AdminTemplates = () => {
         preclone_pool_size: 0,
         preclone_pool_max: 0,
         network_mode: "bridge",
+        console_provider: "spice",
       });
       load();
     } catch (err) {
@@ -108,6 +111,7 @@ const AdminTemplates = () => {
       preclone_pool_max: tmpl.preclone_pool_max ?? tmpl.preclone_pool_size ?? 0,
       enabled: tmpl.enabled,
       network_mode: tmpl.network_mode || "bridge",
+      console_provider: tmpl.console_provider || "spice",
     });
   };
 
@@ -237,6 +241,16 @@ const AdminTemplates = () => {
                 <option value="isolated">Isolated (no egress)</option>
               </select>
             </label>
+            <label>
+              Console provider
+              <select
+                value={form.console_provider}
+                onChange={(e) => setForm({ ...form, console_provider: e.target.value })}
+              >
+                <option value="spice">SPICE</option>
+                <option value="guacamole">Guacamole (VNC)</option>
+              </select>
+            </label>
             <button onClick={create} disabled={!form.image_id || !form.name}>
               Create
             </button>
@@ -260,6 +274,9 @@ const AdminTemplates = () => {
                 </div>
                 <div className="muted small">
                   Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
+                </div>
+                <div className="muted small">
+                  Console: {t.console_provider === "guacamole" ? "Guacamole (VNC)" : "SPICE"}
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
@@ -405,6 +422,16 @@ const AdminTemplates = () => {
                     <option value="none">None (no egress)</option>
                     <option value="unrestricted">Unrestricted</option>
                     <option value="isolated">Isolated (no egress)</option>
+                  </select>
+                </label>
+                <label>
+                  Console provider
+                  <select
+                    value={editForm.console_provider}
+                    onChange={(e) => setEditForm({ ...editForm, console_provider: e.target.value })}
+                  >
+                    <option value="spice">SPICE</option>
+                    <option value="guacamole">Guacamole (VNC)</option>
                   </select>
                 </label>
                 <label>

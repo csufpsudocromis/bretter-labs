@@ -2,6 +2,10 @@
 # Keep this file non-secret; provide runtime secret values via Kubernetes Secrets.
 
 appTemplateValues:
+  # Cluster runtime image refs (current GHCR digest refs required by baseline are not pullable in this environment).
+  BACKEND_IMAGE: "ghcr.io/csufpsudocromis/bretter-backend:local-20260317153133"
+  FRONTEND_IMAGE: "ghcr.io/csufpsudocromis/bretter-frontend:local-20260317153133"
+  RUNNER_IMAGE: "ghcr.io/csufpsudocromis/win-vm-runner:local-20260317153133"
   CONTROL_NODE: "cbekube1"
   NODE_EXTERNAL_HOST: "10.68.49.250"
   RUNNER_NODE_SELECTOR_VALUE: "cbekube2"

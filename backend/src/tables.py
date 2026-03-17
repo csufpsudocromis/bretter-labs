@@ -85,6 +85,7 @@ class Template(SQLModel, table=True):
     max_active_instances: int = 2
     enabled: bool = False
     network_mode: str = "bridge"
+    console_provider: str = "spice"
     created_at: datetime = Field(default_factory=utc_now)
 
 

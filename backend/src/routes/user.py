@@ -19,6 +19,7 @@ from sqlmodel import Session, select
 from urllib3.exceptions import InsecureRequestWarning
 
 from ..auth import consume_connect_grant, issue_connect_token, require_user, validate_connect_session
+from ..console_providers import normalize_vm_console_provider
 from ..config import settings
 from ..db import get_session
 from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
@@ -274,6 +275,13 @@ def _extract_spice_password(console_url: str | None) -> str:
     return ""
 
 
+def _console_provider_from_url(console_url: str | None) -> str:
+    raw = str(console_url or "").strip().lower()
+    if "/vnc.html" in raw:
+        return "guacamole"
+    return "spice"
+
+
 def _vm_console_embed_url(
     instance_id: str,
     title: str,
@@ -297,6 +305,56 @@ def _vm_console_embed_url(
         }
     )
     return f"{base}/user/pods/{instance_id}/connect/spice-embed.html?{query}#password={quote(spice_password, safe='')}"
+
+
+def _vm_console_vnc_url(
+    instance_id: str,
+    title: str,
+    idle_minutes: int,
+    request: Request | None = None,
+) -> str:
+    base, host, port = _request_console_base(request)
+    encrypt = "true" if base.startswith("https://") else "false"
+    query = urlencode(
+        {
+            "host": host,
+            "port": port,
+            "encrypt": encrypt,
+            "title": title,
+            "instance_id": instance_id,
+            "idle_minutes": str(max(1, int(idle_minutes))),
+            "autoconnect": "true",
+            "resize": "remote",
+            "reconnect": "true",
+            "path": f"user/pods/{instance_id}/connect/websockify",
+        }
+    )
+    return f"{base}/user/pods/{instance_id}/connect/vnc.html?{query}"
+
+
+def _vm_console_connect_url(
+    instance_id: str,
+    title: str,
+    idle_minutes: int,
+    console_provider: str,
+    request: Request | None = None,
+    spice_password: str = "",
+) -> str:
+    provider = normalize_vm_console_provider(console_provider)
+    if provider == "guacamole":
+        return _vm_console_vnc_url(
+            instance_id=instance_id,
+            title=title,
+            idle_minutes=idle_minutes,
+            request=request,
+        )
+    return _vm_console_embed_url(
+        instance_id=instance_id,
+        title=title,
+        idle_minutes=idle_minutes,
+        spice_password=spice_password,
+        request=request,
+    )
 
 
 def _upstream_requires_https(response: requests.Response) -> bool:
@@ -357,6 +415,7 @@ def list_available_templates(
             max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
             enabled=record.enabled,
             network_mode=normalize_vm_network_mode(getattr(record, "network_mode", "bridge")),
+            console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
             created_at=record.created_at,
         )
         for record in templates
@@ -461,13 +520,19 @@ def issue_vm_connect_token(
     idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
     if idle_cap is not None:
         idle_minutes = min(idle_minutes, idle_cap)
-    spice_password = _extract_spice_password(record.console_url)
-    if not spice_password:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="console credentials are not available")
-    connect_url = _vm_console_embed_url(
+    console_provider = normalize_vm_console_provider(
+        getattr(template, "console_provider", _console_provider_from_url(record.console_url))
+    )
+    spice_password = ""
+    if console_provider == "spice":
+        spice_password = _extract_spice_password(record.console_url)
+        if not spice_password:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="console credentials are not available")
+    connect_url = _vm_console_connect_url(
         instance_id=record.id,
         title=(template.name if template else "VM"),
         idle_minutes=idle_minutes,
+        console_provider=console_provider,
         spice_password=spice_password,
         request=request,
     )
@@ -576,15 +641,19 @@ async def proxy_vm_console(
         idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
         if idle_cap is not None:
             idle_minutes = min(idle_minutes, idle_cap)
-        spice_password = _extract_spice_password(record.console_url)
-        embed_url = _vm_console_embed_url(
+        console_provider = normalize_vm_console_provider(
+            getattr(template, "console_provider", _console_provider_from_url(record.console_url))
+        )
+        spice_password = _extract_spice_password(record.console_url) if console_provider == "spice" else ""
+        connect_url = _vm_console_connect_url(
             instance_id=record.id,
             title=(template.name if template else "VM"),
             idle_minutes=idle_minutes,
+            console_provider=console_provider,
             spice_password=spice_password,
             request=request,
         )
-        response = RedirectResponse(url=embed_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+        response = RedirectResponse(url=connect_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
         if issued_connect_session:
             _attach_vm_connect_session_cookie(response, request, instance_id, issued_connect_session)
         return response
@@ -914,7 +983,8 @@ def start_vm(
         warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, instance_id, user.username)
     except Exception:
         warm_pool_pvc = None
-    spice_password = _generate_spice_password()
+    console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
+    spice_password = _generate_spice_password() if console_provider == "spice" else ""
     pod_request = PodRequest(
         instance_id=instance_id,
         template_id=template.id,
@@ -926,7 +996,8 @@ def start_vm(
         owner=user.username,
         network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
         instance_disk_pvc=warm_pool_pvc,
-        spice_password=spice_password,
+        console_provider=console_provider,
+        spice_password=(spice_password or None),
     )
     try:
         pod_status = kube.create_pod(pod_request)
@@ -945,10 +1016,11 @@ def start_vm(
     kube.create_service_for_pod(
         pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
     )
-    console_url = _vm_console_embed_url(
+    console_url = _vm_console_connect_url(
         instance_id=instance_id,
         title=template.name,
         idle_minutes=idle_minutes,
+        console_provider=console_provider,
         spice_password=spice_password,
     )
 
@@ -1062,7 +1134,8 @@ def restart_vm(
         warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, record.id, user.username)
     except Exception:
         warm_pool_pvc = None
-    spice_password = _generate_spice_password()
+    console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
+    spice_password = _generate_spice_password() if console_provider == "spice" else ""
     pod_request = PodRequest(
         instance_id=record.id,
         template_id=template.id,
@@ -1074,7 +1147,8 @@ def restart_vm(
         owner=user.username,
         network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
         instance_disk_pvc=warm_pool_pvc,
-        spice_password=spice_password,
+        console_provider=console_provider,
+        spice_password=(spice_password or None),
     )
     try:
         pod_status = kube.create_pod(pod_request)
@@ -1092,10 +1166,11 @@ def restart_vm(
     kube.create_service_for_pod(
         pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
     )
-    console_url = _vm_console_embed_url(
+    console_url = _vm_console_connect_url(
         instance_id=record.id,
         title=template.name,
         idle_minutes=idle_minutes,
+        console_provider=console_provider,
         spice_password=spice_password,
     )
 

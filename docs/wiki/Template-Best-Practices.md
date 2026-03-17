@@ -24,6 +24,12 @@ Use these defaults to reduce failed launches and improve startup consistency.
 - Use `isolated`/`none` for offline training.
 - Use `unrestricted` only when required.
 
+### Console provider
+
+- Default to `spice` for Windows-focused labs and SPICE agent features.
+- Use `guacamole` (VNC transport) when you want a simpler VNC console path.
+- Keep one provider per template to simplify troubleshooting and operator runbooks.
+
 ### Warm pool and launch limits
 
 - Use pre-clone pool for frequently used templates.

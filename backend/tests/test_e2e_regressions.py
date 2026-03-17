@@ -13,7 +13,7 @@ from src.time_utils import utc_now
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
 
 
-def _seed_vm_template() -> None:
+def _seed_vm_template(*, console_provider: str = "spice") -> None:
     with Session(engine) as session:
         session.add(
             Image(
@@ -38,6 +38,7 @@ def _seed_vm_template() -> None:
                 idle_timeout_minutes=30,
                 enabled=True,
                 network_mode="bridge",
+                console_provider=console_provider,
             )
         )
         session.commit()
@@ -392,6 +393,75 @@ def test_vm_and_container_lifecycle_with_single_active_lab_enforced(login_user: 
     assert container_restart.status_code == 200
     container_delete = login_user.delete(f"/user/containers/{container_id}")
     assert container_delete.status_code == 204
+
+
+def test_vm_connect_token_uses_spice_embed_for_spice_templates(login_user: TestClient):
+    _seed_vm_template(console_provider="spice")
+
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    vm_id = started.json()["id"]
+
+    token_response = login_user.post(f"/user/pods/{vm_id}/connect-token")
+    assert token_response.status_code == 200, token_response.text
+    connect_url = token_response.json()["connect_url"]
+    assert "/connect/spice-embed.html" in connect_url
+    assert "password=" in connect_url
+
+
+def test_vm_connect_token_uses_vnc_console_for_guacamole_templates(login_user: TestClient):
+    _seed_vm_template(console_provider="guacamole")
+
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    vm_id = started.json()["id"]
+
+    token_response = login_user.post(f"/user/pods/{vm_id}/connect-token")
+    assert token_response.status_code == 200, token_response.text
+    connect_url = token_response.json()["connect_url"]
+    assert "/connect/vnc.html" in connect_url
+    assert "password=" not in connect_url
+
+
+def test_admin_template_console_provider_round_trip(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-vm-admin-1",
+                name="Admin VM Image",
+                filename="admin-vm.qcow2",
+                checksum="sha256:admin",
+                size_bytes=4096,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.commit()
+
+    payload = {
+        "name": "Admin VM",
+        "description": "provider test",
+        "os_type": "windows",
+        "image_id": "img-vm-admin-1",
+        "cpu_cores": 2,
+        "ram_mb": 4096,
+        "auto_delete_minutes": 30,
+        "idle_timeout_minutes": 30,
+        "console_provider": "guacamole",
+    }
+    created = login_admin.post("/admin/templates", json=payload)
+    assert created.status_code == 201, created.text
+    template_id = created.json()["id"]
+    assert created.json()["console_provider"] == "guacamole"
+
+    listed = login_admin.get("/admin/templates")
+    assert listed.status_code == 200, listed.text
+    matched = [item for item in listed.json() if item["id"] == template_id]
+    assert matched
+    assert matched[0]["console_provider"] == "guacamole"
+
+    updated = login_admin.patch(f"/admin/templates/{template_id}", json={"console_provider": "spice"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["console_provider"] == "spice"
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):

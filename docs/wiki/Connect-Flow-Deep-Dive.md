@@ -46,6 +46,9 @@ sequenceDiagram
 - VM:
   - `POST /user/pods/{id}/connect-token`
   - `/user/pods/{id}/connect/{proxy_path}`
+  - Console target is template-driven:
+    - `spice` templates use `/user/pods/{id}/connect/spice-embed.html`
+    - `guacamole` templates use `/user/pods/{id}/connect/vnc.html`
 - Container:
   - `POST /user/containers/{id}/connect-token`
   - `/user/containers/{id}/connect/{proxy_path}`

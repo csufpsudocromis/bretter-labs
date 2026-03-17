@@ -11,6 +11,7 @@ CPU_MODEL="${CPU_MODEL:-host}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-user}"
 VM_VHOST_NET_ENABLED="${VM_VHOST_NET_ENABLED:-true}"
 VM_NET_MULTIQUEUE_ENABLED="${VM_NET_MULTIQUEUE_ENABLED:-true}"
+CONSOLE_PROVIDER="${CONSOLE_PROVIDER:-spice}"
 SPICE_TICKETING="${SPICE_TICKETING:-true}"
 SPICE_PASSWORD="${SPICE_PASSWORD:-}"
 TAP_EGRESS_IF=""
@@ -46,6 +47,18 @@ VGA_TYPE="${VGA_TYPE:-qxl}"
 CPU_CORES="${CPU_CORES:-2}"
 RAM_MB="${RAM_MB:-4096}"
 VM_NET_QUEUES="${VM_NET_QUEUES:-${CPU_CORES}}"
+CONSOLE_PROVIDER="$(printf '%s' "$CONSOLE_PROVIDER" | tr '[:upper:]' '[:lower:]')"
+case "$CONSOLE_PROVIDER" in
+  guacamole|guac|novnc|vnc)
+    CONSOLE_PROVIDER="guacamole"
+    ;;
+  spice|spice-vnc|spice_vnc)
+    CONSOLE_PROVIDER="spice"
+    ;;
+  *)
+    CONSOLE_PROVIDER="spice"
+    ;;
+esac
 if ! [[ "$VM_NET_QUEUES" =~ ^[0-9]+$ ]]; then
   VM_NET_QUEUES=1
 fi
@@ -57,6 +70,9 @@ if (( VM_NET_QUEUES > 8 )); then
 fi
 if [[ "${VM_NET_MULTIQUEUE_ENABLED,,}" != "true" ]]; then
   VM_NET_QUEUES=1
+fi
+if [[ "$CONSOLE_PROVIDER" == "guacamole" && "${VGA_TYPE}" == "qxl" ]]; then
+  VGA_TYPE="std"
 fi
 
 # Detect disk format when not provided. VHDs (vpc) need the right format to boot.
@@ -90,8 +106,24 @@ print(5900 + num)
 PY
 )
 
-# Determine web root for SPICE HTML5 assets if present.
-WEBROOT="/usr/share/spice-html5"
+QEMU_VNC_BIND=$(python3 - <<'PY'
+import os
+disp = os.environ.get("VNC_DISPLAY", ":0")
+if not disp.startswith(":"):
+    disp = f":{disp}"
+try:
+    num = int(disp[1:])
+except Exception:
+    num = 0
+print(f"127.0.0.1:{num}")
+PY
+)
+
+if [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
+  WEBROOT="/usr/share/novnc"
+else
+  WEBROOT="/usr/share/spice-html5"
+fi
 if [[ ! -d "$WEBROOT" ]]; then
   WEBROOT="/usr/share/novnc"
 fi
@@ -100,27 +132,32 @@ if [[ ! -d "$WEBROOT" ]]; then
   mkdir -p "$WEBROOT"
 fi
 
-# Start websockify to wrap SPICE port into websocket for browser SPICE client.
 SPICE_PORT=${SPICE_PORT:-5930}
+CONSOLE_TARGET_PORT="$SPICE_PORT"
+if [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
+  CONSOLE_TARGET_PORT="$VNC_PORT"
+fi
 WEBSOCKIFY_ARGS=(--web="$WEBROOT")
 if [[ -n "${TLS_CERT_FILE:-}" && -n "${TLS_KEY_FILE:-}" && -f "${TLS_CERT_FILE}" && -f "${TLS_KEY_FILE}" ]]; then
   WEBSOCKIFY_ARGS+=(--cert="$TLS_CERT_FILE" --key="$TLS_KEY_FILE")
 fi
-websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$SPICE_PORT" --daemon
+websockify "${WEBSOCKIFY_ARGS[@]}" "$WS_PORT" "localhost:$CONSOLE_TARGET_PORT" --daemon
 
-SPICE_ARGS="port=${SPICE_PORT},addr=0.0.0.0"
-if [[ "${SPICE_TICKETING,,}" == "true" ]]; then
-  if [[ -z "$SPICE_PASSWORD" ]]; then
-    SPICE_PASSWORD="$(python3 - <<'PY'
+if [[ "$CONSOLE_PROVIDER" == "spice" ]]; then
+  SPICE_ARGS="port=${SPICE_PORT},addr=0.0.0.0"
+  if [[ "${SPICE_TICKETING,,}" == "true" ]]; then
+    if [[ -z "$SPICE_PASSWORD" ]]; then
+      SPICE_PASSWORD="$(python3 - <<'PY'
 import secrets
 alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
 print("".join(secrets.choice(alphabet) for _ in range(24)))
 PY
 )"
+    fi
+    SPICE_ARGS="${SPICE_ARGS},disable-ticketing=off,password=${SPICE_PASSWORD}"
+  else
+    SPICE_ARGS="${SPICE_ARGS},disable-ticketing=on"
   fi
-  SPICE_ARGS="${SPICE_ARGS},disable-ticketing=off,password=${SPICE_PASSWORD}"
-else
-  SPICE_ARGS="${SPICE_ARGS},disable-ticketing=on"
 fi
 
 QEMU_ARGS=(
@@ -128,10 +165,6 @@ QEMU_ARGS=(
   -smp "${CPU_CORES}"
   -boot c
   -display none
-  -spice "${SPICE_ARGS}"
-  -device virtio-serial
-  -chardev spicevmc,id=vdagent,debug=0,name=vdagent
-  -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
   -device ich9-usb-ehci1
   -device ich9-usb-uhci1
   -device ich9-usb-uhci2
@@ -140,6 +173,16 @@ QEMU_ARGS=(
   -machine accel=kvm:tcg
   -rtc base=localtime
 )
+if [[ "$CONSOLE_PROVIDER" == "spice" ]]; then
+  QEMU_ARGS+=(
+    -spice "${SPICE_ARGS}"
+    -device virtio-serial
+    -chardev spicevmc,id=vdagent,debug=0,name=vdagent
+    -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
+  )
+else
+  QEMU_ARGS+=(-vnc "${QEMU_VNC_BIND}")
+fi
 
 # If KVM is available, add -enable-kvm
 if [[ -c /dev/kvm ]]; then
@@ -286,7 +329,11 @@ else
   )
 fi
 
-echo "Starting QEMU with disk=${DISK}, cpu=${CPU_CORES}, ram=${RAM_MB}MB, vnc=${VNC_DISPLAY:-:0}, ws_port=${WS_PORT}"
+echo "Starting QEMU with disk=${DISK}, cpu=${CPU_CORES}, ram=${RAM_MB}MB, provider=${CONSOLE_PROVIDER}, ws_port=${WS_PORT}"
+echo "Console target: localhost:${CONSOLE_TARGET_PORT}"
+if [[ "$CONSOLE_PROVIDER" == "guacamole" ]]; then
+  echo "VNC bind address: ${QEMU_VNC_BIND}"
+fi
 echo "Disk format: ${DISK_FORMAT}"
 echo "VM networking: backend=${VM_NET_BACKEND}, queues=${VM_NET_QUEUES}, vhost_net=${VM_VHOST_NET_ENABLED}"
 exec qemu-system-x86_64 "${QEMU_ARGS[@]}"

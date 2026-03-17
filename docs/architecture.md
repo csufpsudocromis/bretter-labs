@@ -13,7 +13,7 @@ Bretter Labs is a FastAPI + React (Vite) platform that provisions per-user VM an
   FastAPI service that handles auth, RBAC-style admin/user API routes, template/image lifecycle, launch orchestration, idle reaping, and health/alert surfaces.
 
 - **Runner (`runner`)**  
-  VM runtime image (QEMU + SPICE/websockify) used by VM lab pods.
+  VM runtime image (QEMU + websockify) used by VM lab pods with template-selected SPICE or VNC console mode.
 
 - **Kubernetes orchestration layer**  
   Backend creates and manages workloads/services/network policies and uses storage-aware workflows for image uploads, conversions, cloning, and warm-pool behaviors.
@@ -33,7 +33,7 @@ Bretter Labs is a FastAPI + React (Vite) platform that provisions per-user VM an
 ## VM pipeline
 
 1. Uploaded VM disk is validated and normalized as needed.
-2. Template defines resources, firmware/machine defaults, network mode, and idle timeout.
+2. Template defines resources, firmware/machine defaults, network mode, console provider, and idle timeout.
 3. Start request creates instance resources and service endpoints.
 4. User opens browser connect tab for interactive VM session.
 

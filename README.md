@@ -34,6 +34,7 @@ Users launch labs with staged status feedback and connect in the browser.
 
 - VM image upload and normalization
 - VM templates and container templates
+- Per-template VM console provider selection (`spice` or `guacamole`/VNC)
 - Container image registry management
 - Runtime, storage, appearance, and alert/error settings
 - Resource, pod, and health visibility in admin pages
@@ -75,7 +76,7 @@ Core components:
 
 - `frontend-vite/`: UI for admin and user workflows
 - `backend/`: API, auth/session, orchestration, migrations
-- `runner/`: VM runtime image (QEMU/SPICE)
+- `runner/`: VM runtime image (QEMU with SPICE or VNC console modes)
 - `deploy/helm/`: Helm chart and production values used by setup
 - `scripts/setup.sh`: bootstrap, deploy (Helm), and tuning automation
 

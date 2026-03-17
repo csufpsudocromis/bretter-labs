@@ -25,6 +25,7 @@ from kubernetes.stream import stream
 from kubernetes.utils import parse_quantity
 
 from ..auth import hash_password, require_permission, revoke_tokens
+from ..console_providers import normalize_vm_console_provider
 from ..config import settings
 from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
@@ -1205,6 +1206,8 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN preclone_pool_max INTEGER DEFAULT 0")
         if "max_active_instances" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN max_active_instances INTEGER DEFAULT 2")
+        if "console_provider" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN console_provider TEXT DEFAULT 'spice'")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1223,6 +1226,20 @@ def _ensure_template_columns() -> None:
                 "UPDATE template SET preclone_pool_max = preclone_pool_size WHERE preclone_pool_max < preclone_pool_size"
             )
             cur.execute("UPDATE template SET max_active_instances = 2 WHERE max_active_instances IS NULL")
+            conn.commit()
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
+        if "console_provider" in cols:
+            cur.execute(
+                """
+                UPDATE template
+                SET console_provider = CASE
+                    WHEN console_provider IS NULL OR trim(console_provider) = '' THEN 'spice'
+                    WHEN lower(trim(console_provider)) IN ('guacamole', 'guac', 'novnc', 'vnc') THEN 'guacamole'
+                    WHEN lower(trim(console_provider)) = 'spice' THEN 'spice'
+                    ELSE 'spice'
+                END
+                """
+            )
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -3448,6 +3465,7 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         max_active_instances=max(0, int(payload.max_active_instances or 0)),
         enabled=payload.enabled,
         network_mode=normalize_vm_network_mode(payload.network_mode),
+        console_provider=normalize_vm_console_provider(payload.console_provider),
         created_at=utc_now(),
     )
     session.add(record)
@@ -3468,6 +3486,7 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
         enabled=record.enabled,
         network_mode=normalize_vm_network_mode(record.network_mode),
+        console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
         created_at=record.created_at,
     )
 
@@ -3495,6 +3514,7 @@ def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
             max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
             enabled=record.enabled,
             network_mode=normalize_vm_network_mode(record.network_mode),
+            console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
             created_at=record.created_at,
         )
         for record in templates
@@ -3553,6 +3573,8 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         record.enabled = payload.enabled
     if payload.network_mode is not None:
         record.network_mode = normalize_vm_network_mode(payload.network_mode)
+    if payload.console_provider is not None:
+        record.console_provider = normalize_vm_console_provider(payload.console_provider)
     session.add(record)
     session.commit()
     session.refresh(record)
@@ -3571,6 +3593,7 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
         max_active_instances=max(0, int(getattr(record, "max_active_instances", 2) or 0)),
         enabled=record.enabled,
         network_mode=normalize_vm_network_mode(record.network_mode),
+        console_provider=normalize_vm_console_provider(getattr(record, "console_provider", "spice")),
         created_at=record.created_at,
     )
 

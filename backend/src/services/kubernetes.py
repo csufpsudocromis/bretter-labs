@@ -25,6 +25,7 @@ from kubernetes.client import ApiException
 from sqlmodel import Session, select
 
 from ..config import settings
+from ..console_providers import normalize_vm_console_provider
 from ..network_modes import normalize_vm_network_mode
 from ..tables import Config, ContainerInstance, ContainerTemplate, Image, Instance, Template
 from ..time_utils import utc_now
@@ -44,6 +45,7 @@ class PodRequest:
     owner: str
     network_mode: str = "bridge"
     instance_disk_pvc: Optional[str] = None
+    console_provider: str = "spice"
     spice_password: Optional[str] = None
 
 
@@ -629,6 +631,7 @@ class KubernetesService:
         pod_name = self._pod_name(req)
         self.ensure_namespace(settings.kube_namespace)
         vm_network_mode = normalize_vm_network_mode(req.network_mode)
+        console_provider = normalize_vm_console_provider(req.console_provider)
         instance_disk_pvc = self._ensure_instance_disk_pvc(req)
         guest_ram_mb = max(512, int(req.ram_mb))
         memory_overhead_mb = max(0, int(settings.vm_memory_overhead_mb))
@@ -714,6 +717,8 @@ class KubernetesService:
         drive_if = "virtio" if is_linux else "ide"
         # SPICE works best with qxl on Windows images; keep std on Linux guests.
         vga = "std" if is_linux else "qxl"
+        if console_provider == "guacamole" and vga == "qxl":
+            vga = "std"
         suffix = Path(req.image_path).suffix.lower()
         # Use the native disk format for both Linux and Windows.
         disk_format = None
@@ -741,10 +746,14 @@ class KubernetesService:
             client.V1EnvVar(name="VM_VHOST_NET_ENABLED", value=str(settings.vm_vhost_net_enabled).lower()),
             client.V1EnvVar(name="VM_NET_MULTIQUEUE_ENABLED", value=str(settings.vm_net_multiqueue_enabled).lower()),
             client.V1EnvVar(name="VM_NET_QUEUES", value=str(max(1, int(req.cpu_cores)))),
-            client.V1EnvVar(name="SPICE_TICKETING", value="true"),
+            client.V1EnvVar(name="CONSOLE_PROVIDER", value=console_provider),
         ]
-        if req.spice_password:
-            env_vars.append(client.V1EnvVar(name="SPICE_PASSWORD", value=req.spice_password))
+        if console_provider == "spice":
+            env_vars.append(client.V1EnvVar(name="SPICE_TICKETING", value="true"))
+            if req.spice_password:
+                env_vars.append(client.V1EnvVar(name="SPICE_PASSWORD", value=req.spice_password))
+        else:
+            env_vars.append(client.V1EnvVar(name="SPICE_TICKETING", value="false"))
         if tls_secret_name:
             env_vars.extend(
                 [
