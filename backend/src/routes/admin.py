@@ -2781,14 +2781,21 @@ def _ensure_on_pvc(source_path: Path) -> None:
 
 def _list_pvc_files() -> list[dict]:
     items = []
-    root = Path(settings.storage_root)
-    for path in root.iterdir():
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in ALLOWED_SUFFIXES:
-            continue
-        st = path.stat()
-        items.append({"name": path.name, "size": st.st_size, "mtime": st.st_mtime})
+    try:
+        root = _image_dir()
+    except OSError:
+        logger.warning("Unable to initialize image storage root %s", settings.storage_root, exc_info=True)
+        return items
+    try:
+        for path in root.iterdir():
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in ALLOWED_SUFFIXES:
+                continue
+            st = path.stat()
+            items.append({"name": path.name, "size": st.st_size, "mtime": st.st_mtime})
+    except OSError:
+        logger.warning("Unable to list image storage root %s", root, exc_info=True)
     return items
 
 
