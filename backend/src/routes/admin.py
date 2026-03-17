@@ -2395,6 +2395,16 @@ def _ensure_free_space(required_free_bytes: int, *, context: str) -> None:
     )
 
 
+def _repair_image_dir_permissions() -> None:
+    try:
+        _with_pvc_helper(
+            ["/bin/sh", "-c", "chown -R 10001:10001 /images && chmod -R u+rwX /images"],
+            capture_output=False,
+        )
+    except Exception:
+        logger.warning("Failed to repair image storage ownership/permissions", exc_info=True)
+
+
 def _cleanup_stale_helper_pods(max_age_minutes: int = 20) -> None:
     try:
         core = kube._client()
@@ -3086,21 +3096,47 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     filename = Path(file.filename).name
     task_id = str(uuid4())
     image_id = str(uuid4())
-    try:
-        dest_path = _image_dir() / filename
+
+    def _write_upload_to_path(dest_path: Path) -> int:
+        written = 0
         with dest_path.open("wb") as buffer:
             while chunk := file.file.read(1024 * 1024):
                 _ensure_free_space(MIN_FREE_UPLOAD_BYTES + len(chunk), context="upload")
-                size_bytes += len(chunk)
-                if size_bytes > MAX_UPLOAD_BYTES:
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                         detail="image too large (max 60GB)",
                     )
                 buffer.write(chunk)
+        return written
+
+    try:
+        dest_path = _image_dir() / filename
+        size_bytes = _write_upload_to_path(dest_path)
         if size_bytes == 0:
             dest_path.unlink(missing_ok=True)
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
+    except PermissionError:
+        logger.warning("Upload permission denied for %s; attempting storage permission repair", filename, exc_info=True)
+        _repair_image_dir_permissions()
+        try:
+            file.file.seek(0)
+        except Exception:
+            pass
+        try:
+            dest_path = _image_dir() / filename
+            size_bytes = _write_upload_to_path(dest_path)
+            if size_bytes == 0:
+                dest_path.unlink(missing_ok=True)
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded file is empty")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Failed to upload %s after permission repair: %s", filename, exc, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"upload failed: {exc}"
+            ) from exc
     except HTTPException:
         raise
     except Exception as exc:
