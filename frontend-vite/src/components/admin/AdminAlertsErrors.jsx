@@ -49,6 +49,10 @@ const AdminAlertsErrors = () => {
   };
 
   const clearErrorLog = async () => {
+    if (!(data?.error_log_clear_supported ?? true)) {
+      setMessage(data?.error_log_clear_reason || "Clear Error Log is not available in this environment.");
+      return;
+    }
     if (!window.confirm("Clear the backend error log file now?")) return;
     setLoading(true);
     setMessage("");
@@ -72,6 +76,8 @@ const AdminAlertsErrors = () => {
   }, [errorPage]);
 
   const errorLog = data?.error_log;
+  const clearSupported = data?.error_log_clear_supported ?? true;
+  const clearReason = data?.error_log_clear_reason || "";
   const pageNumbers = buildPageNumbers(errorLog?.page || 1, errorLog?.total_pages || 1);
   const errorText = errorLog?.lines?.length
     ? errorLog.lines.join("\n")
@@ -84,12 +90,18 @@ const AdminAlertsErrors = () => {
         <button className="ghost" onClick={() => load(errorPage)} disabled={loading}>
           {loading ? "Refreshing..." : "Refresh"}
         </button>
-        <button className="danger" onClick={clearErrorLog} disabled={loading}>
+        <button
+          className="danger"
+          onClick={clearErrorLog}
+          disabled={loading || !clearSupported}
+          title={!clearSupported && clearReason ? clearReason : ""}
+        >
           Clear Error Log
         </button>
       </div>
       {message && <div className="error">{message}</div>}
       {infoMessage && <div className="muted small">{infoMessage}</div>}
+      {!loading && !clearSupported && clearReason && <div className="muted small">{clearReason}</div>}
       {data && (
         <>
           <div className="card" style={{ marginBottom: "1rem" }}>

@@ -1,4 +1,5 @@
-from src.routes.admin import _finalize_in_checksum_phase, _parse_finalize_progress_percent
+from src.config import settings
+from src.routes.admin import _finalize_in_checksum_phase, _parse_finalize_progress_percent, _requested_upload_pvc_gi
 
 
 def test_parse_finalize_progress_percent_from_qemu_progress_log() -> None:
@@ -18,3 +19,13 @@ def test_parse_finalize_progress_percent_clamps_value_bounds() -> None:
 def test_finalize_in_checksum_phase_detects_phase_marker() -> None:
     assert _finalize_in_checksum_phase("BLABS_PHASE=checksum\n")
     assert not _finalize_in_checksum_phase("BLABS_PHASE=convert\n")
+
+
+def test_requested_upload_pvc_gi_applies_minimum_floor(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "min_upload_pvc_gib", 80)
+    assert _requested_upload_pvc_gi(1) == 80
+
+
+def test_requested_upload_pvc_gi_uses_larger_computed_size(monkeypatch) -> None:
+    monkeypatch.setattr(settings, "min_upload_pvc_gib", 40)
+    assert _requested_upload_pvc_gi(120 * 1024**3) == 121

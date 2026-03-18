@@ -16,7 +16,8 @@ SPICE_TICKETING="${SPICE_TICKETING:-true}"
 SPICE_PASSWORD="${SPICE_PASSWORD:-}"
 RDP_FORWARD_PORT="${RDP_FORWARD_PORT:-33890}"
 GUAC_TOKEN_KEY="${GUAC_TOKEN_KEY:-}"
-GUAC_RDP_SECURITY="${GUAC_RDP_SECURITY:-any}"
+# Default to NLA for Windows guests; allow overrides via env when required.
+GUAC_RDP_SECURITY="${GUAC_RDP_SECURITY:-nla}"
 GUAC_RDP_IGNORE_CERT="${GUAC_RDP_IGNORE_CERT:-true}"
 TAP_EGRESS_IF=""
 
@@ -159,34 +160,12 @@ fi
 if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
   mkdir -p "$WEBROOT/guacamole"
   cp /opt/runner/rdp.html "$WEBROOT/rdp.html"
-  GUAC_JS_SOURCE=""
-  for candidate in \
-    /opt/runner/node_modules/guacamole-common-js/dist/all.min.js \
-    /opt/runner/node_modules/guacamole-common-js/dist/esm/guacamole-common.min.js \
-    /opt/runner/node_modules/guacamole-common-js/dist/cjs/guacamole-common.min.js \
-    /opt/runner/node_modules/guacamole-common-js/guacamole-common-js/all.min.js; do
-    if [[ -f "$candidate" ]]; then
-      GUAC_JS_SOURCE="$candidate"
-      break
-    fi
-  done
-  if [[ -z "$GUAC_JS_SOURCE" ]]; then
-    echo "Missing guacamole-common-js assets in runner image" >&2
+  GUAC_JS_SOURCE="/opt/runner/guacamole/all.min.js"
+  if [[ ! -f "$GUAC_JS_SOURCE" ]]; then
+    echo "Missing guacamole-common-js browser bundle: $GUAC_JS_SOURCE" >&2
     exit 1
   fi
-  python3 - "$GUAC_JS_SOURCE" "$WEBROOT/guacamole/all.min.js" <<'PY'
-import pathlib
-import re
-import sys
-
-src = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
-# Normalize module/CJS package outputs into a browser-global script.
-src = re.sub(r",\s*module\.exports\s*=\s*Guacamole;?\s*$", ";", src, flags=re.S)
-src = re.sub(r"\s*export\s+default\s+Guacamole;\s*$", "", src, flags=re.S)
-src = re.sub(r"\s*module\.exports\s*=\s*Guacamole;\s*$", "", src, flags=re.S)
-src = re.sub(r",\s*$", ";", src, flags=re.S)
-pathlib.Path(sys.argv[2]).write_text(src, encoding="utf-8")
-PY
+  cp "$GUAC_JS_SOURCE" "$WEBROOT/guacamole/all.min.js"
   if [[ -z "$GUAC_TOKEN_KEY" ]]; then
     GUAC_TOKEN_KEY="$(python3 - <<'PY'
 import secrets

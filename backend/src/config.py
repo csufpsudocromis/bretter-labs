@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     kube_node_selector_key: str = "kubernetes.io/hostname"
     kube_node_selector_value: str = ""  # set to pin pods to a node (e.g., kub1)
     kube_vm_storage_class: str = ""  # set to enable per-VM cloned PVC disks (e.g., longhorn)
+    min_upload_pvc_gib: int = 80  # minimum PVC size for upload/import DataVolumes
     kube_upload_use_cdi: bool = True
     kube_cdi_namespace: str = "cdi"
     kube_use_kvm: bool = True  # set False if /dev/kvm is unavailable

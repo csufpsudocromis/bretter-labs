@@ -373,6 +373,8 @@ class AlertsAndErrorsView(BaseModel):
     alertmanager_error: str = ""
     alerts: list[AlertManagerAlert] = Field(default_factory=list)
     error_log: ErrorLogView
+    error_log_clear_supported: bool = True
+    error_log_clear_reason: str = ""
 
 
 class ErrorLogClearResult(BaseModel):

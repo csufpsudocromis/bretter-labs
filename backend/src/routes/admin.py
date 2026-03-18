@@ -87,6 +87,7 @@ RAW_CONVERSION_SUFFIXES = {".qcow", ".qcow2"}
 QCOW2_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".vdi"}
 MIN_FREE_UPLOAD_BYTES = 18 * 1024 * 1024 * 1024  # keep nodefs above kubelet disk-pressure headroom
 SOURCE_PVC_OVERHEAD_BYTES = 1024 * 1024 * 1024  # account for filesystem metadata/lost+found overhead
+MIN_UPLOAD_PVC_GIB = max(1, int(getattr(settings, "min_upload_pvc_gib", 80) or 80))
 SITE_BACKGROUND_MAX_BYTES = 20 * 1024 * 1024
 SITE_BACKGROUND_ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 SITE_BACKGROUND_PUBLIC_PREFIX = "/user/site-assets/"
@@ -897,13 +898,60 @@ def _read_error_log_file(path: Path, max_bytes: int, page: int, per_page: int) -
     )
 
 
-def _collect_k8s_error_logs(max_bytes: int, page: int, per_page: int) -> ErrorLogView:
-    source = f"kubernetes:{settings.kube_namespace}"
-    core = kube._client()
+def _list_backend_pods(core: client.CoreV1Api) -> tuple[list[client.V1Pod], str]:
+    namespace = _to_str(settings.kube_namespace)
+
+    def _is_live_backend_pod(pod: client.V1Pod) -> bool:
+        pod_name = _to_str(getattr(pod.metadata, "name", ""))
+        if not pod_name:
+            return False
+        if getattr(pod.metadata, "deletion_timestamp", None) is not None:
+            return False
+        phase = _to_str(getattr(getattr(pod, "status", None), "phase", "")).lower()
+        return phase in {"", "running"}
+
     try:
-        pods = core.list_namespaced_pod(namespace=settings.kube_namespace).items
-    except ApiException as exc:
-        return ErrorLogView(source=source, bytes=0, truncated=False, content=f"Failed to list pods: {exc}")
+        labeled = core.list_namespaced_pod(namespace=namespace, label_selector="app=bretter-backend").items
+    except Exception as exc:
+        logger.warning("Failed listing labeled backend pods in %s: %s", namespace, exc)
+        return [], f"Failed to list backend pods: {exc}"
+
+    pods = [pod for pod in labeled if _is_live_backend_pod(pod)]
+    if pods:
+        return pods, ""
+
+    # Legacy fallback for clusters that do not carry expected labels on backend pods.
+    try:
+        all_pods = core.list_namespaced_pod(namespace=namespace).items
+    except Exception as exc:
+        logger.warning("Failed listing pods for backend-name fallback in %s: %s", namespace, exc)
+        return [], f"Failed to list backend pods: {exc}"
+
+    pods = []
+    for pod in all_pods:
+        pod_name = _to_str(getattr(pod.metadata, "name", ""))
+        if pod_name and "bretter-backend" in pod_name and _is_live_backend_pod(pod):
+            pods.append(pod)
+    if not pods:
+        return [], "No backend pods found."
+    return pods, ""
+
+
+def _collect_k8s_error_logs(max_bytes: int, page: int, per_page: int) -> ErrorLogView:
+    source = f"kubernetes:{settings.kube_namespace}:backend"
+    try:
+        core = kube._client()
+    except Exception as exc:
+        return ErrorLogView(
+            source=source,
+            bytes=0,
+            truncated=False,
+            content=f"Failed to initialize Kubernetes client: {exc}",
+        )
+
+    pods, pods_error = _list_backend_pods(core)
+    if not pods:
+        return ErrorLogView(source=source, bytes=0, truncated=False, content=pods_error or "No backend pods found.")
 
     # Most recent pods first so operators see the latest failures first.
     pods_sorted = sorted(
@@ -926,7 +974,7 @@ def _collect_k8s_error_logs(max_bytes: int, page: int, per_page: int) -> ErrorLo
                 tail_lines=4000,
                 limit_bytes=max_per_pod,
             )
-        except ApiException:
+        except Exception:
             continue
         pod_lines = _extract_error_lines(log_text or "")
         if not pod_lines:
@@ -957,29 +1005,18 @@ def _clear_backend_error_logs(path: Path) -> ErrorLogClearResult:
     source = f"file:{path}"
     clear_cmd = f"mkdir -p {shlex.quote(str(path.parent))} && : > {shlex.quote(str(path))}"
     core = kube._client()
-    try:
-        pods = core.list_namespaced_pod(
-            namespace=settings.kube_namespace,
-            label_selector="app=bretter-backend",
-        ).items
-    except ApiException as exc:
-        logger.warning("Failed listing backend pods for error log clear: %s", exc)
-        _truncate_local_error_log(path)
-        return ErrorLogClearResult(
-            source=source,
-            cleared_pods=1,
-            total_pods=1,
-            detail="Cleared local backend error log.",
-        )
-
+    pods, pods_error = _list_backend_pods(core)
     pod_names = [_to_str(pod.metadata.name) for pod in pods if _to_str(pod.metadata.name)]
     if not pod_names:
         _truncate_local_error_log(path)
+        detail = "Cleared local backend error log."
+        if pods_error:
+            detail = f"{detail} {pods_error}"
         return ErrorLogClearResult(
             source=source,
             cleared_pods=1,
             total_pods=1,
-            detail="Cleared local backend error log.",
+            detail=detail,
         )
 
     failed_pods: list[str] = []
@@ -1563,13 +1600,18 @@ def _ensure_fileserver(task: ImageUploadTask) -> str:
     return f"http://{name}.{settings.kube_namespace}.svc.cluster.local:8080/{urlquote(task.filename)}"
 
 
+def _requested_upload_pvc_gi(size_bytes: int) -> int:
+    required_bytes = max(0, int(size_bytes)) + SOURCE_PVC_OVERHEAD_BYTES
+    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
+    return max(MIN_UPLOAD_PVC_GIB, requested_gi)
+
+
 def _start_datavolume_import(task: ImageUploadTask, claim_name: str) -> str:
     if not _has_cdi_datavolume():
         raise RuntimeError("CDI DataVolume CRD is not installed")
     custom = client.CustomObjectsApi()
     core = kube._client()
-    required_bytes = int(task.size_bytes) + SOURCE_PVC_OVERHEAD_BYTES
-    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
+    requested_gi = _requested_upload_pvc_gi(int(task.size_bytes))
 
     # Remove existing PVC/DataVolume so the import can be recreated with the expected size.
     try:
@@ -1622,6 +1664,32 @@ def _start_datavolume_import(task: ImageUploadTask, claim_name: str) -> str:
     return f"dv:{claim_name}"
 
 
+def _ensure_source_filename_alias_on_pvc(claim_name: str, source_filename: str, desired_filename: str) -> None:
+    claim = (claim_name or "").strip()
+    if not claim:
+        raise RuntimeError("source PVC claim name is required")
+    src = Path(source_filename).name
+    dst = Path(desired_filename).name
+    if not src or not dst or src == dst:
+        return
+    quoted_src = shlex.quote(src)
+    quoted_dst = shlex.quote(dst)
+    _with_pvc_helper(
+        [
+            "/bin/sh",
+            "-c",
+            (
+                "set -eu; "
+                "cd /images; "
+                f"if [ ! -f {quoted_src} ]; then echo 'BLABS_ERROR=source missing: {src}' >&2; exit 22; fi; "
+                f"if [ -e {quoted_dst} ] || [ -L {quoted_dst} ]; then exit 0; fi; "
+                f"ln -s {quoted_src} {quoted_dst}"
+            ),
+        ],
+        claim_name=claim,
+    )
+
+
 def _datavolume_phase(name: str) -> tuple[str, str]:
     custom = client.CustomObjectsApi()
     obj = custom.get_namespaced_custom_object(
@@ -1654,8 +1722,7 @@ def _create_direct_upload_datavolume(task: ImageUploadTask) -> str:
     if not settings.kube_vm_storage_class:
         raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for direct CDI upload")
     custom = client.CustomObjectsApi()
-    required_bytes = int(task.size_bytes) + SOURCE_PVC_OVERHEAD_BYTES
-    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
+    requested_gi = _requested_upload_pvc_gi(int(task.size_bytes))
     name = _direct_upload_pvc_name(task.id)
 
     body = {
@@ -2355,6 +2422,21 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 _cleanup_fileserver(task.id)
                 return task
             _cleanup_fileserver(task.id)
+            try:
+                _ensure_source_filename_alias_on_pvc(
+                    task.source_pvc or "",
+                    settings.cdi_upload_source_filename or "disk.img",
+                    task.filename,
+                )
+            except Exception as exc:
+                task.status = "failed"
+                task.detail = "Failed to finalize source image filename alias"
+                task.error_message = str(exc)
+                task.updated_at = utc_now()
+                session.add(task)
+                session.commit()
+                session.refresh(task)
+                return task
         else:
             try:
                 job = batch.read_namespaced_job(name=task.copy_job, namespace=settings.kube_namespace)
@@ -2669,8 +2751,8 @@ def _ensure_image_source_pvc_claim(image_id: str, size_bytes: int) -> str:
         raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for clone-based disks")
 
     claim_name = _source_pvc_name(image_id)
-    required_bytes = size_bytes + SOURCE_PVC_OVERHEAD_BYTES
-    requested_gi = max(1, math.ceil(required_bytes / (1024**3)))
+    requested_gi = _requested_upload_pvc_gi(size_bytes)
+    requested_bytes = requested_gi * (1024**3)
     core = kube._client()
     existing_pvc = None
     try:
@@ -2683,12 +2765,12 @@ def _ensure_image_source_pvc_claim(image_id: str, size_bytes: int) -> str:
         if existing_pvc.spec and existing_pvc.spec.resources and existing_pvc.spec.resources.requests:
             existing_request = existing_pvc.spec.resources.requests.get("storage")
         existing_bytes = int(parse_quantity(existing_request)) if existing_request else 0
-        if existing_bytes < required_bytes:
+        if existing_bytes < requested_bytes:
             logger.warning(
                 "Recreating source PVC %s with larger capacity (current=%s bytes, required=%s bytes)",
                 claim_name,
                 existing_bytes,
-                required_bytes,
+                requested_bytes,
             )
             core.delete_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
             _wait_for_pvc_deleted(core, claim_name)
@@ -4312,12 +4394,19 @@ def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
     else:
         error_log = _collect_k8s_error_logs(max_bytes=max_bytes, page=page, per_page=per_page)
 
+    clear_supported = bool(log_file_path)
+    clear_reason = ""
+    if not clear_supported:
+        clear_reason = "Clear Error Log is unavailable because BLABS_ERROR_LOG_FILE_PATH is not configured."
+
     return AlertsAndErrorsView(
         fetched_at=datetime.now(timezone.utc),
         alertmanager_url=_to_str(settings.alertmanager_api_url),
         alertmanager_error=alertmanager_error,
         alerts=alerts,
         error_log=error_log,
+        error_log_clear_supported=clear_supported,
+        error_log_clear_reason=clear_reason,
     )
 
 
@@ -4329,7 +4418,10 @@ def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
 def clear_alerts_error_log() -> ErrorLogClearResult:
     log_file_path = _to_str(settings.error_log_file_path)
     if not log_file_path:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Error log file path is not configured.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Clear Error Log is unavailable because BLABS_ERROR_LOG_FILE_PATH is not configured.",
+        )
     try:
         return _clear_backend_error_logs(Path(log_file_path))
     except Exception as exc:

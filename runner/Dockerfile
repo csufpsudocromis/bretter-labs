@@ -13,6 +13,7 @@
 # The web client can connect to ws://${runner-host}:${WS_PORT} (VNC/SPICE over WebSocket).
 
 FROM ubuntu:24.04
+ARG GUAC_VERSION=1.3.0
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -29,6 +30,8 @@ RUN apt-get update && \
       nodejs \
       npm \
       python3 \
+      curl \
+      unzip \
       ca-certificates && \
     if apt-cache show libguac-client-rdp0t64 >/dev/null 2>&1; then \
       apt-get install -y --no-install-recommends libguac-client-rdp0t64; \
@@ -43,7 +46,12 @@ RUN apt-get update && \
 
 WORKDIR /opt/runner
 
-RUN npm install --prefix /opt/runner --omit=dev guacamole-lite@1.2.0 guacamole-common-js@1.5.0
+RUN npm install --prefix /opt/runner --omit=dev guacamole-lite@1.2.0
+
+RUN mkdir -p /opt/runner/guacamole && \
+    curl -fsSL "https://archive.apache.org/dist/guacamole/${GUAC_VERSION}/binary/guacamole-${GUAC_VERSION}.war" -o /tmp/guacamole.war && \
+    unzip -j /tmp/guacamole.war "guacamole-common-js/all.min.js" -d /opt/runner/guacamole && \
+    rm -f /tmp/guacamole.war
 
 COPY entrypoint.sh guac-rdp-server.js rdp.html /opt/runner/
 
