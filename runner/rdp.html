@@ -18,23 +18,33 @@
         font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       }
       .layout {
-        display: flex;
-        flex-direction: column;
+        position: relative;
         height: 100%;
       }
       .toolbar {
-        display: grid;
+        display: none;
         grid-template-columns: repeat(4, minmax(0, 1fr)) auto auto;
         gap: 0.5rem;
         align-items: end;
         padding: 0.65rem;
         background: rgba(15, 23, 42, 0.96);
         border-bottom: 1px solid rgba(148, 163, 184, 0.28);
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        z-index: 20;
+      }
+      .layout.show-toolbar .toolbar {
+        display: grid;
       }
       .field {
         display: flex;
         flex-direction: column;
         min-width: 0;
+      }
+      .field.hidden {
+        display: none !important;
       }
       label {
         font-size: 0.72rem;
@@ -63,29 +73,44 @@
         color: #f8fafc;
       }
       #status {
+        display: none;
         margin: 0;
         padding: 0.45rem 0.65rem;
         font-size: 0.82rem;
         color: #cbd5e1;
-        background: rgba(15, 23, 42, 0.85);
-        border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(15, 23, 42, 0.72);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.15);
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        z-index: 15;
+        pointer-events: none;
+      }
+      .layout.show-status #status {
+        display: block;
+      }
+      .layout.show-toolbar.show-status #status {
+        top: 3.35rem;
       }
       #display {
-        position: relative;
-        flex: 1;
+        position: absolute;
+        inset: 0;
         overflow: hidden;
+        background: #000;
       }
       #display > div {
-        width: 100%;
-        height: 100%;
-      }
-      #display canvas {
-        width: 100% !important;
-        height: 100% !important;
+        position: absolute;
+        left: 0;
+        top: 0;
+        transform-origin: top left;
       }
       @media (max-width: 980px) {
         .toolbar {
           grid-template-columns: 1fr 1fr;
+        }
+        .layout.show-toolbar.show-status #status {
+          top: 7rem;
         }
       }
     </style>
@@ -110,7 +135,6 @@
           <input id="initialProgram" />
         </div>
         <button id="connectBtn" type="button">Connect</button>
-        <button id="disconnectBtn" type="button" class="secondary">Disconnect</button>
       </div>
       <p id="status">Ready.</p>
       <div id="display"></div>
@@ -118,16 +142,21 @@
     <script src="./guacamole/all.min.js"></script>
     <script>
       (function () {
+        const layoutEl = document.querySelector(".layout");
         const statusEl = document.getElementById("status");
         const displayEl = document.getElementById("display");
         const connectBtn = document.getElementById("connectBtn");
-        const disconnectBtn = document.getElementById("disconnectBtn");
+        const usernameField = document.querySelector('label[for="username"]')?.parentElement;
+        const passwordField = document.querySelector('label[for="password"]')?.parentElement;
+        const domainField = document.querySelector('label[for="domain"]')?.parentElement;
+        const initialProgramField = document.querySelector('label[for="initialProgram"]')?.parentElement;
         const usernameEl = document.getElementById("username");
         const passwordEl = document.getElementById("password");
         const domainEl = document.getElementById("domain");
         const initialProgramEl = document.getElementById("initialProgram");
 
         const params = new URLSearchParams(window.location.search);
+        const debugMode = (params.get("debug") || "").toLowerCase() === "1" || (params.get("debug") || "").toLowerCase() === "true";
         const host = params.get("host") || window.location.hostname;
         const rawPort = params.get("port") || window.location.port || (window.location.protocol === "https:" ? "443" : "80");
         const encrypt = (params.get("encrypt") || String(window.location.protocol === "https:")).toLowerCase() === "true";
@@ -142,16 +171,240 @@
         let isBootstrapping = false;
         let readinessPoll = null;
         let pageActive = true;
+        let reconnectTimer = null;
+        let frameCheckTimer = null;
+        let fitLoopTimer = null;
+        let resizeSendTimer = null;
+        let lastSizeRequestAt = 0;
+        let connectInFlight = false;
+        let autoReconnectAttempts = 0;
+        const maxAutoReconnectAttempts = 12;
+        let allowAutoReconnect = autoConnect;
+        let baseStatusMessage = "Ready.";
+        let debugStatusTimer = null;
+
+        function getViewportSize() {
+          const width = Math.max(
+            640,
+            Math.floor(window.innerWidth || document.documentElement.clientWidth || displayEl.clientWidth || 640)
+          );
+          const height = Math.max(
+            480,
+            Math.floor(window.innerHeight || document.documentElement.clientHeight || displayEl.clientHeight || 480)
+          );
+          return { width, height };
+        }
+
+        function shouldSuppressStatus(message) {
+          if (debugMode) return false;
+          return /^Connected\b/i.test(String(message || ""));
+        }
 
         function setStatus(message) {
-          statusEl.textContent = message;
+          baseStatusMessage = message;
+          let renderedMessage = String(message || "");
+          if (debugMode) {
+            const canvases = Array.from(displayEl.querySelectorAll("canvas"));
+            const first = canvases[0];
+            const firstSize = first ? `${Number(first.width || 0)}x${Number(first.height || 0)}` : "none";
+            const largest = canvases.reduce(
+              (acc, canvas) => {
+                const width = Number(canvas.width || 0);
+                const height = Number(canvas.height || 0);
+                const area = width * height;
+                if (area > acc.area) return { width, height, area };
+                return acc;
+              },
+              { width: 0, height: 0, area: 0 }
+            );
+            const largestSize = canvases.length ? `${largest.width}x${largest.height}` : "none";
+            const displayRoot = displayEl.firstElementChild;
+            const rootSize = displayRoot ? `${displayRoot.clientWidth}x${displayRoot.clientHeight}` : "none";
+            renderedMessage = `${baseStatusMessage} [debug canvases=${canvases.length} first=${firstSize} largest=${largestSize} viewport=${displayEl.clientWidth}x${displayEl.clientHeight} root=${rootSize}]`;
+          }
+          statusEl.textContent = renderedMessage;
+          const visible = renderedMessage.length > 0 && !shouldSuppressStatus(baseStatusMessage);
+          layoutEl.classList.toggle("show-status", visible);
         }
 
         function setConnectVisible(visible) {
           connectBtn.style.display = visible ? "" : "none";
         }
 
+        function setCredentialPromptVisible(visible) {
+          [usernameField, passwordField, domainField, initialProgramField].forEach((field) => {
+            if (field) field.classList.toggle("hidden", !visible);
+          });
+          layoutEl.classList.toggle("show-toolbar", visible);
+          setConnectVisible(visible);
+        }
+
+        function canvasHasVisiblePixels(canvas) {
+          const width = Number(canvas.width || 0);
+          const height = Number(canvas.height || 0);
+          if (width < 48 || height < 48) return false;
+          let ctx = null;
+          try {
+            ctx = canvas.getContext("2d", { willReadFrequently: true });
+          } catch (_err) {
+            return true;
+          }
+          if (!ctx) return false;
+          try {
+            // Sample a sparse grid; transparent pixels indicate no frame drawn for this layer.
+            const cols = 4;
+            const rows = 4;
+            for (let y = 0; y < rows; y += 1) {
+              for (let x = 0; x < cols; x += 1) {
+                const px = Math.min(width - 1, Math.floor(((x + 0.5) * width) / cols));
+                const py = Math.min(height - 1, Math.floor(((y + 0.5) * height) / rows));
+                const alpha = ctx.getImageData(px, py, 1, 1).data[3] || 0;
+                if (alpha > 0) return true;
+              }
+            }
+          } catch (_err) {
+            return true;
+          }
+          return false;
+        }
+
+        function hasDisplayFrame() {
+          const canvases = Array.from(displayEl.querySelectorAll("canvas"));
+          if (!canvases.length) return false;
+          let visibleMeaningfulLayers = 0;
+          for (const canvas of canvases) {
+            const width = Number(canvas.width || 0);
+            const height = Number(canvas.height || 0);
+            if (!canvasHasVisiblePixels(canvas)) continue;
+            visibleMeaningfulLayers += 1;
+            if (width * height >= 640 * 360 || visibleMeaningfulLayers >= 2) {
+              return true;
+            }
+          }
+          return false;
+        }
+
+        function clearFrameCheckTimer() {
+          if (frameCheckTimer) {
+            window.clearTimeout(frameCheckTimer);
+            frameCheckTimer = null;
+          }
+        }
+
+        function clearReconnectTimer() {
+          if (reconnectTimer) {
+            window.clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+          }
+        }
+
+        function clearFitLoopTimer() {
+          if (fitLoopTimer) {
+            window.clearInterval(fitLoopTimer);
+            fitLoopTimer = null;
+          }
+        }
+
+        function clearResizeSendTimer() {
+          if (resizeSendTimer) {
+            window.clearTimeout(resizeSendTimer);
+            resizeSendTimer = null;
+          }
+        }
+
+        function sendCurrentClientSize() {
+          if (!client) return;
+          const viewport = getViewportSize();
+          client.sendSize(viewport.width, viewport.height);
+          lastSizeRequestAt = Date.now();
+        }
+
+        function maybeRequestRemoteResize() {
+          if (!client) return;
+          const display = client.getDisplay();
+          if (!display) return;
+          const displayWidth = Number(display.getWidth ? display.getWidth() : 0);
+          const displayHeight = Number(display.getHeight ? display.getHeight() : 0);
+          if (displayWidth < 1 || displayHeight < 1) return;
+          const viewport = getViewportSize();
+          const deltaWidth = Math.abs(viewport.width - displayWidth);
+          const deltaHeight = Math.abs(viewport.height - displayHeight);
+          if (deltaWidth < 32 && deltaHeight < 32) return;
+          const now = Date.now();
+          if (now - lastSizeRequestAt < 1000) return;
+          sendCurrentClientSize();
+        }
+
+        function fitDisplayToViewport() {
+          if (!client) return;
+          const display = client.getDisplay();
+          if (!display) return;
+          const displayWidth = Number(display.getWidth ? display.getWidth() : 0);
+          const displayHeight = Number(display.getHeight ? display.getHeight() : 0);
+          if (displayWidth < 1 || displayHeight < 1) return;
+          const maxWidth = Math.max(1, displayEl.clientWidth);
+          const maxHeight = Math.max(1, displayEl.clientHeight);
+          const scale = Math.min(maxWidth / displayWidth, maxHeight / displayHeight);
+          display.scale(scale);
+          const scaledWidth = Math.floor(displayWidth * scale);
+          const scaledHeight = Math.floor(displayHeight * scale);
+          const offsetX = Math.max(0, Math.floor((maxWidth - scaledWidth) / 2));
+          const offsetY = Math.max(0, Math.floor((maxHeight - scaledHeight) / 2));
+          const element = display.getElement();
+          element.style.left = `${offsetX}px`;
+          element.style.top = `${offsetY}px`;
+        }
+
+        function normalizeMouseState(state) {
+          if (!client) return state;
+          const display = client.getDisplay();
+          if (!display || !display.getScale) return state;
+          const scale = Number(display.getScale()) || 1;
+          if (Math.abs(scale - 1) < 0.001) return state;
+          return {
+            ...state,
+            x: Math.round(Number(state.x || 0) / scale),
+            y: Math.round(Number(state.y || 0) / scale),
+          };
+        }
+
+        function startFitLoop() {
+          clearFitLoopTimer();
+          fitDisplayToViewport();
+          fitLoopTimer = window.setInterval(() => {
+            fitDisplayToViewport();
+            maybeRequestRemoteResize();
+            if (hasDisplayFrame() && baseStatusMessage !== "Connected.") {
+              autoReconnectAttempts = 0;
+              setStatus("Connected.");
+            }
+          }, 250);
+        }
+
+        function scheduleReconnect(reason, delayMs = 800) {
+          if (!allowAutoReconnect || !pageActive || connectInFlight) return;
+          if (reconnectTimer) return;
+          if (autoReconnectAttempts >= maxAutoReconnectAttempts) {
+            setStatus("Unable to establish stable RDP session. Please retry connect.");
+            setCredentialPromptVisible(true);
+            return;
+          }
+          autoReconnectAttempts += 1;
+          setStatus(`${reason} Retrying (${autoReconnectAttempts}/${maxAutoReconnectAttempts})...`);
+          reconnectTimer = window.setTimeout(() => {
+            reconnectTimer = null;
+            void connect();
+          }, delayMs);
+        }
+
         function cleanup() {
+          clearFrameCheckTimer();
+          clearFitLoopTimer();
+          clearResizeSendTimer();
+          if (debugStatusTimer) {
+            window.clearInterval(debugStatusTimer);
+            debugStatusTimer = null;
+          }
           try {
             if (keyboard) {
               keyboard.onkeydown = null;
@@ -184,13 +437,22 @@
           }
         }
 
-        async function fetchToken() {
+        async function fetchToken(viewport) {
+          const usingManualCredentials =
+            !autoConnect ||
+            !usernameField?.classList.contains("hidden") ||
+            !passwordField?.classList.contains("hidden");
           const payload = {
-            username: usernameEl.value || "",
-            password: passwordEl.value || "",
-            domain: domainEl.value || "",
-            initial_program: initialProgramEl.value || "",
+            username: usingManualCredentials ? usernameEl.value || "" : "",
+            password: usingManualCredentials ? passwordEl.value || "" : "",
+            domain: usingManualCredentials ? domainEl.value || "" : "",
+            initial_program: usingManualCredentials ? initialProgramEl.value || "" : "",
           };
+          if (viewport && Number.isFinite(viewport.width) && Number.isFinite(viewport.height)) {
+            payload.width = Math.max(640, Math.floor(viewport.width));
+            payload.height = Math.max(480, Math.floor(viewport.height));
+            payload.dpi = 96;
+          }
           const response = await fetch("rdp-token", {
             method: "POST",
             headers: { "content-type": "application/json" },
@@ -198,8 +460,13 @@
             body: JSON.stringify(payload),
           });
           if (!response.ok) {
-            const details = await response.text();
-            throw new Error(details || `failed to get token (${response.status})`);
+            const text = await response.text();
+            let detail = text;
+            try {
+              const parsed = JSON.parse(text || "{}");
+              detail = parsed?.detail ? String(parsed.detail) : text;
+            } catch (_err) {}
+            throw new Error(detail || `failed to get token (${response.status})`);
           }
           const data = await response.json();
           if (!data.token) {
@@ -209,35 +476,69 @@
         }
 
         async function connect() {
+          if (connectInFlight) return;
+          connectInFlight = true;
+          clearReconnectTimer();
+          clearFrameCheckTimer();
           connectBtn.disabled = true;
           setStatus("Connecting...");
           cleanup();
           try {
-            const token = await fetchToken();
+            const viewport = getViewportSize();
+            const token = await fetchToken(viewport);
             const scheme = encrypt ? "wss" : "ws";
             const tunnelUrl = `${scheme}://${host}:${rawPort}/${path}`;
             const tunnel = new Guacamole.WebSocketTunnel(tunnelUrl);
             client = new Guacamole.Client(tunnel);
             client.onerror = (error) => {
-              const msg = (error && error.message) || "connection failed";
+              const msg = (error && (error.message || error.name || JSON.stringify(error))) || "connection failed";
+              if (allowAutoReconnect) {
+                scheduleReconnect(`Error: ${msg}`);
+                return;
+              }
               setStatus(`Error: ${msg}`);
-              setConnectVisible(true);
+              setCredentialPromptVisible(true);
             };
             tunnel.onerror = (error) => {
-              const msg = (error && error.message) || "tunnel error";
+              const msg = (error && (error.message || error.name || JSON.stringify(error))) || "tunnel error";
+              if (allowAutoReconnect) {
+                scheduleReconnect(`Error: ${msg}`);
+                return;
+              }
               setStatus(`Error: ${msg}`);
-              setConnectVisible(true);
+              setCredentialPromptVisible(true);
             };
             tunnel.onstatechange = (state) => {
-              if (state === 2) setStatus("Connected.");
-              if (state === 3 || state === 5) setStatus("Disconnected.");
+              const states = (Guacamole && Guacamole.Tunnel && Guacamole.Tunnel.State) || {};
+              if (state === states.OPEN || state === 1) {
+                setStatus("Connected. Waiting for desktop frame...");
+                return;
+              }
+              if (state === states.UNSTABLE || state === 3) {
+                setStatus("Connection unstable...");
+                return;
+              }
+              if (state === states.CLOSED || state === 2) {
+                if (allowAutoReconnect) {
+                  scheduleReconnect("Connection closed.");
+                  return;
+                }
+                setStatus("Disconnected.");
+                setCredentialPromptVisible(true);
+              }
             };
             const display = client.getDisplay().getElement();
             displayEl.replaceChildren(display);
+            startFitLoop();
+            if (debugMode && !debugStatusTimer) {
+              debugStatusTimer = window.setInterval(() => {
+                setStatus(baseStatusMessage);
+              }, 1000);
+            }
 
             mouse = new Guacamole.Mouse(display);
             mouse.onmousemove = mouse.onmousedown = mouse.onmouseup = (state) => {
-              if (client) client.sendMouseState(state);
+              if (client) client.sendMouseState(normalizeMouseState(state));
             };
 
             keyboard = new Guacamole.Keyboard(window);
@@ -248,24 +549,45 @@
               if (client) client.sendKeyEvent(0, keysym);
             };
 
-            const width = Math.max(1024, window.innerWidth);
-            const height = Math.max(768, window.innerHeight - 140);
-            client.connect(
-              `token=${encodeURIComponent(token)}&width=${width}&height=${height}&dpi=96&audio=audio/L16;rate=44100`
-            );
+            const connectData = new URLSearchParams({ token });
+            client.connect(connectData.toString());
+            // Some RDP stacks do not honor the initial handshake size reliably.
+            // Reassert client size right after connect to trigger a full frame.
+            window.setTimeout(() => {
+              if (client) sendCurrentClientSize();
+            }, 250);
+            window.setTimeout(() => {
+              if (client && !hasDisplayFrame()) sendCurrentClientSize();
+            }, 1200);
+            frameCheckTimer = window.setTimeout(() => {
+              if (hasDisplayFrame()) {
+                autoReconnectAttempts = 0;
+                setStatus("Connected.");
+                return;
+              }
+              // Do not tear down active sessions based on canvas heuristics.
+              // Some RDP desktop states paint in layers that are difficult to detect reliably.
+              setStatus("Connected. Waiting for desktop frame...");
+            }, 7000);
           } catch (err) {
-            setStatus(`Error: ${err.message || err}`);
-            setConnectVisible(true);
+            const message = `Error: ${err.message || err}`;
+            if (allowAutoReconnect) {
+              scheduleReconnect(message);
+            } else {
+              setStatus(message);
+              setCredentialPromptVisible(true);
+            }
             cleanup();
           } finally {
             connectBtn.disabled = false;
+            connectInFlight = false;
           }
         }
 
         async function waitForRdpAndConnect() {
           if (isBootstrapping) return;
           isBootstrapping = true;
-          setConnectVisible(false);
+          setCredentialPromptVisible(false);
           let attempts = 0;
           while (pageActive && attempts < 240) {
             attempts += 1;
@@ -283,25 +605,40 @@
           }
           isBootstrapping = false;
           setStatus("RDP service is still starting. You can try manual connect.");
-          setConnectVisible(true);
+          setCredentialPromptVisible(true);
         }
 
-        connectBtn.addEventListener("click", connect);
-        disconnectBtn.addEventListener("click", () => {
-          cleanup();
-          setStatus("Disconnected.");
+        connectBtn.addEventListener("click", () => {
+          allowAutoReconnect = false;
+          autoReconnectAttempts = 0;
+          void connect();
         });
         window.addEventListener("beforeunload", () => {
           pageActive = false;
+          clearReconnectTimer();
+          clearFitLoopTimer();
+          clearResizeSendTimer();
           if (readinessPoll) window.clearTimeout(readinessPoll);
           cleanup();
         });
+        window.addEventListener("resize", () => {
+          fitDisplayToViewport();
+          clearResizeSendTimer();
+          resizeSendTimer = window.setTimeout(() => {
+            resizeSendTimer = null;
+            sendCurrentClientSize();
+            fitDisplayToViewport();
+          }, 200);
+        });
         if (autoConnect) {
+          allowAutoReconnect = true;
+          setCredentialPromptVisible(false);
           setStatus("Waiting for VM RDP service...");
           void waitForRdpAndConnect();
         } else {
+          allowAutoReconnect = false;
+          setCredentialPromptVisible(true);
           setStatus("Ready. Enter guest OS credentials if required, then connect.");
-          setConnectVisible(true);
         }
       })();
     </script>

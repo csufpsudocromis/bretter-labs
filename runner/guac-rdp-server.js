@@ -20,12 +20,23 @@ const guacdPort = parseInt(process.env.GUACD_PORT || "4822", 10);
 
 const rdpHost = process.env.GUAC_RDP_HOST || "127.0.0.1";
 const rdpPort = parseInt(process.env.GUAC_RDP_PORT || "33890", 10);
-const rdpSecurity = process.env.GUAC_RDP_SECURITY || "any";
+// Prefer NLA for modern Windows guests; "any" can negotiate modes that
+// connect but fail to render a usable desktop in some environments.
+const rdpSecurity = process.env.GUAC_RDP_SECURITY || "nla";
 const rdpIgnoreCert = String(process.env.GUAC_RDP_IGNORE_CERT || "true").toLowerCase() !== "false";
 const defaultRdpUsername = String(process.env.RDP_DEFAULT_USERNAME || "").trim().slice(0, 128);
 const defaultRdpPassword = String(process.env.RDP_DEFAULT_PASSWORD || "").trim().slice(0, 256);
+const defaultRdpWidth = parseInt(process.env.GUAC_RDP_WIDTH || "0", 10);
+const defaultRdpHeight = parseInt(process.env.GUAC_RDP_HEIGHT || "0", 10);
+const defaultRdpDpi = parseInt(process.env.GUAC_RDP_DPI || "96", 10);
 const maxInactivityMsRaw = parseInt(process.env.GUAC_MAX_INACTIVITY_MS || "0", 10);
 const maxInactivityMs = Number.isFinite(maxInactivityMsRaw) && maxInactivityMsRaw >= 0 ? maxInactivityMsRaw : 0;
+const RDP_NEGOTIATION_REQUEST = Buffer.from([
+  0x03, 0x00, 0x00, 0x13, // TPKT
+  0x0e, 0xe0, 0x00, 0x00, 0x00, 0x00, 0x00, // X.224
+  0x01, 0x00, 0x08, 0x00, // RDP negotiation request
+  0x03, 0x00, 0x00, 0x00, // requested protocols: SSL | HYBRID (NLA)
+]);
 
 const cryptSeed = process.env.GUAC_TOKEN_KEY || "bretter-labs-guac-rdp";
 const cryptCipher = "aes-256-cbc";
@@ -86,28 +97,47 @@ function coerceString(value, maxLength = 128) {
   return text.slice(0, maxLength);
 }
 
+function coerceInt(value, { min = 1, max = Number.MAX_SAFE_INTEGER } = {}) {
+  const parsed = Number.parseInt(String(value || ""), 10);
+  if (!Number.isFinite(parsed)) return 0;
+  if (parsed < min || parsed > max) return 0;
+  return parsed;
+}
+
+function applyRdpDisplayDefaults(settings) {
+  settings["enable-wallpaper"] = "true";
+  settings["disable-wallpaper"] = "false";
+  settings["enable-theming"] = "true";
+  settings["enable-full-window-drag"] = "true";
+  settings["enable-desktop-composition"] = "true";
+  settings["resize-method"] = "display-update";
+}
+
 function buildConnectionSettings(payload) {
   const username = coerceString(payload.username, 128) || defaultRdpUsername;
   const password = coerceString(payload.password, 256) || defaultRdpPassword;
   const domain = coerceString(payload.domain, 128);
   const initialProgram = coerceString(payload.initial_program, 256);
+  const requestedWidth = coerceInt(payload.width, { min: 640, max: 8192 }) || coerceInt(defaultRdpWidth, { min: 640, max: 8192 });
+  const requestedHeight =
+    coerceInt(payload.height, { min: 480, max: 8192 }) || coerceInt(defaultRdpHeight, { min: 480, max: 8192 });
+  const requestedDpi = coerceInt(payload.dpi, { min: 72, max: 600 }) || coerceInt(defaultRdpDpi, { min: 72, max: 600 }) || 96;
 
   const settings = {
     "hostname": rdpHost,
     "port": String(rdpPort),
     "security": rdpSecurity,
     "ignore-cert": rdpIgnoreCert ? "true" : "false",
-    "enable-wallpaper": "false",
-    "enable-theming": "false",
-    "enable-full-window-drag": "false",
-    "enable-desktop-composition": "false",
-    "enable-menu-animations": "false",
   };
+  applyRdpDisplayDefaults(settings);
 
   if (username) settings.username = username;
   if (password) settings.password = password;
   if (domain) settings.domain = domain;
   if (initialProgram) settings["initial-program"] = initialProgram;
+  if (requestedWidth) settings.width = String(requestedWidth);
+  if (requestedHeight) settings.height = String(requestedHeight);
+  settings.dpi = String(requestedDpi);
   return settings;
 }
 
@@ -156,6 +186,7 @@ function serveStatic(req, res) {
 function checkRdpReady(timeoutMs = 1000) {
   return new Promise((resolve) => {
     let settled = false;
+    let sawReply = false;
     const socket = net.createConnection({ host: rdpHost, port: rdpPort });
     const finish = (ready) => {
       if (settled) return;
@@ -165,7 +196,22 @@ function checkRdpReady(timeoutMs = 1000) {
       } catch (_err) {}
       resolve(Boolean(ready));
     };
-    socket.once("connect", () => finish(true));
+    socket.once("connect", () => {
+      try {
+        socket.write(RDP_NEGOTIATION_REQUEST);
+      } catch (_err) {
+        finish(false);
+      }
+    });
+    socket.on("data", (chunk) => {
+      if (chunk && chunk.length > 0) {
+        sawReply = true;
+        finish(true);
+      }
+    });
+    socket.once("end", () => {
+      finish(sawReply);
+    });
     socket.once("error", () => finish(false));
     socket.setTimeout(timeoutMs, () => finish(false));
   });
@@ -230,6 +276,7 @@ new GuacamoleLite(
         mergedSettings.port = String(rdpPort);
         mergedSettings.security = rdpSecurity;
         mergedSettings["ignore-cert"] = rdpIgnoreCert ? "true" : "false";
+        applyRdpDisplayDefaults(mergedSettings);
         settings.connection = settings.connection || {};
         settings.connection.type = "rdp";
         settings.connection.settings = mergedSettings;
