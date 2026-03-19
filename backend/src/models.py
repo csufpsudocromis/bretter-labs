@@ -95,14 +95,30 @@ class ImageCreateResponse(ImageMeta):
 class ImageUploadTaskStatus(BaseModel):
     task_id: str
     status: str
+    stage: str = ""
+    progress_percent: int | None = None
     original_filename: str
     filename: str
     size_bytes: int
     detail: str = ""
     error: str | None = None
+    retry_count: int = 0
+    max_retries: int = 0
+    next_retry_at: datetime | None = None
+    last_retry_error: str | None = None
     image_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AdminAuditEventOut(BaseModel):
+    id: str
+    actor: str
+    action: str
+    target_type: str
+    target_id: str
+    detail: str = ""
+    created_at: datetime
 
 
 class ContainerImageCreate(BaseModel):
@@ -119,6 +135,7 @@ class ContainerImageMeta(BaseModel):
     id: str
     name: str
     image_ref: str
+    signature_warning: Optional[str] = None
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
     last_scan_summary: str = ""

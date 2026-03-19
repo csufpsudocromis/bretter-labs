@@ -3,18 +3,8 @@ import { api } from "../../api";
 
 const DEFAULT_FORM = {
   name: "",
-  source: "docker_hub",
-  registry: "docker.io",
-  repository: "",
-  tag: "latest",
   image_ref: "",
 };
-
-const normalizeRegistry = (value) =>
-  String(value || "")
-    .trim()
-    .replace(/^https?:\/\//, "")
-    .replace(/\/+$/, "");
 
 const inferNameFromRef = (imageRef) => {
   const raw = String(imageRef || "").trim();
@@ -27,27 +17,11 @@ const inferNameFromRef = (imageRef) => {
   return tail || raw;
 };
 
-const buildImageRef = (form) => {
-  const source = String(form.source || "docker_hub");
-  if (source === "direct") {
-    return String(form.image_ref || "").trim();
-  }
-
-  const repository = String(form.repository || "")
-    .trim()
-    .replace(/^\/+/, "")
-    .replace(/\/+$/, "");
-  if (!repository) return "";
-
-  const tag = String(form.tag || "").trim();
-  const suffix = tag ? `:${tag}` : "";
-  if (source === "docker_hub") {
-    return `${repository}${suffix}`;
-  }
-
-  const registry = normalizeRegistry(form.registry);
-  if (!registry) return "";
-  return `${registry}/${repository}${suffix}`;
+const normalizeSignatureWarning = (warning) => {
+  const text = String(warning || "").trim();
+  if (!text) return "";
+  if (/no signatures/i.test(text)) return "Image has no signatures.";
+  return text.endsWith(".") ? text : `${text}.`;
 };
 
 const AdminContainerImages = () => {
@@ -90,13 +64,13 @@ const AdminContainerImages = () => {
 
   const create = async () => {
     if (isCreating) return;
-    const imageRef = buildImageRef(form);
+    const imageRef = String(form.image_ref || "").trim();
     const payload = {
       name: String(form.name || "").trim() || inferNameFromRef(imageRef),
       image_ref: imageRef,
     };
     if (!payload.name || !payload.image_ref) {
-      setError("Name and image source are required");
+      setError("Image reference is required");
       return;
     }
     setIsCreating(true);
@@ -104,11 +78,16 @@ const AdminContainerImages = () => {
     try {
       const res = await api.post("/admin/container-images", payload);
       const created = res.data;
+      const signatureWarning = String(created?.signature_warning || "").trim();
       setForm({ ...DEFAULT_FORM });
       if (created && created.id) {
         setImages((prev) => [created, ...prev.filter((img) => img.id !== created.id)]);
       }
-      setMessage("Container image added. Pre-pull/scan running in background.");
+      setMessage(
+        signatureWarning
+          ? `Container image added. Warning: ${normalizeSignatureWarning(signatureWarning)}`
+          : "Container image added. Pre-pull/scan running in background."
+      );
       setError("");
       load();
     } catch (err) {
@@ -129,10 +108,15 @@ const AdminContainerImages = () => {
     if (!imageId || isImageBusy(imageId)) return;
     setBusyAction(actionKey(imageId, "save"));
     try {
-      await api.patch(`/admin/container-images/${imageId}`, editForm);
+      const res = await api.patch(`/admin/container-images/${imageId}`, editForm);
+      const signatureWarning = String(res?.data?.signature_warning || "").trim();
       setEditingId(null);
       setEditForm({ name: "", image_ref: "" });
-      setMessage("Container image updated");
+      setMessage(
+        signatureWarning
+          ? `Container image updated. Warning: ${normalizeSignatureWarning(signatureWarning)}`
+          : "Container image updated"
+      );
       setError("");
       load();
     } catch (err) {
@@ -188,12 +172,7 @@ const AdminContainerImages = () => {
     }
   };
 
-  const sourceImageRef = buildImageRef(form);
-  const canCreate =
-    Boolean(
-      String(form.name || "").trim() ||
-      (form.source === "direct" ? String(form.image_ref || "").trim() : String(form.repository || "").trim())
-    ) && Boolean(sourceImageRef);
+  const canCreate = Boolean(String(form.image_ref || "").trim());
 
   return (
     <div>
@@ -213,55 +192,13 @@ const AdminContainerImages = () => {
               />
             </label>
             <label>
-              Source
-              <select value={form.source} onChange={(e) => setForm((prev) => ({ ...prev, source: e.target.value }))}>
-                <option value="docker_hub">Docker Hub</option>
-                <option value="registry">Other OCI registry</option>
-                <option value="direct">Direct image reference</option>
-              </select>
+              Image reference
+              <input
+                value={form.image_ref}
+                placeholder="ghcr.io/org/app:1.2.3"
+                onChange={(e) => setForm((prev) => ({ ...prev, image_ref: e.target.value }))}
+              />
             </label>
-            {form.source === "direct" ? (
-              <label>
-                Image reference
-                <input
-                  value={form.image_ref}
-                  placeholder="ghcr.io/org/app:1.2.3"
-                  onChange={(e) => setForm((prev) => ({ ...prev, image_ref: e.target.value }))}
-                />
-              </label>
-            ) : (
-              <>
-                {form.source === "registry" && (
-                  <label>
-                    Registry host
-                    <input
-                      value={form.registry}
-                      placeholder="ghcr.io"
-                      onChange={(e) => setForm((prev) => ({ ...prev, registry: e.target.value }))}
-                    />
-                  </label>
-                )}
-                <label>
-                  Repository
-                  <input
-                    value={form.repository}
-                    placeholder={form.source === "docker_hub" ? "library/nginx" : "owner/app"}
-                    onChange={(e) => setForm((prev) => ({ ...prev, repository: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Tag
-                  <input
-                    value={form.tag}
-                    placeholder="latest"
-                    onChange={(e) => setForm((prev) => ({ ...prev, tag: e.target.value }))}
-                  />
-                </label>
-              </>
-            )}
-            <div className="muted small">
-              Resolved reference: <code>{sourceImageRef || "-"}</code>
-            </div>
             <button onClick={create} disabled={!canCreate || isCreating}>
               {isCreating ? "Adding..." : "Add image"}
             </button>

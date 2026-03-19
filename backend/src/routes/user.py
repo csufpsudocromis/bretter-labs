@@ -38,6 +38,7 @@ SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the c
 _VM_CONNECT_GRANT_COOKIE_NAME = "blabs_connect_grant"
 _VM_CONNECT_SESSION_COOKIE_NAME = "blabs_connect_session"
 _VM_PROXY_TIMEOUT_SECONDS = 45
+_VM_RDP_READY_TIMEOUT_SECONDS = 2
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -277,6 +278,35 @@ def _vm_service_host(instance_id: str) -> str:
     return f"svc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
 
 
+def _vm_rdp_ready_status(instance_id: str) -> tuple[bool, str]:
+    upstream_host = _vm_service_host(instance_id)
+    for scheme in _vm_http_schemes():
+        upstream_url = f"{scheme}://{upstream_host}:6080/rdp-ready"
+        verify_tls = scheme != "https"
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InsecureRequestWarning)
+                response = requests.get(
+                    upstream_url,
+                    timeout=_VM_RDP_READY_TIMEOUT_SECONDS,
+                    verify=verify_tls,
+                )
+            if scheme == "http" and _upstream_requires_https(response):
+                continue
+            if response.status_code != 200:
+                return False, "VM process started; waiting for RDP service."
+            try:
+                payload = response.json()
+            except ValueError:
+                return False, "VM process started; waiting for RDP service."
+            if bool(payload.get("ready")):
+                return True, "VM is running."
+            return False, "VM process started; waiting for RDP service."
+        except requests.RequestException:
+            continue
+    return False, "VM process started; waiting for RDP service."
+
+
 def _extract_spice_password(console_url: str | None) -> str:
     raw = str(console_url or "").strip()
     if not raw:
@@ -483,6 +513,10 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             record.last_active_at = utc_now()
             session.add(record)
             changed = True
+        tmpl = templates.get(record.template_id)
+        console_provider = normalize_vm_console_provider(
+            getattr(tmpl, "console_provider", _console_provider_from_url(record.console_url))
+        )
         pod_status: PodStatus | None = None
         try:
             pod_status = kube.get_status(record.id, record.owner)
@@ -492,14 +526,19 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
                 mapped = "stopped"
             else:
                 raise
-        feedback[record.id] = _status_feedback(mapped, pod_status)
+        stage, detail = _status_feedback(mapped, pod_status)
+        if mapped == "running" and console_provider == "guacamole_rdp":
+            rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id)
+            if not rdp_ready:
+                stage = "starting"
+                detail = rdp_detail
+        feedback[record.id] = (stage, detail)
         if mapped != record.status:
             record.status = mapped
             record.last_active_at = utc_now()
             session.add(record)
             changed = True
         # Auto-delete stopped/completed instances based on template setting.
-        tmpl = templates.get(record.template_id)
         if tmpl and record.status in {"stopped", "completed"}:
             cutoff = utc_now() - timedelta(minutes=tmpl.auto_delete_minutes)
             if record.last_active_at < cutoff:
@@ -571,6 +610,10 @@ def issue_vm_connect_token(
     console_provider = normalize_vm_console_provider(
         getattr(template, "console_provider", _console_provider_from_url(record.console_url))
     )
+    if console_provider == "guacamole_rdp":
+        rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id)
+        if not rdp_ready:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=rdp_detail)
     spice_password = ""
     if console_provider == "spice":
         spice_password = _extract_spice_password(record.console_url)

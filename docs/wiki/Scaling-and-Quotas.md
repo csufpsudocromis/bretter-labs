@@ -9,7 +9,7 @@ Last reviewed: March 9, 2026.
 UI behavior:
 
 - Namespace is selected from a dropdown populated from cluster namespaces and saved quota rows.
-- Team is not shown in UI; quotas are applied using default team (`default`).
+- Team is editable in UI (defaults to `default`) and can be selected/typed for per-team quota rows.
 - Empty fields mean unlimited for that limit.
 
 ## Available limits
@@ -44,6 +44,7 @@ The one-active-lab rule is still enforced separately:
 ## Backing API routes
 
 - `GET /admin/quota-namespaces`
+- `GET /admin/quota-teams`
 - `GET /admin/team-quotas`
 - `POST /admin/team-quotas`
 - `PATCH /admin/team-quotas/{quota_id}`

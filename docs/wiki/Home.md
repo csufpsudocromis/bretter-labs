@@ -49,6 +49,7 @@ Use this sequence for every production rollout:
 python3 scripts/validate_production_profile.py --strict \
   -f deploy/helm/values-production.yaml \
   -f deploy/helm/values-prod-site.yaml
+NAMESPACE=labs ./scripts/deploy_preflight.sh
 ./scripts/ci_guardrails.sh
 PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 NAMESPACE=labs ./scripts/production_go_live_proof.sh

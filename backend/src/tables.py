@@ -58,8 +58,15 @@ class ImageUploadTask(SQLModel, table=True):
     filename: str
     size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "queued"
+    stage: str = "queued"
+    progress_percent: Optional[int] = None
     detail: str = ""
     error_message: Optional[str] = None
+    retry_count: int = 0
+    max_retries: int = 0
+    next_retry_at: Optional[datetime] = None
+    last_retry_error: Optional[str] = None
+    finalize_started_at: Optional[datetime] = None
     image_id: Optional[str] = None
     checksum: Optional[str] = None
     source_pvc: Optional[str] = None
@@ -220,3 +227,13 @@ class TeamQuota(SQLModel, table=True):
     enabled: bool = True
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class AdminAuditEvent(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    actor: str = Field(default="unknown", index=True)
+    action: str = Field(index=True)
+    target_type: str = Field(index=True)
+    target_id: str = Field(default="")
+    detail: str = Field(default="")
+    created_at: datetime = Field(default_factory=utc_now, index=True)

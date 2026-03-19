@@ -103,6 +103,7 @@ Notes:
   - `BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default `300`)
   - `BLABS_AUTH_LOGIN_LOCKOUT_SECONDS` (default `300`)
 - Successful and failed login/logout/SSO callback events are logged with source, username, and request IP.
+- Admin mutations (templates/images/quotas/settings/error-log clear) are recorded and queryable via `/admin/audit-events`.
 
 ## CORS and login origin policy
 

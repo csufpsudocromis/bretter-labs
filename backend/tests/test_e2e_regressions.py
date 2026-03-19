@@ -6,6 +6,7 @@ from kubernetes.client import ApiException
 from sqlmodel import Session
 
 from src.auth import connect_token_storage_key, hash_password, lookup_session_token
+from src.config import settings
 from src.db import engine
 from src.rbac import Role
 from src.services.kubernetes import PodStatus, kube
@@ -451,8 +452,9 @@ def test_vm_connect_token_uses_vnc_console_for_guacamole_templates(login_user: T
     assert "password=" not in connect_url
 
 
-def test_vm_connect_token_uses_rdp_console_for_guacamole_rdp_templates(login_user: TestClient):
+def test_vm_connect_token_uses_rdp_console_for_guacamole_rdp_templates(login_user: TestClient, monkeypatch):
     _seed_vm_template(console_provider="guacamole_rdp")
+    monkeypatch.setattr("src.routes.user._vm_rdp_ready_status", lambda _instance_id: (True, "VM is running."))
 
     started = login_user.post("/user/templates/tmpl-vm-1/start")
     assert started.status_code == 201, started.text
@@ -466,7 +468,49 @@ def test_vm_connect_token_uses_rdp_console_for_guacamole_rdp_templates(login_use
     assert "password=" not in connect_url
 
 
-def test_admin_template_console_provider_round_trip(login_admin: TestClient):
+def test_vm_connect_token_blocks_until_rdp_ready_for_guacamole_rdp_templates(login_user: TestClient, monkeypatch):
+    _seed_vm_template(console_provider="guacamole_rdp")
+
+    monkeypatch.setattr(
+        "src.routes.user._vm_rdp_ready_status",
+        lambda _instance_id: (False, "VM process started; waiting for RDP service."),
+    )
+
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    vm_id = started.json()["id"]
+
+    token_response = login_user.post(f"/user/pods/{vm_id}/connect-token")
+    assert token_response.status_code == 409, token_response.text
+    assert "waiting for RDP service" in token_response.json()["detail"]
+
+
+def test_vm_list_marks_guacamole_rdp_instances_starting_until_rdp_ready(login_user: TestClient, monkeypatch):
+    _seed_vm_template(console_provider="guacamole_rdp")
+
+    monkeypatch.setattr(
+        "src.routes.user._vm_rdp_ready_status",
+        lambda _instance_id: (False, "VM process started; waiting for RDP service."),
+    )
+    monkeypatch.setattr(
+        "src.routes.user.kube.get_status",
+        lambda instance_id, _owner: PodStatus(instance_id=instance_id, phase="Running", ready=True),
+    )
+
+    started = login_user.post("/user/templates/tmpl-vm-1/start")
+    assert started.status_code == 201, started.text
+    vm_id = started.json()["id"]
+
+    listed = login_user.get("/user/pods")
+    assert listed.status_code == 200, listed.text
+    entry = next(item for item in listed.json() if item["id"] == vm_id)
+    assert entry["status"] == "running"
+    assert entry["status_stage"] == "starting"
+    assert "waiting for RDP service" in (entry.get("status_detail") or "")
+
+
+def test_admin_template_console_provider_round_trip(login_admin: TestClient, monkeypatch):
+    monkeypatch.setattr(settings, "secrets_encryption_key", "unit-test-template-secret-key-123456")
     with Session(engine) as session:
         session.add(
             Image(
@@ -499,6 +543,11 @@ def test_admin_template_console_provider_round_trip(login_admin: TestClient):
     assert created.json()["console_provider"] == "guacamole"
     assert created.json()["rdp_default_username"] == "vm-user"
     assert created.json()["rdp_default_password_configured"] is True
+    with Session(engine) as session:
+        record = session.get(Template, template_id)
+        assert record is not None
+        assert str(record.rdp_default_password or "") != "vm-pass-123"
+        assert str(record.rdp_default_password or "") != ""
 
     listed = login_admin.get("/admin/templates")
     assert listed.status_code == 200, listed.text

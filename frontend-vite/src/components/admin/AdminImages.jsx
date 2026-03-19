@@ -36,11 +36,51 @@ const AdminImages = () => {
       window.setTimeout(resolve, ms);
     });
 
+  const formatTaskDetail = (task) => {
+    if (!task) return "";
+    const pieces = [];
+    const stage = String(task.stage || task.status || "")
+      .trim()
+      .toLowerCase();
+    const detail = String(task.detail || "").trim();
+    const progressValue = task.progress_percent;
+    const hasProgress = Number.isFinite(progressValue) && progressValue >= 0;
+    if (detail) {
+      pieces.push(detail);
+    }
+    if (hasProgress && stage !== "uploading") {
+      pieces.push(`Progress: ${Math.min(100, Math.max(0, Math.round(progressValue)))}%`);
+    }
+    const retryCount = Number(task.retry_count || 0);
+    const maxRetries = Number(task.max_retries || 0);
+    if (retryCount > 0 || maxRetries > 0) {
+      pieces.push(`Retries: ${retryCount}/${Math.max(0, maxRetries)}`);
+    }
+    if (task.next_retry_at) {
+      const nextRetry = new Date(task.next_retry_at);
+      if (!Number.isNaN(nextRetry.getTime())) {
+        pieces.push(`Next retry: ${nextRetry.toLocaleTimeString()}`);
+      }
+    }
+    return pieces.join(" ");
+  };
+
   const waitForUploadTask = async (taskId) => {
     for (;;) {
       const res = await api.get(`/admin/images/upload-tasks/${taskId}`);
       const task = res.data;
-      setUploadDetail(task.detail || "");
+      setUploadDetail(formatTaskDetail(task));
+      const stage = String(task.stage || task.status || "")
+        .trim()
+        .toLowerCase();
+      if (stage === "uploading") {
+        setUploadStage("uploading");
+      } else if (stage === "finalizing" || stage === "importing") {
+        setUploadStage("finalizing");
+      }
+      if (Number.isFinite(task.progress_percent) && stage !== "uploading") {
+        setProgress(Math.min(100, Math.max(0, Math.round(task.progress_percent))));
+      }
       if (task.status === "completed") return task;
       if (task.status === "failed") {
         throw new Error(task.error || "Upload finalize failed");
@@ -204,7 +244,7 @@ const AdminImages = () => {
           {uploading && uploadStage === "finalizing" && (
             <p>
               Upload complete. Finalizing on cluster (copy/normalize). This can take a few minutes.
-              {uploadDetail ? ` ${uploadDetail}` : ""}
+              {uploadDetail ? ` ${uploadDetail}` : progress ? ` Progress: ${progress}%` : ""}
               {uploadTaskId ? ` (task ${uploadTaskId.slice(0, 8)})` : ""}
             </p>
           )}

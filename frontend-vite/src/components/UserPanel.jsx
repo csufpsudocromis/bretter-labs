@@ -377,7 +377,13 @@ const UserPanel = () => {
     };
     return labelMap[status] || "Unknown";
   };
-  const statusReason = (instance) => (effectiveStatus(instance) === "pending" ? "waiting for available resources" : "");
+  const statusReason = (instance) => {
+    const status = effectiveStatus(instance);
+    const detail = String(instance?.status_detail || "").trim();
+    if (status === "pending") return "waiting for available resources";
+    if (status === "running") return "";
+    return detail;
+  };
   const isRunning = (instance) => effectiveStatus(instance) === "running";
   const containerTemplateName = (templateId) =>
     containerTemplates.find((t) => t.id === templateId)?.name || "Container";

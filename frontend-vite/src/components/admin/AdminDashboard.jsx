@@ -18,6 +18,11 @@ const tiles = [
     description: "View Alertmanager alerts and backend error logs",
     to: "/admin/alerts-errors",
   },
+  {
+    title: "Audit Events",
+    description: "Review admin changes and operational mutations",
+    to: "/admin/audit-events",
+  },
   { title: "Settings", description: "View runtime settings", to: "/admin/settings" },
 ];
 

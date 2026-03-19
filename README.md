@@ -132,16 +132,20 @@ python3 scripts/validate_production_profile.py --strict \
   -f deploy/helm/values-production.yaml \
   -f deploy/helm/values-prod-site.yaml
 
-# 3) run repository guardrails (includes strict production profile validation)
+# 3) run deploy preflight (strict profile + required cluster secrets)
+NAMESPACE=labs ./scripts/deploy_preflight.sh
+
+# 4) run repository guardrails (includes strict production profile validation + preflight static mode)
 ./scripts/ci_guardrails.sh
 
-# 4) deploy with production profile; postdeploy runs go-live proof by default
+# 5) deploy with production profile; postdeploy runs go-live proof by default
 PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 ```
 
 Proof artifact and operator docs:
 
 - Go-live proof script: `scripts/production_go_live_proof.sh`
+- Pre-deploy script: `scripts/deploy_preflight.sh`
 - Default report dir: `artifacts/go-live/`
 - Production values reference: `docs/wiki/Production-Helm-Values-Reference.md`
 - Secret operations: `docs/wiki/Secret-Operations-Runbook.md`

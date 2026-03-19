@@ -4,6 +4,12 @@ Last reviewed: March 16, 2026.
 
 Run this after every deployment before closing the change.
 
+Pre-deploy counterpart:
+
+```bash
+NAMESPACE=labs ./scripts/deploy_preflight.sh
+```
+
 ## Scope
 
 Validates:

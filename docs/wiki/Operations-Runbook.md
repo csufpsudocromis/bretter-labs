@@ -81,6 +81,20 @@ kubectl -n labs rollout status deploy/bretter-frontend --timeout=300s
 kubectl -n labs get pods -o wide
 ```
 
+## Pre-deploy gate
+
+Run this before rollout to catch config/secret blockers early:
+
+```bash
+NAMESPACE=labs ./scripts/deploy_preflight.sh
+```
+
+For CI/static-only usage (skip cluster calls):
+
+```bash
+SKIP_CLUSTER_CHECKS=1 ./scripts/deploy_preflight.sh
+```
+
 If image-based runner changes were deployed, verify both nodes can pull/start:
 
 ```bash
@@ -117,8 +131,10 @@ kubectl -n labs get limitrange bretter-default-container-limits -o yaml
 Admin UI checks:
 
 - `/admin/scaling-quotas` should load available namespaces.
+- `/admin/scaling-quotas` should allow team+namespace quota rows (not only `default`).
 - Quota changes should apply to both VM and container starts.
 - When hit, users should receive quota detail (HTTP 429) or queued reason.
+- `/admin/audit-events` should show recent admin mutations for templates/images/quotas/settings.
 
 ## Common incidents and triage
 

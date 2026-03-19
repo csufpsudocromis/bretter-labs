@@ -24,13 +24,14 @@ from kubernetes.client import ApiException
 from kubernetes.stream import stream
 from kubernetes.utils import parse_quantity
 
-from ..auth import hash_password, require_permission, revoke_tokens
+from ..auth import hash_password, require_permission, require_user, revoke_tokens
 from ..console_providers import normalize_vm_console_provider
 from ..config import settings
 from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
     AlertManagerAlert,
     AlertsAndErrorsView,
+    AdminAuditEventOut,
     ConcurrencySettings,
     ErrorLogClearResult,
     ErrorLogView,
@@ -77,6 +78,7 @@ from ..services.kubernetes import kube
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
 from ..secret_codec import encrypt_secret, secret_is_configured
 from ..tables import Config, Image, ImageUploadTask, Instance, TeamQuota, Template, User
+from ..tables import AdminAuditEvent
 from ..time_utils import utc_now
 
 router = APIRouter(dependencies=[Depends(require_permission(Permission.ADMIN_ACCESS))])
@@ -99,6 +101,9 @@ POD_READY_SLEEP = 2
 FINALIZE_JOB_TIMEOUT_SECONDS = 3 * 60 * 60
 COPY_JOB_TIMEOUT_SECONDS = 3 * 60 * 60
 TASK_RETENTION_HOURS = 24
+FINALIZE_MAX_RETRIES = max(0, int(getattr(settings, "image_finalize_max_retries", 3) or 3))
+FINALIZE_RETRY_BASE_SECONDS = max(5, int(getattr(settings, "image_finalize_retry_base_seconds", 15) or 15))
+FINALIZE_RETRY_MAX_SECONDS = max(30, int(getattr(settings, "image_finalize_retry_max_seconds", 600) or 600))
 
 _CDI_AVAILABLE: bool | None = None
 FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%")
@@ -1366,6 +1371,20 @@ def _ensure_upload_task_columns() -> None:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_job TEXT")
         if "copy_job" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN copy_job TEXT")
+        if "stage" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN stage TEXT DEFAULT 'queued'")
+        if "progress_percent" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN progress_percent INTEGER")
+        if "retry_count" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN retry_count INTEGER DEFAULT 0")
+        if "max_retries" not in cols:
+            to_add.append(f"ALTER TABLE imageuploadtask ADD COLUMN max_retries INTEGER DEFAULT {FINALIZE_MAX_RETRIES}")
+        if "next_retry_at" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN next_retry_at TIMESTAMP")
+        if "last_retry_error" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN last_retry_error TEXT")
+        if "finalize_started_at" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_started_at TIMESTAMP")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1373,8 +1392,53 @@ def _ensure_upload_task_columns() -> None:
                 pass
         if to_add:
             conn.commit()
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(imageuploadtask)")}
+        if "stage" in cols:
+            cur.execute("UPDATE imageuploadtask SET stage = status WHERE stage IS NULL OR trim(stage) = ''")
+        if "retry_count" in cols:
+            cur.execute("UPDATE imageuploadtask SET retry_count = 0 WHERE retry_count IS NULL")
+        if "max_retries" in cols:
+            cur.execute(
+                "UPDATE imageuploadtask SET max_retries = ? WHERE max_retries IS NULL OR max_retries < 0",
+                (FINALIZE_MAX_RETRIES,),
+            )
+        conn.commit()
     except Exception:
         logger.exception("Failed to ensure image upload task columns")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _ensure_admin_audit_table() -> None:
+    if not SQLITE_DB:
+        return
+    db_path = settings.database_path
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS adminauditevent (
+                id TEXT PRIMARY KEY,
+                actor TEXT NOT NULL DEFAULT 'unknown',
+                action TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMP NOT NULL
+            )
+            """
+        )
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)")
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)")
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
+        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_created_at ON adminauditevent(created_at)")
+        conn.commit()
+    except Exception:
+        logger.exception("Failed to ensure admin audit event table")
     finally:
         try:
             conn.close()
@@ -1387,17 +1451,71 @@ _ensure_template_columns()
 _ensure_image_columns()
 _ensure_instance_columns()
 _ensure_upload_task_columns()
+_ensure_admin_audit_table()
+
+
+def _record_admin_audit_event(
+    session: Session,
+    *,
+    actor: str | None,
+    action: str,
+    target_type: str,
+    target_id: str | None = None,
+    detail: str | None = None,
+) -> None:
+    event = AdminAuditEvent(
+        id=str(uuid4()),
+        actor=(str(actor or "").strip() or "unknown")[:128],
+        action=(str(action or "").strip() or "unknown")[:128],
+        target_type=(str(target_type or "").strip() or "unknown")[:64],
+        target_id=(str(target_id or "").strip())[:128],
+        detail=(str(detail or "").strip())[:512],
+        created_at=utc_now(),
+    )
+    session.add(event)
+
+
+def _retry_backoff_seconds(retry_count: int) -> int:
+    exponent = max(0, int(retry_count) - 1)
+    delay = FINALIZE_RETRY_BASE_SECONDS * (2**exponent)
+    return min(FINALIZE_RETRY_MAX_SECONDS, max(FINALIZE_RETRY_BASE_SECONDS, int(delay)))
+
+
+def _task_stage_progress(task: ImageUploadTask) -> tuple[str, int | None]:
+    status = str(getattr(task, "status", "") or "").strip().lower()
+    stage = str(getattr(task, "stage", "") or "").strip().lower()
+    if status == "completed":
+        return ("completed", 100)
+    if status == "failed":
+        return ("failed", int(getattr(task, "progress_percent", 0) or 0))
+    if status == "uploading":
+        return ("uploading", int(getattr(task, "progress_percent", 0) or 0))
+    if status == "finalizing":
+        progress = getattr(task, "progress_percent", None)
+        return ("finalizing", int(progress) if isinstance(progress, int) else None)
+    if status == "importing":
+        return ("importing", int(getattr(task, "progress_percent", 100) or 100))
+    if stage:
+        return (stage, getattr(task, "progress_percent", None))
+    return ("queued", getattr(task, "progress_percent", None))
 
 
 def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
+    stage, progress_percent = _task_stage_progress(task)
     return ImageUploadTaskStatus(
         task_id=task.id,
         status=task.status,
+        stage=stage,
+        progress_percent=progress_percent,
         original_filename=task.original_filename,
         filename=task.filename,
         size_bytes=task.size_bytes,
         detail=task.detail or "",
         error=task.error_message,
+        retry_count=max(0, int(getattr(task, "retry_count", 0) or 0)),
+        max_retries=max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES)),
+        next_retry_at=getattr(task, "next_retry_at", None),
+        last_retry_error=getattr(task, "last_retry_error", None),
         image_id=task.image_id,
         created_at=task.created_at,
         updated_at=task.updated_at,
@@ -1408,8 +1526,15 @@ def _update_upload_task(
     task_id: str,
     *,
     status: str | None = None,
+    stage: str | None = None,
+    progress_percent: int | None = None,
     detail: str | None = None,
     error_message: str | None = None,
+    retry_count: int | None = None,
+    max_retries: int | None = None,
+    next_retry_at: datetime | None = None,
+    last_retry_error: str | None = None,
+    finalize_started_at: datetime | None = None,
     image_id: str | None = None,
     filename: str | None = None,
     size_bytes: int | None = None,
@@ -1425,10 +1550,24 @@ def _update_upload_task(
             return
         if status is not None:
             task.status = status
+        if stage is not None:
+            task.stage = stage
+        if progress_percent is not None:
+            task.progress_percent = max(0, min(100, int(progress_percent)))
         if detail is not None:
             task.detail = detail
         if error_message is not None:
             task.error_message = error_message
+        if retry_count is not None:
+            task.retry_count = max(0, int(retry_count))
+        if max_retries is not None:
+            task.max_retries = max(0, int(max_retries))
+        if next_retry_at is not None:
+            task.next_retry_at = next_retry_at
+        if last_retry_error is not None:
+            task.last_retry_error = last_retry_error
+        if finalize_started_at is not None:
+            task.finalize_started_at = finalize_started_at
         if image_id is not None:
             task.image_id = image_id
         if filename is not None:
@@ -2077,11 +2216,29 @@ def _read_job_log(job_name: str, *, tail_lines: int = 200) -> str:
         return ""
 
 
-def _ensure_upload_task_finalize_job(task: ImageUploadTask) -> None:
-    if task.finalize_job:
+def _ensure_upload_task_finalize_job(task: ImageUploadTask, *, force_recreate: bool = False) -> None:
+    if task.finalize_job and not force_recreate:
         return
+    if force_recreate and task.finalize_job:
+        batch = client.BatchV1Api()
+        try:
+            batch.delete_namespaced_job(
+                name=task.finalize_job,
+                namespace=settings.kube_namespace,
+                propagation_policy="Background",
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+        task.finalize_job = None
     task.finalize_job = _create_finalize_from_upload_job(task) if task.upload_pvc else _create_finalize_job(task)
     task.status = "finalizing"
+    task.stage = "finalizing"
+    task.progress_percent = 0
+    task.max_retries = max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES))
+    task.next_retry_at = None
+    if not getattr(task, "finalize_started_at", None):
+        task.finalize_started_at = utc_now()
     task.detail = "Finalizing image format/checksum on cluster"
     task.updated_at = utc_now()
 
@@ -2214,6 +2371,18 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
         return task
 
     batch = client.BatchV1Api()
+    now = utc_now()
+    task.max_retries = max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES))
+    task.retry_count = max(0, int(getattr(task, "retry_count", 0) or 0))
+    if not str(getattr(task, "stage", "") or "").strip():
+        task.stage = task.status
+
+    def _commit_task() -> ImageUploadTask:
+        task.updated_at = utc_now()
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+        return task
 
     if task.upload_pvc and task.status == "uploading":
         try:
@@ -2221,35 +2390,37 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
         except ApiException as exc:
             if exc.status == 404:
                 task.status = "failed"
+                task.stage = "failed"
                 task.detail = "Direct upload DataVolume not found"
                 task.error_message = "direct upload datavolume disappeared before completion"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                _commit_task()
                 _cleanup_task_jobs(task)
                 return task
             raise
         phase_lower = phase.lower()
         if phase_lower == "failed":
             task.status = "failed"
+            task.stage = "failed"
             task.detail = "Direct CDI upload failed"
             task.error_message = msg or "direct upload failed"
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            _commit_task()
             _cleanup_task_jobs(task)
             return task
         if phase_lower != "succeeded":
+            task.stage = "uploading"
             task.detail = "Uploading image directly to CDI DataVolume"
             task.error_message = None
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            task.progress_percent = None
+            _commit_task()
             return task
         task.status = "finalizing"
+        task.stage = "finalizing"
+        task.progress_percent = 0
+        task.finalize_started_at = now
+        task.max_retries = max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES))
+        task.retry_count = 0
+        task.next_retry_at = None
+        task.last_retry_error = None
         task.detail = "Direct upload complete; starting finalize job"
         task.error_message = None
 
@@ -2258,16 +2429,23 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             _ensure_upload_task_finalize_job(task)
         except Exception as exc:
             task.status = "failed"
+            task.stage = "failed"
             task.detail = "Failed to submit finalize job"
             task.error_message = str(exc)
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            _commit_task()
             return task
 
     if task.status == "finalizing":
         finalize_log = ""
+        if task.finalize_started_at and (now - task.finalize_started_at).total_seconds() > max(
+            FINALIZE_JOB_TIMEOUT_SECONDS + 300, FINALIZE_JOB_TIMEOUT_SECONDS
+        ):
+            task.status = "failed"
+            task.stage = "failed"
+            task.detail = "Finalize job timed out"
+            task.error_message = "finalize job exceeded timeout"
+            _commit_task()
+            return task
         try:
             job = batch.read_namespaced_job(name=task.finalize_job, namespace=settings.kube_namespace)
             phase = _job_phase(job)
@@ -2276,12 +2454,58 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "Finalize job not found"
                 task.error_message = "finalize job disappeared before completion"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                task.stage = "failed"
+                _commit_task()
                 return task
             raise
+
+        if phase == "failed":
+            finalize_log = _read_job_log(task.finalize_job, tail_lines=180) if task.finalize_job else ""
+            latest_error = (finalize_log.strip() or "finalize job failed")[:4096]
+            task.last_retry_error = latest_error
+            if task.retry_count < task.max_retries:
+                if task.next_retry_at and now < task.next_retry_at:
+                    wait_seconds = max(1, int((task.next_retry_at - now).total_seconds()))
+                    task.detail = (
+                        f"Finalize retry scheduled in {wait_seconds}s "
+                        f"(attempt {task.retry_count}/{task.max_retries})"
+                    )
+                    task.error_message = None
+                    task.stage = "finalizing"
+                    _commit_task()
+                    return task
+                if task.next_retry_at and now >= task.next_retry_at:
+                    try:
+                        _ensure_upload_task_finalize_job(task, force_recreate=True)
+                    except Exception as exc:
+                        task.status = "failed"
+                        task.stage = "failed"
+                        task.detail = "Failed to resubmit finalize job"
+                        task.error_message = str(exc)
+                        _commit_task()
+                        return task
+                    task.next_retry_at = None
+                    task.detail = f"Retrying finalize job (attempt {task.retry_count}/{task.max_retries})"
+                    task.error_message = None
+                    task.stage = "finalizing"
+                    _commit_task()
+                    return task
+                task.retry_count += 1
+                backoff = _retry_backoff_seconds(task.retry_count)
+                task.next_retry_at = now + timedelta(seconds=backoff)
+                task.detail = (
+                    f"Finalize job failed; retrying in {backoff}s " f"(attempt {task.retry_count}/{task.max_retries})"
+                )
+                task.error_message = None
+                task.stage = "finalizing"
+                _commit_task()
+                return task
+            task.status = "failed"
+            task.stage = "failed"
+            task.detail = "Finalize job failed after retries"
+            task.error_message = latest_error
+            _commit_task()
+            return task
 
         if phase in {"running", "pending"}:
             if task.finalize_job:
@@ -2295,24 +2519,17 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 progress = _parse_finalize_progress_percent(finalize_log)
                 if progress is None:
                     task.detail = "Finalizing image format/checksum on cluster (0% complete)"
+                    task.progress_percent = 0
                 elif progress >= 100 and _finalize_in_checksum_phase(finalize_log):
                     task.detail = "Finalizing image format/checksum on cluster (100% complete; computing checksum)"
+                    task.progress_percent = 100
                 else:
                     task.detail = f"Finalizing image format/checksum on cluster ({progress}% complete)"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                    task.progress_percent = progress
+                task.stage = "finalizing"
+                task.error_message = None
+                _commit_task()
                 return task
-        if phase == "failed":
-            task.status = "failed"
-            task.detail = "Finalize job failed"
-            task.error_message = _read_job_log(task.finalize_job, tail_lines=120) or "finalize job failed"
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
-            return task
 
         try:
             if not finalize_log and task.finalize_job:
@@ -2323,18 +2540,15 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.checksum = out_sha
             task.detail = "Preparing source PVC copy job"
             task.error_message = None
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            task.stage = "finalizing"
+            task.progress_percent = 100
+            _commit_task()
         except Exception as exc:
             task.status = "failed"
+            task.stage = "failed"
             task.detail = "Failed to parse finalize output"
             task.error_message = str(exc)
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            _commit_task()
             return task
 
         try:
@@ -2342,24 +2556,21 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.source_pvc = claim_name
             task.copy_job = copy_job
             task.status = "importing"
+            task.stage = "importing"
             task.detail = (
                 "Importing image into clone source PVC via CDI DataVolume"
                 if copy_job.startswith("dv:")
                 else "Copying image into clone source PVC"
             )
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            task.progress_percent = None
+            _commit_task()
             return task
         except Exception as exc:
             task.status = "failed"
+            task.stage = "failed"
             task.detail = "Failed to start source PVC copy job"
             task.error_message = str(exc)
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            _commit_task()
             return task
 
     if task.status == "importing":
@@ -2373,18 +2584,14 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     if copy_job.startswith("dv:")
                     else "Copying image into clone source PVC"
                 )
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                task.stage = "importing"
+                _commit_task()
             except Exception as exc:
                 task.status = "failed"
+                task.stage = "failed"
                 task.detail = "Failed to start source PVC copy job"
                 task.error_message = str(exc)
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                _commit_task()
                 return task
 
         if task.copy_job.startswith("dv:"):
@@ -2394,31 +2601,26 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             except ApiException as exc:
                 if exc.status == 404:
                     task.status = "failed"
+                    task.stage = "failed"
                     task.detail = "DataVolume import not found"
                     task.error_message = "datavolume disappeared before completion"
-                    task.updated_at = utc_now()
-                    session.add(task)
-                    session.commit()
-                    session.refresh(task)
+                    _commit_task()
                     return task
                 raise
 
             phase_lower = dv_phase.lower()
             if phase_lower not in {"succeeded", "failed"}:
                 task.detail = "Importing image into clone source PVC via CDI DataVolume"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                task.stage = "importing"
+                task.error_message = None
+                _commit_task()
                 return task
             if phase_lower == "failed":
                 task.status = "failed"
+                task.stage = "failed"
                 task.detail = "CDI DataVolume import failed"
                 task.error_message = dv_msg or "datavolume import failed"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                _commit_task()
                 _cleanup_fileserver(task.id)
                 return task
             _cleanup_fileserver(task.id)
@@ -2430,12 +2632,10 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 )
             except Exception as exc:
                 task.status = "failed"
+                task.stage = "failed"
                 task.detail = "Failed to finalize source image filename alias"
                 task.error_message = str(exc)
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                _commit_task()
                 return task
         else:
             try:
@@ -2444,51 +2644,43 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             except ApiException as exc:
                 if exc.status == 404:
                     task.status = "failed"
+                    task.stage = "failed"
                     task.detail = "Source PVC copy job not found"
                     task.error_message = "copy job disappeared before completion"
-                    task.updated_at = utc_now()
-                    session.add(task)
-                    session.commit()
-                    session.refresh(task)
+                    _commit_task()
                     return task
                 raise
 
             if phase in {"running", "pending"}:
                 task.detail = "Copying image into clone source PVC"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                task.stage = "importing"
+                task.error_message = None
+                _commit_task()
                 return task
 
             if phase == "failed":
                 task.status = "failed"
+                task.stage = "failed"
                 task.detail = "Source PVC copy failed"
                 task.error_message = _read_job_log(task.copy_job, tail_lines=120) or "copy job failed"
-                task.updated_at = utc_now()
-                session.add(task)
-                session.commit()
-                session.refresh(task)
+                _commit_task()
                 return task
 
         try:
             _upsert_image_from_task(task, session)
             task.status = "completed"
+            task.stage = "completed"
+            task.progress_percent = 100
             task.detail = "Image ready"
             task.error_message = None
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            _commit_task()
             _cleanup_task_jobs(task)
         except Exception as exc:
             task.status = "failed"
+            task.stage = "failed"
             task.detail = "Failed to register image metadata"
             task.error_message = str(exc)
-            task.updated_at = utc_now()
-            session.add(task)
-            session.commit()
-            session.refresh(task)
+            _commit_task()
     return task
 
 
@@ -2937,6 +3129,18 @@ def _user_out(user: User) -> UserOut:
     )
 
 
+def _admin_audit_event_out(record: AdminAuditEvent) -> AdminAuditEventOut:
+    return AdminAuditEventOut(
+        id=record.id,
+        actor=record.actor,
+        action=record.action,
+        target_type=record.target_type,
+        target_id=record.target_id,
+        detail=record.detail or "",
+        created_at=record.created_at,
+    )
+
+
 def _team_quota_out(record: TeamQuota) -> TeamQuotaOut:
     return TeamQuotaOut(
         id=record.id,
@@ -2977,13 +3181,33 @@ def list_quota_namespaces(session: Session = Depends(get_session)) -> list[str]:
     return sorted(available)
 
 
+@router.get(
+    "/quota-teams",
+    response_model=list[str],
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def list_quota_teams(session: Session = Depends(get_session)) -> list[str]:
+    available: set[str] = {normalize_team("default")}
+    user_rows = session.exec(select(User.team)).all()
+    for row in user_rows:
+        available.add(normalize_team(row))
+    quota_rows = session.exec(select(TeamQuota.team)).all()
+    for row in quota_rows:
+        available.add(normalize_team(row))
+    return sorted([team for team in available if team])
+
+
 @router.post(
     "/users",
     response_model=UserOut,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
 )
-def add_user(payload: UserCreate, session: Session = Depends(get_session)) -> UserOut:
+def add_user(
+    payload: UserCreate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> UserOut:
     existing = session.get(User, payload.username)
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="user exists")
@@ -3000,6 +3224,14 @@ def add_user(payload: UserCreate, session: Session = Depends(get_session)) -> Us
         force_password_change=False,
     )
     session.add(user)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="user",
+        target_id=user.username,
+        detail=f"role={role} team={user.team}",
+    )
     session.commit()
     session.refresh(user)
     return _user_out(user)
@@ -3028,7 +3260,12 @@ def list_users(session: Session = Depends(get_session)) -> list[UserOut]:
 @router.patch(
     "/users/{username}", response_model=UserOut, dependencies=[Depends(require_permission(Permission.USERS_WRITE))]
 )
-def update_user(username: str, payload: UserUpdate, session: Session = Depends(get_session)) -> UserOut:
+def update_user(
+    username: str,
+    payload: UserUpdate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> UserOut:
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
@@ -3059,6 +3296,14 @@ def update_user(username: str, payload: UserUpdate, session: Session = Depends(g
         user.team = normalize_team(payload.team)
     user.username = new_username
     session.add(user)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="user",
+        target_id=user.username,
+        detail=f"role={user.role} team={user.team}",
+    )
     session.commit()
     session.refresh(user)
     return _user_out(user)
@@ -3069,13 +3314,24 @@ def update_user(username: str, payload: UserUpdate, session: Session = Depends(g
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
 )
-def remove_user(username: str, session: Session = Depends(get_session)) -> None:
+def remove_user(
+    username: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
     if role_for_user(user) == Role.PLATFORM_ADMIN and username == settings.admin_default_username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot delete default admin")
     revoke_tokens(session, username)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="delete",
+        target_type="user",
+        target_id=username,
+    )
     session.delete(user)
     session.commit()
 
@@ -3097,7 +3353,11 @@ def list_team_quotas(session: Session = Depends(get_session)) -> list[TeamQuotaO
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def create_team_quota(payload: TeamQuotaCreate, session: Session = Depends(get_session)) -> TeamQuotaOut:
+def create_team_quota(
+    payload: TeamQuotaCreate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> TeamQuotaOut:
     team = normalize_team(payload.team)
     namespace = normalize_namespace(payload.namespace)
     existing = session.exec(
@@ -3123,6 +3383,14 @@ def create_team_quota(payload: TeamQuotaCreate, session: Session = Depends(get_s
         updated_at=now,
     )
     session.add(row)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="team_quota",
+        target_id=row.id,
+        detail=f"team={team} namespace={namespace}",
+    )
     session.commit()
     session.refresh(row)
     return _team_quota_out(row)
@@ -3133,7 +3401,12 @@ def create_team_quota(payload: TeamQuotaCreate, session: Session = Depends(get_s
     response_model=TeamQuotaOut,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_team_quota(quota_id: str, payload: TeamQuotaUpdate, session: Session = Depends(get_session)) -> TeamQuotaOut:
+def update_team_quota(
+    quota_id: str,
+    payload: TeamQuotaUpdate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> TeamQuotaOut:
     row = session.get(TeamQuota, quota_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
@@ -3186,6 +3459,14 @@ def update_team_quota(quota_id: str, payload: TeamQuotaUpdate, session: Session 
 
     row.updated_at = utc_now()
     session.add(row)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="team_quota",
+        target_id=row.id,
+        detail=f"team={row.team} namespace={row.namespace}",
+    )
     session.commit()
     session.refresh(row)
     return _team_quota_out(row)
@@ -3196,10 +3477,22 @@ def update_team_quota(quota_id: str, payload: TeamQuotaUpdate, session: Session 
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def delete_team_quota(quota_id: str, session: Session = Depends(get_session)) -> None:
+def delete_team_quota(
+    quota_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     row = session.get(TeamQuota, quota_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="delete",
+        target_type="team_quota",
+        target_id=row.id,
+        detail=f"team={row.team} namespace={row.namespace}",
+    )
     session.delete(row)
     session.commit()
 
@@ -3210,7 +3503,11 @@ def delete_team_quota(quota_id: str, session: Session = Depends(get_session)) ->
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
-def upload_image(file: UploadFile = File(...), session: Session = Depends(get_session)) -> ImageUploadTaskStatus:
+def upload_image(
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageUploadTaskStatus:
     if not file.filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filename required")
     if not settings.kube_vm_storage_class:
@@ -3281,13 +3578,28 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         filename=filename,
         size_bytes=size_bytes,
         status="finalizing",
+        stage="finalizing",
+        progress_percent=0,
         detail="Upload complete; submitting finalize job",
         error_message=None,
+        retry_count=0,
+        max_retries=FINALIZE_MAX_RETRIES,
+        next_retry_at=None,
+        last_retry_error=None,
+        finalize_started_at=utc_now(),
         image_id=image_id,
         created_at=utc_now(),
         updated_at=utc_now(),
     )
     session.add(task)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="image_upload_task",
+        target_id=task.id,
+        detail=f"filename={task.filename} size_bytes={task.size_bytes}",
+    )
     session.commit()
     session.refresh(task)
 
@@ -3298,6 +3610,7 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
         session.refresh(task)
     except Exception as exc:
         task.status = "failed"
+        task.stage = "failed"
         task.detail = "Failed to submit finalize job"
         task.error_message = str(exc)
         task.updated_at = utc_now()
@@ -3314,7 +3627,11 @@ def upload_image(file: UploadFile = File(...), session: Session = Depends(get_se
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
-def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(get_session)) -> DirectUploadSession:
+def start_direct_upload(
+    payload: DirectUploadStart,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> DirectUploadSession:
     if not settings.cdi_direct_upload_enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="direct CDI upload is disabled")
     if not settings.kube_vm_storage_class:
@@ -3349,13 +3666,25 @@ def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(g
         filename=filename,
         size_bytes=payload.size_bytes,
         status="uploading",
+        stage="uploading",
+        progress_percent=0,
         detail="Ready for direct CDI upload",
         error_message=None,
+        retry_count=0,
+        max_retries=FINALIZE_MAX_RETRIES,
         image_id=str(uuid4()),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
     session.add(task)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="image_upload_task",
+        target_id=task.id,
+        detail=f"direct=true filename={task.filename} size_bytes={task.size_bytes}",
+    )
     session.commit()
     session.refresh(task)
 
@@ -3363,12 +3692,14 @@ def start_direct_upload(payload: DirectUploadStart, session: Session = Depends(g
         task.upload_pvc = _create_direct_upload_datavolume(task)
         token = _request_direct_upload_token(task.upload_pvc)
         task.detail = "Uploading image directly to CDI DataVolume"
+        task.stage = "uploading"
         task.updated_at = utc_now()
         session.add(task)
         session.commit()
         session.refresh(task)
     except Exception as exc:
         task.status = "failed"
+        task.stage = "failed"
         task.detail = "Failed to initialize direct CDI upload"
         task.error_message = str(exc)
         task.updated_at = utc_now()
@@ -3394,6 +3725,7 @@ def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> Im
     except Exception as exc:
         logger.error("Failed to refresh upload task %s: %s", task_id, exc, exc_info=True)
         task.status = "failed"
+        task.stage = "failed"
         task.detail = "Internal error while refreshing upload task"
         task.error_message = str(exc)
         task.updated_at = utc_now()
@@ -3409,7 +3741,11 @@ def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> Im
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
-def import_image(payload: ImageImport, session: Session = Depends(get_session)) -> ImageCreateResponse:
+def import_image(
+    payload: ImageImport,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageCreateResponse:
     if not settings.kube_vm_storage_class:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -3473,6 +3809,14 @@ def import_image(payload: ImageImport, session: Session = Depends(get_session)) 
         created_at=utc_now(),
     )
     session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="image",
+        target_id=record.id,
+        detail=f"filename={record.filename} source_pvc={record.source_pvc or ''}",
+    )
     session.commit()
     return ImageCreateResponse(
         id=record.id,
@@ -3523,7 +3867,11 @@ def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
-def delete_image(image_id: str, session: Session = Depends(get_session)) -> None:
+def delete_image(
+    image_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     record = session.get(Image, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
@@ -3576,6 +3924,14 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
                     detail=f"failed to delete source pvc: {exc.reason}",
                 ) from exc
             logger.info("Source PVC delete skipped for %s: status=%s", record.source_pvc, exc.status)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="delete",
+        target_type="image",
+        target_id=record.id,
+        detail=f"filename={record.filename}",
+    )
     session.delete(record)
     session.commit()
 
@@ -3585,7 +3941,12 @@ def delete_image(image_id: str, session: Session = Depends(get_session)) -> None
     response_model=ImageMeta,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
-def rename_image(image_id: str, payload: ImageRename, session: Session = Depends(get_session)) -> ImageMeta:
+def rename_image(
+    image_id: str,
+    payload: ImageRename,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageMeta:
     record = session.get(Image, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
@@ -3624,6 +3985,14 @@ def rename_image(image_id: str, payload: ImageRename, session: Session = Depends
     record.name = new_name
     record.filename = new_filename
     session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="image",
+        target_id=record.id,
+        detail=f"name={record.name} filename={record.filename}",
+    )
     session.commit()
     session.refresh(record)
     return ImageMeta(
@@ -3668,7 +4037,11 @@ def _template_to_model(record: Template) -> VMTemplate:
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
 )
-def create_template(payload: VMTemplateCreate, session: Session = Depends(get_session)) -> VMTemplate:
+def create_template(
+    payload: VMTemplateCreate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> VMTemplate:
     image = session.get(Image, payload.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
@@ -3709,6 +4082,14 @@ def create_template(payload: VMTemplateCreate, session: Session = Depends(get_se
         created_at=utc_now(),
     )
     session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="template",
+        target_id=record.id,
+        detail=f"name={record.name} image_id={record.image_id}",
+    )
     session.commit()
     session.refresh(record)
     return _template_to_model(record)
@@ -3729,7 +4110,12 @@ def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
     response_model=VMTemplate,
     dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
 )
-def update_template(template_id: str, payload: VMTemplateUpdate, session: Session = Depends(get_session)) -> VMTemplate:
+def update_template(
+    template_id: str,
+    payload: VMTemplateUpdate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> VMTemplate:
     record = session.get(Template, template_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
@@ -3783,6 +4169,14 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
     if payload.rdp_default_password is not None and str(payload.rdp_default_password).strip():
         record.rdp_default_password = encrypt_secret(str(payload.rdp_default_password).strip())
     session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="template",
+        target_id=record.id,
+        detail=f"name={record.name} image_id={record.image_id} enabled={record.enabled}",
+    )
     session.commit()
     session.refresh(record)
     return _template_to_model(record)
@@ -3793,10 +4187,22 @@ def update_template(template_id: str, payload: VMTemplateUpdate, session: Sessio
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
 )
-def delete_template(template_id: str, session: Session = Depends(get_session)) -> None:
+def delete_template(
+    template_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     record = session.get(Template, template_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="delete",
+        target_type="template",
+        target_id=record.id,
+        detail=f"name={record.name}",
+    )
     session.delete(record)
     session.commit()
 
@@ -4415,7 +4821,9 @@ def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
     response_model=ErrorLogClearResult,
     dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
 )
-def clear_alerts_error_log() -> ErrorLogClearResult:
+def clear_alerts_error_log(
+    actor: User = Depends(require_user), session: Session = Depends(get_session)
+) -> ErrorLogClearResult:
     log_file_path = _to_str(settings.error_log_file_path)
     if not log_file_path:
         raise HTTPException(
@@ -4423,12 +4831,44 @@ def clear_alerts_error_log() -> ErrorLogClearResult:
             detail="Clear Error Log is unavailable because BLABS_ERROR_LOG_FILE_PATH is not configured.",
         )
     try:
-        return _clear_backend_error_logs(Path(log_file_path))
+        result = _clear_backend_error_logs(Path(log_file_path))
+        _record_admin_audit_event(
+            session,
+            actor=actor.username,
+            action="clear",
+            target_type="error_logs",
+            target_id="backend",
+            detail=result.detail,
+        )
+        session.commit()
+        return result
     except Exception as exc:
         logger.warning("Failed clearing error log file %s: %s", log_file_path, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to clear error log: {exc}"
         )
+
+
+@router.get(
+    "/audit-events",
+    response_model=list[AdminAuditEventOut],
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
+def list_admin_audit_events(
+    limit: int = Query(100, ge=1, le=500),
+    actor: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+) -> list[AdminAuditEventOut]:
+    stmt = select(AdminAuditEvent)
+    actor_filter = str(actor or "").strip()
+    action_filter = str(action or "").strip()
+    if actor_filter:
+        stmt = stmt.where(AdminAuditEvent.actor == actor_filter)
+    if action_filter:
+        stmt = stmt.where(AdminAuditEvent.action == action_filter)
+    rows = session.exec(stmt.order_by(AdminAuditEvent.created_at.desc())).all()[:limit]
+    return [_admin_audit_event_out(row) for row in rows]
 
 
 @router.post(
@@ -4437,12 +4877,25 @@ def clear_alerts_error_log() -> ErrorLogClearResult:
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
 def update_concurrency(
-    settings_payload: ConcurrencySettings, session: Session = Depends(get_session)
+    settings_payload: ConcurrencySettings,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> ConcurrencySettings:
     config = session.get(Config, 1) or Config(id=1)
     config.max_concurrent_vms = settings_payload.max_concurrent_vms
     config.per_user_vm_limit = settings_payload.per_user_vm_limit
     session.add(config)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_concurrency",
+        target_id="global",
+        detail=(
+            f"max_concurrent_vms={settings_payload.max_concurrent_vms} "
+            f"per_user_vm_limit={settings_payload.per_user_vm_limit}"
+        ),
+    )
     session.commit()
     return settings_payload
 
@@ -4453,11 +4906,21 @@ def update_concurrency(
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
 def update_idle_timeout(
-    settings_payload: IdleTimeoutSettings, session: Session = Depends(get_session)
+    settings_payload: IdleTimeoutSettings,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> IdleTimeoutSettings:
     config = session.get(Config, 1) or Config(id=1)
     config.idle_timeout_minutes = settings_payload.idle_timeout_minutes
     session.add(config)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_idle_timeout",
+        target_id="global",
+        detail=f"idle_timeout_minutes={settings_payload.idle_timeout_minutes}",
+    )
     session.commit()
     return settings_payload
 
@@ -4480,6 +4943,7 @@ def get_storage_settings(session: Session = Depends(get_session)) -> StorageSett
 def update_storage_settings(
     payload: StorageSettingsUpdate,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> StorageSettingsRead:
     cfg = _get_or_create_config(session)
     if payload.clear_overrides:
@@ -4498,6 +4962,22 @@ def update_storage_settings(
         if payload.kube_vm_storage_class is not None:
             cfg.kube_vm_storage_class_override = _to_str(payload.kube_vm_storage_class)
     session.add(cfg)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_storage",
+        target_id="global",
+        detail=(
+            "clear_overrides=true"
+            if payload.clear_overrides
+            else (
+                f"storage_root={_to_str(cfg.storage_root_override)} "
+                f"kube_image_pvc={_to_str(cfg.kube_image_pvc_override)} "
+                f"kube_vm_storage_class={_to_str(cfg.kube_vm_storage_class_override)}"
+            )
+        ),
+    )
     session.commit()
     session.refresh(cfg)
 
@@ -4528,9 +5008,10 @@ def get_runtime_settings(session: Session = Depends(get_session)) -> RuntimeSett
 def update_runtime_storage_settings(
     payload: StorageSettingsUpdate,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> RuntimeSettingsRead:
     # Backward-compatible path used by older frontend builds.
-    update_storage_settings(payload=payload, session=session)
+    update_storage_settings(payload=payload, session=session, actor=actor)
     return get_runtime_settings(session=session)
 
 
@@ -4541,7 +5022,9 @@ def update_runtime_storage_settings(
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
 def upload_site_background(
-    file: UploadFile = File(...), session: Session = Depends(get_session)
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> SiteBackgroundAsset:
     original_name = Path(str(file.filename or "")).name
     suffix = Path(original_name).suffix.lower()
@@ -4600,6 +5083,14 @@ def upload_site_background(
     public_path = _site_background_public_path(filename)
     cfg.theme_bg_image = public_path
     session.add(cfg)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_site_background",
+        target_id="global",
+        detail=f"filename={filename} size_bytes={total}",
+    )
     session.commit()
     if old_path and old_path != public_path:
         _delete_local_site_background(old_path)
@@ -4644,7 +5135,11 @@ def get_site_settings(session: Session = Depends(get_session)) -> SiteSettings:
     response_model=SiteSettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_site_settings(payload: SiteSettings, session: Session = Depends(get_session)) -> SiteSettings:
+def update_site_settings(
+    payload: SiteSettings,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> SiteSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     old_bg_image = str(cfg.theme_bg_image or "").strip()
     cfg.site_title = payload.site_title
@@ -4671,6 +5166,14 @@ def update_site_settings(payload: SiteSettings, session: Session = Depends(get_s
     cfg.theme_tile_opacity = payload.theme_tile_opacity
     cfg.theme_tile_border_opacity = payload.theme_tile_border_opacity
     session.add(cfg)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_site",
+        target_id="global",
+        detail=f"site_title={cfg.site_title}",
+    )
     session.commit()
     session.refresh(cfg)
     if old_bg_image and old_bg_image != cfg.theme_bg_image:
@@ -4725,7 +5228,11 @@ def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     response_model=SSOSettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_sso_settings(payload: SSOSettingsUpdate, session: Session = Depends(get_session)) -> SSOSettings:
+def update_sso_settings(
+    payload: SSOSettingsUpdate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     cfg.sso_enabled = payload.sso_enabled
     cfg.sso_provider = payload.sso_provider
@@ -4737,6 +5244,14 @@ def update_sso_settings(payload: SSOSettingsUpdate, session: Session = Depends(g
     cfg.sso_userinfo_url = payload.sso_userinfo_url
     cfg.sso_redirect_url = payload.sso_redirect_url
     session.add(cfg)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_sso",
+        target_id="global",
+        detail=f"sso_enabled={cfg.sso_enabled} provider={cfg.sso_provider}",
+    )
     session.commit()
     session.refresh(cfg)
     return SSOSettings(
@@ -4779,7 +5294,11 @@ def get_ldap_settings(session: Session = Depends(get_session)) -> LDAPSettings:
     response_model=LDAPSettings,
     dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
 )
-def update_ldap_settings(payload: LDAPSettingsUpdate, session: Session = Depends(get_session)) -> LDAPSettings:
+def update_ldap_settings(
+    payload: LDAPSettingsUpdate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> LDAPSettings:
     user_filter = str(payload.ldap_user_filter or "").strip() or "(uid={username})"
     if "{username}" not in user_filter:
         raise HTTPException(
@@ -4799,6 +5318,14 @@ def update_ldap_settings(payload: LDAPSettingsUpdate, session: Session = Depends
     cfg.ldap_timeout_seconds = max(3, min(60, int(payload.ldap_timeout_seconds or 10)))
     cfg.ldap_auto_create_users = bool(payload.ldap_auto_create_users)
     session.add(cfg)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="settings_ldap",
+        target_id="global",
+        detail=f"ldap_enabled={cfg.ldap_enabled} ldap_server_uri={cfg.ldap_server_uri}",
+    )
     session.commit()
     session.refresh(cfg)
     return LDAPSettings(

@@ -1,5 +1,10 @@
 from src.config import settings
-from src.routes.admin import _finalize_in_checksum_phase, _parse_finalize_progress_percent, _requested_upload_pvc_gi
+from src.routes.admin import (
+    _finalize_in_checksum_phase,
+    _parse_finalize_progress_percent,
+    _requested_upload_pvc_gi,
+    _retry_backoff_seconds,
+)
 
 
 def test_parse_finalize_progress_percent_from_qemu_progress_log() -> None:
@@ -29,3 +34,8 @@ def test_requested_upload_pvc_gi_applies_minimum_floor(monkeypatch) -> None:
 def test_requested_upload_pvc_gi_uses_larger_computed_size(monkeypatch) -> None:
     monkeypatch.setattr(settings, "min_upload_pvc_gib", 40)
     assert _requested_upload_pvc_gi(120 * 1024**3) == 121
+
+
+def test_finalize_retry_backoff_is_bounded() -> None:
+    assert _retry_backoff_seconds(1) >= 5
+    assert _retry_backoff_seconds(5) >= _retry_backoff_seconds(2)

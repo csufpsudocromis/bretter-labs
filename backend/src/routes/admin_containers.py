@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 import subprocess
 from uuid import uuid4
@@ -98,18 +99,40 @@ def _enforce_registry_policy(image_ref: str) -> None:
         )
 
 
-def _verify_image_signature(image_ref: str) -> None:
+def _verify_image_signature(image_ref: str) -> str | None:
     if not settings.container_signature_verification_enabled:
-        return
+        return None
+    cosign_home = "/tmp/blabs-cosign/home"
+    cosign_cache = "/tmp/blabs-cosign/cache"
+    try:
+        os.makedirs(cosign_home, mode=0o700, exist_ok=True)
+        os.makedirs(cosign_cache, mode=0o700, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"failed to prepare local signature verification cache: {exc}",
+        ) from exc
+    cosign_env = os.environ.copy()
+    cosign_env["HOME"] = cosign_home
+    cosign_env["XDG_CACHE_HOME"] = cosign_cache
     cmd = ["cosign", "verify"]
     key_ref = (settings.container_signature_key_ref or "").strip()
     if key_ref:
         cmd.extend(["--key", key_ref])
     else:
-        cmd.append("--keyless")
+        # Cosign v3 requires identity/issuer constraints for keyless verification.
+        # Use permissive regex defaults to preserve existing "any keyless signer" policy.
+        cmd.extend(
+            [
+                "--certificate-identity-regexp",
+                ".*",
+                "--certificate-oidc-issuer-regexp",
+                ".*",
+            ]
+        )
     cmd.append(image_ref)
     try:
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60, env=cosign_env)
     except FileNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -121,7 +144,12 @@ def _verify_image_signature(image_ref: str) -> None:
         ) from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "signature verification failed").strip()
+        if "no signatures found" in detail.lower():
+            warning = "Image has no signatures; continuing with warning-only policy."
+            logger.warning("Container image %s has no signatures; allowing registration by policy.", image_ref)
+            return warning
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail[:500])
+    return None
 
 
 def _normalize_template_key(value: str) -> str:
@@ -224,11 +252,12 @@ def _run_image_prepull(image_ref: str) -> None:
         logger.warning("Container image pre-pull failed for %s", image_ref, exc_info=True)
 
 
-def _image_out(record: ContainerImageTable) -> ContainerImageMeta:
+def _image_out(record: ContainerImageTable, signature_warning: str | None = None) -> ContainerImageMeta:
     return ContainerImageMeta(
         id=record.id,
         name=record.name,
         image_ref=record.image_ref,
+        signature_warning=signature_warning,
         last_scan_at=getattr(record, "last_scan_at", None),
         last_scan_status=str(getattr(record, "last_scan_status", "never") or "never"),
         last_scan_summary=str(getattr(record, "last_scan_summary", "") or ""),
@@ -383,7 +412,7 @@ def create_container_image(
 ) -> ContainerImageMeta:
     image_ref = _normalize_container_image_ref(payload.image_ref)
     _enforce_registry_policy(image_ref)
-    _verify_image_signature(image_ref)
+    signature_warning = _verify_image_signature(image_ref)
     existing = session.exec(select(ContainerImageTable).where(ContainerImageTable.image_ref == image_ref)).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
@@ -405,7 +434,7 @@ def create_container_image(
         background_tasks.add_task(_run_image_prepull, image_ref)
     if settings.container_scan_enabled:
         background_tasks.add_task(_run_image_scan_for_id, record.id)
-    return _image_out(record)
+    return _image_out(record, signature_warning=signature_warning)
 
 
 @router.get(
@@ -435,6 +464,7 @@ def update_container_image(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    signature_warning = None
     if "name" in updates:
         name = (updates.get("name") or "").strip()
         if not name:
@@ -443,7 +473,7 @@ def update_container_image(
     if "image_ref" in updates:
         image_ref = _normalize_container_image_ref(str(updates.get("image_ref") or ""))
         _enforce_registry_policy(image_ref)
-        _verify_image_signature(image_ref)
+        signature_warning = _verify_image_signature(image_ref)
         existing = session.exec(
             select(ContainerImageTable)
             .where(ContainerImageTable.image_ref == image_ref)
@@ -465,7 +495,7 @@ def update_container_image(
             background_tasks.add_task(_run_image_prepull, record.image_ref)
         if settings.container_scan_enabled:
             background_tasks.add_task(_run_image_scan_for_id, image_id)
-    return _image_out(record)
+    return _image_out(record, signature_warning=signature_warning)
 
 
 @router.delete(
