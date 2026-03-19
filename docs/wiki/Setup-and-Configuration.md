@@ -189,6 +189,7 @@ ENABLE_MONITORING=1 \
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
 - Post-deploy admin API smoke validation now runs by default (`RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1`) using authenticated `/admin/*` read paths.
 - Setup deploy phase now installs recurring GHCR access checks (`bretter-ghcr-access-check`) and user-flow SLO probe CronJobs (`bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
+- For image publish workflows, set repo Actions secrets `GHCR_USERNAME` and `GHCR_PAT` (`write:packages`) when publishing to pre-existing private GHCR packages; workflow falls back to `GITHUB_TOKEN` when those secrets are absent.
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
 - If setup generated a new bootstrap admin secret and `ADMIN_API_SMOKE_PASSWORD` is not set, setup auto-disables the post-deploy admin API smoke check to avoid login failures against existing admin credentials.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).

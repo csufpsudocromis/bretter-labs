@@ -394,6 +394,13 @@ Publish images + auto-pin production digests:
 #   commit_digest_update=true
 ```
 
+For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
+
+- `GHCR_USERNAME`
+- `GHCR_PAT` (with `write:packages` scope)
+
+If these are not set, the workflow falls back to `GITHUB_TOKEN`.
+
 Publish a GitHub Release:
 
 ```bash
