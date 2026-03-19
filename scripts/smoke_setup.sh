@@ -72,7 +72,7 @@ run_failure "reject invalid runner smoke toggle" \
 
 run_failure "reject production profile with missing explicit control-node override" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:3680afce30f651faf7758eb56ea8a15a84a5101e1448098d50b858eb95e0a906 \
+  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
   FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
   RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
   RUNNER_NODE_SELECTOR_VALUE=runner-pool NODE_EXTERNAL_HOST=prod-labs.internal VM_STORAGE_CLASS=prod-vm-storage \
@@ -81,7 +81,7 @@ run_failure "reject production profile with missing explicit control-node overri
 
 run_success "allow production dry-run with explicit hardened overrides" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:3680afce30f651faf7758eb56ea8a15a84a5101e1448098d50b858eb95e0a906 \
+  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
   FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
   RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
   CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \

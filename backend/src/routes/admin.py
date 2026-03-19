@@ -18,6 +18,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel
 import requests
+from sqlalchemy import text
 from sqlmodel import Session, select
 from kubernetes import client
 from kubernetes.client import ApiException
@@ -1413,35 +1414,63 @@ def _ensure_upload_task_columns() -> None:
 
 
 def _ensure_admin_audit_table() -> None:
-    if not SQLITE_DB:
-        return
-    db_path = settings.database_path
+    conn: sqlite3.Connection | None = None
     try:
-        conn = sqlite3.connect(db_path)
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS adminauditevent (
-                id TEXT PRIMARY KEY,
-                actor TEXT NOT NULL DEFAULT 'unknown',
-                action TEXT NOT NULL,
-                target_type TEXT NOT NULL,
-                target_id TEXT NOT NULL DEFAULT '',
-                detail TEXT NOT NULL DEFAULT '',
-                created_at TIMESTAMP NOT NULL
+        if SQLITE_DB:
+            db_path = settings.database_path
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS adminauditevent (
+                    id TEXT PRIMARY KEY,
+                    actor TEXT NOT NULL DEFAULT 'unknown',
+                    action TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL DEFAULT '',
+                    detail TEXT NOT NULL DEFAULT '',
+                    created_at TIMESTAMP NOT NULL
+                )
+                """
             )
-            """
-        )
-        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)")
-        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)")
-        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
-        cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_created_at ON adminauditevent(created_at)")
-        conn.commit()
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_created_at ON adminauditevent(created_at)")
+            conn.commit()
+            return
+
+        with session_scope() as session:
+            session.exec(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS adminauditevent (
+                        id TEXT PRIMARY KEY,
+                        actor VARCHAR(128) NOT NULL DEFAULT 'unknown',
+                        action VARCHAR(128) NOT NULL,
+                        target_type VARCHAR(64) NOT NULL,
+                        target_id VARCHAR(128) NOT NULL DEFAULT '',
+                        detail VARCHAR(512) NOT NULL DEFAULT '',
+                        created_at TIMESTAMP NOT NULL
+                    )
+                    """
+                )
+            )
+            session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)"))
+            session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)"))
+            session.exec(
+                text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
+            )
+            session.exec(
+                text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_created_at ON adminauditevent(created_at)")
+            )
+            session.commit()
     except Exception:
         logger.exception("Failed to ensure admin audit event table")
     finally:
         try:
-            conn.close()
+            if SQLITE_DB and conn is not None:
+                conn.close()
         except Exception:
             pass
 

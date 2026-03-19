@@ -45,6 +45,7 @@ def test_alembic_upgrade_head_on_clean_db(tmp_path: Path) -> None:
     assert "template" in table_names
     assert "containertemplate" in table_names
     assert "connecttoken" in table_names
+    assert "adminauditevent" in table_names
 
 
 def test_release_version_files_are_consistent() -> None:
