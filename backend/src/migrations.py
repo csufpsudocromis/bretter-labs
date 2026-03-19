@@ -23,6 +23,17 @@ APP_TABLES: set[str] = {
     "token",
     "user",
 }
+# Only these tables existed in the legacy pre-Alembic schema. Use this subset
+# to decide whether to stamp baseline revision 0001.
+LEGACY_BASELINE_TABLES: set[str] = {
+    "config",
+    "image",
+    "imageuploadtask",
+    "instance",
+    "template",
+    "token",
+    "user",
+}
 ALEMBIC_BASELINE_REVISION = "0001"
 
 
@@ -41,7 +52,7 @@ def _table_names(engine: Engine) -> set[str]:
 
 
 def _has_any_app_tables(tables: Iterable[str]) -> bool:
-    return any(name in APP_TABLES for name in tables)
+    return any(name in LEGACY_BASELINE_TABLES for name in tables)
 
 
 def _current_heads(engine: Engine) -> set[str]:

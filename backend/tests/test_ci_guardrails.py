@@ -50,6 +50,40 @@ def test_alembic_upgrade_head_on_clean_db(tmp_path: Path) -> None:
     assert "adminauditevent" in table_names
 
 
+def test_alembic_does_not_stamp_legacy_baseline_for_newer_partial_tables(tmp_path: Path) -> None:
+    db_path = tmp_path / "partial-newer-table.db"
+    database_url = f"sqlite:///{db_path}"
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS adminauditevent (
+                    id TEXT PRIMARY KEY,
+                    actor TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    target_type TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    detail TEXT NOT NULL,
+                    created_at DATETIME NOT NULL
+                )
+                """
+            )
+        )
+
+    run_db_migrations(engine=engine, database_url=database_url)
+
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+        applied_revision = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar_one()
+
+    assert "template" in table_names
+    assert "image" in table_names
+    assert "adminauditevent" in table_names
+    assert str(applied_revision) == "0023"
+
+
 def test_alembic_schema_guard_rejects_unexpected_expected_revision(tmp_path: Path) -> None:
     db_path = tmp_path / "expected-revision.db"
     database_url = f"sqlite:///{db_path}"
