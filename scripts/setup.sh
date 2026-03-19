@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION" 2>/dev/null || true)"
+APP_VERSION="$(tr -d '[:space:]' <"$ROOT_DIR/VERSION" 2>/dev/null || true)"
 if [[ "$APP_VERSION" =~ ^[0-9]+(\.[0-9]+){2}$ ]]; then
   DEFAULT_IMAGE_TAG="v${APP_VERSION}"
 else
@@ -79,6 +79,8 @@ VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
 BACKEND_NODEPORT_ENABLED="${BACKEND_NODEPORT_ENABLED:-0}"
 BACKEND_NODEPORT="${BACKEND_NODEPORT:-30080}"
 PRODUCTION_PROFILE="${PRODUCTION_PROFILE:-0}"
+REQUIRE_SCHEMA_READY="${REQUIRE_SCHEMA_READY:-1}"
+EXPECTED_ALEMBIC_REVISION="${EXPECTED_ALEMBIC_REVISION:-}"
 CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
 CORS_ALLOWED_ORIGINS="${CORS_ALLOWED_ORIGINS:-}"
 CORS_ALLOWED_ORIGIN_REGEX="${CORS_ALLOWED_ORIGIN_REGEX:-}"
@@ -151,6 +153,17 @@ MONITORING_CHART_VERSION="${MONITORING_CHART_VERSION:-v82.10.4}"
 MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
 MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
 MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
+ENABLE_GHCR_ACCESS_HEALTHCHECK="${ENABLE_GHCR_ACCESS_HEALTHCHECK:-1}"
+GHCR_ACCESS_HEALTHCHECK_SCHEDULE="${GHCR_ACCESS_HEALTHCHECK_SCHEDULE:-*/10 * * * *}"
+GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS="${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS:-120}"
+GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET="${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET:-ghcr-creds}"
+ENABLE_USERFLOW_SLO_PROBES="${ENABLE_USERFLOW_SLO_PROBES:-1}"
+USERFLOW_SLO_PROBE_SCHEDULE="${USERFLOW_SLO_PROBE_SCHEDULE:-*/10 * * * *}"
+USERFLOW_SLO_LOOKBACK_MINUTES="${USERFLOW_SLO_LOOKBACK_MINUTES:-30}"
+USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT="${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT:-25}"
+USERFLOW_SLO_RDP_STUCK_MINUTES="${USERFLOW_SLO_RDP_STUCK_MINUTES:-12}"
+USERFLOW_SLO_RDP_STUCK_MAX="${USERFLOW_SLO_RDP_STUCK_MAX:-2}"
+USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT="${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT:-25}"
 ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL="${ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL:-1}"
 KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE="${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE:-*/5 * * * *}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
@@ -168,6 +181,10 @@ KYVERNO_CHART_VERSION="${KYVERNO_CHART_VERSION:-v3.7.1}"
 ADMISSION_POLICY_TEMPLATE="${ADMISSION_POLICY_TEMPLATE:-$ROOT_DIR/deploy/policies/kyverno/clusterpolicies.yaml.tpl}"
 RUN_POST_DEPLOY_API_HEALTH_CHECK="${RUN_POST_DEPLOY_API_HEALTH_CHECK:-1}"
 POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS="${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS:-120}"
+RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK="${RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK:-1}"
+POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS="${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS:-180}"
+ADMIN_API_SMOKE_USERNAME="${ADMIN_API_SMOKE_USERNAME:-admin}"
+ADMIN_API_SMOKE_PASSWORD="${ADMIN_API_SMOKE_PASSWORD:-}"
 RUN_POST_DEPLOY_SYNTHETIC_CHECK="${RUN_POST_DEPLOY_SYNTHETIC_CHECK:-1}"
 SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
 SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-}"
@@ -187,6 +204,8 @@ RENDERED_HELM_VALUES=""
 ADMIN_BOOTSTRAP_PASSWORD_GENERATED=0
 SYNTHETIC_CHECK_PASSWORD_AUTOSET=0
 SYNTHETIC_CHECK_AUTO_DISABLED=0
+ADMIN_API_SMOKE_PASSWORD_AUTOSET=0
+ADMIN_API_SMOKE_AUTO_DISABLED=0
 ADMIN_BOOTSTRAP_SECRET_FILE=""
 
 log() {
@@ -239,11 +258,20 @@ configure_admin_bootstrap_credentials() {
       SYNTHETIC_CHECK_PASSWORD_AUTOSET=1
     fi
   fi
+  if [ "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" -eq 1 ] && [ -z "$ADMIN_API_SMOKE_PASSWORD" ]; then
+    if [ "$ADMIN_BOOTSTRAP_PASSWORD_GENERATED" -eq 1 ]; then
+      RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=0
+      ADMIN_API_SMOKE_AUTO_DISABLED=1
+    else
+      ADMIN_API_SMOKE_PASSWORD="$ADMIN_BOOTSTRAP_PASSWORD"
+      ADMIN_API_SMOKE_PASSWORD_AUTOSET=1
+    fi
+  fi
 }
 
 validate_public_scheme() {
   case "$PUBLIC_SCHEME" in
-    https|http) ;;
+    https | http) ;;
     *) fail "PUBLIC_SCHEME must be either https or http." ;;
   esac
 }
@@ -259,7 +287,7 @@ validate_tls_config() {
 
 validate_preload_config() {
   case "$PRELOAD_RUNNER_ON_ALL_NODES" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "PRELOAD_RUNNER_ON_ALL_NODES must be either 0 or 1." ;;
   esac
 }
@@ -276,7 +304,7 @@ looks_placeholder_value() {
     return 0
   fi
   case "$lowered" in
-    *"<"*|*">"*|*changeme*|*example*|tbd|todo)
+    *"<"* | *">"* | *changeme* | *example* | tbd | todo)
       return 0
       ;;
   esac
@@ -320,9 +348,25 @@ is_digest_image_reference() {
   [[ "$1" == *@sha256:* ]]
 }
 
+is_local_image_reference() {
+  local ref lowered
+  ref="$1"
+  lowered="${ref,,}"
+  if [[ "$lowered" == localhost/* ]]; then
+    return 0
+  fi
+  if [[ "$lowered" == *":local"* ]]; then
+    return 0
+  fi
+  if [[ "$lowered" == *"local-"* ]]; then
+    return 0
+  fi
+  return 1
+}
+
 validate_longhorn_tuning_config() {
   case "$LONGHORN_TUNE" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "LONGHORN_TUNE must be either 0 or 1." ;;
   esac
 
@@ -345,7 +389,7 @@ validate_longhorn_tuning_config() {
 
 validate_autocleanup_config() {
   case "$ENABLE_AUTOCLEANUP" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "ENABLE_AUTOCLEANUP must be either 0 or 1." ;;
   esac
 
@@ -385,19 +429,19 @@ validate_autocleanup_config() {
   if ! is_uint "$AUTOCLEANUP_PVC_EMERGENCY_PCT" || [ "$AUTOCLEANUP_PVC_EMERGENCY_PCT" -gt 100 ]; then
     fail "AUTOCLEANUP_PVC_EMERGENCY_PCT must be an integer between 0 and 100."
   fi
-  if [ "$AUTOCLEANUP_NODEFS_WARN_PCT" -gt "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" ] || \
-     [ "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" -gt "$AUTOCLEANUP_NODEFS_EMERGENCY_PCT" ]; then
+  if [ "$AUTOCLEANUP_NODEFS_WARN_PCT" -gt "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" ] ||
+    [ "$AUTOCLEANUP_NODEFS_CRITICAL_PCT" -gt "$AUTOCLEANUP_NODEFS_EMERGENCY_PCT" ]; then
     fail "Nodefs alert thresholds must be non-decreasing (warn <= critical <= emergency)."
   fi
-  if [ "$AUTOCLEANUP_PVC_WARN_PCT" -gt "$AUTOCLEANUP_PVC_CRITICAL_PCT" ] || \
-     [ "$AUTOCLEANUP_PVC_CRITICAL_PCT" -gt "$AUTOCLEANUP_PVC_EMERGENCY_PCT" ]; then
+  if [ "$AUTOCLEANUP_PVC_WARN_PCT" -gt "$AUTOCLEANUP_PVC_CRITICAL_PCT" ] ||
+    [ "$AUTOCLEANUP_PVC_CRITICAL_PCT" -gt "$AUTOCLEANUP_PVC_EMERGENCY_PCT" ]; then
     fail "PVC alert thresholds must be non-decreasing (warn <= critical <= emergency)."
   fi
 }
 
 validate_kubelet_serving_csr_autoapproval_config() {
   case "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL must be either 0 or 1." ;;
   esac
   if [ "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" -eq 0 ]; then
@@ -410,7 +454,7 @@ validate_kubelet_serving_csr_autoapproval_config() {
 
 validate_setup_phase_config() {
   case "$SETUP_DRY_RUN" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "SETUP_DRY_RUN must be either 0 or 1." ;;
   esac
 
@@ -427,7 +471,7 @@ validate_setup_phase_config() {
   IFS=',' read -r -a phases <<<"$raw"
   for phase in "${phases[@]}"; do
     case "$phase" in
-      prereqs|deploy|postdeploy) ;;
+      prereqs | deploy | postdeploy) ;;
       *) fail "Unsupported setup phase: ${phase}. Allowed values: prereqs,deploy,postdeploy (or all)." ;;
     esac
     case ",${deduped}," in
@@ -441,7 +485,7 @@ validate_setup_phase_config() {
 
 validate_image_reference_policy() {
   case "$ALLOW_MUTABLE_IMAGE_TAGS" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "ALLOW_MUTABLE_IMAGE_TAGS must be either 0 or 1." ;;
   esac
 
@@ -464,14 +508,21 @@ validate_image_reference_policy() {
 
   if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
     local non_digest_refs=()
+    local local_refs=()
     for image_var in BACKEND_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
       image_ref="${!image_var}"
       if ! is_digest_image_reference "$image_ref"; then
         non_digest_refs+=("${image_var}=${image_ref}")
       fi
+      if is_local_image_reference "$image_ref"; then
+        local_refs+=("${image_var}=${image_ref}")
+      fi
     done
     if [ "${#non_digest_refs[@]}" -gt 0 ]; then
       fail "PRODUCTION_PROFILE=1 requires digest-pinned images (@sha256): ${non_digest_refs[*]}"
+    fi
+    if [ "${#local_refs[@]}" -gt 0 ]; then
+      fail "PRODUCTION_PROFILE=1 rejects local/dev image references (localhost/local-*): ${local_refs[*]}"
     fi
   fi
 }
@@ -499,22 +550,22 @@ validate_storage_guard_config() {
 
 validate_vm_network_config() {
   case "$VM_NET_BACKEND" in
-    tap-nat|user) ;;
+    tap-nat | user) ;;
     *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
   esac
   case "$VM_RUNNER_PRIVILEGED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "VM_RUNNER_PRIVILEGED must be either 0 or 1." ;;
   esac
   case "${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY}" in
-    Local|Cluster|local|cluster) ;;
+    Local | Cluster | local | cluster) ;;
     *) fail "VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY must be Local or Cluster." ;;
   esac
   if ! is_uint "$VM_CONSOLE_TICKET_LENGTH" || [ "$VM_CONSOLE_TICKET_LENGTH" -lt 12 ] || [ "$VM_CONSOLE_TICKET_LENGTH" -gt 64 ]; then
     fail "VM_CONSOLE_TICKET_LENGTH must be an integer between 12 and 64."
   fi
   case "$BACKEND_NODEPORT_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "BACKEND_NODEPORT_ENABLED must be either 0 or 1." ;;
   esac
   if [ "$BACKEND_NODEPORT_ENABLED" -eq 1 ]; then
@@ -523,18 +574,18 @@ validate_vm_network_config() {
     fi
   fi
   case "$VM_CONNECT_INSECURE_TLS" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "VM_CONNECT_INSECURE_TLS must be either 0 or 1." ;;
   esac
 }
 
 validate_container_runtime_config() {
   case "$CONTAINER_INGRESS_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CONTAINER_INGRESS_ENABLED must be either 0 or 1." ;;
   esac
   case "$CONTAINER_IMAGE_PREPULL_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CONTAINER_IMAGE_PREPULL_ENABLED must be either 0 or 1." ;;
   esac
   if [ "$CONTAINER_INGRESS_ENABLED" -eq 1 ] && [ -z "$CONTAINER_INGRESS_BASE_DOMAIN" ]; then
@@ -544,7 +595,7 @@ validate_container_runtime_config() {
     fail "CONTAINER_IMAGE_PREPULL_TIMEOUT_SECONDS must be an integer >= 10."
   fi
   case "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be either 0 or 1." ;;
   esac
   if [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY" ] && [ -n "$CONTAINER_SIGNATURE_PUBLIC_KEY_FILE" ]; then
@@ -562,11 +613,11 @@ validate_container_runtime_config() {
     fi
   fi
   case "$CONTAINER_SCAN_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CONTAINER_SCAN_ENABLED must be either 0 or 1." ;;
   esac
   case "$CONTAINER_START_QUEUE_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CONTAINER_START_QUEUE_ENABLED must be either 0 or 1." ;;
   esac
   if [ -z "$CONTAINER_ALLOWED_REGISTRIES" ]; then
@@ -585,19 +636,32 @@ validate_container_runtime_config() {
     fail "CONTAINER_START_QUEUE_MAX_DELAY_SECONDS must be >= CONTAINER_START_QUEUE_BASE_DELAY_SECONDS."
   fi
   case "$CONTAINER_CONNECT_INSECURE_TLS" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CONTAINER_CONNECT_INSECURE_TLS must be either 0 or 1." ;;
   esac
+}
+
+validate_schema_gate_config() {
+  case "$REQUIRE_SCHEMA_READY" in
+    0 | 1) ;;
+    *) fail "REQUIRE_SCHEMA_READY must be either 0 or 1." ;;
+  esac
+  if [ -n "$EXPECTED_ALEMBIC_REVISION" ] && ! [[ "$EXPECTED_ALEMBIC_REVISION" =~ ^[A-Za-z0-9_]+$ ]]; then
+    fail "EXPECTED_ALEMBIC_REVISION must be empty or an alphanumeric Alembic revision id."
+  fi
+  if [ "$PRODUCTION_PROFILE" -eq 1 ] && [ "$REQUIRE_SCHEMA_READY" -ne 1 ]; then
+    fail "REQUIRE_SCHEMA_READY must be 1 when PRODUCTION_PROFILE=1."
+  fi
 }
 
 validate_auth_and_cors_config() {
   local cors_origins_lower secrets_key_lower
   case "$PRODUCTION_PROFILE" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "PRODUCTION_PROFILE must be either 0 or 1." ;;
   esac
   case "$CORS_ENTERPRISE_PROFILE" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CORS_ENTERPRISE_PROFILE must be either 0 or 1." ;;
   esac
   if [ "$CORS_ENTERPRISE_PROFILE" -eq 1 ] && [ -z "$CORS_ALLOWED_ORIGINS" ]; then
@@ -613,7 +677,7 @@ validate_auth_and_cors_config() {
     fail "AUTH_LOGIN_LOCKOUT_SECONDS must be an integer >= 10."
   fi
   case "$PRUNE_BOOTSTRAP_ADMIN_ENV" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be either 0 or 1." ;;
   esac
   if [ -z "$RUNTIME_SECRETS_SECRET_NAME" ]; then
@@ -631,7 +695,7 @@ validate_auth_and_cors_config() {
     fi
     secrets_key_lower="${SECRETS_ENCRYPTION_KEY,,}"
     case "$secrets_key_lower" in
-      admin|password|changeme|admin123|secret|default)
+      admin | password | changeme | admin123 | secret | default)
         fail "SECRETS_ENCRYPTION_KEY uses a weak value; set a strong key."
         ;;
     esac
@@ -685,7 +749,7 @@ validate_auth_and_cors_config() {
 
 validate_postgres_config() {
   case "$USE_EXTERNAL_SECRETS" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "USE_EXTERNAL_SECRETS must be either 0 or 1." ;;
   esac
   [ -n "$POSTGRES_USER" ] || fail "POSTGRES_USER cannot be empty."
@@ -695,15 +759,15 @@ validate_postgres_config() {
 
 validate_external_secrets_config() {
   case "$INSTALL_EXTERNAL_SECRETS_OPERATOR" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "INSTALL_EXTERNAL_SECRETS_OPERATOR must be either 0 or 1." ;;
   esac
   case "$CREATE_VAULT_CLUSTER_SECRET_STORE" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CREATE_VAULT_CLUSTER_SECRET_STORE must be either 0 or 1." ;;
   esac
   case "$EXTERNAL_PULL_SECRET_ENABLED" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "EXTERNAL_PULL_SECRET_ENABLED must be either 0 or 1." ;;
   esac
   if ! is_uint "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS" || [ "$EXTERNAL_SECRETS_WAIT_TIMEOUT_SECONDS" -lt 30 ]; then
@@ -729,7 +793,7 @@ validate_external_secrets_config() {
     [ -n "$VAULT_K8S_ROLE" ] || fail "VAULT_K8S_ROLE cannot be empty when CREATE_VAULT_CLUSTER_SECRET_STORE=1."
     [ -n "$VAULT_KV_MOUNT" ] || fail "VAULT_KV_MOUNT cannot be empty when CREATE_VAULT_CLUSTER_SECRET_STORE=1."
     case "$VAULT_KV_VERSION" in
-      v1|v2) ;;
+      v1 | v2) ;;
       *) fail "VAULT_KV_VERSION must be v1 or v2." ;;
     esac
   fi
@@ -737,7 +801,7 @@ validate_external_secrets_config() {
 
 validate_cdi_upload_config() {
   case "$INSTALL_CDI" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "INSTALL_CDI must be either 0 or 1." ;;
   esac
   [ -n "$CDI_VERSION" ] || fail "CDI_VERSION cannot be empty."
@@ -748,14 +812,14 @@ validate_cdi_upload_config() {
 
 validate_cpu_manager_config() {
   case "$CPU_MANAGER_STATIC" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "CPU_MANAGER_STATIC must be either 0 or 1." ;;
   esac
 }
 
 validate_monitoring_config() {
   case "$ENABLE_MONITORING" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "ENABLE_MONITORING must be either 0 or 1." ;;
   esac
   if [ "$ENABLE_MONITORING" -eq 0 ]; then
@@ -779,6 +843,42 @@ validate_monitoring_config() {
   if [ "$MONITORING_WARM_POOL_MIN_READY" -lt 0 ]; then
     fail "MONITORING_WARM_POOL_MIN_READY must be an integer >= 0."
   fi
+  case "$ENABLE_GHCR_ACCESS_HEALTHCHECK" in
+    0 | 1) ;;
+    *) fail "ENABLE_GHCR_ACCESS_HEALTHCHECK must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_GHCR_ACCESS_HEALTHCHECK" -eq 1 ]; then
+    [ -n "$GHCR_ACCESS_HEALTHCHECK_SCHEDULE" ] || fail "GHCR_ACCESS_HEALTHCHECK_SCHEDULE cannot be empty."
+    if ! is_uint "$GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS" || [ "$GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS" -lt 30 ]; then
+      fail "GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS must be an integer >= 30."
+    fi
+    [ -n "$GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET" ] || fail "GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET cannot be empty."
+  fi
+  case "$ENABLE_USERFLOW_SLO_PROBES" in
+    0 | 1) ;;
+    *) fail "ENABLE_USERFLOW_SLO_PROBES must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_USERFLOW_SLO_PROBES" -eq 1 ]; then
+    [ -n "$USERFLOW_SLO_PROBE_SCHEDULE" ] || fail "USERFLOW_SLO_PROBE_SCHEDULE cannot be empty."
+    if ! is_uint "$USERFLOW_SLO_LOOKBACK_MINUTES" || [ "$USERFLOW_SLO_LOOKBACK_MINUTES" -lt 5 ]; then
+      fail "USERFLOW_SLO_LOOKBACK_MINUTES must be an integer >= 5."
+    fi
+    if ! is_uint "$USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT" || [ "$USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT" -gt 100 ]; then
+      fail "USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT must be an integer between 0 and 100."
+    fi
+    if ! is_uint "$USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT" || [ "$USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT" -gt 100 ]; then
+      fail "USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT must be an integer between 0 and 100."
+    fi
+    if ! is_uint "$USERFLOW_SLO_RDP_STUCK_MINUTES" || [ "$USERFLOW_SLO_RDP_STUCK_MINUTES" -lt 2 ]; then
+      fail "USERFLOW_SLO_RDP_STUCK_MINUTES must be an integer >= 2."
+    fi
+    if ! is_uint "$USERFLOW_SLO_RDP_STUCK_MAX"; then
+      fail "USERFLOW_SLO_RDP_STUCK_MAX must be an integer >= 0."
+    fi
+    if [ "$USERFLOW_SLO_RDP_STUCK_MAX" -lt 0 ]; then
+      fail "USERFLOW_SLO_RDP_STUCK_MAX must be an integer >= 0."
+    fi
+  fi
   if [ -z "$HELM_VERSION" ]; then
     fail "HELM_VERSION cannot be empty when ENABLE_MONITORING=1."
   fi
@@ -786,11 +886,11 @@ validate_monitoring_config() {
 
 validate_metrics_server_config() {
   case "$ENABLE_METRICS_SERVER" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "ENABLE_METRICS_SERVER must be either 0 or 1." ;;
   esac
   case "$METRICS_SERVER_INSECURE_TLS" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "METRICS_SERVER_INSECURE_TLS must be either 0 or 1." ;;
   esac
   if ! is_semver_tag "$METRICS_SERVER_VERSION"; then
@@ -803,11 +903,11 @@ validate_metrics_server_config() {
 
 validate_admission_policy_config() {
   case "$ENABLE_ADMISSION_POLICIES" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "ENABLE_ADMISSION_POLICIES must be either 0 or 1." ;;
   esac
   case "$INSTALL_KYVERNO" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "INSTALL_KYVERNO must be either 0 or 1." ;;
   esac
   if [ "$ENABLE_ADMISSION_POLICIES" -eq 0 ]; then
@@ -824,7 +924,7 @@ validate_admission_policy_config() {
 
 validate_post_deploy_api_health_config() {
   case "$RUN_POST_DEPLOY_API_HEALTH_CHECK" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "RUN_POST_DEPLOY_API_HEALTH_CHECK must be either 0 or 1." ;;
   esac
   if [ "$RUN_POST_DEPLOY_API_HEALTH_CHECK" -eq 0 ]; then
@@ -835,13 +935,28 @@ validate_post_deploy_api_health_config() {
   fi
 }
 
+validate_admin_api_smoke_check_config() {
+  case "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" in
+    0 | 1) ;;
+    *) fail "RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK must be either 0 or 1." ;;
+  esac
+  if [ "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" -eq 0 ]; then
+    return
+  fi
+  [ -n "$ADMIN_API_SMOKE_USERNAME" ] || fail "ADMIN_API_SMOKE_USERNAME cannot be empty when admin API smoke checks are enabled."
+  [ -n "$ADMIN_API_SMOKE_PASSWORD" ] || fail "ADMIN_API_SMOKE_PASSWORD cannot be empty when admin API smoke checks are enabled."
+  if ! is_uint "$POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS" || [ "$POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS" -lt 60 ]; then
+    fail "POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS must be an integer >= 60."
+  fi
+}
+
 validate_synthetic_check_config() {
   case "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "RUN_POST_DEPLOY_SYNTHETIC_CHECK must be either 0 or 1." ;;
   esac
   case "$SYNTHETIC_CHECK_REQUIRE_TEMPLATES" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "SYNTHETIC_CHECK_REQUIRE_TEMPLATES must be either 0 or 1." ;;
   esac
   if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 0 ]; then
@@ -856,7 +971,7 @@ validate_synthetic_check_config() {
 
 validate_runner_smoke_check_config() {
   case "$RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK must be either 0 or 1." ;;
   esac
   if [ "$RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK" -eq 0 ]; then
@@ -866,14 +981,14 @@ validate_runner_smoke_check_config() {
     fail "POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS must be an integer >= 30."
   fi
   case "$POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY" in
-    Always|IfNotPresent|Never) ;;
+    Always | IfNotPresent | Never) ;;
     *) fail "POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY must be one of: Always, IfNotPresent, Never." ;;
   esac
 }
 
 validate_production_go_live_proof_config() {
   case "$RUN_PRODUCTION_GO_LIVE_PROOF" in
-    0|1) ;;
+    0 | 1) ;;
     *) fail "RUN_PRODUCTION_GO_LIVE_PROOF must be either 0 or 1." ;;
   esac
 
@@ -957,10 +1072,10 @@ install_kubectl() {
   sudo_cmd apt-get update -y
   sudo_cmd apt-get install -y apt-transport-https
   sudo_cmd mkdir -p /etc/apt/keyrings
-  curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key \
-    | sudo_cmd gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-  echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /" \
-    | sudo_cmd tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
+  curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key |
+    sudo_cmd gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /" |
+    sudo_cmd tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
   sudo_cmd apt-get update -y
   sudo_cmd apt-get install -y kubectl
 }
@@ -973,10 +1088,10 @@ install_helm() {
   local arch helm_arch tmp_dir
   arch="$(uname -m)"
   case "$arch" in
-    x86_64|amd64)
+    x86_64 | amd64)
       helm_arch="amd64"
       ;;
-    aarch64|arm64)
+    aarch64 | arm64)
       helm_arch="arm64"
       ;;
     *)
@@ -1129,8 +1244,8 @@ tune_longhorn_for_phase2() {
 }
 
 ensure_cdi_installed() {
-  if kubectl get crd datavolumes.cdi.kubevirt.io >/dev/null 2>&1 && \
-     kubectl api-resources --api-group=upload.cdi.kubevirt.io 2>/dev/null | awk '{print $1}' | grep -qx "uploadtokenrequests"; then
+  if kubectl get crd datavolumes.cdi.kubevirt.io >/dev/null 2>&1 &&
+    kubectl api-resources --api-group=upload.cdi.kubevirt.io 2>/dev/null | awk '{print $1}' | grep -qx "uploadtokenrequests"; then
     return
   fi
   if [ "$INSTALL_CDI" -ne 1 ]; then
@@ -1288,8 +1403,7 @@ patch_default_pvc_alert_exclusions() {
   fi
 
   log "Patching ${rule_name} PVC filling alerts to ignore pool-* PVCs..."
-  if ! python3 - "$MONITORING_NAMESPACE" "$rule_name" <<'PY' \
-    | kubectl -n "$MONITORING_NAMESPACE" apply -f - >/dev/null; then
+  if ! python3 - "$MONITORING_NAMESPACE" "$rule_name" <<'PY' |
 import json
 import re
 import subprocess
@@ -1348,6 +1462,7 @@ obj.pop("status", None)
 print(json.dumps(obj))
 print(f"patched_rules={changed}", file=sys.stderr)
 PY
+    kubectl -n "$MONITORING_NAMESPACE" apply -f - >/dev/null; then
     warn "Failed to patch default KubePersistentVolumeFillingUp rules; continuing."
     return
   fi
@@ -1696,6 +1811,38 @@ spec:
             severity: warning
           annotations:
             summary: A direct-upload DataVolume PVC has been active for over ${MONITORING_DV_STALE_MINUTES} minutes.
+        - alert: BretterGhcrAccessCheckFailing
+          expr: |
+            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-ghcr-access-check-.*"}[30m]) > 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: GHCR access health checks are failing.
+        - alert: BretterVmLaunchSloBreached
+          expr: |
+            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[30m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: VM launch SLO probe is failing (launch failure-rate threshold breached).
+        - alert: BretterRdpReadinessSloBreached
+          expr: |
+            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[30m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: RDP readiness SLO probe is failing (stuck RDP instances above threshold).
+        - alert: BretterUploadFinalizeSloBreached
+          expr: |
+            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[30m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Upload finalize SLO probe is failing (finalize failure-rate threshold breached).
 EOF
 }
 
@@ -1765,7 +1912,7 @@ fi
     cleanup_node_debugger_pods "$node"
   done
 
-  kubectl wait --for=condition=Ready nodes --all --timeout=300s >/dev/null 2>&1 || \
+  kubectl wait --for=condition=Ready nodes --all --timeout=300s >/dev/null 2>&1 ||
     log "WARNING: kubelet restart finished but not all nodes reported Ready within timeout."
   log "CPU manager static enabled on all nodes."
 }
@@ -1821,9 +1968,9 @@ check_free_space_guard() {
 warn_if_diskpressure_nodes() {
   local pressured
   pressured="$(
-    kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="DiskPressure")].status}{"\n"}{end}' \
-      | awk '$2=="True"{print $1}' \
-      | xargs || true
+    kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.conditions[?(@.type=="DiskPressure")].status}{"\n"}{end}' |
+      awk '$2=="True"{print $1}' |
+      xargs || true
   )"
   if [ -n "$pressured" ]; then
     log "WARNING: nodes currently reporting DiskPressure: $pressured"
@@ -1985,7 +2132,7 @@ render_helm_values_override() {
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref container_signature_key_secret_name
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
-  local production_profile
+  local production_profile require_schema_ready expected_alembic_revision
   local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
   local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
   local vm_connect_insecure_tls container_connect_insecure_tls runtime_secrets_secret_name runtime_secrets_encryption_key_key secrets_encryption_key
@@ -2040,6 +2187,8 @@ render_helm_values_override() {
   container_start_queue_base_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS")"
   container_start_queue_max_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
   production_profile="$(yaml_escape "$PRODUCTION_PROFILE")"
+  require_schema_ready="$(yaml_escape "$REQUIRE_SCHEMA_READY")"
+  expected_alembic_revision="$(yaml_escape "$EXPECTED_ALEMBIC_REVISION")"
   cors_enterprise_profile="$(yaml_escape "$CORS_ENTERPRISE_PROFILE")"
   cors_allowed_origins="$(yaml_escape "$CORS_ALLOWED_ORIGINS")"
   cors_allowed_origin_regex="$(yaml_escape "$CORS_ALLOWED_ORIGIN_REGEX")"
@@ -2103,6 +2252,8 @@ appTemplateValues:
   CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "${container_start_queue_base_delay_seconds}"
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "${container_start_queue_max_delay_seconds}"
   PRODUCTION_PROFILE: "${production_profile}"
+  REQUIRE_SCHEMA_READY: "${require_schema_ready}"
+  EXPECTED_ALEMBIC_REVISION: "${expected_alembic_revision}"
   CORS_ENTERPRISE_PROFILE: "${cors_enterprise_profile}"
   CORS_ALLOWED_ORIGINS: "${cors_allowed_origins}"
   CORS_ALLOWED_ORIGIN_REGEX: "${cors_allowed_origin_regex}"
@@ -2260,8 +2411,8 @@ cleanup_node_debugger_pods() {
   local node="$1"
   local pod_names
 
-  pod_names="$(kubectl -n default get pods --no-headers -o custom-columns=':metadata.name' 2>/dev/null \
-    | grep "^node-debugger-${node}-" || true)"
+  pod_names="$(kubectl -n default get pods --no-headers -o custom-columns=':metadata.name' 2>/dev/null |
+    grep "^node-debugger-${node}-" || true)"
   if [ -z "$pod_names" ]; then
     return
   fi
@@ -2303,7 +2454,7 @@ preload_runner_image_on_worker_nodes() {
       # shellcheck disable=SC2016
       kubectl debug "node/${node}" --quiet --image=busybox:1.36 -- \
         sh -c 'set -eu; tmp=/host/tmp/bretter-runner-image.tar; cat >"$tmp"; chroot /host ctr -n k8s.io images import /tmp/bretter-runner-image.tar; rm -f "$tmp"' \
-        < "$runner_tar" 2>&1
+        <"$runner_tar" 2>&1
     )"; then
       cleanup_node_debugger_pods "$node"
       if [ -n "$preload_output" ]; then
@@ -2386,8 +2537,8 @@ reconcile_backend_data_pv() {
   fi
 
   local current_hostnames current_hostpath recreate_reason
-  current_hostnames="$(kubectl get pv backend-data-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' \
-    | awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
+  current_hostnames="$(kubectl get pv backend-data-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' |
+    awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
   current_hostpath="$(kubectl get pv backend-data-pv -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)"
   recreate_reason=""
 
@@ -2417,8 +2568,8 @@ reconcile_postgres_data_pv() {
   fi
 
   local current_hostnames current_hostpath recreate_reason
-  current_hostnames="$(kubectl get pv backend-postgres-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' \
-    | awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
+  current_hostnames="$(kubectl get pv backend-postgres-pv -o jsonpath='{range .spec.nodeAffinity.required.nodeSelectorTerms[*].matchExpressions[*]}{.key}={.values[*]}{"\n"}{end}' |
+    awk -F= '$1=="kubernetes.io/hostname"{print $2}')"
   current_hostpath="$(kubectl get pv backend-postgres-pv -o jsonpath='{.spec.hostPath.path}' 2>/dev/null || true)"
   recreate_reason=""
 
@@ -3026,6 +3177,356 @@ spec:
 EOF
 }
 
+apply_ghcr_access_healthcheck() {
+  if [ "$ENABLE_GHCR_ACCESS_HEALTHCHECK" -ne 1 ]; then
+    log "Skipping GHCR access health check automation (ENABLE_GHCR_ACCESS_HEALTHCHECK=0)."
+    kubectl -n "$NAMESPACE" delete cronjob bretter-ghcr-access-check --ignore-not-found=true >/dev/null 2>&1 || true
+    return
+  fi
+
+  log "Applying GHCR access health check CronJob (schedule: $GHCR_ACCESS_HEALTHCHECK_SCHEDULE)"
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-ghcr-access-check
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${GHCR_ACCESS_HEALTHCHECK_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1200
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET}
+          containers:
+            - name: ghcr-check
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: GHCR_TIMEOUT_SECONDS
+                  value: "${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}"
+                - name: IMAGE_REFS
+                  value: "${BACKEND_IMAGE},${FRONTEND_IMAGE},${RUNNER_IMAGE}"
+              volumeMounts:
+                - name: ghcr-creds
+                  mountPath: /var/run/ghcr-creds
+                  readOnly: true
+              command:
+                - /bin/bash
+                - -lc
+                - |
+                  set -euo pipefail
+                  python3 - <<'PY'
+                  import base64
+                  import json
+                  import os
+                  import re
+                  import sys
+                  from typing import Optional
+                  from urllib.parse import parse_qsl
+
+                  import requests
+
+                  timeout = max(10, int(os.environ.get("GHCR_TIMEOUT_SECONDS") or "120"))
+                  image_refs = [item.strip() for item in str(os.environ.get("IMAGE_REFS") or "").split(",") if item.strip()]
+                  docker_config_path = "/var/run/ghcr-creds/.dockerconfigjson"
+
+
+                  def fail(message: str) -> None:
+                      print(f"FAIL: {message}", file=sys.stderr)
+                      sys.exit(1)
+
+
+                  def parse_ref(image_ref: str) -> tuple[str, str]:
+                      ref = image_ref.strip()
+                      if "@" in ref:
+                          image_name, manifest_ref = ref.rsplit("@", 1)
+                          return image_name, manifest_ref
+                      image_name = ref
+                      tail = image_name.rsplit("/", 1)[-1]
+                      if ":" in tail:
+                          manifest_ref = tail.rsplit(":", 1)[-1]
+                          image_name = image_name[: -(len(manifest_ref) + 1)]
+                      else:
+                          manifest_ref = "latest"
+                      return image_name, manifest_ref
+
+
+                  def _basic_auth_from_dockerconfig(host: str) -> Optional[tuple[str, str]]:
+                      if not os.path.exists(docker_config_path):
+                          return None
+                      try:
+                          payload = json.loads(open(docker_config_path, "r", encoding="utf-8").read())
+                      except Exception:
+                          return None
+                      auths = (payload or {}).get("auths") or {}
+                      candidates = [host, f"https://{host}", f"https://{host}/v1/"]
+                      for key in candidates:
+                          entry = auths.get(key) or {}
+                          auth_b64 = str(entry.get("auth") or "").strip()
+                          if not auth_b64:
+                              continue
+                          try:
+                              decoded = base64.b64decode(auth_b64).decode("utf-8")
+                          except Exception:
+                              continue
+                          if ":" not in decoded:
+                              continue
+                          username, password = decoded.split(":", 1)
+                          if username and password:
+                              return username, password
+                      return None
+
+
+                  def _parse_www_authenticate(header: str) -> dict[str, str]:
+                      raw = str(header or "").strip()
+                      if not raw.lower().startswith("bearer "):
+                          return {}
+                      params = raw[7:].strip()
+                      result: dict[str, str] = {}
+                      for key, value in re.findall(r'([A-Za-z_]+)="([^"]*)"', params):
+                          result[key.lower()] = value
+                      if result:
+                          return result
+                      for token in parse_qsl(params.replace(",", "&"), keep_blank_values=True):
+                          result[token[0].lower()] = token[1]
+                      return result
+
+
+                  def fetch_bearer_token(www_authenticate: str, auth: Optional[tuple[str, str]]) -> Optional[str]:
+                      parts = _parse_www_authenticate(www_authenticate)
+                      realm = str(parts.get("realm") or "").strip()
+                      if not realm:
+                          return None
+                      params = {}
+                      if parts.get("service"):
+                          params["service"] = parts["service"]
+                      if parts.get("scope"):
+                          params["scope"] = parts["scope"]
+                      response = requests.get(
+                          realm,
+                          params=params,
+                          timeout=timeout,
+                          auth=auth if auth else None,
+                      )
+                      if response.status_code >= 400:
+                          return None
+                      payload = response.json() if "application/json" in str(response.headers.get("content-type") or "") else {}
+                      token = str(payload.get("token") or payload.get("access_token") or "").strip()
+                      return token or None
+
+
+                  def check_manifest_pullability(image_ref: str) -> None:
+                      image_name, manifest_ref = parse_ref(image_ref)
+                      if not image_name or "/" not in image_name:
+                          fail(f"invalid image reference: {image_ref}")
+                      registry, repository = image_name.split("/", 1)
+                      if registry.lower() != "ghcr.io":
+                          print(f"SKIP: non-GHCR image reference not checked: {image_ref}")
+                          return
+                      url = f"https://{registry}/v2/{repository}/manifests/{manifest_ref}"
+                      headers = {
+                          "Accept": (
+                              "application/vnd.oci.image.manifest.v1+json,"
+                              "application/vnd.docker.distribution.manifest.v2+json"
+                          )
+                      }
+                      auth = _basic_auth_from_dockerconfig(registry)
+
+                      response = requests.head(url, headers=headers, timeout=timeout)
+                      if response.status_code in {200, 301, 302}:
+                          return
+
+                      bearer = None
+                      if response.status_code == 401:
+                          bearer = fetch_bearer_token(response.headers.get("www-authenticate", ""), auth)
+                      if bearer:
+                          headers["Authorization"] = f"Bearer {bearer}"
+                          response = requests.head(url, headers=headers, timeout=timeout)
+                          if response.status_code in {200, 301, 302}:
+                              return
+
+                      if auth:
+                          response = requests.head(url, headers=headers, timeout=timeout, auth=auth)
+                          if response.status_code in {200, 301, 302}:
+                              return
+
+                      fail(f"manifest pullability check failed for {image_ref}: HTTP {response.status_code}")
+
+
+                  ping = requests.get("https://ghcr.io/v2/", timeout=timeout)
+                  if ping.status_code not in {200, 401}:
+                      fail(f"ghcr.io registry API ping failed: HTTP {ping.status_code}")
+
+                  if not image_refs:
+                      fail("IMAGE_REFS is empty; no GHCR references to validate.")
+                  for ref in image_refs:
+                      check_manifest_pullability(ref)
+
+                  print(f"GHCR access check passed for {len(image_refs)} image references.")
+                  PY
+          volumes:
+            - name: ghcr-creds
+              secret:
+                secretName: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET}
+                optional: true
+EOF
+}
+
+apply_userflow_slo_probes() {
+  if [ "$ENABLE_USERFLOW_SLO_PROBES" -ne 1 ]; then
+    log "Skipping user-flow SLO probes (ENABLE_USERFLOW_SLO_PROBES=0)."
+    kubectl -n "$NAMESPACE" delete cronjob bretter-slo-vm-launch bretter-slo-rdp-readiness bretter-slo-upload-finalize --ignore-not-found=true >/dev/null 2>&1 || true
+    return
+  fi
+
+  log "Applying user-flow SLO probe CronJobs (schedule: $USERFLOW_SLO_PROBE_SCHEDULE)"
+  local probe_command
+  probe_command="set -euo pipefail; python3 /app/backend/src/tools/userflow_slo_probe.py"
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-slo-vm-launch
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1200
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: slo-vm-launch
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: BLABS_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: BLABS_DATABASE_URL
+                - name: SLO_CHECK_TYPE
+                  value: vm_launch
+                - name: SLO_LOOKBACK_MINUTES
+                  value: "${USERFLOW_SLO_LOOKBACK_MINUTES}"
+                - name: VM_LAUNCH_FAILURE_RATE_PCT
+                  value: "${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}"
+                - name: RDP_STUCK_MINUTES
+                  value: "${USERFLOW_SLO_RDP_STUCK_MINUTES}"
+                - name: RDP_STUCK_MAX
+                  value: "${USERFLOW_SLO_RDP_STUCK_MAX}"
+                - name: UPLOAD_FINALIZE_FAILURE_RATE_PCT
+                  value: "${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}"
+              command:
+                - /bin/bash
+                - -lc
+                - "${probe_command}"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-slo-rdp-readiness
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1200
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: slo-rdp-readiness
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: BLABS_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: BLABS_DATABASE_URL
+                - name: SLO_CHECK_TYPE
+                  value: rdp_readiness
+                - name: SLO_LOOKBACK_MINUTES
+                  value: "${USERFLOW_SLO_LOOKBACK_MINUTES}"
+                - name: VM_LAUNCH_FAILURE_RATE_PCT
+                  value: "${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}"
+                - name: RDP_STUCK_MINUTES
+                  value: "${USERFLOW_SLO_RDP_STUCK_MINUTES}"
+                - name: RDP_STUCK_MAX
+                  value: "${USERFLOW_SLO_RDP_STUCK_MAX}"
+                - name: UPLOAD_FINALIZE_FAILURE_RATE_PCT
+                  value: "${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}"
+              command:
+                - /bin/bash
+                - -lc
+                - "${probe_command}"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-slo-upload-finalize
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1200
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: slo-upload-finalize
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: BLABS_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: BLABS_DATABASE_URL
+                - name: SLO_CHECK_TYPE
+                  value: upload_finalize
+                - name: SLO_LOOKBACK_MINUTES
+                  value: "${USERFLOW_SLO_LOOKBACK_MINUTES}"
+                - name: VM_LAUNCH_FAILURE_RATE_PCT
+                  value: "${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}"
+                - name: RDP_STUCK_MINUTES
+                  value: "${USERFLOW_SLO_RDP_STUCK_MINUTES}"
+                - name: RDP_STUCK_MAX
+                  value: "${USERFLOW_SLO_RDP_STUCK_MAX}"
+                - name: UPLOAD_FINALIZE_FAILURE_RATE_PCT
+                  value: "${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}"
+              command:
+                - /bin/bash
+                - -lc
+                - "${probe_command}"
+EOF
+}
+
 apply_kubelet_serving_csr_autoapproval() {
   if [ "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" -ne 1 ]; then
     log "Skipping kubelet-serving CSR auto-approval automation (ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=0)."
@@ -3285,6 +3786,8 @@ apply_manifests() {
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s
 
   prune_bootstrap_admin_env
+  apply_ghcr_access_healthcheck
+  apply_userflow_slo_probes
 }
 
 prune_bootstrap_admin_env() {
@@ -3304,7 +3807,8 @@ prune_bootstrap_admin_env() {
     return
   fi
 
-  patch_payload="$(cat <<'EOF'
+  patch_payload="$(
+    cat <<'EOF'
 spec:
   template:
     spec:
@@ -3314,7 +3818,7 @@ spec:
         - name: BLABS_ADMIN_DEFAULT_PASSWORD
           $patch: delete
 EOF
-)"
+  )"
 
   log "Pruning bootstrap admin secret from bretter-backend deployment env..."
   kubectl -n "$NAMESPACE" patch deployment bretter-backend --type=strategic --patch "$patch_payload" >/dev/null
@@ -3362,6 +3866,138 @@ run_post_deploy_api_health_check() {
   done
 
   fail "Post-deploy API health check failed at ${url}."
+}
+
+run_post_deploy_admin_api_smoke_check() {
+  if [ "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" -ne 1 ]; then
+    log "Skipping post-deploy admin API smoke validation (RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=0)."
+    return
+  fi
+
+  local username_b64 password_b64 admin_api_base admin_verify_tls
+  username_b64="$(printf '%s' "$ADMIN_API_SMOKE_USERNAME" | base64 -w0)"
+  password_b64="$(printf '%s' "$ADMIN_API_SMOKE_PASSWORD" | base64 -w0)"
+  admin_api_base="http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+  admin_verify_tls="1"
+  if [ "$TLS_ENABLED" -eq 1 ]; then
+    admin_api_base="https://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+    admin_verify_tls="0"
+  fi
+
+  log "Running post-deploy admin API smoke validation job..."
+  kubectl -n "$NAMESPACE" delete job bretter-post-deploy-admin-api-smoke --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bretter-post-deploy-admin-api-smoke
+  namespace: ${NAMESPACE}
+spec:
+  ttlSecondsAfterFinished: 1800
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: admin-api-smoke
+          image: ${BACKEND_IMAGE}
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: API_BASE
+              value: "${admin_api_base}"
+            - name: VERIFY_TLS
+              value: "${admin_verify_tls}"
+            - name: USERNAME_B64
+              value: "${username_b64}"
+            - name: PASSWORD_B64
+              value: "${password_b64}"
+            - name: TIMEOUT_SECONDS
+              value: "${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS}"
+          command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              python3 - <<'PY'
+              import base64
+              import json
+              import os
+              import sys
+              import time
+
+              import requests
+
+              API_BASE = str(os.environ.get("API_BASE") or "").rstrip("/")
+              VERIFY_TLS = str(os.environ.get("VERIFY_TLS") or "1") == "1"
+              USERNAME = base64.b64decode(str(os.environ.get("USERNAME_B64") or "")).decode("utf-8")
+              PASSWORD = base64.b64decode(str(os.environ.get("PASSWORD_B64") or "")).decode("utf-8")
+              TIMEOUT_SECONDS = max(60, int(os.environ.get("TIMEOUT_SECONDS") or "180"))
+              DEADLINE = time.time() + TIMEOUT_SECONDS
+
+              if not API_BASE:
+                  print("FAIL: API_BASE is required", file=sys.stderr)
+                  sys.exit(1)
+              if not USERNAME or not PASSWORD:
+                  print("FAIL: admin smoke credentials are required", file=sys.stderr)
+                  sys.exit(1)
+
+              session = requests.Session()
+              session.headers.update({"Accept": "application/json"})
+
+
+              def fail(message: str) -> None:
+                  print(f"FAIL: {message}", file=sys.stderr)
+                  sys.exit(1)
+
+
+              def req(method: str, path: str, **kwargs) -> requests.Response:
+                  url = path if path.startswith("http://") or path.startswith("https://") else f"{API_BASE}{path}"
+                  return session.request(method=method, url=url, timeout=20, verify=VERIFY_TLS, **kwargs)
+
+
+              health = req("GET", "/health")
+              if health.status_code != 200:
+                  fail(f"health check failed ({health.status_code}): {health.text[:300]}")
+              payload = health.json() if "application/json" in str(health.headers.get("content-type") or "") else {}
+              if str(payload.get("status") or "").lower() != "ok":
+                  fail(f"unexpected health payload: {json.dumps(payload)[:300]}")
+
+              login = req("POST", "/auth/login", json={"username": USERNAME, "password": PASSWORD})
+              if login.status_code != 200:
+                  fail(f"admin login failed ({login.status_code}): {login.text[:300]}")
+
+              checks = [
+                  "/admin/users",
+                  "/admin/templates",
+                  "/admin/images",
+                  "/admin/container-images",
+                  "/admin/team-quotas",
+                  "/admin/settings/storage",
+                  "/admin/settings/runtime",
+                  "/admin/audit-events?limit=5",
+              ]
+
+              for path in checks:
+                  if time.time() > DEADLINE:
+                      fail("admin API smoke timed out before completing checks")
+                  resp = req("GET", path)
+                  if resp.status_code != 200:
+                      fail(f"{path} failed ({resp.status_code}): {resp.text[:300]}")
+                  if "application/json" not in str(resp.headers.get("content-type") or ""):
+                      fail(f"{path} did not return application/json")
+
+              req("POST", "/auth/logout")
+              print("Admin API smoke validation passed.")
+              PY
+EOF
+
+  if ! kubectl -n "$NAMESPACE" wait --for=condition=complete job/bretter-post-deploy-admin-api-smoke --timeout="${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS}s"; then
+    kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-admin-api-smoke --all-containers=true || true
+    fail "Post-deploy admin API smoke validation job failed."
+  fi
+  kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-admin-api-smoke --all-containers=true || true
 }
 
 run_post_deploy_synthetic_check() {
@@ -3735,6 +4371,7 @@ log_runtime_configuration() {
   log "Container scanning enabled: $CONTAINER_SCAN_ENABLED (interval: ${CONTAINER_SCAN_INTERVAL_MINUTES}m severity: ${CONTAINER_SCAN_SEVERITY})"
   log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
   log "Backend production profile: $PRODUCTION_PROFILE"
+  log "Backend schema readiness gate: $REQUIRE_SCHEMA_READY (expected revision: ${EXPECTED_ALEMBIC_REVISION:-head})"
   log "CORS enterprise profile: $CORS_ENTERPRISE_PROFILE (origins: ${CORS_ALLOWED_ORIGINS:-default})"
   log "Auth login rate limit window/max/lockout: ${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS}s/${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS}/${AUTH_LOGIN_LOCKOUT_SECONDS}s"
   log "Bootstrap admin env pruning: $PRUNE_BOOTSTRAP_ADMIN_ENV"
@@ -3743,14 +4380,22 @@ log_runtime_configuration() {
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION})"
+  log "GHCR access health check enabled: $ENABLE_GHCR_ACCESS_HEALTHCHECK (schedule: ${GHCR_ACCESS_HEALTHCHECK_SCHEDULE} timeout: ${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}s secret: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET})"
+  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m)"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
   log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
+  log "Post-deploy admin API smoke enabled: $RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK (timeout: ${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS}s user: ${ADMIN_API_SMOKE_USERNAME})"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
   log "Post-deploy runner smoke enabled: $RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK (timeout: ${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS}s pull-policy: ${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY})"
   log "Production go-live proof enabled: $RUN_PRODUCTION_GO_LIVE_PROOF (report dir: $PRODUCTION_GO_LIVE_REPORT_DIR health-timeout: ${PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS}s)"
+  if [ "$ADMIN_API_SMOKE_AUTO_DISABLED" -eq 1 ]; then
+    log "Admin API smoke auto-disabled: set ADMIN_API_SMOKE_PASSWORD to validate existing deployments."
+  elif [ "$ADMIN_API_SMOKE_PASSWORD_AUTOSET" -eq 1 ]; then
+    log "Admin API smoke password was auto-set from the bootstrap admin secret."
+  fi
   if [ "$SYNTHETIC_CHECK_AUTO_DISABLED" -eq 1 ]; then
     log "Synthetic check auto-disabled: set SYNTHETIC_CHECK_PASSWORD to run authenticated synthetic validation on existing deployments."
   elif [ "$SYNTHETIC_CHECK_PASSWORD_AUTOSET" -eq 1 ]; then
@@ -3833,6 +4478,7 @@ run_phase_postdeploy() {
   patch_default_pvc_alert_exclusions
   apply_monitoring_alert_rules
   run_post_deploy_api_health_check
+  run_post_deploy_admin_api_smoke_check
   run_post_deploy_synthetic_check
   run_post_deploy_runner_smoke_check
   run_production_go_live_proof
@@ -3850,6 +4496,7 @@ main() {
   validate_storage_guard_config
   validate_vm_network_config
   validate_container_runtime_config
+  validate_schema_gate_config
   validate_auth_and_cors_config
   validate_postgres_config
   validate_external_secrets_config
@@ -3861,6 +4508,7 @@ main() {
   validate_kubelet_serving_csr_autoapproval_config
   configure_admin_bootstrap_credentials
   validate_post_deploy_api_health_config
+  validate_admin_api_smoke_check_config
   validate_synthetic_check_config
   validate_runner_smoke_check_config
   validate_production_go_live_proof_config

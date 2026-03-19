@@ -58,6 +58,12 @@ run_failure "reject invalid admission policy toggle" \
 run_failure "reject invalid post-deploy API health check toggle" \
   env SETUP_DRY_RUN=1 RUN_POST_DEPLOY_API_HEALTH_CHECK=2 "$SETUP_SCRIPT"
 
+run_failure "reject invalid admin API smoke toggle" \
+  env SETUP_DRY_RUN=1 RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=2 "$SETUP_SCRIPT"
+
+run_failure "reject invalid admin API smoke timeout" \
+  env SETUP_DRY_RUN=1 RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1 ADMIN_API_SMOKE_PASSWORD=bootstrap-secret POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS=20 "$SETUP_SCRIPT"
+
 run_failure "reject invalid bootstrap env prune toggle" \
   env SETUP_DRY_RUN=1 PRUNE_BOOTSTRAP_ADMIN_ENV=2 "$SETUP_SCRIPT"
 
@@ -81,6 +87,24 @@ run_failure "reject production profile with missing explicit control-node overri
 
 run_success "allow production dry-run with explicit hardened overrides" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
+  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
+  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
+  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
+  CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
+  "$SETUP_SCRIPT"
+
+run_failure "reject production profile with local/dev image references" \
+  env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
+  BACKEND_IMAGE=localhost/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
+  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
+  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
+  CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
+  CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
+  "$SETUP_SCRIPT"
+
+run_failure "reject production profile when schema gate is disabled" \
+  env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 REQUIRE_SCHEMA_READY=0 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
   BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
   FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
   RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \

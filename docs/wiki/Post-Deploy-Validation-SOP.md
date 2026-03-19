@@ -1,6 +1,6 @@
 # Post-Deploy Validation SOP
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 Run this after every deployment before closing the change.
 
@@ -17,6 +17,7 @@ Validates:
 - Login/auth session
 - VM launch/connect/delete
 - Container launch/connect/delete
+- Admin API read-path health (`/admin/*`)
 - Idle timeout prompt visibility (user page + connect page)
 - Runner image startup on runner node (postdeploy smoke pod)
 - Core rollout health
@@ -57,20 +58,24 @@ Note:
 
 ## Phase 2: Synthetic job (preferred)
 
-If setup synthetic check is enabled:
+If setup admin API smoke and synthetic checks are enabled:
 
 ```bash
+kubectl -n labs get job bretter-post-deploy-admin-api-smoke
+kubectl -n labs logs job/bretter-post-deploy-admin-api-smoke --all-containers=true
 kubectl -n labs get job bretter-post-deploy-check
 kubectl -n labs logs job/bretter-post-deploy-check --all-containers=true
 ```
 
 Pass criteria:
 
+- Admin API smoke job completes successfully.
 - Job completes successfully.
 - Logs include end-to-end success markers for VM/container paths.
 
 Notes:
 
+- Setup auto-disables admin API smoke validation when it generated a fresh bootstrap admin secret and no `ADMIN_API_SMOKE_PASSWORD` was supplied.
 - Setup auto-disables synthetic validation when it generated a fresh bootstrap admin secret and no `SYNTHETIC_CHECK_PASSWORD` was supplied.
 - Setup runs a runner image smoke pod during `postdeploy` by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - For existing deployments, run authenticated synthetic validation with explicit credentials:
@@ -80,6 +85,9 @@ SETUP_PHASES=postdeploy \
 RUN_POST_DEPLOY_SYNTHETIC_CHECK=1 \
 SYNTHETIC_CHECK_USERNAME=admin \
 SYNTHETIC_CHECK_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
+RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1 \
+ADMIN_API_SMOKE_USERNAME=admin \
+ADMIN_API_SMOKE_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
 ./scripts/setup.sh
 ```
 

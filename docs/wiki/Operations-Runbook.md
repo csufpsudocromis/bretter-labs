@@ -1,6 +1,6 @@
 # Operations Runbook
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 ## Production pre-rollout gate
 
@@ -127,6 +127,41 @@ Generate and archive a single report covering rollout, production env checks, ru
 
 ```bash
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
+
+## Rollback command
+
+Use the one-command rollback helper:
+
+```bash
+NAMESPACE=labs ./scripts/rollback_release.sh
+```
+
+Optional explicit revision:
+
+```bash
+TARGET_REVISION=12 NAMESPACE=labs ./scripts/rollback_release.sh
+```
+
+By default this script:
+- rolls Helm back to the most recent prior deployed/superseded revision
+- waits for backend/frontend rollout
+- runs go-live proof unless `RUN_GO_LIVE_PROOF=0`
+
+## Continuous probe checks
+
+`setup.sh` deploy phase now applies recurring probe CronJobs:
+
+- `bretter-ghcr-access-check`: verifies GHCR registry/API + manifest pullability for backend/frontend/runner refs.
+- `bretter-slo-vm-launch`: fails when VM launch failure rate breaches configured threshold.
+- `bretter-slo-rdp-readiness`: fails when too many RDP instances remain stuck in starting states.
+- `bretter-slo-upload-finalize`: fails when upload-finalize failure rate breaches configured threshold.
+
+Quick status:
+
+```bash
+kubectl -n labs get cronjob bretter-ghcr-access-check bretter-slo-vm-launch bretter-slo-rdp-readiness bretter-slo-upload-finalize
+kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | rg 'bretter-ghcr-access-check|bretter-slo-'
 ```
 
 ## Quotas and scaling checks

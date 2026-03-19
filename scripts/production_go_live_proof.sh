@@ -122,6 +122,8 @@ def is_truthy(raw: str) -> bool:
 errors: list[str] = []
 if not is_truthy(env_values.get("BLABS_PRODUCTION_PROFILE", "")):
     errors.append("BLABS_PRODUCTION_PROFILE is not enabled in backend deployment env.")
+if not is_truthy(env_values.get("BLABS_REQUIRE_SCHEMA_READY", "")):
+    errors.append("BLABS_REQUIRE_SCHEMA_READY is not enabled in backend deployment env.")
 if not is_truthy(env_values.get("BLABS_CORS_ENTERPRISE_PROFILE", "")):
     errors.append("BLABS_CORS_ENTERPRISE_PROFILE is not enabled in backend deployment env.")
 if not is_truthy(env_values.get("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED", "")):

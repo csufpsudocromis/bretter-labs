@@ -160,6 +160,8 @@ Proof artifact and operator docs:
 | `NODE_EXTERNAL_HOST` | auto | Public host/IP used in generated URLs |
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `PRODUCTION_PROFILE` | `0` | Enables backend startup hardening checks (set `1` for production) |
+| `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
+| `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
 | `ADMIN_BOOTSTRAP_PASSWORD` | random | Initial one-time admin secret used only when no admin user exists (required for first bootstrap path) |
 | `VM_STORAGE_CLASS` | auto | StorageClass for VM clone disks |
@@ -205,6 +207,20 @@ Proof artifact and operator docs:
 | `RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK` | `1` | Run runner image startup smoke check during postdeploy |
 | `POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS` | `120` | Timeout budget for runner smoke pod readiness |
 | `POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY` | `IfNotPresent` | Pull policy used by runner smoke pod (`Always`/`IfNotPresent`/`Never`) |
+| `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK` | `1` | Run authenticated admin API smoke suite during postdeploy |
+| `POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS` | `180` | Timeout budget for admin API smoke job |
+| `ADMIN_API_SMOKE_USERNAME` | `admin` | Admin username used by postdeploy admin smoke validation |
+| `ADMIN_API_SMOKE_PASSWORD` | empty | Admin password used by postdeploy admin smoke validation |
+| `ENABLE_GHCR_ACCESS_HEALTHCHECK` | `1` | Deploy recurring GHCR registry access CronJob |
+| `GHCR_ACCESS_HEALTHCHECK_SCHEDULE` | `*/10 * * * *` | Cron schedule for GHCR access checks |
+| `GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS` | `120` | Timeout budget for each GHCR access probe run |
+| `ENABLE_USERFLOW_SLO_PROBES` | `1` | Deploy recurring VM/RDP/upload SLO probe CronJobs |
+| `USERFLOW_SLO_PROBE_SCHEDULE` | `*/10 * * * *` | Cron schedule for user-flow SLO probes |
+| `USERFLOW_SLO_LOOKBACK_MINUTES` | `30` | Lookback window for SLO rate checks |
+| `USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT` | `25` | VM launch failure-rate threshold for SLO breach |
+| `USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT` | `25` | Upload finalize failure-rate threshold for SLO breach |
+| `USERFLOW_SLO_RDP_STUCK_MINUTES` | `12` | Age threshold before RDP-starting instances are considered stuck |
+| `USERFLOW_SLO_RDP_STUCK_MAX` | `2` | Max allowed stuck RDP instances before SLO breach |
 | `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
 | `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
 | `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |
@@ -327,6 +343,17 @@ python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-pr
 ./scripts/ci_guardrails.sh
 ```
 
+Publish images + auto-pin production digests:
+
+```bash
+# GitHub Actions workflow dispatch:
+# .github/workflows/publish-and-pin-images.yml
+# Inputs:
+#   version=0.3.1
+#   image_namespace=<ghcr-namespace>
+#   commit_digest_update=true
+```
+
 Post-rollout proof artifact:
 
 ```bash
@@ -336,6 +363,7 @@ NAMESPACE=labs ./scripts/production_go_live_proof.sh
 Deploy-time proof:
 
 - `SETUP_PHASES=deploy,postdeploy PRODUCTION_PROFILE=1 ./scripts/setup.sh` runs the same proof automatically unless `RUN_PRODUCTION_GO_LIVE_PROOF=0`.
+- `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1` additionally verifies authenticated `/admin/*` read-path health.
 
 ## Operations
 
@@ -346,6 +374,14 @@ kubectl -n labs get pods
 kubectl -n labs get deploy bretter-backend bretter-frontend
 kubectl -n labs logs deploy/bretter-backend --tail=200
 kubectl -n labs get pods | rg '^ct-|^vm-|^virt-launcher-'
+```
+
+Rollback (one command):
+
+```bash
+NAMESPACE=labs ./scripts/rollback_release.sh
+# optional explicit target:
+# TARGET_REVISION=12 NAMESPACE=labs ./scripts/rollback_release.sh
 ```
 
 Common issues:

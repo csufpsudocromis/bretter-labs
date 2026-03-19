@@ -1,6 +1,6 @@
 # Setup and Configuration
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 ## Quick install
 
@@ -27,6 +27,8 @@ Core:
 - `NODE_EXTERNAL_HOST`
 - `PUBLIC_SCHEME` (`https` recommended)
 - `PRODUCTION_PROFILE` (`1` recommended for production)
+- `REQUIRE_SCHEMA_READY` (default `1`; fail startup if DB schema/head is not ready)
+- `EXPECTED_ALEMBIC_REVISION` (optional explicit expected Alembic revision)
 - `TLS_ENABLED`, `TLS_SECRET_NAME`
 
 Storage:
@@ -102,11 +104,25 @@ Monitoring/ops:
 - `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE`
 - `RUN_POST_DEPLOY_API_HEALTH_CHECK`
 - `POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS`
+- `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK`
+- `POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS`
+- `ADMIN_API_SMOKE_USERNAME`, `ADMIN_API_SMOKE_PASSWORD`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
 - `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
 - `RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK`
 - `POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS`
 - `POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY`
+- `ENABLE_GHCR_ACCESS_HEALTHCHECK`
+- `GHCR_ACCESS_HEALTHCHECK_SCHEDULE`
+- `GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS`
+- `GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET`
+- `ENABLE_USERFLOW_SLO_PROBES`
+- `USERFLOW_SLO_PROBE_SCHEDULE`
+- `USERFLOW_SLO_LOOKBACK_MINUTES`
+- `USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT`
+- `USERFLOW_SLO_RDP_STUCK_MINUTES`
+- `USERFLOW_SLO_RDP_STUCK_MAX`
+- `USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT`
 - `RUN_PRODUCTION_GO_LIVE_PROOF` (defaults to `PRODUCTION_PROFILE`)
 - `PRODUCTION_GO_LIVE_REPORT_DIR`
 - `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS`
@@ -159,6 +175,7 @@ ENABLE_MONITORING=1 \
 - If `CONTAINER_SIGNATURE_KEY_REF` uses `/etc/bretter-signing/*`, ensure secret `CONTAINER_SIGNATURE_KEY_SECRET_NAME` contains that key file.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
 - `PRODUCTION_PROFILE=1` additionally requires digest-pinned backend/frontend/runner image refs (`@sha256`).
+- `PRODUCTION_PROFILE=1` rejects local/dev image references (`localhost/*`, `:local*`, `local-*`) for backend/frontend/runner.
 - Setup no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or set explicit immutable image refs.
 - Production values baseline (`deploy/helm/values-production.yaml`) is digest-pinned and CI-enforced for backend/frontend/runner image refs.
 - Use `deploy/helm/values-production-site.template.yaml` to create site overlays (for example `deploy/helm/values-prod-site.yaml`) and validate with `-f` layering.
@@ -170,7 +187,10 @@ ENABLE_MONITORING=1 \
 - `postdeploy` also runs a runner image startup smoke pod by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
+- Post-deploy admin API smoke validation now runs by default (`RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1`) using authenticated `/admin/*` read paths.
+- Setup deploy phase now installs recurring GHCR access checks (`bretter-ghcr-access-check`) and user-flow SLO probe CronJobs (`bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
+- If setup generated a new bootstrap admin secret and `ADMIN_API_SMOKE_PASSWORD` is not set, setup auto-disables the post-deploy admin API smoke check to avoid login failures against existing admin credentials.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
 - After first-login reset, verify bootstrap env pruning: `kubectl -n labs get deploy bretter-backend -o yaml | grep BLABS_ADMIN_DEFAULT_PASSWORD` should return nothing.
 - When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.

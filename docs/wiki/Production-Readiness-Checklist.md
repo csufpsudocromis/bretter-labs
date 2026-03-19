@@ -1,6 +1,6 @@
 # Production Readiness Checklist
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 Use this checklist before first production deployment and for each release.
 
@@ -20,12 +20,14 @@ Use this checklist before first production deployment and for each release.
 - Set `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (required for production profile).
 - Set `CONTAINER_SIGNATURE_KEY_REF` and `CONTAINER_SIGNATURE_KEY_SECRET_NAME` for managed-key verification.
 - Verify `bretter-cosign-public-key` matches the expected official key fingerprint before rollout.
+- Keep `REQUIRE_SCHEMA_READY=1` in production values/overlays.
 
 ## Image and supply chain
 
 - Keep `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` digest-pinned (`@sha256:...`).
 - Verify digest refs exist in your registry before rollout.
 - Keep mutable-tag override disabled (`ALLOW_MUTABLE_IMAGE_TAGS=0`).
+- Ensure production image refs are not local/dev references (`localhost/*`, `:local*`, `local-*`).
 - Keep chart/tool versions pinned (for example `MONITORING_CHART_VERSION`, `KYVERNO_CHART_VERSION`, `EXTERNAL_SECRETS_CHART_VERSION`, `METRICS_SERVER_VERSION`).
 
 ## Auth/bootstrap
@@ -49,9 +51,10 @@ Use this checklist before first production deployment and for each release.
 - Run strict production profile validation before rollout (`-f values-production.yaml -f <site-overlay>.yaml`).
 - Run `scripts/production_go_live_proof.sh` after rollout and archive the generated report.
 - Keep `RUN_PRODUCTION_GO_LIVE_PROOF=1` for production postdeploy automation (default when `PRODUCTION_PROFILE=1`).
-- Run post-deploy API health and synthetic checks.
+- Run post-deploy API health, admin API smoke, and synthetic checks.
+- Verify recurring probe CronJobs are healthy (`bretter-ghcr-access-check`, `bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
 - Verify backup/restore path for Postgres before go-live.
-- Confirm rollback plan is documented for backend/frontend image digest rollbacks.
+- Confirm rollback plan is documented and executable (`scripts/rollback_release.sh`).
 
 ## Related pages
 

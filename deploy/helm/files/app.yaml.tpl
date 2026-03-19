@@ -548,6 +548,10 @@ spec:
               value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
             - name: BLABS_PRODUCTION_PROFILE
               value: "__PRODUCTION_PROFILE__"
+            - name: BLABS_REQUIRE_SCHEMA_READY
+              value: "__REQUIRE_SCHEMA_READY__"
+            - name: BLABS_EXPECTED_ALEMBIC_REVISION
+              value: "__EXPECTED_ALEMBIC_REVISION__"
             - name: BLABS_CORS_ENTERPRISE_PROFILE
               value: "__CORS_ENTERPRISE_PROFILE__"
             - name: BLABS_CORS_ALLOWED_ORIGINS

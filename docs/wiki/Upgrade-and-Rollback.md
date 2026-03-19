@@ -1,6 +1,6 @@
 # Upgrade and Rollback
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 ## Quick path
 
@@ -45,6 +45,20 @@ Capture and archive:
 - Prefer forward-fix deployments where possible.
 
 ## Rollback quick procedure
+
+Preferred path:
+
+```bash
+NAMESPACE=labs ./scripts/rollback_release.sh
+```
+
+Optional explicit target revision:
+
+```bash
+TARGET_REVISION=12 NAMESPACE=labs ./scripts/rollback_release.sh
+```
+
+Manual fallback:
 
 1. Roll back backend/frontend image digests in values overlay.
 2. Re-run deploy phase with pinned prior digests.

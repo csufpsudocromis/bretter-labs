@@ -2,10 +2,12 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, inspect
+from sqlalchemy import text
 
 from src.main import app
-from src.migrations import run_db_migrations
+from src.migrations import assert_schema_ready, run_db_migrations
 
 
 def test_openapi_operation_ids_are_unique() -> None:
@@ -46,6 +48,35 @@ def test_alembic_upgrade_head_on_clean_db(tmp_path: Path) -> None:
     assert "containertemplate" in table_names
     assert "connecttoken" in table_names
     assert "adminauditevent" in table_names
+
+
+def test_alembic_schema_guard_rejects_unexpected_expected_revision(tmp_path: Path) -> None:
+    db_path = tmp_path / "expected-revision.db"
+    database_url = f"sqlite:///{db_path}"
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+
+    run_db_migrations(engine=engine, database_url=database_url)
+
+    with pytest.raises(RuntimeError, match="Database schema revision mismatch"):
+        run_db_migrations(
+            engine=engine,
+            database_url=database_url,
+            expected_revision="0001",
+            require_schema_ready=True,
+        )
+
+
+def test_alembic_schema_guard_detects_missing_required_tables(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing-table.db"
+    database_url = f"sqlite:///{db_path}"
+    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+
+    run_db_migrations(engine=engine, database_url=database_url)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE connecttoken"))
+
+    with pytest.raises(RuntimeError, match="missing required application tables"):
+        assert_schema_ready(engine=engine, database_url=database_url)
 
 
 def test_release_version_files_are_consistent() -> None:

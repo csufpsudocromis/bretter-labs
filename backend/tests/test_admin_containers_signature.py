@@ -74,3 +74,15 @@ def test_create_container_image_returns_signature_warning_for_unsigned_image(log
     payload = response.json()
     assert payload["name"] == "Unsigned Nginx"
     assert payload["signature_warning"] == "Image has no signatures; continuing with warning-only policy."
+
+
+def test_create_container_image_rejects_local_dev_ref_in_production(login_admin: TestClient, monkeypatch):
+    monkeypatch.setattr(admin_containers.settings, "production_profile", True)
+    monkeypatch.setattr(admin_containers.settings, "container_allowed_registries", "*")
+
+    response = login_admin.post(
+        "/admin/container-images",
+        json={"name": "Local Dev", "image_ref": "localhost/dev/image:local-1"},
+    )
+    assert response.status_code == 422, response.text
+    assert "local/dev image references are not allowed in production profile" in response.text

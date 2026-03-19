@@ -32,7 +32,12 @@ engine = create_engine(
 
 
 def init_db() -> None:
-    run_db_migrations(engine=engine, database_url=DATABASE_URL)
+    run_db_migrations(
+        engine=engine,
+        database_url=DATABASE_URL,
+        expected_revision=settings.expected_alembic_revision or None,
+        require_schema_ready=bool(settings.require_schema_ready),
+    )
 
 
 @contextmanager

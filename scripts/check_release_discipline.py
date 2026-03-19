@@ -47,6 +47,13 @@ def _looks_placeholder(value: str) -> bool:
     )
 
 
+def _looks_local_image_ref(value: str) -> bool:
+    lowered = str(value or "").strip().lower()
+    if not lowered:
+        return False
+    return lowered.startswith("localhost/") or ":local" in lowered or "local-" in lowered
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     version_path = root / "VERSION"
@@ -56,6 +63,9 @@ def main() -> int:
     values_prod_path = root / "deploy" / "helm" / "values-production.yaml"
     values_prod_site_template_path = root / "deploy" / "helm" / "values-production-site.template.yaml"
     setup_script_path = root / "scripts" / "setup.sh"
+    publish_workflow_path = root / ".github" / "workflows" / "publish-and-pin-images.yml"
+    digest_update_script_path = root / "scripts" / "update_production_image_digests.py"
+    rollback_script_path = root / "scripts" / "rollback_release.sh"
     frontend_dockerfile_path = root / "frontend-vite" / "Dockerfile"
     backend_dockerfile_path = root / "backend" / "Dockerfile"
 
@@ -113,6 +123,11 @@ def main() -> int:
             errors.append(
                 "deploy/helm/values-production.yaml must pin production images by digest: " f"{key}={image_ref!r}"
             )
+        if _looks_local_image_ref(image_ref):
+            errors.append(
+                "deploy/helm/values-production.yaml must not use local/dev image references in production: "
+                f"{key}={image_ref!r}"
+            )
     for key in ("BACKEND_REPLICAS", "FRONTEND_REPLICAS"):
         replica_value = _extract_yaml_scalar(values_production, key).strip()
         if not replica_value:
@@ -127,6 +142,17 @@ def main() -> int:
         errors.append(
             "deploy/helm/values-production.yaml must enable backend startup hardening profile: "
             f"PRODUCTION_PROFILE={production_profile!r}"
+        )
+    require_schema_ready = _extract_yaml_scalar(values_production, "REQUIRE_SCHEMA_READY").strip().lower()
+    if require_schema_ready not in {"1", "true", "yes", "on"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must enforce startup schema validation: "
+            f"REQUIRE_SCHEMA_READY={require_schema_ready!r}"
+        )
+    expected_alembic_revision = _extract_yaml_scalar(values_production, "EXPECTED_ALEMBIC_REVISION").strip()
+    if expected_alembic_revision and not re.match(r"^[A-Za-z0-9_]+$", expected_alembic_revision):
+        errors.append(
+            "deploy/helm/values-production.yaml EXPECTED_ALEMBIC_REVISION must be empty or an alphanumeric revision id."
         )
 
     required_production_overrides = (
@@ -195,6 +221,7 @@ def main() -> int:
             "VM_STORAGE_CLASS",
             "CORS_ALLOWED_ORIGINS",
             "TLS_SECRET_NAME",
+            "REQUIRE_SCHEMA_READY",
         ):
             if not _extract_yaml_scalar(values_site_template, key).strip():
                 errors.append(
@@ -204,6 +231,24 @@ def main() -> int:
         template_secrets_key = _extract_yaml_scalar(values_site_template, "SECRETS_ENCRYPTION_KEY").strip()
         if template_secrets_key:
             errors.append("deploy/helm/values-production-site.template.yaml must keep SECRETS_ENCRYPTION_KEY empty.")
+
+    if not digest_update_script_path.exists():
+        errors.append("scripts/update_production_image_digests.py is missing.")
+    if not rollback_script_path.exists():
+        errors.append("scripts/rollback_release.sh is missing.")
+
+    if not publish_workflow_path.exists():
+        errors.append(".github/workflows/publish-and-pin-images.yml is missing.")
+    else:
+        publish_workflow = _read_text(publish_workflow_path)
+        if "docker/build-push-action" not in publish_workflow:
+            errors.append(
+                ".github/workflows/publish-and-pin-images.yml must publish images via docker/build-push-action."
+            )
+        if "update_production_image_digests.py" not in publish_workflow:
+            errors.append(
+                ".github/workflows/publish-and-pin-images.yml must call scripts/update_production_image_digests.py."
+            )
 
     setup_script = _read_text(setup_script_path)
     if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:

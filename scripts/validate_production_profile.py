@@ -69,6 +69,13 @@ def _is_digest_pinned(image_ref: str) -> bool:
     return bool(DIGEST_PIN_RE.match(image_ref))
 
 
+def _looks_local_image_ref(image_ref: str) -> bool:
+    lowered = str(image_ref or "").strip().lower()
+    if not lowered:
+        return False
+    return lowered.startswith("localhost/") or ":local" in lowered or "local-" in lowered
+
+
 def _split_csv_values(raw: str) -> list[str]:
     values: list[str] = []
     seen: set[str] = set()
@@ -123,6 +130,8 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             continue
         if not _is_digest_pinned(image_ref):
             errors.append(f"{key} must be digest-pinned with @sha256 (found: {image_ref!r}).")
+        if _looks_local_image_ref(image_ref):
+            errors.append(f"{key} must not use local/dev image references in production (found: {image_ref!r}).")
 
     get_uint("BACKEND_REPLICAS")
     get_uint("FRONTEND_REPLICAS")
@@ -131,6 +140,11 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
         errors.append("ALLOW_MUTABLE_IMAGE_TAGS must be disabled for production.")
     if not get_bool("PRODUCTION_PROFILE", default=False):
         errors.append("PRODUCTION_PROFILE must be enabled for production.")
+    if not get_bool("REQUIRE_SCHEMA_READY", default=True):
+        errors.append("REQUIRE_SCHEMA_READY must be enabled for production.")
+    expected_revision = get_text("EXPECTED_ALEMBIC_REVISION")
+    if expected_revision and not re.match(r"^[A-Za-z0-9_]+$", expected_revision):
+        errors.append("EXPECTED_ALEMBIC_REVISION must be empty or an alphanumeric Alembic revision id.")
     if get_bool("BACKEND_NODEPORT_ENABLED", default=False):
         errors.append("BACKEND_NODEPORT_ENABLED must be disabled for production.")
     if get_bool("VM_CONNECT_INSECURE_TLS", default=False):

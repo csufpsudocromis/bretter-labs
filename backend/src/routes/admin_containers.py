@@ -52,6 +52,11 @@ def _normalize_container_image_ref(value: str) -> str:
     return ref
 
 
+def _is_local_dev_image_ref(image_ref: str) -> bool:
+    lowered = str(image_ref or "").strip().lower()
+    return lowered.startswith("localhost/") or ":local" in lowered or "local-" in lowered
+
+
 def _validate_env(env_map: dict[str, str]) -> dict[str, str]:
     validated: dict[str, str] = {}
     for raw_key, raw_value in (env_map or {}).items():
@@ -90,12 +95,22 @@ def _registry_from_ref(image_ref: str) -> str:
 def _enforce_registry_policy(image_ref: str) -> None:
     allowed = _allowed_registries()
     if "*" in allowed:
+        if bool(getattr(settings, "production_profile", False)) and _is_local_dev_image_ref(image_ref):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="local/dev image references are not allowed in production profile",
+            )
         return
     registry = _registry_from_ref(image_ref)
     if registry not in allowed:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"registry {registry or 'unknown'} is not allowed by policy",
+        )
+    if bool(getattr(settings, "production_profile", False)) and _is_local_dev_image_ref(image_ref):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="local/dev image references are not allowed in production profile",
         )
 
 

@@ -24,10 +24,10 @@ jobs:
           sudo apt-get install -y shellcheck shfmt
 
       - name: Run shellcheck
-        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/production_go_live_proof.sh frontend-vite/nginx-entrypoint.sh
+        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/production_go_live_proof.sh scripts/rollback_release.sh frontend-vite/nginx-entrypoint.sh
 
       - name: Run shfmt
-        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/production_go_live_proof.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
+        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/production_go_live_proof.sh scripts/rollback_release.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
 
       - name: Run hadolint
         run: |
@@ -72,7 +72,7 @@ jobs:
           .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 
       - name: Check Python formatting
-        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py
+        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py
 
       - name: Run pip-audit
         run: |

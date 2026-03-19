@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     storage_root: str = "/mnt/lab-images"
     database_path: str = "backend/data/app.db"
     database_url: str = ""
+    require_schema_ready: bool = True
+    expected_alembic_revision: str = ""
     kube_namespace: str = "labs"
     kube_auto_create_namespace: bool = False
     kube_image_pvc: str = "golden-images"

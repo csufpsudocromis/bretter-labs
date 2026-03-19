@@ -1,0 +1,122 @@
+name: Publish Images And Pin Digests
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (without leading v). Defaults to VERSION file."
+        required: false
+      image_namespace:
+        description: "GHCR namespace (defaults to repository owner)."
+        required: false
+      commit_digest_update:
+        description: "Commit updated digests into deploy/helm/values-production.yaml"
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version and namespace
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_input="${{ github.event.inputs.version }}"
+          if [ -z "${version_input}" ]; then
+            version_input="$(tr -d '[:space:]' < VERSION)"
+          fi
+          if [[ ! "${version_input}" =~ ^[0-9]+(\.[0-9]+){2}([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "invalid semantic version: ${version_input}" >&2
+            exit 1
+          fi
+          namespace_input="${{ github.event.inputs.image_namespace }}"
+          if [ -z "${namespace_input}" ]; then
+            namespace_input="${GITHUB_REPOSITORY_OWNER}"
+          fi
+          if [ -z "${namespace_input}" ]; then
+            echo "image namespace cannot be empty" >&2
+            exit 1
+          fi
+          echo "version=${version_input}" >>"${GITHUB_OUTPUT}"
+          echo "image_namespace=${namespace_input}" >>"${GITHUB_OUTPUT}"
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push backend image
+        id: backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend:v${{ steps.meta.outputs.version }}
+          provenance: false
+
+      - name: Build and push frontend image
+        id: frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: frontend-vite/Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-frontend:v${{ steps.meta.outputs.version }}
+          provenance: false
+
+      - name: Build and push runner image
+        id: runner
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: runner/Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.meta.outputs.image_namespace }}/win-vm-runner:v${{ steps.meta.outputs.version }}
+          provenance: false
+
+      - name: Show published refs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "backend=ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend@${{ steps.backend.outputs.digest }}"
+          echo "frontend=ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-frontend@${{ steps.frontend.outputs.digest }}"
+          echo "runner=ghcr.io/${{ steps.meta.outputs.image_namespace }}/win-vm-runner@${{ steps.runner.outputs.digest }}"
+
+      - name: Update production digest pins
+        if: ${{ github.event.inputs.commit_digest_update != 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/update_production_image_digests.py \
+            --values-file deploy/helm/values-production.yaml \
+            --backend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend@${{ steps.backend.outputs.digest }}" \
+            --frontend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-frontend@${{ steps.frontend.outputs.digest }}" \
+            --runner-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/win-vm-runner@${{ steps.runner.outputs.digest }}"
+
+          if git diff --quiet -- deploy/helm/values-production.yaml; then
+            echo "No digest pin changes detected."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/helm/values-production.yaml
+          git commit -m "chore(release): pin production image digests for v${{ steps.meta.outputs.version }}"
+          git push

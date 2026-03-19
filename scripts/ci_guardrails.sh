@@ -30,7 +30,8 @@ fi
   backend/tests \
   scripts/check_release_discipline.py \
   scripts/bump_version.py \
-  scripts/validate_production_profile.py
+  scripts/validate_production_profile.py \
+  scripts/update_production_image_digests.py
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 

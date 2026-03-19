@@ -1,6 +1,6 @@
 # Production Helm Values Reference
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 Canonical file:
 
@@ -33,11 +33,13 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.FRONTEND_REPLICAS`
 - `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
+- `appTemplateValues.REQUIRE_SCHEMA_READY` should remain `"1"` in production
 - `appTemplateValues.SECRETS_ENCRYPTION_KEY` should remain empty in committed production values (inject runtime secret at deploy time)
 
 ## Image pinning policy
 
 - `appTemplateValues.BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` must remain digest-pinned (`@sha256:...`).
+- Production refs must not use local/dev patterns (`localhost/*`, `:local*`, `local-*`).
 - This is CI-enforced by `scripts/check_release_discipline.py`.
 - `scripts/setup.sh` also enforces digest pinning when `PRODUCTION_PROFILE=1`.
 
@@ -57,7 +59,7 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 3. Create/inject runtime secrets (`RUNTIME_SECRETS_SECRET_NAME`, signature key secret) at deploy time.
 4. Validate production profile with baseline + overlay in order.
 5. Deploy with explicit values files in order.
-6. Run rollout status + post-deploy synthetic check (set `SYNTHETIC_CHECK_PASSWORD` explicitly on existing deployments).
+6. Run rollout status + post-deploy checks (API health, admin API smoke, synthetic check).
 7. Run `scripts/deploy_preflight.sh` to validate secrets and per-node image pullability.
 8. Archive go-live proof output.
 

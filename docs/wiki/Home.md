@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 ## Audience paths
 
@@ -75,6 +75,8 @@ Reference pages:
 - Reusable production baseline values with site-overlay template (`values-production-site.template.yaml`)
 - Deploy preflight gate checks merged values, secret wiring, and per-node image pullability
 - Automatic production go-live proof in `postdeploy` when `PRODUCTION_PROFILE=1`
+- Post-deploy admin API smoke validation job (`bretter-post-deploy-admin-api-smoke`)
+- Recurring GHCR access and user-flow SLO probe CronJobs with Prometheus alert rules
 
 ## Architecture diagram
 
