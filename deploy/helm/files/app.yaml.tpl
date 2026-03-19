@@ -315,7 +315,7 @@ spec:
     rollingUpdate:
       maxUnavailable: 1
       maxSurge: 0
-  replicas: 2
+  replicas: __BACKEND_REPLICAS__
   selector:
     matchLabels:
       app: bretter-backend
@@ -625,7 +625,7 @@ spec:
     rollingUpdate:
       maxUnavailable: 1
       maxSurge: 0
-  replicas: 2
+  replicas: __FRONTEND_REPLICAS__
   selector:
     matchLabels:
       app: bretter-frontend

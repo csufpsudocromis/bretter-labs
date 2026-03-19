@@ -22,6 +22,8 @@ fi
 BACKEND_IMAGE="${BACKEND_IMAGE:-$DEFAULT_BACKEND_IMAGE}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-$DEFAULT_FRONTEND_IMAGE}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-$DEFAULT_RUNNER_IMAGE}"
+BACKEND_REPLICAS="${BACKEND_REPLICAS:-1}"
+FRONTEND_REPLICAS="${FRONTEND_REPLICAS:-2}"
 ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
 SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
 SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
@@ -171,6 +173,9 @@ SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
 SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-}"
 SYNTHETIC_CHECK_TIMEOUT_SECONDS="${SYNTHETIC_CHECK_TIMEOUT_SECONDS:-420}"
 SYNTHETIC_CHECK_REQUIRE_TEMPLATES="${SYNTHETIC_CHECK_REQUIRE_TEMPLATES:-0}"
+RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK="${RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK:-1}"
+POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS="${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS:-120}"
+POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY="${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY:-IfNotPresent}"
 RUN_PRODUCTION_GO_LIVE_PROOF="${RUN_PRODUCTION_GO_LIVE_PROOF:-$PRODUCTION_PROFILE}"
 PRODUCTION_GO_LIVE_REPORT_DIR="${PRODUCTION_GO_LIVE_REPORT_DIR:-$ROOT_DIR/artifacts/go-live}"
 PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS="${PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS:-120}"
@@ -309,6 +314,10 @@ is_mutable_image_reference() {
     return 0
   fi
   return 1
+}
+
+is_digest_image_reference() {
+  [[ "$1" == *@sha256:* ]]
 }
 
 validate_longhorn_tuning_config() {
@@ -451,6 +460,28 @@ validate_image_reference_policy() {
   done
   if [ "${#invalid_refs[@]}" -gt 0 ]; then
     fail "Mutable image references are not allowed: ${invalid_refs[*]}. Use immutable tags or digests, or set ALLOW_MUTABLE_IMAGE_TAGS=1 for dev-only workflows."
+  fi
+
+  if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+    local non_digest_refs=()
+    for image_var in BACKEND_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
+      image_ref="${!image_var}"
+      if ! is_digest_image_reference "$image_ref"; then
+        non_digest_refs+=("${image_var}=${image_ref}")
+      fi
+    done
+    if [ "${#non_digest_refs[@]}" -gt 0 ]; then
+      fail "PRODUCTION_PROFILE=1 requires digest-pinned images (@sha256): ${non_digest_refs[*]}"
+    fi
+  fi
+}
+
+validate_replica_config() {
+  if ! is_uint "$BACKEND_REPLICAS" || [ "$BACKEND_REPLICAS" -lt 1 ]; then
+    fail "BACKEND_REPLICAS must be an integer >= 1."
+  fi
+  if ! is_uint "$FRONTEND_REPLICAS" || [ "$FRONTEND_REPLICAS" -lt 1 ]; then
+    fail "FRONTEND_REPLICAS must be an integer >= 1."
   fi
 }
 
@@ -821,6 +852,23 @@ validate_synthetic_check_config() {
   if ! is_uint "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" || [ "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" -lt 60 ]; then
     fail "SYNTHETIC_CHECK_TIMEOUT_SECONDS must be an integer >= 60."
   fi
+}
+
+validate_runner_smoke_check_config() {
+  case "$RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK" in
+    0|1) ;;
+    *) fail "RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK must be either 0 or 1." ;;
+  esac
+  if [ "$RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK" -eq 0 ]; then
+    return
+  fi
+  if ! is_uint "$POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS" || [ "$POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS" -lt 30 ]; then
+    fail "POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS must be an integer >= 30."
+  fi
+  case "$POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY" in
+    Always|IfNotPresent|Never) ;;
+    *) fail "POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY must be one of: Always, IfNotPresent, Never." ;;
+  esac
 }
 
 validate_production_go_live_proof_config() {
@@ -1817,6 +1865,7 @@ render_manifest_template() {
   local output="$2"
 
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
+  local backend_replicas frontend_replicas
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend vm_runner_privileged
@@ -1834,6 +1883,8 @@ render_manifest_template() {
   backend_image="$(escape_sed_replacement "$BACKEND_IMAGE")"
   frontend_image="$(escape_sed_replacement "$FRONTEND_IMAGE")"
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
+  backend_replicas="$(escape_sed_replacement "$BACKEND_REPLICAS")"
+  frontend_replicas="$(escape_sed_replacement "$FRONTEND_REPLICAS")"
   public_scheme="$(escape_sed_replacement "$PUBLIC_SCHEME")"
   tls_secret_name="$(escape_sed_replacement "$TLS_SECRET_NAME")"
   windows_machine_type="$(escape_sed_replacement "$WINDOWS_MACHINE_TYPE")"
@@ -1876,6 +1927,8 @@ render_manifest_template() {
     -e "s/__BACKEND_IMAGE__/${backend_image}/g" \
     -e "s/__FRONTEND_IMAGE__/${frontend_image}/g" \
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
+    -e "s/__BACKEND_REPLICAS__/${backend_replicas}/g" \
+    -e "s/__FRONTEND_REPLICAS__/${frontend_replicas}/g" \
     -e "s/__PUBLIC_SCHEME__/${public_scheme}/g" \
     -e "s/__TLS_SECRET_NAME__/${tls_secret_name}/g" \
     -e "s/__WINDOWS_MACHINE_TYPE__/${windows_machine_type}/g" \
@@ -1923,6 +1976,7 @@ render_helm_values_override() {
   local output_file="$1"
   local control_node node_external_host runner_node_selector_value vm_storage_class
   local backend_image frontend_image runner_image public_scheme tls_secret_name
+  local backend_replicas frontend_replicas
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local backend_service_type backend_service_nodeport_line
@@ -1945,6 +1999,8 @@ render_helm_values_override() {
   backend_image="$(yaml_escape "$BACKEND_IMAGE")"
   frontend_image="$(yaml_escape "$FRONTEND_IMAGE")"
   runner_image="$(yaml_escape "$RUNNER_IMAGE")"
+  backend_replicas="$(yaml_escape "$BACKEND_REPLICAS")"
+  frontend_replicas="$(yaml_escape "$FRONTEND_REPLICAS")"
   public_scheme="$(yaml_escape "$PUBLIC_SCHEME")"
   tls_secret_name="$(yaml_escape "$TLS_SECRET_NAME")"
   windows_machine_type="$(yaml_escape "$WINDOWS_MACHINE_TYPE")"
@@ -2012,6 +2068,8 @@ appTemplateValues:
   BACKEND_IMAGE: "${backend_image}"
   FRONTEND_IMAGE: "${frontend_image}"
   RUNNER_IMAGE: "${runner_image}"
+  BACKEND_REPLICAS: "${backend_replicas}"
+  FRONTEND_REPLICAS: "${frontend_replicas}"
   PUBLIC_SCHEME: "${public_scheme}"
   TLS_SECRET_NAME: "${tls_secret_name}"
   ADMIN_BOOTSTRAP_PASSWORD: "${admin_bootstrap_password}"
@@ -2481,7 +2539,7 @@ ensure_container_signature_key_secret() {
   fi
 
   current_b64="$(kubectl -n "$NAMESPACE" get secret "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" \
-    -o "jsonpath={.data['$key_file_name']}" 2>/dev/null || true)"
+    -o "go-template={{ index .data \"$key_file_name\" }}" 2>/dev/null || true)"
   if [ -n "$current_b64" ]; then
     log "Using existing signature key secret ${CONTAINER_SIGNATURE_KEY_SECRET_NAME}."
     return
@@ -3538,6 +3596,59 @@ EOF
   kubectl -n "$NAMESPACE" logs job/bretter-post-deploy-check --all-containers=true || true
 }
 
+run_post_deploy_runner_smoke_check() {
+  if [ "$RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK" -ne 1 ]; then
+    log "Skipping runner image smoke check (RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=0)."
+    return
+  fi
+
+  local node_selector pod_name
+  node_selector="${RUNNER_NODE_SELECTOR_VALUE:-$CONTROL_NODE}"
+  pod_name="bretter-runner-smoke-$(date +%s)"
+
+  log "Running post-deploy runner image smoke check on node ${node_selector}..."
+  kubectl -n "$NAMESPACE" delete pod "$pod_name" --ignore-not-found=true >/dev/null 2>&1 || true
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod_name}
+  namespace: ${NAMESPACE}
+spec:
+  restartPolicy: Never
+  nodeSelector:
+    kubernetes.io/hostname: ${node_selector}
+  tolerations:
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+  imagePullSecrets:
+    - name: ghcr-creds
+  containers:
+    - name: runner-smoke
+      image: ${RUNNER_IMAGE}
+      imagePullPolicy: ${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY}
+      command:
+        - /bin/sh
+        - -lc
+        - |
+          set -eu
+          echo runner-smoke-ok
+          sleep 15
+EOF
+
+  if ! kubectl -n "$NAMESPACE" wait --for=condition=Ready "pod/${pod_name}" --timeout="${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS}s"; then
+    kubectl -n "$NAMESPACE" describe pod "$pod_name" || true
+    kubectl -n "$NAMESPACE" logs "$pod_name" --tail=200 || true
+    kubectl -n "$NAMESPACE" delete pod "$pod_name" --ignore-not-found=true >/dev/null 2>&1 || true
+    fail "Post-deploy runner smoke check failed."
+  fi
+
+  kubectl -n "$NAMESPACE" logs "$pod_name" --tail=20 || true
+  kubectl -n "$NAMESPACE" delete pod "$pod_name" --ignore-not-found=true >/dev/null 2>&1 || true
+  log "Post-deploy runner smoke check passed."
+}
+
 run_production_go_live_proof() {
   if [ "$RUN_PRODUCTION_GO_LIVE_PROOF" -ne 1 ]; then
     log "Skipping production go-live proof report (RUN_PRODUCTION_GO_LIVE_PROOF=0)."
@@ -3607,6 +3718,7 @@ log_runtime_configuration() {
     log "External pull secret management: $EXTERNAL_PULL_SECRET_ENABLED"
   fi
   log "Using VM storage class: $VM_STORAGE_CLASS"
+  log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"
   log "VM console external traffic policy: $VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY"
@@ -3637,6 +3749,7 @@ log_runtime_configuration() {
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
+  log "Post-deploy runner smoke enabled: $RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK (timeout: ${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS}s pull-policy: ${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY})"
   log "Production go-live proof enabled: $RUN_PRODUCTION_GO_LIVE_PROOF (report dir: $PRODUCTION_GO_LIVE_REPORT_DIR health-timeout: ${PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS}s)"
   if [ "$SYNTHETIC_CHECK_AUTO_DISABLED" -eq 1 ]; then
     log "Synthetic check auto-disabled: set SYNTHETIC_CHECK_PASSWORD to run authenticated synthetic validation on existing deployments."
@@ -3721,6 +3834,7 @@ run_phase_postdeploy() {
   apply_monitoring_alert_rules
   run_post_deploy_api_health_check
   run_post_deploy_synthetic_check
+  run_post_deploy_runner_smoke_check
   run_production_go_live_proof
 }
 
@@ -3729,6 +3843,7 @@ main() {
   validate_tls_config
   validate_setup_phase_config
   validate_image_reference_policy
+  validate_replica_config
   validate_preload_config
   validate_longhorn_tuning_config
   validate_autocleanup_config
@@ -3747,6 +3862,7 @@ main() {
   configure_admin_bootstrap_credentials
   validate_post_deploy_api_health_config
   validate_synthetic_check_config
+  validate_runner_smoke_check_config
   validate_production_go_live_proof_config
   validate_helm_deploy_config
 

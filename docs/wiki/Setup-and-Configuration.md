@@ -41,6 +41,8 @@ Images:
 - `BACKEND_IMAGE`
 - `FRONTEND_IMAGE`
 - `RUNNER_IMAGE`
+- `BACKEND_REPLICAS` (default `1`)
+- `FRONTEND_REPLICAS` (default `2`)
 - `ALLOW_MUTABLE_IMAGE_TAGS` (default `0`; production should stay `0`)
 - `PRUNE_BOOTSTRAP_ADMIN_ENV` (default `1`; removes bootstrap admin secret env from running backend deployment after initial rollout)
 
@@ -102,6 +104,9 @@ Monitoring/ops:
 - `POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
 - `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
+- `RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK`
+- `POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS`
+- `POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY`
 - `RUN_PRODUCTION_GO_LIVE_PROOF` (defaults to `PRODUCTION_PROFILE`)
 - `PRODUCTION_GO_LIVE_REPORT_DIR`
 - `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS`
@@ -153,13 +158,16 @@ ENABLE_MONITORING=1 \
 - Production profile requires `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` with a non-empty `CONTAINER_SIGNATURE_KEY_REF`.
 - If `CONTAINER_SIGNATURE_KEY_REF` uses `/etc/bretter-signing/*`, ensure secret `CONTAINER_SIGNATURE_KEY_SECRET_NAME` contains that key file.
 - Default image policy rejects mutable refs (for example `:latest`); use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` for explicit dev-only override.
+- `PRODUCTION_PROFILE=1` additionally requires digest-pinned backend/frontend/runner image refs (`@sha256`).
 - Setup no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or set explicit immutable image refs.
 - Production values baseline (`deploy/helm/values-production.yaml`) is digest-pinned and CI-enforced for backend/frontend/runner image refs.
 - Use `deploy/helm/values-production-site.template.yaml` to create site overlays (for example `deploy/helm/values-prod-site.yaml`) and validate with `-f` layering.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
 - Use `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml` before production rollouts (add additional `-f <site-values>.yaml` overlays when used).
+- Use `NAMESPACE=labs ./scripts/deploy_preflight.sh` before rollout to enforce merged-values validation, secret wiring, and per-node image pullability.
 - `postdeploy` now runs `scripts/production_go_live_proof.sh` automatically when `RUN_PRODUCTION_GO_LIVE_PROOF=1` (default in production profile).
+- `postdeploy` also runs a runner image startup smoke pod by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.

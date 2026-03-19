@@ -10,6 +10,8 @@ appTemplateValues:
   BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1
   FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1
+  BACKEND_REPLICAS: "1"
+  FRONTEND_REPLICAS: "2"
   PUBLIC_SCHEME: https
   TLS_SECRET_NAME: bretter-tls
   ADMIN_BOOTSTRAP_PASSWORD: ""

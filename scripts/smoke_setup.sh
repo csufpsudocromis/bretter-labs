@@ -67,14 +67,23 @@ run_failure "reject invalid production go-live proof toggle" \
 run_failure "reject invalid production go-live proof health timeout" \
   env SETUP_DRY_RUN=1 RUN_PRODUCTION_GO_LIVE_PROOF=1 PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS=abc "$SETUP_SCRIPT"
 
+run_failure "reject invalid runner smoke toggle" \
+  env SETUP_DRY_RUN=1 RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=2 "$SETUP_SCRIPT"
+
 run_failure "reject production profile with missing explicit control-node override" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
+  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:8b3dba2d8224e2812ead41af23a38fe7c0bc0f4668559fd0e63e4cddbcdbfb97 \
+  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:95cb0841c776cac89c236fa4febfbd2bb053b7471a35c3449b60719af307d3b2 \
+  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:51f6fce709465a4488307bc2e54cb8a0362d5165d2d2729ff730c537c196375d \
   RUNNER_NODE_SELECTOR_VALUE=runner-pool NODE_EXTERNAL_HOST=prod-labs.internal VM_STORAGE_CLASS=prod-vm-storage \
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"
 
 run_success "allow production dry-run with explicit hardened overrides" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
+  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:8b3dba2d8224e2812ead41af23a38fe7c0bc0f4668559fd0e63e4cddbcdbfb97 \
+  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:95cb0841c776cac89c236fa4febfbd2bb053b7471a35c3449b60719af307d3b2 \
+  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:51f6fce709465a4488307bc2e54cb8a0362d5165d2d2729ff730c537c196375d \
   CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"

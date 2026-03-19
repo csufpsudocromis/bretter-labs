@@ -9,6 +9,9 @@
 #   -f deploy/helm/values-prod-site.yaml
 
 appTemplateValues:
+  # Optionally override replica counts per environment.
+  BACKEND_REPLICAS: "1"
+  FRONTEND_REPLICAS: "2"
   CONTROL_NODE: "<control-node-hostname>"
   NODE_EXTERNAL_HOST: "<public-node-host-or-ip>"
   RUNNER_NODE_SELECTOR_VALUE: "<runner-node-selector-value>"

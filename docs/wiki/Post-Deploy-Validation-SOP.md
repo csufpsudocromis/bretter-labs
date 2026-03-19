@@ -18,6 +18,7 @@ Validates:
 - VM launch/connect/delete
 - Container launch/connect/delete
 - Idle timeout prompt visibility (user page + connect page)
+- Runner image startup on runner node (postdeploy smoke pod)
 - Core rollout health
 
 ## Phase 1: Rollout health gate
@@ -71,6 +72,7 @@ Pass criteria:
 Notes:
 
 - Setup auto-disables synthetic validation when it generated a fresh bootstrap admin secret and no `SYNTHETIC_CHECK_PASSWORD` was supplied.
+- Setup runs a runner image smoke pod during `postdeploy` by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - For existing deployments, run authenticated synthetic validation with explicit credentials:
 
 ```bash
@@ -78,6 +80,16 @@ SETUP_PHASES=postdeploy \
 RUN_POST_DEPLOY_SYNTHETIC_CHECK=1 \
 SYNTHETIC_CHECK_USERNAME=admin \
 SYNTHETIC_CHECK_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
+./scripts/setup.sh
+```
+
+To rerun only runner smoke manually:
+
+```bash
+SETUP_PHASES=postdeploy \
+RUN_POST_DEPLOY_API_HEALTH_CHECK=0 \
+RUN_POST_DEPLOY_SYNTHETIC_CHECK=0 \
+RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1 \
 ./scripts/setup.sh
 ```
 

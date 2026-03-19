@@ -84,6 +84,9 @@ kubectl -n labs get pods -o wide
 ## Pre-deploy gate
 
 Run this before rollout to catch config/secret blockers early:
+- strict merged values validation (`values-production.yaml` + `values-prod-site.yaml`)
+- runtime/signature secret presence checks
+- per-node image pull smoke checks for backend/frontend/runner
 
 ```bash
 NAMESPACE=labs ./scripts/deploy_preflight.sh
@@ -95,7 +98,13 @@ For CI/static-only usage (skip cluster calls):
 SKIP_CLUSTER_CHECKS=1 ./scripts/deploy_preflight.sh
 ```
 
-If image-based runner changes were deployed, verify both nodes can pull/start:
+If you need to bypass node image pull checks temporarily (dev-only):
+
+```bash
+PREDEPLOY_VERIFY_NODE_IMAGE_PULLS=0 NAMESPACE=labs ./scripts/deploy_preflight.sh
+```
+
+If image-based runner changes were deployed, verify node placement and runner startup:
 
 ```bash
 kubectl -n labs get pods -o wide | rg 'vm-|virt-launcher|ct-'

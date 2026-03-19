@@ -7,6 +7,9 @@ REPORT_DIR="${REPORT_DIR:-$ROOT_DIR/artifacts/go-live}"
 HEALTH_TIMEOUT_SECONDS="${HEALTH_TIMEOUT_SECONDS:-120}"
 NODE_EXTERNAL_HOST_OVERRIDE="${NODE_EXTERNAL_HOST:-}"
 PUBLIC_SCHEME_OVERRIDE="${PUBLIC_SCHEME:-}"
+BASE_VALUES_FILE="${BASE_VALUES_FILE:-$ROOT_DIR/deploy/helm/values-production.yaml}"
+SITE_VALUES_FILE="${SITE_VALUES_FILE:-$ROOT_DIR/deploy/helm/values-prod-site.yaml}"
+REQUIRE_SITE_VALUES_FILE="${REQUIRE_SITE_VALUES_FILE:-1}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="${REPORT_DIR}/production-go-live-${timestamp}.txt"
@@ -59,9 +62,19 @@ PY
 log "Production go-live proof started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Namespace: $NAMESPACE"
 log "Report: $report_path"
-
-run_check "production profile validator (strict)" \
-  python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml"
+log "Base values: $BASE_VALUES_FILE"
+if [ -f "$SITE_VALUES_FILE" ]; then
+  log "Site values: $SITE_VALUES_FILE"
+  run_check "production profile validator (strict merged values)" \
+    python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$BASE_VALUES_FILE" -f "$SITE_VALUES_FILE"
+else
+  if [ "$REQUIRE_SITE_VALUES_FILE" = "1" ]; then
+    fail_check "production profile validator (missing site values file: $SITE_VALUES_FILE)"
+  else
+    run_check "production profile validator (strict baseline values)" \
+      python3 "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$BASE_VALUES_FILE"
+  fi
+fi
 
 run_check "backend rollout status" \
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s

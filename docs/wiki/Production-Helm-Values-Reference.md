@@ -29,6 +29,8 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`
 - `appTemplateValues.CONTAINER_SIGNATURE_KEY_REF`
 - `appTemplateValues.CONTAINER_SIGNATURE_KEY_SECRET_NAME`
+- `appTemplateValues.BACKEND_REPLICAS`
+- `appTemplateValues.FRONTEND_REPLICAS`
 - `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
 - `appTemplateValues.SECRETS_ENCRYPTION_KEY` should remain empty in committed production values (inject runtime secret at deploy time)
@@ -37,6 +39,7 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 
 - `appTemplateValues.BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` must remain digest-pinned (`@sha256:...`).
 - This is CI-enforced by `scripts/check_release_discipline.py`.
+- `scripts/setup.sh` also enforces digest pinning when `PRODUCTION_PROFILE=1`.
 
 ## Key sections and intent
 
@@ -55,7 +58,8 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 4. Validate production profile with baseline + overlay in order.
 5. Deploy with explicit values files in order.
 6. Run rollout status + post-deploy synthetic check (set `SYNTHETIC_CHECK_PASSWORD` explicitly on existing deployments).
-7. Archive go-live proof output.
+7. Run `scripts/deploy_preflight.sh` to validate secrets and per-node image pullability.
+8. Archive go-live proof output.
 
 Example:
 
@@ -67,6 +71,10 @@ cp deploy/helm/values-production-site.template.yaml deploy/helm/values-prod-site
 python3 scripts/validate_production_profile.py --strict \
   -f deploy/helm/values-production.yaml \
   -f deploy/helm/values-prod-site.yaml
+```
+
+```bash
+NAMESPACE=labs ./scripts/deploy_preflight.sh
 ```
 
 ```bash

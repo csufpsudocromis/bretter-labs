@@ -102,6 +102,20 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             return default
         return normalized
 
+    def get_uint(key: str) -> int:
+        raw = get_text(key)
+        if not raw:
+            errors.append(f"{key} is required.")
+            return 0
+        try:
+            parsed = int(raw)
+        except ValueError:
+            errors.append(f"{key} must be an integer >= 1 (found: {raw!r}).")
+            return 0
+        if parsed < 1:
+            errors.append(f"{key} must be an integer >= 1 (found: {raw!r}).")
+        return parsed
+
     for key in ("BACKEND_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
         image_ref = get_text(key)
         if not image_ref:
@@ -109,6 +123,9 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             continue
         if not _is_digest_pinned(image_ref):
             errors.append(f"{key} must be digest-pinned with @sha256 (found: {image_ref!r}).")
+
+    get_uint("BACKEND_REPLICAS")
+    get_uint("FRONTEND_REPLICAS")
 
     if get_bool("ALLOW_MUTABLE_IMAGE_TAGS", default=False):
         errors.append("ALLOW_MUTABLE_IMAGE_TAGS must be disabled for production.")

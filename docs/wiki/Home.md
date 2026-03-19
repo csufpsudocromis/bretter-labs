@@ -73,6 +73,7 @@ Reference pages:
 - Default ingress NetworkPolicies with explicit app allow rules
 - Error log cap/rotation at 10MB with paging (50 entries/page)
 - Reusable production baseline values with site-overlay template (`values-production-site.template.yaml`)
+- Deploy preflight gate checks merged values, secret wiring, and per-node image pullability
 - Automatic production go-live proof in `postdeploy` when `PRODUCTION_PROFILE=1`
 
 ## Architecture diagram

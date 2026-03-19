@@ -132,7 +132,7 @@ python3 scripts/validate_production_profile.py --strict \
   -f deploy/helm/values-production.yaml \
   -f deploy/helm/values-prod-site.yaml
 
-# 3) run deploy preflight (strict profile + required cluster secrets)
+# 3) run deploy preflight (strict merged values + required cluster secrets + per-node image pull smoke)
 NAMESPACE=labs ./scripts/deploy_preflight.sh
 
 # 4) run repository guardrails (includes strict production profile validation + preflight static mode)
@@ -174,6 +174,8 @@ Proof artifact and operator docs:
 | `BACKEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend:v<VERSION>` | Backend image reference |
 | `FRONTEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-frontend:v<VERSION>` | Frontend image reference |
 | `RUNNER_IMAGE` | `ghcr.io/csufpsudocromis/win-vm-runner:v<VERSION>` | Runner image reference |
+| `BACKEND_REPLICAS` | `1` | Backend deployment replica count |
+| `FRONTEND_REPLICAS` | `2` | Frontend deployment replica count |
 | `LOAD_LOCAL_IMAGES` | `1` | Build/import local images into cluster runtime |
 | `PUSH_IMAGES` | `0` | Build and push images to registry |
 | `CREATE_PULL_SECRET` | `0` | Create/update `ghcr-creds` pull secret |
@@ -200,6 +202,9 @@ Proof artifact and operator docs:
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
 | `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE` | `*/5 * * * *` | Cron schedule for kubelet-serving CSR auto-approver job |
+| `RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK` | `1` | Run runner image startup smoke check during postdeploy |
+| `POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS` | `120` | Timeout budget for runner smoke pod readiness |
+| `POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY` | `IfNotPresent` | Pull policy used by runner smoke pod (`Always`/`IfNotPresent`/`Never`) |
 | `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
 | `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
 | `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |
@@ -211,6 +216,7 @@ Metrics-server TLS guidance:
 - Use `METRICS_SERVER_INSECURE_TLS=1` only for local/dev clusters when proper kubelet PKI is unavailable.
 - `setup.sh` installs a kubelet-serving CSR auto-approver CronJob (default enabled) that only approves pending requests when requester/subject/SANs match the target node.
 - By default, `setup.sh` rejects mutable image refs (for example `:latest` or missing tag). Use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` only for dev workflows.
+- When `PRODUCTION_PROFILE=1`, `setup.sh` requires digest-pinned image refs (`@sha256`) for backend/frontend/runner.
 - `setup.sh` no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or pass explicit immutable image refs.
 - `deploy/helm/values-production.yaml` is digest-pinned and CI-enforced for `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE`.
 

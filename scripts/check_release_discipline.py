@@ -113,6 +113,15 @@ def main() -> int:
             errors.append(
                 "deploy/helm/values-production.yaml must pin production images by digest: " f"{key}={image_ref!r}"
             )
+    for key in ("BACKEND_REPLICAS", "FRONTEND_REPLICAS"):
+        replica_value = _extract_yaml_scalar(values_production, key).strip()
+        if not replica_value:
+            errors.append(f"deploy/helm/values-production.yaml missing {key}.")
+            continue
+        if not re.match(r"^[1-9][0-9]*$", replica_value):
+            errors.append(
+                f"deploy/helm/values-production.yaml {key} must be an integer >= 1 (found {replica_value!r})."
+            )
     production_profile = _extract_yaml_scalar(values_production, "PRODUCTION_PROFILE")
     if production_profile != "1":
         errors.append(
@@ -178,6 +187,8 @@ def main() -> int:
 
     if values_site_template:
         for key in (
+            "BACKEND_REPLICAS",
+            "FRONTEND_REPLICAS",
             "CONTROL_NODE",
             "NODE_EXTERNAL_HOST",
             "RUNNER_NODE_SELECTOR_VALUE",
