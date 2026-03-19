@@ -17,6 +17,7 @@
 - [Template Best Practices](Template-Best-Practices)
 - [Security and Auth](Security-and-Auth)
 - [LDAP Authentication](LDAP-Authentication)
+- [Community and Roadmap](Community-and-Roadmap)
 - [Scaling and Quotas](Scaling-and-Quotas)
 - [Container Labs](Container-Labs)
 - [VM Image Formats](VM-Image-Formats)

@@ -1,5 +1,8 @@
 # Backend image for Bretter Labs (FastAPI + Uvicorn)
 FROM python:3.11-slim AS base
+LABEL org.opencontainers.image.source="https://github.com/csufpsudocromis/bretter-labs" \
+      org.opencontainers.image.url="https://github.com/csufpsudocromis/bretter-labs" \
+      org.opencontainers.image.licenses="MIT"
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=on \

@@ -38,6 +38,7 @@ Last reviewed: March 19, 2026.
 - [Scaling and Quotas](Scaling-and-Quotas)
 - [Security and Auth](Security-and-Auth)
 - [LDAP Authentication](LDAP-Authentication)
+- [Community and Roadmap](Community-and-Roadmap)
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist)
 - [Setup and Configuration](Setup-and-Configuration)
 

@@ -1,0 +1,41 @@
+name: Feature request
+description: Propose a new capability or improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For larger design ideas, consider starting in Discussions first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What user/operator problem are you trying to solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What should change?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches considered and why they were rejected.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Operational/security impact
+      description: Risks, migration impact, and security considerations.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Observable behavior that defines done.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...

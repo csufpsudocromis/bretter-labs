@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security Report (Private)
+    url: https://github.com/csufpsudocromis/bretter-labs/security/advisories/new
+    about: Report security vulnerabilities through GitHub private advisories.
+  - name: Discussions (Q&A / Design)
+    url: https://github.com/csufpsudocromis/bretter-labs/discussions
+    about: Ask questions or start design discussions before opening feature issues.

@@ -8,11 +8,9 @@ Bretter Labs is a Kubernetes-native virtual lab platform for browser-based VM an
 Admins manage images, templates, users, runtime/storage settings, and platform health.  
 Users launch labs with staged status feedback and connect in the browser.
 
-![Bretter Labs screenshot](images/thumbnail.png)
-![Bretter Labs screenshot 2](images/thumbnail1.png)
-
 ## Table of Contents
 
+- [Prove It Fast](#prove-it-fast)
 - [What You Get](#what-you-get)
 - [Supported VM Image Types](#supported-vm-image-types)
 - [Architecture](#architecture)
@@ -24,9 +22,51 @@ Users launch labs with staged status feedback and connect in the browser.
 - [Local Development](#local-development)
 - [Release and Versioning](#release-and-versioning)
 - [Operations](#operations)
+- [Container Packages](#container-packages)
+- [Contributing](#contributing)
+- [Security Policy](#security-policy)
+- [Community and Roadmap](#community-and-roadmap)
 - [Documentation and Wiki](#documentation-and-wiki)
 - [Project Structure](#project-structure)
 - [License](#license)
+
+## Prove It Fast
+
+### Try it in 5 minutes
+
+```bash
+git clone https://github.com/csufpsudocromis/bretter-labs.git
+cd bretter-labs
+./scripts/setup.sh
+```
+
+Then open `https://<NODE_EXTERNAL_HOST>:30073` and sign in with the bootstrap admin credentials printed by setup.
+
+### Architecture at a glance
+
+```mermaid
+flowchart LR
+  Browser --> Frontend["Frontend (React/Vite)"]
+  Frontend --> Backend["Backend (FastAPI)"]
+  Backend --> Postgres["Postgres + Alembic"]
+  Backend --> K8s["Kubernetes API"]
+  K8s --> VM["VM Runner Pods"]
+  K8s --> CT["Container Lab Pods"]
+  K8s --> PVC["PVC / StorageClass"]
+```
+
+### What it looks like
+
+![Admin dashboard and VM operations](images/thumbnail.png)
+_Admin view: image/template operations, runtime controls, and health._
+
+![User lab launch and connect flow](images/thumbnail1.png)
+_User view: launch feedback and in-browser connect workflow._
+
+### 60-second walkthrough
+
+- Publish a short demo video/GIF and link it here for first-time evaluators.
+- Suggested location: GitHub Discussions "Show and Tell" thread.
 
 ## What You Get
 
@@ -354,6 +394,17 @@ Publish images + auto-pin production digests:
 #   commit_digest_update=true
 ```
 
+Publish a GitHub Release:
+
+```bash
+# ensure VERSION + CHANGELOG are updated, then tag:
+git tag v$(cat VERSION)
+git push origin v$(cat VERSION)
+```
+
+- Tag push triggers `.github/workflows/release-on-tag.yml`.
+- Release notes are sourced from `CHANGELOG.md` for the tagged version.
+
 Post-rollout proof artifact:
 
 ```bash
@@ -389,6 +440,43 @@ Common issues:
 - Pending labs: cluster waiting on available CPU/memory/storage.
 - Upload finalize failures: check PVC/node disk usage and CDI/upload path health.
 - TLS warnings: expected with self-signed certificates unless custom certs are installed.
+
+## Container Packages
+
+Primary container images are published to GHCR:
+
+- `ghcr.io/csufpsudocromis/bretter-backend`
+- `ghcr.io/csufpsudocromis/bretter-frontend`
+- `ghcr.io/csufpsudocromis/win-vm-runner`
+
+Quick pull examples:
+
+```bash
+docker pull ghcr.io/csufpsudocromis/bretter-backend:v0.3.1
+docker pull ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1
+docker pull ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1
+```
+
+GitHub package listing:
+
+- https://github.com/csufpsudocromis?tab=packages
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test, and PR guidance.
+
+## Security Policy
+
+See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reporting.
+
+## Community and Roadmap
+
+- Discussions: https://github.com/csufpsudocromis/bretter-labs/discussions
+- Roadmap thread: https://github.com/csufpsudocromis/bretter-labs/discussions/2
+- Operator Q&A thread: https://github.com/csufpsudocromis/bretter-labs/discussions/3
+- Identity design thread: https://github.com/csufpsudocromis/bretter-labs/discussions/4
+- Issues: https://github.com/csufpsudocromis/bretter-labs/issues
+- Roadmap page: `docs/wiki/Community-and-Roadmap.md`
 
 ## Documentation and Wiki
 

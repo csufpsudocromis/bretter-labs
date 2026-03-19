@@ -1,0 +1,72 @@
+name: Release On Tag
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version from tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
+          echo "version=${version}" >>"${GITHUB_OUTPUT}"
+
+      - name: Validate VERSION matches tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(tr -d '[:space:]' < VERSION)"
+          if [ "${expected}" != "${{ steps.version.outputs.version }}" ]; then
+            echo "Tag/version mismatch: tag=${{ steps.version.outputs.version }} VERSION=${expected}" >&2
+            exit 1
+          fi
+
+      - name: Extract changelog section
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          version = "${{ steps.version.outputs.version }}"
+          changelog = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(rf"^## \[{re.escape(version)}\][^\n]*\n", re.MULTILINE)
+          match = pattern.search(changelog)
+          if not match:
+            Path("RELEASE_NOTES.md").write_text(
+                f"Release {version}\n\nSee CHANGELOG.md for details.\n",
+                encoding="utf-8",
+            )
+          else:
+            start = match.start()
+            next_match = re.compile(r"^## \[[^\]]+\]", re.MULTILINE).search(changelog, match.end())
+            end = next_match.start() if next_match else len(changelog)
+            notes = changelog[start:end].strip() + "\n"
+            Path("RELEASE_NOTES.md").write_text(notes, encoding="utf-8")
+          PY
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body_path: RELEASE_NOTES.md
+          generate_release_notes: true

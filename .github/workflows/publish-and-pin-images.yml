@@ -69,6 +69,11 @@ jobs:
           file: backend/Dockerfile
           push: true
           tags: ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend:v${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
 
       - name: Build and push frontend image
@@ -79,6 +84,11 @@ jobs:
           file: frontend-vite/Dockerfile
           push: true
           tags: ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-frontend:v${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
 
       - name: Build and push runner image
@@ -89,6 +99,11 @@ jobs:
           file: runner/Dockerfile
           push: true
           tags: ghcr.io/${{ steps.meta.outputs.image_namespace }}/win-vm-runner:v${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.url=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
           provenance: false
 
       - name: Show published refs

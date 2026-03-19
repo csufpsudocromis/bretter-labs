@@ -12,6 +12,9 @@ COPY frontend-vite/ ./
 RUN npm run build
 
 FROM docker.io/library/nginx:1.27-alpine AS runtime
+LABEL org.opencontainers.image.source="https://github.com/csufpsudocromis/bretter-labs" \
+      org.opencontainers.image.url="https://github.com/csufpsudocromis/bretter-labs" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /usr/share/nginx/html
 COPY --from=build /app/dist/ ./
 COPY frontend-vite/nginx-entrypoint.sh /usr/local/bin/nginx-entrypoint.sh

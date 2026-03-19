@@ -13,6 +13,9 @@
 # The web client can connect to ws://${runner-host}:${WS_PORT} (VNC/SPICE over WebSocket).
 
 FROM ubuntu:24.04
+LABEL org.opencontainers.image.source="https://github.com/csufpsudocromis/bretter-labs" \
+      org.opencontainers.image.url="https://github.com/csufpsudocromis/bretter-labs" \
+      org.opencontainers.image.licenses="MIT"
 ARG GUAC_VERSION=1.3.0
 
 RUN apt-get update && \
