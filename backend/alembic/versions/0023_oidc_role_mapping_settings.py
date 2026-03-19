@@ -55,8 +55,8 @@ def upgrade() -> None:
     op.execute("UPDATE config SET sso_role_claim = 'groups' WHERE sso_role_claim IS NULL OR sso_role_claim = ''")
     op.execute("UPDATE config SET sso_default_role = 'user' WHERE sso_default_role IS NULL OR sso_default_role = ''")
     op.execute("UPDATE config SET sso_role_mappings_json = '{}' WHERE sso_role_mappings_json IS NULL")
-    op.execute("UPDATE config SET sso_auto_create_users = 1 WHERE sso_auto_create_users IS NULL")
-    op.execute("UPDATE config SET sso_sync_roles_on_login = 1 WHERE sso_sync_roles_on_login IS NULL")
+    op.execute("UPDATE config SET sso_auto_create_users = TRUE WHERE sso_auto_create_users IS NULL")
+    op.execute("UPDATE config SET sso_sync_roles_on_login = TRUE WHERE sso_sync_roles_on_login IS NULL")
 
 
 def downgrade() -> None:

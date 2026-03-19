@@ -12,8 +12,8 @@ appTemplateValues:
   RUNNER_NODE_SELECTOR_VALUE: runner-pool
   VM_STORAGE_CLASS: prod-vm-storage
   # Production profile requires immutable digest pins.
-  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe
-  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a
+  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend@sha256:a8648ba6ec5711c3a173c28faa6a8a9e8f4e51a8543805b2447dab43a6b286bf
+  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend@sha256:088143b83edb58870acdce26518ea71c370c4a250cb159926e25305af0f5f461
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76
   BACKEND_REPLICAS: "1"
   FRONTEND_REPLICAS: "2"
