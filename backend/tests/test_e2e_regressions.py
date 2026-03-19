@@ -183,6 +183,56 @@ def test_admin_secret_settings_are_write_only(login_admin: TestClient):
     assert "ldap_bind_password" not in ldap_read.json()
 
 
+def test_admin_can_read_and_update_oidc_role_mapping_settings(login_admin: TestClient):
+    read = login_admin.get("/admin/settings/sso")
+    assert read.status_code == 200, read.text
+    read_body = read.json()
+    assert read_body["sso_role_claim"] == "groups"
+    assert read_body["sso_default_role"] == "user"
+    assert read_body["sso_role_mappings"] == {}
+    assert read_body["sso_auto_create_users"] is True
+    assert read_body["sso_sync_roles_on_login"] is True
+
+    payload = {
+        "sso_enabled": True,
+        "sso_provider": "Keycloak",
+        "sso_client_id": "labs-app",
+        "sso_client_secret": "oidc-secret",
+        "sso_authorize_url": "https://idp.example.com/auth",
+        "sso_token_url": "https://idp.example.com/token",
+        "sso_userinfo_url": "https://idp.example.com/userinfo",
+        "sso_redirect_url": "https://labs.example.com/auth/sso/callback",
+        "sso_role_claim": "groups",
+        "sso_default_role": "viewer",
+        "sso_role_mappings": {
+            "admins": "platform_admin",
+            "ops": "lab_operator",
+        },
+        "sso_auto_create_users": True,
+        "sso_sync_roles_on_login": True,
+    }
+    write = login_admin.patch("/admin/settings/sso", json=payload)
+    assert write.status_code == 200, write.text
+    body = write.json()
+    assert body["sso_enabled"] is True
+    assert body["sso_provider"] == "Keycloak"
+    assert body["sso_role_claim"] == "groups"
+    assert body["sso_default_role"] == "viewer"
+    assert body["sso_role_mappings"] == {"admins": "platform_admin", "ops": "lab_operator"}
+    assert body["sso_auto_create_users"] is True
+    assert body["sso_sync_roles_on_login"] is True
+    assert body["sso_client_secret_configured"] is True
+
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        assert cfg.sso_role_claim == "groups"
+        assert cfg.sso_default_role == "viewer"
+        assert cfg.sso_auto_create_users is True
+        assert cfg.sso_sync_roles_on_login is True
+        assert cfg.sso_role_mappings_json == '{"admins":"platform_admin","ops":"lab_operator"}'
+
+
 def test_login_rate_limit_blocks_repeated_failures(client: TestClient, monkeypatch):
     monkeypatch.setattr("src.routes.auth.settings.auth_login_rate_limit_max_attempts", 2)
     monkeypatch.setattr("src.routes.auth.settings.auth_login_lockout_seconds", 60)
@@ -295,6 +345,11 @@ def test_oidc_start_and_callback_issue_session_cookie(client: TestClient, monkey
         cfg.sso_token_url = "https://idp.example.com/oauth2/v2/token"
         cfg.sso_userinfo_url = "https://idp.example.com/oauth2/v2/userinfo"
         cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
+        cfg.sso_role_claim = "groups"
+        cfg.sso_default_role = "user"
+        cfg.sso_role_mappings_json = '{"admins":"platform_admin","ops":"lab_operator"}'
+        cfg.sso_auto_create_users = True
+        cfg.sso_sync_roles_on_login = True
         session.add(cfg)
         session.commit()
 
@@ -344,6 +399,192 @@ def test_oidc_start_and_callback_issue_session_cookie(client: TestClient, monkey
     me = client.get("/auth/me")
     assert me.status_code == 200, me.text
     assert me.json()["username"] == "oidcuser"
+    assert me.json()["role"] == "user"
+
+
+def test_oidc_role_mapping_assigns_highest_mapped_role(client: TestClient, monkeypatch):
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        cfg.sso_enabled = True
+        cfg.sso_client_id = "oidc-client"
+        cfg.sso_client_secret = "oidc-secret"
+        cfg.sso_authorize_url = "https://idp.example.com/oauth2/v2/auth"
+        cfg.sso_token_url = "https://idp.example.com/oauth2/v2/token"
+        cfg.sso_userinfo_url = "https://idp.example.com/oauth2/v2/userinfo"
+        cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
+        cfg.sso_role_claim = "groups"
+        cfg.sso_default_role = "viewer"
+        cfg.sso_role_mappings_json = '{"admins":"platform_admin","ops":"lab_operator","view":"viewer"}'
+        cfg.sso_auto_create_users = True
+        cfg.sso_sync_roles_on_login = True
+        session.add(cfg)
+        session.commit()
+
+    class _FakeResponse:
+        def __init__(self, payload: dict, status_code: int = 200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    def _fake_post(url, data, headers, timeout):
+        assert "token" in url
+        assert data["code"] == "test-code"
+        return _FakeResponse({"access_token": "access-123"})
+
+    def _fake_get(url, headers, timeout):
+        assert "userinfo" in url
+        return _FakeResponse({"preferred_username": "oidcuser", "groups": ["ops", "admins"]})
+
+    monkeypatch.setattr("src.routes.auth.requests.post", _fake_post)
+    monkeypatch.setattr("src.routes.auth.requests.get", _fake_get)
+
+    start = client.get(
+        "/auth/sso/start",
+        params={"return_to": "https://10.68.49.250:30073/"},
+        headers={"origin": "https://10.68.49.250:30073"},
+    )
+    assert start.status_code == 200, start.text
+    state = parse_qs(urlparse(start.json()["authorize_url"]).query)["state"][0]
+
+    callback = client.get(
+        "/auth/sso/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code in {302, 307}
+
+    me = client.get("/auth/me")
+    assert me.status_code == 200, me.text
+    assert me.json()["username"] == "oidcuser"
+    assert me.json()["role"] == Role.PLATFORM_ADMIN
+    assert me.json()["can_access_admin"] is True
+
+
+def test_oidc_role_mapping_respects_auto_create_disabled(client: TestClient, monkeypatch):
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        cfg.sso_enabled = True
+        cfg.sso_client_id = "oidc-client"
+        cfg.sso_client_secret = "oidc-secret"
+        cfg.sso_authorize_url = "https://idp.example.com/oauth2/v2/auth"
+        cfg.sso_token_url = "https://idp.example.com/oauth2/v2/token"
+        cfg.sso_userinfo_url = "https://idp.example.com/oauth2/v2/userinfo"
+        cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
+        cfg.sso_role_claim = "groups"
+        cfg.sso_default_role = "user"
+        cfg.sso_role_mappings_json = '{"admins":"platform_admin"}'
+        cfg.sso_auto_create_users = False
+        cfg.sso_sync_roles_on_login = True
+        session.add(cfg)
+        session.commit()
+
+    class _FakeResponse:
+        def __init__(self, payload: dict, status_code: int = 200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr(
+        "src.routes.auth.requests.post",
+        lambda url, data, headers, timeout: _FakeResponse({"access_token": "access-123"}),
+    )
+    monkeypatch.setattr(
+        "src.routes.auth.requests.get",
+        lambda url, headers, timeout: _FakeResponse({"preferred_username": "new-oidc-user", "groups": ["admins"]}),
+    )
+
+    start = client.get(
+        "/auth/sso/start",
+        params={"return_to": "https://10.68.49.250:30073/"},
+        headers={"origin": "https://10.68.49.250:30073"},
+    )
+    assert start.status_code == 200, start.text
+    state = parse_qs(urlparse(start.json()["authorize_url"]).query)["state"][0]
+
+    callback = client.get(
+        "/auth/sso/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code in {302, 307}
+    assert "auth_error=oidc_user_not_provisioned" in callback.headers["location"]
+
+
+def test_oidc_role_mapping_syncs_existing_user_role_on_login(client: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            User(
+                username="oidc-existing",
+                password_hash=hash_password("password"),
+                role=Role.USER,
+                team="default",
+                is_admin=False,
+                force_password_change=False,
+            )
+        )
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        cfg.sso_enabled = True
+        cfg.sso_client_id = "oidc-client"
+        cfg.sso_client_secret = "oidc-secret"
+        cfg.sso_authorize_url = "https://idp.example.com/oauth2/v2/auth"
+        cfg.sso_token_url = "https://idp.example.com/oauth2/v2/token"
+        cfg.sso_userinfo_url = "https://idp.example.com/oauth2/v2/userinfo"
+        cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
+        cfg.sso_role_claim = "groups"
+        cfg.sso_default_role = "user"
+        cfg.sso_role_mappings_json = '{"ops":"lab_operator"}'
+        cfg.sso_auto_create_users = False
+        cfg.sso_sync_roles_on_login = True
+        session.add(cfg)
+        session.commit()
+
+    class _FakeResponse:
+        def __init__(self, payload: dict, status_code: int = 200):
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self):
+            return self._payload
+
+    monkeypatch.setattr(
+        "src.routes.auth.requests.post",
+        lambda url, data, headers, timeout: _FakeResponse({"access_token": "access-123"}),
+    )
+    monkeypatch.setattr(
+        "src.routes.auth.requests.get",
+        lambda url, headers, timeout: _FakeResponse({"preferred_username": "oidc-existing", "groups": ["ops"]}),
+    )
+
+    start = client.get(
+        "/auth/sso/start",
+        params={"return_to": "https://10.68.49.250:30073/"},
+        headers={"origin": "https://10.68.49.250:30073"},
+    )
+    assert start.status_code == 200, start.text
+    state = parse_qs(urlparse(start.json()["authorize_url"]).query)["state"][0]
+
+    callback = client.get(
+        "/auth/sso/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    assert callback.status_code in {302, 307}
+
+    with Session(engine) as session:
+        user = session.get(User, "oidc-existing")
+        assert user is not None
+        assert user.role == Role.LAB_OPERATOR
+        assert user.is_admin is True
 
 
 def test_cookie_auth_session_ttl_is_enforced(client: TestClient, monkeypatch):

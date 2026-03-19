@@ -1195,6 +1195,16 @@ def _ensure_config_columns() -> None:
             to_add.append("ALTER TABLE config ADD COLUMN sso_userinfo_url TEXT DEFAULT ''")
         if "sso_redirect_url" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN sso_redirect_url TEXT DEFAULT ''")
+        if "sso_role_claim" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN sso_role_claim TEXT DEFAULT 'groups'")
+        if "sso_default_role" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN sso_default_role TEXT DEFAULT 'user'")
+        if "sso_role_mappings_json" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN sso_role_mappings_json TEXT DEFAULT '{}'")
+        if "sso_auto_create_users" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN sso_auto_create_users BOOLEAN DEFAULT 1")
+        if "sso_sync_roles_on_login" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN sso_sync_roles_on_login BOOLEAN DEFAULT 1")
         if "ldap_enabled" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN ldap_enabled BOOLEAN DEFAULT 0")
         if "ldap_server_uri" not in cols:
@@ -5231,6 +5241,43 @@ def update_site_settings(
     )
 
 
+def _normalize_sso_role_mappings(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for claim_value, role_value in raw.items():
+        claim_key = str(claim_value or "").strip().lower()
+        if not claim_key:
+            continue
+        normalized_role = normalize_requested_role(str(role_value or "").strip())
+        normalized[claim_key] = normalized_role
+    return normalized
+
+
+def _read_sso_role_mappings(cfg: Config) -> dict[str, str]:
+    raw = str(getattr(cfg, "sso_role_mappings_json", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+
+    normalized: dict[str, str] = {}
+    for claim_value, role_value in parsed.items():
+        claim_key = str(claim_value or "").strip().lower()
+        role_key = str(role_value or "").strip().lower()
+        if not claim_key or not role_key:
+            continue
+        try:
+            normalized[claim_key] = normalize_requested_role(role_key)
+        except ValueError:
+            continue
+    return normalized
+
+
 @router.get(
     "/settings/sso",
     response_model=SSOSettings,
@@ -5240,6 +5287,7 @@ def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     session.add(cfg)
     session.commit()
+    role_mappings = _read_sso_role_mappings(cfg)
     return SSOSettings(
         sso_enabled=cfg.sso_enabled,
         sso_provider=cfg.sso_provider,
@@ -5249,6 +5297,11 @@ def get_sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,
         sso_redirect_url=cfg.sso_redirect_url,
+        sso_role_claim=str(cfg.sso_role_claim or "groups").strip() or "groups",
+        sso_default_role=str(cfg.sso_default_role or Role.USER).strip() or Role.USER,
+        sso_role_mappings=role_mappings,
+        sso_auto_create_users=bool(cfg.sso_auto_create_users),
+        sso_sync_roles_on_login=bool(cfg.sso_sync_roles_on_login),
     )
 
 
@@ -5262,16 +5315,28 @@ def update_sso_settings(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> SSOSettings:
+    try:
+        default_role = normalize_requested_role(payload.sso_default_role)
+        role_mappings = _normalize_sso_role_mappings(payload.sso_role_mappings)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    role_claim = str(payload.sso_role_claim or "").strip() or "groups"
     cfg = session.get(Config, 1) or Config(id=1)
     cfg.sso_enabled = payload.sso_enabled
-    cfg.sso_provider = payload.sso_provider
-    cfg.sso_client_id = payload.sso_client_id
+    cfg.sso_provider = str(payload.sso_provider or "").strip()
+    cfg.sso_client_id = str(payload.sso_client_id or "").strip()
     if "sso_client_secret" in payload.model_fields_set:
         cfg.sso_client_secret = encrypt_secret(payload.sso_client_secret)
-    cfg.sso_authorize_url = payload.sso_authorize_url
-    cfg.sso_token_url = payload.sso_token_url
-    cfg.sso_userinfo_url = payload.sso_userinfo_url
-    cfg.sso_redirect_url = payload.sso_redirect_url
+    cfg.sso_authorize_url = str(payload.sso_authorize_url or "").strip()
+    cfg.sso_token_url = str(payload.sso_token_url or "").strip()
+    cfg.sso_userinfo_url = str(payload.sso_userinfo_url or "").strip()
+    cfg.sso_redirect_url = str(payload.sso_redirect_url or "").strip()
+    cfg.sso_role_claim = role_claim
+    cfg.sso_default_role = default_role
+    cfg.sso_role_mappings_json = json.dumps(role_mappings, sort_keys=True, separators=(",", ":"))
+    cfg.sso_auto_create_users = bool(payload.sso_auto_create_users)
+    cfg.sso_sync_roles_on_login = bool(payload.sso_sync_roles_on_login)
     session.add(cfg)
     _record_admin_audit_event(
         session,
@@ -5279,7 +5344,10 @@ def update_sso_settings(
         action="update",
         target_type="settings_sso",
         target_id="global",
-        detail=f"sso_enabled={cfg.sso_enabled} provider={cfg.sso_provider}",
+        detail=(
+            f"sso_enabled={cfg.sso_enabled} provider={cfg.sso_provider} "
+            f"default_role={cfg.sso_default_role} mappings={len(role_mappings)}"
+        ),
     )
     session.commit()
     session.refresh(cfg)
@@ -5292,6 +5360,11 @@ def update_sso_settings(
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,
         sso_redirect_url=cfg.sso_redirect_url,
+        sso_role_claim=str(cfg.sso_role_claim or "groups").strip() or "groups",
+        sso_default_role=str(cfg.sso_default_role or Role.USER).strip() or Role.USER,
+        sso_role_mappings=_read_sso_role_mappings(cfg),
+        sso_auto_create_users=bool(cfg.sso_auto_create_users),
+        sso_sync_roles_on_login=bool(cfg.sso_sync_roles_on_login),
     )
 
 

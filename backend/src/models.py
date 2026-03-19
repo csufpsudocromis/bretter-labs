@@ -440,6 +440,11 @@ class SSOSettings(BaseModel):
     sso_token_url: str
     sso_userinfo_url: str
     sso_redirect_url: str
+    sso_role_claim: str = Field(default="groups", min_length=1, max_length=128)
+    sso_default_role: str = Field(default="user", min_length=1, max_length=64)
+    sso_role_mappings: dict[str, str] = Field(default_factory=dict)
+    sso_auto_create_users: bool = True
+    sso_sync_roles_on_login: bool = True
 
 
 class LDAPSettings(BaseModel):
@@ -464,6 +469,11 @@ class SSOSettingsUpdate(BaseModel):
     sso_token_url: str
     sso_userinfo_url: str
     sso_redirect_url: str
+    sso_role_claim: str = Field(default="groups", min_length=1, max_length=128)
+    sso_default_role: str = Field(default="user", min_length=1, max_length=64)
+    sso_role_mappings: dict[str, str] = Field(default_factory=dict)
+    sso_auto_create_users: bool = True
+    sso_sync_roles_on_login: bool = True
 
 
 class LDAPSettingsUpdate(BaseModel):

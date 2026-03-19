@@ -990,6 +990,19 @@ def sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
     cfg = session.get(Config, 1) or Config(id=1)
     session.add(cfg)
     session.commit()
+    role_mappings: dict[str, str] = {}
+    raw_mappings = str(getattr(cfg, "sso_role_mappings_json", "") or "").strip()
+    if raw_mappings:
+        try:
+            parsed = json.loads(raw_mappings)
+            if isinstance(parsed, dict):
+                for claim_value, role_value in parsed.items():
+                    claim_key = str(claim_value or "").strip().lower()
+                    role_key = str(role_value or "").strip().lower()
+                    if claim_key and role_key:
+                        role_mappings[claim_key] = role_key
+        except ValueError:
+            role_mappings = {}
     return SSOSettings(
         sso_enabled=cfg.sso_enabled,
         sso_provider=cfg.sso_provider,
@@ -999,6 +1012,11 @@ def sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
         sso_token_url=cfg.sso_token_url,
         sso_userinfo_url=cfg.sso_userinfo_url,
         sso_redirect_url=cfg.sso_redirect_url,
+        sso_role_claim=str(getattr(cfg, "sso_role_claim", "groups") or "groups").strip() or "groups",
+        sso_default_role=str(getattr(cfg, "sso_default_role", "user") or "user").strip() or "user",
+        sso_role_mappings=role_mappings,
+        sso_auto_create_users=bool(getattr(cfg, "sso_auto_create_users", True)),
+        sso_sync_roles_on_login=bool(getattr(cfg, "sso_sync_roles_on_login", True)),
     )
 
 

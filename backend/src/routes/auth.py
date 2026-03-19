@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import logging
 import re
 import secrets
@@ -28,7 +29,14 @@ from ..auth import (
 from ..config import settings
 from ..db import get_session
 from ..models import Credentials, UserOut
-from ..rbac import Role, can_access_admin, list_permissions_for_role, role_for_user
+from ..rbac import (
+    Role,
+    can_access_admin,
+    ensure_user_role_fields,
+    list_permissions_for_role,
+    normalize_role,
+    role_for_user,
+)
 from ..secret_codec import decrypt_secret
 from ..services.ldap_auth import (
     LDAPRuntimeConfig,
@@ -48,6 +56,14 @@ _USERNAME_CLEAN_RE = re.compile(r"[^a-zA-Z0-9._@-]+")
 _LOGIN_ATTEMPTS: dict[str, deque[float]] = {}
 _LOGIN_BLOCKED_UNTIL: dict[str, float] = {}
 _LOGIN_ATTEMPT_LOCK = threading.Lock()
+_OIDC_ROLE_PRIORITY: dict[str, int] = {
+    Role.USER: 0,
+    Role.VIEWER: 10,
+    Role.IMAGE_MANAGER: 20,
+    Role.TEMPLATE_MANAGER: 20,
+    Role.LAB_OPERATOR: 30,
+    Role.PLATFORM_ADMIN: 100,
+}
 
 
 def _user_out(user: User) -> UserOut:
@@ -251,6 +267,82 @@ def _oidc_username_from_claims(claims: dict) -> str:
     if len(normalized) < 3:
         normalized = f"user-{secrets.token_hex(4)}"
     return normalized[:64]
+
+
+def _oidc_role_mappings(cfg: Config) -> dict[str, str]:
+    raw = str(getattr(cfg, "sso_role_mappings_json", "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for claim_value, role_value in parsed.items():
+        claim_key = str(claim_value or "").strip().lower()
+        role_key = normalize_role(str(role_value or "").strip().lower())
+        if not claim_key or not role_key:
+            continue
+        normalized[claim_key] = role_key
+    return normalized
+
+
+def _claim_values(claims: dict, claim_name: str) -> list[str]:
+    raw = claims.get(claim_name)
+    if raw is None:
+        return []
+    values: list[str] = []
+    if isinstance(raw, (list, tuple, set)):
+        for item in raw:
+            text = str(item or "").strip().lower()
+            if text:
+                values.append(text)
+    elif isinstance(raw, str):
+        text = raw.strip().lower()
+        if text:
+            values.append(text)
+            for split_token in re.split(r"[,\s]+", text):
+                split_value = split_token.strip().lower()
+                if split_value and split_value not in values:
+                    values.append(split_value)
+    else:
+        text = str(raw).strip().lower()
+        if text:
+            values.append(text)
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def _resolve_oidc_role(cfg: Config, claims: dict) -> str:
+    default_role = normalize_role(str(getattr(cfg, "sso_default_role", Role.USER) or Role.USER).strip())
+    mappings = _oidc_role_mappings(cfg)
+    claim_name = str(getattr(cfg, "sso_role_claim", "groups") or "groups").strip()
+    if not claim_name:
+        return default_role
+
+    claim_values = _claim_values(claims, claim_name)
+    if not claim_values:
+        return default_role
+
+    matched_roles: list[str] = []
+    for claim_value in claim_values:
+        mapped = mappings.get(claim_value)
+        if mapped:
+            matched_roles.append(mapped)
+
+    if not matched_roles:
+        return default_role
+    matched_roles.sort(key=lambda role: _OIDC_ROLE_PRIORITY.get(normalize_role(role), 0), reverse=True)
+    return normalize_role(matched_roles[0])
 
 
 def _oidc_exchange_token(cfg: Config, code: str, code_verifier: str) -> dict:
@@ -555,23 +647,50 @@ def sso_callback(
     token_payload = _oidc_exchange_token(cfg, str(code), code_verifier)
     claims = _oidc_userinfo(cfg, str(token_payload.get("access_token")))
     username = _oidc_username_from_claims(claims)
+    resolved_role = _resolve_oidc_role(cfg, claims)
+    auto_create = bool(getattr(cfg, "sso_auto_create_users", True))
+    sync_roles = bool(getattr(cfg, "sso_sync_roles_on_login", True))
     user = session.get(User, username)
     if not user:
+        if not auto_create:
+            _audit_auth_event(
+                event="sso_callback",
+                outcome="failed",
+                request=request,
+                username=username,
+                source="oidc",
+                detail="oidc_user_not_provisioned",
+            )
+            return _redirect_with_auth_error(return_to, "oidc_user_not_provisioned")
         user = User(
             username=username,
             password_hash=hash_password(secrets.token_urlsafe(32)),
-            role=Role.USER,
+            role=resolved_role,
             team=normalize_team(None),
-            is_admin=False,
+            is_admin=can_access_admin(resolved_role),
             force_password_change=False,
         )
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+    elif sync_roles:
+        if str(user.role or "").strip().lower() != resolved_role:
+            user.role = resolved_role
+        ensure_user_role_fields(user)
         session.add(user)
         session.commit()
         session.refresh(user)
     token = issue_token(session, user.username)
     response = RedirectResponse(url=return_to or _sanitize_return_to("/", request), status_code=status.HTTP_302_FOUND)
     set_auth_cookie(response, token)
-    _audit_auth_event(event="sso_callback", outcome="success", request=request, username=user.username, source="oidc")
+    _audit_auth_event(
+        event="sso_callback",
+        outcome="success",
+        request=request,
+        username=user.username,
+        source="oidc",
+        detail=f"role={role_for_user(user)}",
+    )
     return response
 
 

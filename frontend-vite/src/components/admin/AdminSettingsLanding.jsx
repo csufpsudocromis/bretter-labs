@@ -23,8 +23,8 @@ const AdminSettingsLanding = () => (
         <p>View backend/runtime configuration (read-only).</p>
       </Link>
       <Link to="/admin/settings/sso" className="tile">
-        <h3>Single Sign-On</h3>
-        <p>Enable/configure SSO for this environment.</p>
+        <h3>OIDC / SSO</h3>
+        <p>Configure OIDC login, role mapping, and user provisioning behavior.</p>
       </Link>
       <Link to="/admin/settings/ldap" className="tile">
         <h3>LDAP</h3>
