@@ -20,6 +20,7 @@ if ! [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] || [ "$WAIT_SECONDS" -lt 10 ]; then
   exit 1
 fi
 
+# shellcheck disable=SC2317  # Invoked indirectly via EXIT trap.
 cleanup() {
   kubectl -n "$NAMESPACE" delete labinstance "$INSTANCE_NAME" --ignore-not-found=true >/dev/null 2>&1 || true
   if [ -n "$CONTROLLER_PID" ] && kill -0 "$CONTROLLER_PID" >/dev/null 2>&1; then
