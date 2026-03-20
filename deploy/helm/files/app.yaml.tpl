@@ -476,6 +476,8 @@ spec:
               value: "10485760"
             - name: BLABS_API_DOCS_ENABLED
               value: "false"
+            - name: UVICORN_WORKERS
+              value: "__UVICORN_WORKERS__"
             - name: BLABS_KUBE_NODE_EXTERNAL_HOST
               value: __NODE_EXTERNAL_HOST__
             - name: BLABS_PUBLIC_SCHEME
@@ -651,6 +653,44 @@ spec:
     - port: 8000
       targetPort: 8000
 __BACKEND_SERVICE_NODEPORT_LINE__
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bretter-backend
+  namespace: __NAMESPACE__
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bretter-backend
+  minReplicas: __BACKEND_HPA_MIN_REPLICAS__
+  maxReplicas: __BACKEND_HPA_MAX_REPLICAS__
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: __BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT__
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -913,6 +953,44 @@ spec:
     - port: 443
       targetPort: 8443
       nodePort: 30073
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: bretter-frontend
+  namespace: __NAMESPACE__
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: bretter-frontend
+  minReplicas: __FRONTEND_HPA_MIN_REPLICAS__
+  maxReplicas: __FRONTEND_HPA_MAX_REPLICAS__
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 3
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      selectPolicy: Max
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: __FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT__
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

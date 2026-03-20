@@ -14,6 +14,8 @@ Use this checklist before first production deployment and for each release.
 - Set `appTemplateValues.CORS_ALLOWED_ORIGINS` to your real UI origins (no localhost/127.0.0.1).
 - Set `appTemplateValues.VM_STORAGE_CLASS` to the intended production class.
 - Set `appTemplateValues.TLS_SECRET_NAME` to the production certificate secret.
+- Ensure `BACKEND_REPLICAS`/`FRONTEND_REPLICAS` are within configured HPA bounds (`*_HPA_MIN_REPLICAS`..`*_HPA_MAX_REPLICAS`).
+- Tune `UVICORN_WORKERS` for backend pod CPU/memory limits and expected concurrent sessions.
 - Keep `appTemplateValues.SECRETS_ENCRYPTION_KEY` empty in committed production values.
 - Set `appTemplateValues.RUNTIME_SECRETS_SECRET_NAME` and `appTemplateValues.RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`.
 - Ensure runtime secret `bretter-runtime-secrets` exists with data key `secrets_encryption_key` (or your configured overrides) before/at rollout.

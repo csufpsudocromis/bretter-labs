@@ -27,6 +27,13 @@ FRONTEND_IMAGE="${FRONTEND_IMAGE:-$DEFAULT_FRONTEND_IMAGE}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-$DEFAULT_RUNNER_IMAGE}"
 BACKEND_REPLICAS="${BACKEND_REPLICAS:-1}"
 FRONTEND_REPLICAS="${FRONTEND_REPLICAS:-2}"
+BACKEND_HPA_MIN_REPLICAS="${BACKEND_HPA_MIN_REPLICAS:-$BACKEND_REPLICAS}"
+BACKEND_HPA_MAX_REPLICAS="${BACKEND_HPA_MAX_REPLICAS:-$BACKEND_REPLICAS}"
+BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT="${BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT:-70}"
+FRONTEND_HPA_MIN_REPLICAS="${FRONTEND_HPA_MIN_REPLICAS:-$FRONTEND_REPLICAS}"
+FRONTEND_HPA_MAX_REPLICAS="${FRONTEND_HPA_MAX_REPLICAS:-$FRONTEND_REPLICAS}"
+FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT="${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT:-70}"
+UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
 ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
 SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
 SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
@@ -633,11 +640,42 @@ validate_image_reference_policy() {
 }
 
 validate_replica_config() {
+  validate_hpa_config() {
+    local component="$1"
+    local replicas="$2"
+    local min_replicas="$3"
+    local max_replicas="$4"
+    local target_cpu_percent="$5"
+    local prefix="${component}_HPA"
+    local replicas_var="${component}_REPLICAS"
+
+    if ! is_uint "$min_replicas" || [ "$min_replicas" -lt 1 ]; then
+      fail "${prefix}_MIN_REPLICAS must be an integer >= 1."
+    fi
+    if ! is_uint "$max_replicas" || [ "$max_replicas" -lt 1 ]; then
+      fail "${prefix}_MAX_REPLICAS must be an integer >= 1."
+    fi
+    if [ "$max_replicas" -lt "$min_replicas" ]; then
+      fail "${prefix}_MAX_REPLICAS must be >= ${prefix}_MIN_REPLICAS."
+    fi
+    if [ "$replicas" -lt "$min_replicas" ] || [ "$replicas" -gt "$max_replicas" ]; then
+      fail "${replicas_var} must be between ${prefix}_MIN_REPLICAS and ${prefix}_MAX_REPLICAS."
+    fi
+    if ! is_uint "$target_cpu_percent" || [ "$target_cpu_percent" -lt 1 ] || [ "$target_cpu_percent" -gt 100 ]; then
+      fail "${prefix}_TARGET_CPU_UTILIZATION_PERCENT must be an integer in 1-100."
+    fi
+  }
+
   if ! is_uint "$BACKEND_REPLICAS" || [ "$BACKEND_REPLICAS" -lt 1 ]; then
     fail "BACKEND_REPLICAS must be an integer >= 1."
   fi
   if ! is_uint "$FRONTEND_REPLICAS" || [ "$FRONTEND_REPLICAS" -lt 1 ]; then
     fail "FRONTEND_REPLICAS must be an integer >= 1."
+  fi
+  validate_hpa_config "BACKEND" "$BACKEND_REPLICAS" "$BACKEND_HPA_MIN_REPLICAS" "$BACKEND_HPA_MAX_REPLICAS" "$BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT"
+  validate_hpa_config "FRONTEND" "$FRONTEND_REPLICAS" "$FRONTEND_HPA_MIN_REPLICAS" "$FRONTEND_HPA_MAX_REPLICAS" "$FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT"
+  if ! is_uint "$UVICORN_WORKERS" || [ "$UVICORN_WORKERS" -lt 1 ] || [ "$UVICORN_WORKERS" -gt 32 ]; then
+    fail "UVICORN_WORKERS must be an integer in 1-32."
   fi
 }
 
@@ -2738,6 +2776,9 @@ render_manifest_template() {
 
   local ns control_node node_external_host backend_image frontend_image runner_image public_scheme tls_secret_name
   local backend_replicas frontend_replicas
+  local backend_hpa_min_replicas backend_hpa_max_replicas backend_hpa_target_cpu_utilization_percent
+  local frontend_hpa_min_replicas frontend_hpa_max_replicas frontend_hpa_target_cpu_utilization_percent
+  local uvicorn_workers
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend vm_runner_privileged
@@ -2757,6 +2798,13 @@ render_manifest_template() {
   runner_image="$(escape_sed_replacement "$RUNNER_IMAGE")"
   backend_replicas="$(escape_sed_replacement "$BACKEND_REPLICAS")"
   frontend_replicas="$(escape_sed_replacement "$FRONTEND_REPLICAS")"
+  backend_hpa_min_replicas="$(escape_sed_replacement "$BACKEND_HPA_MIN_REPLICAS")"
+  backend_hpa_max_replicas="$(escape_sed_replacement "$BACKEND_HPA_MAX_REPLICAS")"
+  backend_hpa_target_cpu_utilization_percent="$(escape_sed_replacement "$BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT")"
+  frontend_hpa_min_replicas="$(escape_sed_replacement "$FRONTEND_HPA_MIN_REPLICAS")"
+  frontend_hpa_max_replicas="$(escape_sed_replacement "$FRONTEND_HPA_MAX_REPLICAS")"
+  frontend_hpa_target_cpu_utilization_percent="$(escape_sed_replacement "$FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT")"
+  uvicorn_workers="$(escape_sed_replacement "$UVICORN_WORKERS")"
   public_scheme="$(escape_sed_replacement "$PUBLIC_SCHEME")"
   tls_secret_name="$(escape_sed_replacement "$TLS_SECRET_NAME")"
   windows_machine_type="$(escape_sed_replacement "$WINDOWS_MACHINE_TYPE")"
@@ -2801,6 +2849,13 @@ render_manifest_template() {
     -e "s/__RUNNER_IMAGE__/${runner_image}/g" \
     -e "s/__BACKEND_REPLICAS__/${backend_replicas}/g" \
     -e "s/__FRONTEND_REPLICAS__/${frontend_replicas}/g" \
+    -e "s/__BACKEND_HPA_MIN_REPLICAS__/${backend_hpa_min_replicas}/g" \
+    -e "s/__BACKEND_HPA_MAX_REPLICAS__/${backend_hpa_max_replicas}/g" \
+    -e "s/__BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT__/${backend_hpa_target_cpu_utilization_percent}/g" \
+    -e "s/__FRONTEND_HPA_MIN_REPLICAS__/${frontend_hpa_min_replicas}/g" \
+    -e "s/__FRONTEND_HPA_MAX_REPLICAS__/${frontend_hpa_max_replicas}/g" \
+    -e "s/__FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT__/${frontend_hpa_target_cpu_utilization_percent}/g" \
+    -e "s/__UVICORN_WORKERS__/${uvicorn_workers}/g" \
     -e "s/__PUBLIC_SCHEME__/${public_scheme}/g" \
     -e "s/__TLS_SECRET_NAME__/${tls_secret_name}/g" \
     -e "s/__WINDOWS_MACHINE_TYPE__/${windows_machine_type}/g" \
@@ -2849,6 +2904,9 @@ render_helm_values_override() {
   local control_node node_external_host runner_node_selector_value vm_storage_class
   local backend_image backend_admin_image frontend_image runner_image public_scheme tls_secret_name
   local backend_replicas frontend_replicas
+  local backend_hpa_min_replicas backend_hpa_max_replicas backend_hpa_target_cpu_utilization_percent
+  local frontend_hpa_min_replicas frontend_hpa_max_replicas frontend_hpa_target_cpu_utilization_percent
+  local uvicorn_workers
   local orchestration_backend image_import_backend
   local labinstance_crd_group labinstance_crd_version labinstance_crd_plural labinstance_crd_finalizer
   local labimageimport_crd_group labimageimport_crd_version labimageimport_crd_plural labimageimport_crd_finalizer
@@ -2882,6 +2940,13 @@ render_helm_values_override() {
   runner_image="$(yaml_escape "$RUNNER_IMAGE")"
   backend_replicas="$(yaml_escape "$BACKEND_REPLICAS")"
   frontend_replicas="$(yaml_escape "$FRONTEND_REPLICAS")"
+  backend_hpa_min_replicas="$(yaml_escape "$BACKEND_HPA_MIN_REPLICAS")"
+  backend_hpa_max_replicas="$(yaml_escape "$BACKEND_HPA_MAX_REPLICAS")"
+  backend_hpa_target_cpu_utilization_percent="$(yaml_escape "$BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT")"
+  frontend_hpa_min_replicas="$(yaml_escape "$FRONTEND_HPA_MIN_REPLICAS")"
+  frontend_hpa_max_replicas="$(yaml_escape "$FRONTEND_HPA_MAX_REPLICAS")"
+  frontend_hpa_target_cpu_utilization_percent="$(yaml_escape "$FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT")"
+  uvicorn_workers="$(yaml_escape "$UVICORN_WORKERS")"
   orchestration_backend="$(yaml_escape "$ORCHESTRATION_BACKEND")"
   image_import_backend="$(yaml_escape "$IMAGE_IMPORT_BACKEND")"
   labinstance_crd_group="$(yaml_escape "$LABINSTANCE_CRD_GROUP")"
@@ -2974,6 +3039,13 @@ appTemplateValues:
   RUNNER_IMAGE: "${runner_image}"
   BACKEND_REPLICAS: "${backend_replicas}"
   FRONTEND_REPLICAS: "${frontend_replicas}"
+  BACKEND_HPA_MIN_REPLICAS: "${backend_hpa_min_replicas}"
+  BACKEND_HPA_MAX_REPLICAS: "${backend_hpa_max_replicas}"
+  BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT: "${backend_hpa_target_cpu_utilization_percent}"
+  FRONTEND_HPA_MIN_REPLICAS: "${frontend_hpa_min_replicas}"
+  FRONTEND_HPA_MAX_REPLICAS: "${frontend_hpa_max_replicas}"
+  FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT: "${frontend_hpa_target_cpu_utilization_percent}"
+  UVICORN_WORKERS: "${uvicorn_workers}"
   ORCHESTRATION_BACKEND: "${orchestration_backend}"
   IMAGE_IMPORT_BACKEND: "${image_import_backend}"
   LABINSTANCE_CRD_GROUP: "${labinstance_crd_group}"
@@ -5565,6 +5637,8 @@ log_runtime_configuration() {
   log "LabImageImport controller enabled: ${LABIMAGEIMPORT_CONTROLLER_ENABLED} (poll=${LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS}s metrics=${LABIMAGEIMPORT_CONTROLLER_METRICS_BIND}:${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT} leader-election=${LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED})"
   log "Team namespace mode: ${TEAM_NAMESPACE_MODE} (prefix=${TEAM_NAMESPACE_PREFIX})"
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
+  log "Backend/frontend HPA min-max cpu-target: ${BACKEND_HPA_MIN_REPLICAS}-${BACKEND_HPA_MAX_REPLICAS}@${BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}% / ${FRONTEND_HPA_MIN_REPLICAS}-${FRONTEND_HPA_MAX_REPLICAS}@${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}%"
+  log "Uvicorn workers per backend pod: ${UVICORN_WORKERS}"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"
   log "VM console external traffic policy: $VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY"

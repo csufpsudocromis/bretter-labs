@@ -56,6 +56,20 @@ run_failure "reject mutable latest image references by default" \
 run_success "allow mutable image references only with explicit override" \
   env SETUP_DRY_RUN=1 ALLOW_MUTABLE_IMAGE_TAGS=1 BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend:latest" "$SETUP_SCRIPT"
 
+run_failure "reject backend hpa max lower than min" \
+  env SETUP_DRY_RUN=1 BACKEND_HPA_MIN_REPLICAS=2 BACKEND_HPA_MAX_REPLICAS=1 "$SETUP_SCRIPT"
+
+run_failure "reject backend replicas outside hpa bounds" \
+  env SETUP_DRY_RUN=1 BACKEND_REPLICAS=3 BACKEND_HPA_MIN_REPLICAS=1 BACKEND_HPA_MAX_REPLICAS=2 "$SETUP_SCRIPT"
+
+run_failure "reject invalid uvicorn workers value" \
+  env SETUP_DRY_RUN=1 UVICORN_WORKERS=0 "$SETUP_SCRIPT"
+
+run_success "allow autoscaling bounds with valid worker tuning" \
+  env SETUP_DRY_RUN=1 BACKEND_REPLICAS=1 BACKEND_HPA_MIN_REPLICAS=1 BACKEND_HPA_MAX_REPLICAS=3 \
+  FRONTEND_REPLICAS=2 FRONTEND_HPA_MIN_REPLICAS=2 FRONTEND_HPA_MAX_REPLICAS=4 \
+  UVICORN_WORKERS=2 "$SETUP_SCRIPT"
+
 run_failure "reject invalid image import backend mode" \
   env SETUP_DRY_RUN=1 IMAGE_IMPORT_BACKEND=invalid "$SETUP_SCRIPT"
 

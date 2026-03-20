@@ -96,6 +96,7 @@ _User view: launch feedback and in-browser connect workflow._
 - Clone-based VM storage workflows
 - CDI direct upload/finalization support
 - Postgres-backed DB stack with Alembic migrations
+- Backend/frontend HPA controls with CPU-based autoscaling thresholds
 - Monitoring hooks, alert ingestion, and capped error logs
 - Secure session cookie auth with short-lived connect access flow
 
@@ -277,6 +278,13 @@ Proof artifact and operator docs:
 | `RUNNER_IMAGE` | `ghcr.io/csufpsudocromis/win-vm-runner:v<VERSION>` | Runner image reference |
 | `BACKEND_REPLICAS` | `1` | Backend deployment replica count |
 | `FRONTEND_REPLICAS` | `2` | Frontend deployment replica count |
+| `BACKEND_HPA_MIN_REPLICAS` | `BACKEND_REPLICAS` | Backend HPA lower bound |
+| `BACKEND_HPA_MAX_REPLICAS` | `BACKEND_REPLICAS` | Backend HPA upper bound |
+| `BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT` | `70` | Backend HPA CPU target percent |
+| `FRONTEND_HPA_MIN_REPLICAS` | `FRONTEND_REPLICAS` | Frontend HPA lower bound |
+| `FRONTEND_HPA_MAX_REPLICAS` | `FRONTEND_REPLICAS` | Frontend HPA upper bound |
+| `FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT` | `70` | Frontend HPA CPU target percent |
+| `UVICORN_WORKERS` | `1` | Uvicorn worker processes per backend pod |
 | `LOAD_LOCAL_IMAGES` | `1` | Build/import local images into cluster runtime |
 | `PUSH_IMAGES` | `0` | Build and push images to registry |
 | `CREATE_PULL_SECRET` | `0` | Create/update `ghcr-creds` pull secret |

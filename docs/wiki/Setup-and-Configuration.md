@@ -66,6 +66,13 @@ Images:
 - `RUNNER_IMAGE`
 - `BACKEND_REPLICAS` (default `1`)
 - `FRONTEND_REPLICAS` (default `2`)
+- `BACKEND_HPA_MIN_REPLICAS` (default `BACKEND_REPLICAS`)
+- `BACKEND_HPA_MAX_REPLICAS` (default `BACKEND_REPLICAS`)
+- `BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT` (default `70`)
+- `FRONTEND_HPA_MIN_REPLICAS` (default `FRONTEND_REPLICAS`)
+- `FRONTEND_HPA_MAX_REPLICAS` (default `FRONTEND_REPLICAS`)
+- `FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT` (default `70`)
+- `UVICORN_WORKERS` (default `1`; backend process concurrency per pod)
 - `ALLOW_MUTABLE_IMAGE_TAGS` (default `0`; production should stay `0`)
 - `PRUNE_BOOTSTRAP_ADMIN_ENV` (default `1`; removes bootstrap admin secret env from running backend deployment after initial rollout)
 

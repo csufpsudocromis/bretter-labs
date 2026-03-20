@@ -123,6 +123,29 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             errors.append(f"{key} must be an integer >= 1 (found: {raw!r}).")
         return parsed
 
+    def get_percent(key: str) -> int:
+        parsed = get_uint(key)
+        if parsed > 100:
+            errors.append(f"{key} must be an integer in 1-100 (found: {parsed!r}).")
+        return parsed
+
+    def validate_hpa(component: str, replicas: int) -> None:
+        min_key = f"{component}_HPA_MIN_REPLICAS"
+        max_key = f"{component}_HPA_MAX_REPLICAS"
+        target_key = f"{component}_HPA_TARGET_CPU_UTILIZATION_PERCENT"
+        min_replicas = get_uint(min_key)
+        max_replicas = get_uint(max_key)
+        get_percent(target_key)
+        if max_replicas and min_replicas and max_replicas < min_replicas:
+            errors.append(f"{max_key} must be >= {min_key}.")
+        if (
+            replicas
+            and min_replicas
+            and max_replicas
+            and (replicas < min_replicas or replicas > max_replicas)
+        ):
+            errors.append(f"{component}_REPLICAS must be between {min_key} and {max_key}.")
+
     for key in ("BACKEND_IMAGE", "BACKEND_ADMIN_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
         image_ref = get_text(key)
         if not image_ref:
@@ -135,8 +158,14 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
         if _looks_local_image_ref(image_ref):
             errors.append(f"{key} must not use local/dev image references in production (found: {image_ref!r}).")
 
-    get_uint("BACKEND_REPLICAS")
-    get_uint("FRONTEND_REPLICAS")
+    backend_replicas = get_uint("BACKEND_REPLICAS")
+    frontend_replicas = get_uint("FRONTEND_REPLICAS")
+    validate_hpa("BACKEND", backend_replicas)
+    validate_hpa("FRONTEND", frontend_replicas)
+
+    uvicorn_workers = get_uint("UVICORN_WORKERS")
+    if uvicorn_workers > 32:
+        errors.append("UVICORN_WORKERS must be <= 32.")
 
     if get_bool("ALLOW_MUTABLE_IMAGE_TAGS", default=False):
         errors.append("ALLOW_MUTABLE_IMAGE_TAGS must be disabled for production.")

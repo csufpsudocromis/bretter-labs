@@ -90,6 +90,7 @@ Reference pages:
 - Optional LDAP auth fallback configured in `/admin/settings/ldap`
 - One active lab per user enforced server-side (VM + container)
 - Namespace-based scaling and quota controls in `/admin/scaling-quotas`
+- Backend/frontend autoscaling controls via HPA (`*_HPA_MIN/MAX_REPLICAS`, CPU utilization targets) plus `UVICORN_WORKERS`
 - Default ingress NetworkPolicies with explicit app allow rules
 - Error log cap/rotation at 10MB with paging (50 entries/page)
 - Reusable production baseline values with site-overlay template (`values-production-site.template.yaml`)

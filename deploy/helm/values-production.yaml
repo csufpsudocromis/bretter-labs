@@ -19,6 +19,14 @@ appTemplateValues:
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76
   BACKEND_REPLICAS: "1"
   FRONTEND_REPLICAS: "2"
+  # Production baseline keeps conservative autoscaling bounds; tune in site overlay.
+  BACKEND_HPA_MIN_REPLICAS: "1"
+  BACKEND_HPA_MAX_REPLICAS: "4"
+  BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT: "70"
+  FRONTEND_HPA_MIN_REPLICAS: "2"
+  FRONTEND_HPA_MAX_REPLICAS: "6"
+  FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT: "70"
+  UVICORN_WORKERS: "2"
   PUBLIC_SCHEME: https
   TLS_SECRET_NAME: bretter-tls
   ORCHESTRATION_BACKEND: "db"

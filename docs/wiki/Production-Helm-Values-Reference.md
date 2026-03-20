@@ -37,6 +37,13 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.TEAM_NAMESPACE_PREFIX` (team namespace naming convention)
 - `appTemplateValues.BACKEND_REPLICAS`
 - `appTemplateValues.FRONTEND_REPLICAS`
+- `appTemplateValues.BACKEND_HPA_MIN_REPLICAS`
+- `appTemplateValues.BACKEND_HPA_MAX_REPLICAS`
+- `appTemplateValues.BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT`
+- `appTemplateValues.FRONTEND_HPA_MIN_REPLICAS`
+- `appTemplateValues.FRONTEND_HPA_MAX_REPLICAS`
+- `appTemplateValues.FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT`
+- `appTemplateValues.UVICORN_WORKERS`
 - `appTemplateValues.PUBLIC_SCHEME`
 - `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
 - `appTemplateValues.REQUIRE_SCHEMA_READY` should remain `"1"` in production
@@ -56,6 +63,8 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues` includes:
   - deployment coordinates (`NAMESPACE`, `CONTROL_NODE`, `NODE_EXTERNAL_HOST`)
   - image refs (`BACKEND_IMAGE`, `BACKEND_ADMIN_IMAGE`, `FRONTEND_IMAGE`, `RUNNER_IMAGE`)
+  - backend/frontend autoscaling controls (`*_HPA_MIN/MAX_REPLICAS`, `*_HPA_TARGET_CPU_UTILIZATION_PERCENT`)
+  - backend process-level concurrency (`UVICORN_WORKERS`)
   - TLS/public URL controls (`PUBLIC_SCHEME`, `TLS_SECRET_NAME`)
   - auth/cors hardening values
   - runtime/storage/network options consumed by `deploy/helm/files/app.yaml.tpl`

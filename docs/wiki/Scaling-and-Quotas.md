@@ -1,10 +1,17 @@
 # Scaling and Quotas
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 ## Overview
 
 `/admin/scaling-quotas` controls namespace quota limits used by VM and container launch paths.
+
+Cluster component scaling is configured separately through Helm/setup values:
+
+- `BACKEND_REPLICAS`, `FRONTEND_REPLICAS`
+- `BACKEND_HPA_MIN_REPLICAS`, `BACKEND_HPA_MAX_REPLICAS`, `BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT`
+- `FRONTEND_HPA_MIN_REPLICAS`, `FRONTEND_HPA_MAX_REPLICAS`, `FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT`
+- `UVICORN_WORKERS`
 
 UI behavior:
 
