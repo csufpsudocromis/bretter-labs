@@ -87,6 +87,25 @@ spec:
                 idleTimeoutMinutes:
                   type: integer
                   minimum: 1
+                lifecycle:
+                  type: object
+                  properties:
+                    desiredState:
+                      type: string
+                      enum:
+                        - running
+                        - stopped
+                image:
+                  type: object
+                  properties:
+                    id:
+                      type: string
+                    filename:
+                      type: string
+                    sourcePvc:
+                      type: string
+                    osType:
+                      type: string
             status:
               type: object
               properties:
