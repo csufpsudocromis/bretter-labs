@@ -24,6 +24,8 @@ def test_alerts_errors_reports_clear_unavailable_when_log_path_missing(login_adm
     payload = response.json()
     assert payload["error_log_clear_supported"] is False
     assert "BLABS_ERROR_LOG_FILE_PATH" in payload["error_log_clear_reason"]
+    assert payload["rdp_readiness"]["status"] in {"ok", "warning", "critical", "unknown"}
+    assert "stuck_instances" in payload["rdp_readiness"]
 
 
 def test_clear_alerts_error_log_rejects_when_log_path_missing(login_admin, monkeypatch):

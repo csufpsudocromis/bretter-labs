@@ -1,24 +1,13 @@
 # Security and Auth
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 ## Authentication model
 
-- Login uses secure session cookies (`HttpOnly`) instead of localStorage tokens.
-- `/auth/login` sets auth cookie and returns user profile metadata.
+- Session auth uses secure HttpOnly cookies (no localStorage auth tokens).
+- `/auth/login` issues auth cookie and returns user profile.
 - `/auth/logout` revokes server token and clears auth cookie.
-- Optional LDAP authentication can be configured in `/admin/settings/ldap` (local auth attempted first, then LDAP).
-
-Bootstrap admin behavior:
-
-- Username defaults to `admin`.
-- Setup uses a one-time bootstrap secret (generated random unless `ADMIN_BOOTSTRAP_PASSWORD` is set).
-- Bootstrap secret is only used when no admin user exists.
-- Generated bootstrap secret is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` (`600`).
-- Backend startup fails fast if no admin user exists and no bootstrap secret is configured.
-- First login requires password reset (`force_password_change=true`).
-- Capture the generated bootstrap secret in secure credential storage, then verify backend env pruning after first-login reset.
-- Setup synthetic validation requires explicit `SYNTHETIC_CHECK_PASSWORD` on existing deployments; when setup generates a bootstrap secret and no synthetic password is provided, synthetic validation is auto-skipped.
+- Optional LDAP fallback is available via `/admin/settings/ldap` (local auth first, LDAP second).
 
 Default cookie names:
 
@@ -26,27 +15,32 @@ Default cookie names:
 - Connect grant: `blabs_connect_grant`
 - Connect session: `blabs_connect_session`
 
-## Connect token flow (VM + container)
+## Bootstrap admin lifecycle
 
-Connect flow is short-lived and split in two stages:
+- Default bootstrap username: `admin`.
+- Initial deployment requires one-time bootstrap secret when no admin exists.
+- Setup generates random bootstrap secret unless `ADMIN_BOOTSTRAP_PASSWORD` is provided.
+- Generated secret is written to `~/.config/bretter-labs/bootstrap-admin-<timestamp>.txt` with mode `600`.
+- First login requires password reset (`force_password_change=true`).
+- Backend startup fails fast if no admin exists and bootstrap secret is empty.
+- Setup prunes bootstrap env from backend deployment after rollout (`PRUNE_BOOTSTRAP_ADMIN_ENV=1` by default).
+
+## Token/connect security
+
+Connect flow:
 
 1. UI requests `/user/.../connect-token`.
 2. Backend issues one-time connect grant cookie.
 3. Connect endpoint consumes grant and mints connect session cookie.
-4. Proxy/websocket calls require valid connect session cookie.
+4. Proxy/WS calls require valid connect session cookie.
 
 Security properties:
 
-- Grant token is one-time use.
-- Grant/session cookies are path-scoped to connect routes.
-- Session TTL is server-enforced.
-- Session and connect tokens are hashed before database storage (raw token values are not persisted).
-- Legacy plaintext token rows are migrated to hashed storage via Alembic and plaintext lookup fallback is removed.
-
-## Internal API proxy TLS
-
-- Frontend proxies `/api`, `/auth`, and `/user` to backend over TLS when certs are mounted.
-- Backend certificate validation is enabled in the frontend proxy path (no insecure skip-verify fallback in hardened mode).
+- Grant token is one-time and short-lived.
+- Connect cookies are path-scoped.
+- Connect session TTL is server-enforced.
+- Session/connect tokens are hashed before DB storage.
+- Legacy plaintext token rows are migrated; plaintext lookup fallback is removed.
 
 ## RBAC model
 
@@ -59,13 +53,13 @@ Roles:
 - `lab_operator`
 - `platform_admin`
 
-Permissions are enforced on admin/API routes (read/write split for users, templates, images, operations, settings).
+Permissions are enforced on admin/API routes with read/write separation.
 
-## OIDC SSO
+## OIDC SSO (implemented)
 
-OIDC is optional and uses authorization code + PKCE.
+OIDC uses authorization code + PKCE and is configured in `/admin/settings/sso`.
 
-Required SSO config fields:
+Core fields:
 
 - `sso_client_id`
 - `sso_authorize_url`
@@ -73,44 +67,42 @@ Required SSO config fields:
 - `sso_userinfo_url`
 - `sso_redirect_url`
 
+Role mapping controls:
+
+- `sso_role_claim` (default `groups`)
+- `sso_default_role`
+- `sso_role_mappings_json`
+- `sso_auto_create_users`
+- `sso_sync_roles_on_login`
+
 Behavior:
 
 - Login state is stored server-side with short TTL.
-- Callback exchanges code and creates/updates local user.
-- Session cookie is then issued using the normal auth flow.
+- Callback exchanges code for tokens, resolves identity claims, applies role mapping, then issues normal session cookie.
+- Sensitive fields (for example client secret) are treated as write-only in admin APIs.
+
+SAML status:
+
+- SAML is not yet implemented in runtime; keep SAML as a follow-on adapter track.
 
 ## LDAP auth
 
-LDAP is optional and runs only if local auth fails.
-
-Settings page:
-
-- `/admin/settings/ldap`
-
-Notes:
-
+- Optional; attempted only after local auth failure.
+- Configured in `/admin/settings/ldap`.
 - `ldap_user_filter` must include `{username}`.
-- Use `ldaps://` in production where possible.
-- Keep skip-verify disabled unless troubleshooting non-production cert issues.
-- LDAP settings changes are dynamic in DB config; backend restart is not required after save.
-- LDAP bind password and SSO client secret are write-only in admin APIs and are not returned by read endpoints.
-- In production (`BLABS_PRODUCTION_PROFILE=1`), `BLABS_SECRETS_ENCRYPTION_KEY` must be present at runtime (typically via `BLABS_SECRETS_ENCRYPTION_KEY <- secretKeyRef`), and stored admin secrets are encrypted at rest.
+- Prefer `ldaps://` in production; keep skip-verify disabled outside controlled troubleshooting.
+- LDAP settings are stored in config and do not require backend restart after save.
 
-## Login rate limiting and audit events
+## Secrets and encryption controls
 
-- Login failures are rate-limited by backend settings:
-  - `BLABS_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default `5`)
-  - `BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default `300`)
-  - `BLABS_AUTH_LOGIN_LOCKOUT_SECONDS` (default `300`)
-- Successful and failed login/logout/SSO callback events are logged with source, username, and request IP.
-- Admin mutations (templates/images/quotas/settings/error-log clear) are recorded and queryable via `/admin/audit-events`.
+- In production profile, runtime must provide `BLABS_SECRETS_ENCRYPTION_KEY`.
+- Committed production values should keep plaintext key empty and use runtime secret injection.
+- Signature verification key must be mounted and referenced when signature verification is enabled.
+- Stored sensitive admin values (for example LDAP bind password, SSO client secret, template RDP defaults) are encrypted at rest through backend secret-encryption path.
 
-## CORS and login origin policy
+## CORS and cookie safety
 
-If login/API calls must work from LAN IPs and campus domains, set explicit allowed UI origins.
-For hardened deployments, use enterprise CORS mode.
-
-Examples:
+For hardened deployments:
 
 ```bash
 BLABS_CORS_ENTERPRISE_PROFILE=1
@@ -119,18 +111,30 @@ BLABS_CORS_ALLOWED_METHODS="GET,POST,PUT,PATCH,DELETE,OPTIONS"
 BLABS_CORS_ALLOWED_HEADERS="Accept,Content-Type,Authorization"
 ```
 
-Notes:
+Rules:
 
-- Include the **frontend origin** (for example `:30073`, where `/api` is proxied).
-- Keep `BLABS_AUTH_COOKIE_SECURE=1` and `BLABS_CONNECT_COOKIE_SECURE=1` when using HTTPS.
-- In enterprise mode, `BLABS_CORS_ALLOWED_ORIGIN_REGEX` is not allowed.
-- In non-enterprise mode, regex-based origins remain available for dev/legacy compatibility.
+- Include actual frontend origin(s), not localhost placeholders in production.
+- Keep `BLABS_AUTH_COOKIE_SECURE=1` and `BLABS_CONNECT_COOKIE_SECURE=1` on HTTPS.
+- Enterprise mode disallows `BLABS_CORS_ALLOWED_ORIGIN_REGEX`.
+
+## Login throttling and audit
+
+Rate-limit controls:
+
+- `BLABS_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS` (default `5`)
+- `BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` (default `300`)
+- `BLABS_AUTH_LOGIN_LOCKOUT_SECONDS` (default `300`)
+
+Audit coverage:
+
+- Login success/failure/logout/SSO callback events
+- Admin mutations (templates/images/quotas/settings/error-log clear)
+- Query via `/admin/audit-events`
 
 ## API docs exposure
 
-OpenAPI/docs endpoints are disabled in non-dev by default.
-
-- `BLABS_API_DOCS_ENABLED=0` (recommended for production)
+- Keep API docs disabled in production:
+  - `BLABS_API_DOCS_ENABLED=0`
 
 ## Related pages
 
@@ -140,6 +144,5 @@ OpenAPI/docs endpoints are disabled in non-dev by default.
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
 - [Operations Runbook](Operations-Runbook)
 - [Scaling and Quotas](Scaling-and-Quotas)
-- [Pentest Plan and Checklist](Pentest-Plan-and-Checklist)
 - [Setup and Configuration](Setup-and-Configuration)
 - [LDAP Authentication](LDAP-Authentication)

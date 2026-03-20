@@ -1,88 +1,104 @@
 # Template Best Practices
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 19, 2026.
 
-Use these defaults to reduce failed launches and improve startup consistency.
+Use these defaults to reduce launch failures and keep user experience predictable.
 
 ## VM templates
 
-### Sizing
+### Sizing and capacity
 
-- Start with smallest viable profile per OS.
-- Avoid oversizing defaults; bigger defaults increase pending incidents.
-- Keep enough node headroom for one additional emergency lab.
+- Start with smallest viable CPU/RAM profile per OS.
+- Avoid oversized defaults that create scheduler pressure.
+- Keep enough node headroom for burst starts and one emergency lab.
 
-### Image/boot compatibility
+### Image and boot compatibility
 
-- Match OS image with template firmware/machine settings.
-- Validate one known-good boot after every image refresh.
-- Keep image conversion path consistent (avoid mixed/manual conversions).
+- Match image boot model to template firmware/machine type:
+  - Windows: typically UEFI + `q35`
+  - Linux legacy images: often BIOS + `pc`
+- Validate one known-good boot after each image refresh.
+- Keep conversion/import path consistent across images.
+
+### Console provider selection
+
+`spice`:
+
+- Best default for traditional VM console workflow.
+- Requires SPICE password path to resolve at connect time.
+
+`guacamole` (VNC):
+
+- Browser VNC path with simpler client experience.
+- Good for Linux/utility workloads without guest RDP expectations.
+
+`guacamole_rdp`:
+
+- Use only when guest RDP service is expected/enabled.
+- `Connect` remains disabled until runtime RDP readiness is detected.
+- Configure per-template default RDP username/password in `/admin/templates` when needed.
+- Do not use global plaintext shared RDP credentials; defaults are template-scoped and backend-stored as encrypted secret values.
+
+### Warm pool and concurrency limits
+
+- Use pre-clone pool for high-frequency templates.
+- Set `preclone_pool_size` and `preclone_pool_max` based on observed demand.
+- Set `max_active_instances` to prevent noisy-neighbor resource collapse.
 
 ### Network mode
 
 - Default to `bridge`.
-- Use `isolated`/`none` for offline training.
-- Use `unrestricted` only when required.
-
-### Console provider
-
-- Default to `spice` for Windows-focused labs and SPICE agent features.
-- Use `guacamole` (VNC transport) when you want a simpler VNC console path.
-- Use `guacamole_rdp` when guest-native RDP is enabled and you want browser RDP via Guacamole.
-- Keep one provider per template to simplify troubleshooting and operator runbooks.
-
-### Warm pool and launch limits
-
-- Use pre-clone pool for frequently used templates.
-- Set sensible `max_active_instances` per template to avoid noisy-neighbor impact.
+- Use `isolated`/`none` for offline or constrained labs.
+- Use `unrestricted` only when explicitly required and documented.
 
 ## Container templates
 
+### Image and runtime policy
+
+- Use immutable tags or digests for stable behavior.
+- Keep image source registries aligned with allowed registry policy.
+- Prefer signed images in production, even though unsigned-image registration may be warning-only by policy.
+
 ### Sizing
 
-- Set CPU/memory requests based on observed baseline.
-- Avoid burst-only sizing without requests.
-- Revisit limits after real user load data.
+- Set realistic CPU/memory requests and limits.
+- Re-tune after observing actual workload usage.
 
-### Readiness rules
+### Readiness and startup
 
-- Prefer HTTP readiness for web apps.
-- Set expected status code and success path.
-- Tune startup timeout per image/app behavior.
+- Prefer HTTP readiness for web apps with explicit path/status.
+- Add dependency checks (DB/cache endpoints) to fail early.
+- Tune startup timeout per application characteristics.
 
-### Dependency checks
+### Security hardening
 
-- Add DB/cache dependency checks (DNS+TCP).
-- Fail early instead of launching into degraded state.
-
-### Runtime hardening
-
-- Enable `run_as_non_root` where image supports it.
-- Enable read-only root filesystem for compatible workloads.
+- Enable `run_as_non_root` when image supports it.
+- Enable read-only root filesystem where compatible.
 - Keep env/command overrides minimal and documented.
 
-### Exposure/network
+### Exposure and networking
 
-- Prefer TLS-enabled ingress for user-facing apps.
-- Keep `bridge` network mode as default.
+- Prefer ingress + TLS for user-facing applications.
+- Keep `bridge` as default network mode unless there is a clear requirement.
 
-## Universal defaults (VM + container)
+## Universal template controls (VM + container)
 
-- Keep templates disabled until validation is complete.
-- Set idle timeout according to policy and cost profile.
+- Keep template disabled until validation is complete.
+- Set idle timeout based on policy/cost expectations.
 - Keep one-active-lab-per-user policy enabled.
-- Record a template owner and last validation date.
+- Track owner, purpose, and last validation date in template notes/runbook.
 
-## Validation checklist before enabling template
+## Pre-enable validation checklist
 
-1. Launch succeeds on a fresh user session.
-2. Connect succeeds and app/OS is interactive.
-3. Status transitions are accurate (`Building` -> `Starting` -> `Running`).
-4. Idle timeout prompt appears on user + connect views.
-5. Delete path cleans pod/service/policy artifacts.
+1. Launch succeeds from a fresh user session.
+2. Connect succeeds and is interactive.
+3. Status transitions are accurate (`Building` -> `Starting` -> `Running` or VM equivalents).
+4. Idle timeout prompt behavior is correct on user and connect views.
+5. Delete path cleans runtime resources (pods/services/policies/records).
 
 ## Related pages
 
 - [Network Modes Reference](Network-Modes-Reference)
+- [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Error Catalog](Error-Catalog)

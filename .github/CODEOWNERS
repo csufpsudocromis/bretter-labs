@@ -1,0 +1,13 @@
+# Default ownership
+* @csufpsudocromis
+
+# Backend/API
+/backend/ @csufpsudocromis
+/scripts/ @csufpsudocromis
+
+# Frontend/UI
+/frontend-vite/ @csufpsudocromis
+
+# Deployment and CI
+/deploy/ @csufpsudocromis
+/.github/ @csufpsudocromis

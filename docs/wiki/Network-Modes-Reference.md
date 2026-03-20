@@ -1,6 +1,6 @@
 # Network Modes Reference
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 19, 2026.
 
 This page documents network mode behavior for VM and container templates.
 
@@ -66,6 +66,11 @@ Set by `VM_NET_BACKEND` in `setup.sh`:
 - `user`: user-mode networking path
 - `tap-nat`: tap/NAT path (higher performance, more host coupling)
 
+Important console coupling:
+
+- `guacamole_rdp` VM console provider requires `VM_NET_BACKEND=user` for deterministic local RDP forwarding inside runner pod.
+- If `guacamole_rdp` is used with non-`user` backend mode, runner startup fails fast by design.
+
 This is separate from template `network_mode`; both affect final behavior.
 
 ## Container exposure strategy interaction
@@ -79,6 +84,7 @@ Recommended production posture:
 
 - Prefer `ingress` with TLS for user-facing apps.
 - Use `nodeport` for internal-only/lab-network access patterns.
+- Keep ingress class/base domain explicit when ingress is enabled.
 
 ## Recommended defaults
 

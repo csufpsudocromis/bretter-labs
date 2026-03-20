@@ -384,11 +384,25 @@ class ErrorLogView(BaseModel):
     content: str
 
 
+class RdpReadinessTelemetry(BaseModel):
+    status: Literal["ok", "warning", "critical", "unknown"] = "unknown"
+    total_instances: int = 0
+    pending_or_starting_instances: int = 0
+    stuck_instances: int = 0
+    stuck_minutes_threshold: int = 12
+    warning_threshold: int = 0
+    critical_threshold: int = 2
+    sample_instances: list[str] = Field(default_factory=list)
+    slo_alert_active: bool = False
+    slo_alert_names: list[str] = Field(default_factory=list)
+
+
 class AlertsAndErrorsView(BaseModel):
     fetched_at: datetime
     alertmanager_url: str
     alertmanager_error: str = ""
     alerts: list[AlertManagerAlert] = Field(default_factory=list)
+    rdp_readiness: RdpReadinessTelemetry = Field(default_factory=RdpReadinessTelemetry)
     error_log: ErrorLogView
     error_log_clear_supported: bool = True
     error_log_clear_reason: str = ""

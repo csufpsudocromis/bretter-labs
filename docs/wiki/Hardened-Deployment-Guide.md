@@ -1,6 +1,6 @@
 # Hardened Deployment Guide
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 Use this as a production hardening checklist for Bretter Labs.
 
@@ -160,6 +160,7 @@ Keep kubelet metrics scraping in strict TLS mode:
 - Keep `BLABS_VM_CONNECT_INSECURE_TLS=0` and `BLABS_CONTAINER_CONNECT_INSECURE_TLS=0` in production.
 - Enable the insecure toggles only for local/dev clusters that cannot provide valid upstream certificates.
 - Frontend reverse proxy should validate backend TLS (`proxy_ssl_verify on`) using the mounted trust bundle; avoid `proxy_ssl_verify off`.
+- If `guacamole_rdp` templates are used, keep `VM_NET_BACKEND=user` to preserve deterministic local RDP forwarding.
 
 ## 13) Admission policy enforcement (Kyverno)
 

@@ -1,6 +1,6 @@
 # LDAP Authentication
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 19, 2026.
 
 LDAP is optional and is used as a fallback after local auth.
 
@@ -33,12 +33,14 @@ Optional:
 
 ## Kubernetes/runtime checklist
 
-- Backend migrations at head (`0018` or newer):
+- Backend migrations at head:
   - `kubectl -n labs exec deploy/bretter-postgres -- psql -U bretter -d bretterlabs -c "select version_num from alembic_version;"`
 - Backend pods healthy:
   - `kubectl -n labs rollout status deploy/bretter-backend --timeout=300s`
 - Frontend pods healthy:
   - `kubectl -n labs rollout status deploy/bretter-frontend --timeout=300s`
+- Admin API readable:
+  - `curl -sk https://<UI_HOST>:30073/api/user/settings/sso` (or equivalent local path through frontend proxy)
 
 ## Common issues
 
@@ -53,13 +55,22 @@ Optional:
 - Check backend logs:
 
 ```bash
-kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'ldap|bind|search|tls|auth'
+kubectl -n labs logs deploy/bretter-backend --tail=500 | rg -i 'ldap|bind|search|tls|auth|certificate'
 ```
 
-### LDAP migration crash on Postgres
+### Login appears blocked after enabling LDAP
 
-- Cause: bad boolean default SQL in migration.
-- Fix: run backend image containing migration fix commit `f9234fd` or later.
+- Cause: rate-limit lockout after repeated failed attempts.
+- Check:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=300 | rg -i 'lockout|rate limit|ldap'
+```
+
+- Wait lockout window or adjust:
+  - `BLABS_AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS`
+  - `BLABS_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS`
+  - `BLABS_AUTH_LOGIN_LOCKOUT_SECONDS`
 
 ## Related pages
 

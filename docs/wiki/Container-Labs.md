@@ -1,51 +1,66 @@
 # Container Labs
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 19, 2026.
 
 ## Overview
 
-Container labs are launched from admin-managed templates and run as isolated per-instance pods.
+Container labs are launched from admin-managed templates and run as isolated per-instance Kubernetes pods (`ct-*`).
 
-User flow:
+Primary flow:
 
 1. User clicks `Start Lab`.
-2. Status progresses through runtime stages.
-3. `Connect` enables only when readiness is satisfied.
-4. User deletes lab when done.
+2. Backend creates a container instance record and launches a pod/service.
+3. UI stage progresses through launch/readiness states.
+4. `Connect` enables only when the instance is `Running` and has an active access URL.
+5. User deletes the lab when done.
 
-Container labs are shown alongside VMs in unified user sections:
+Container labs appear in the same user panels as VM labs:
 
-- `Available Virtual Labs`
-- `My Running Labs`
+- `Available Virtual Labs` (template catalog)
+- `My Running Labs` (active workload list)
 
 ## Admin workflow
 
-### 1) Register container images (`/admin/container-images`)
+### 1) Register images (`/admin/container-images`)
 
-- Supports Docker Hub and other OCI registry references.
-- Optional actions per image:
-  - `Scan` (queues image scan)
-  - `Pre-pull` (warms image on cluster nodes)
-- Image deletion is blocked while templates still reference it.
+- Source input is a direct OCI image reference (for example `ghcr.io/org/app:v1.2.3`).
+- Name auto-derives from image reference if left blank.
+- Per-image actions:
+  - `Scan`: queue vulnerability scan
+  - `Pre-pull`: warm image across nodes
+  - `Edit`: change display name/image reference
+  - `Delete`: remove image (blocked when templates still reference it)
 
-### 2) Create container templates (`/admin/container-templates`)
+Signature policy behavior:
+
+- When signature verification is enabled, image registration runs `cosign verify`.
+- If an image has no signatures, registration is currently warning-only by policy:
+  - UI message: `Container image added. Warning: Image has no signatures.`
+- Other signature verification failures remain hard errors.
+
+Registry policy behavior:
+
+- Allowed registries are controlled by `BLABS_CONTAINER_ALLOWED_REGISTRIES`.
+- In production profile, local/dev image references are blocked.
+
+### 2) Create templates (`/admin/container-templates`)
 
 Template fields include:
 
 - Name, description, image
-- CPU cores, memory MB, container port
+- CPU/memory sizing
+- Exposed container port
 - Access strategy (`nodeport` or `ingress`)
 - Network mode (`bridge`, `isolated`, `none`, `unrestricted`)
 - Readiness checks (TCP/HTTP, path, expected status, optional success path)
-- Startup timeout and dependency checks
-- Security flags (run as non-root, read-only root filesystem)
-- Command/args/env overrides
+- Dependency checks (host/port/protocol)
+- Startup timeout
+- Security flags (`run_as_non_root`, `read_only_root_fs`)
+- Optional command/args/env overrides
 - Idle timeout
 - Enabled/disabled toggle
 
-Edit flow uses the top form area (same as create form) and returns to create mode after save/cancel.
-
-## Runtime statuses
+## Runtime statuses and connect behavior
 
 Common stage labels shown to users:
 
@@ -57,28 +72,19 @@ Common stage labels shown to users:
 - `Completed`
 - `Failed`
 
-Notes:
+Connect button behavior:
 
-- `Connect` is disabled until status is `Running`.
-- Pending may include a reason such as waiting for available resources.
-- Status details above action buttons are hidden during normal startup and shown on error.
+- Disabled while lab is not ready.
+- Enabled only when status is `Running` and runtime access URL is present.
+- Startup diagnostics are shown only when startup fails (to reduce normal-path noise).
 
-## One active lab rule
+## Safety controls
 
-The global launch rule applies across VM + container:
+- One-active-lab rule applies across VM + container workloads.
+- Namespace/team quotas can block starts with clear quota feedback.
+- Idle timeout policy applies to running labs and connect views.
 
-`You already have a virtual lab running. Delete the current lab before starting a new one.`
-
-## Network mode behavior (template-level)
-
-- `bridge`: normal DNS/web egress for typical app labs
-- `isolated`: restricted/deny egress policy
-- `none`: no egress policy
-- `unrestricted`: no network policy restrictions
-
-Choose per template based on lab security model.
-
-## Troubleshooting quick checks
+## Quick triage
 
 Container stuck in `Starting`:
 
@@ -86,17 +92,26 @@ Container stuck in `Starting`:
 kubectl -n labs get pods | rg '^ct-'
 kubectl -n labs describe pod <ct-pod-name>
 kubectl -n labs logs <ct-pod-name> --tail=200
+kubectl -n labs get svc,endpoints | rg 'ctsvc-|ct-'
 ```
 
-Connect proxy failures:
+Connect path errors:
 
 ```bash
-kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'container connect proxy|websocket|upstream|error'
+kubectl -n labs logs deploy/bretter-backend --tail=500 | rg -i 'container connect proxy|websocket|upstream|timeout|error'
 kubectl -n labs get svc,endpoints | rg '<ct-pod-name-prefix>'
+```
+
+Signature/registration issues:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'signature|cosign|verify|no signatures found'
+kubectl -n labs get deploy bretter-backend -o yaml | rg 'BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED|BLABS_CONTAINER_SIGNATURE_KEY_REF'
 ```
 
 ## Related pages
 
 - [Operations Runbook](Operations-Runbook)
-- [Scaling and Quotas](Scaling-and-Quotas)
 - [Security and Auth](Security-and-Auth)
+- [Template Best Practices](Template-Best-Practices)
+- [Scaling and Quotas](Scaling-and-Quotas)

@@ -1,6 +1,6 @@
 # Scaling and Quotas
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 19, 2026.
 
 ## Overview
 
@@ -77,6 +77,7 @@ If users are blocked unexpectedly:
 - Verify stuck VM/container instances are not still marked active.
 - Check pending pods and cleanup orphaned/stale workloads.
 - Re-test after deleting stale runtime rows/pods.
+- Review `/admin/audit-events` for recent quota edits that may explain behavior changes.
 
 ## Related pages
 

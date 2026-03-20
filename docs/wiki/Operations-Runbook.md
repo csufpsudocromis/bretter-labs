@@ -200,6 +200,51 @@ Actions:
 .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 ```
 
+Operational note:
+
+- Re-running a failed historical workflow run can still fail because it executes old commit code.
+- Trigger a fresh run from latest `main` for current behavior.
+
+### CI guardrails fails on `smoke_tls_login.sh` with backend startup exit
+
+Symptoms:
+
+- `ERROR: frontend TLS health probe failed`
+- Backend exits during startup while logs show Alembic baseline stamping and early migration failure.
+
+Likely cause:
+
+- Legacy baseline stamping was applied to a non-legacy partial schema state.
+
+Actions:
+
+1. Ensure run is on latest `main` with migration baseline fix in `backend/src/migrations.py`.
+2. Re-run CI guardrails from latest commit.
+3. Reproduce locally if needed:
+
+```bash
+PYTHONPATH=backend .venv/bin/pytest backend/tests/test_ci_guardrails.py -k alembic
+./scripts/smoke_tls_login.sh
+```
+
+### Publish workflow fails pushing to GHCR with `403 Forbidden`
+
+Symptoms:
+
+- `docker/build-push-action` fails during push with GHCR blob/manifests `403 Forbidden`.
+
+Likely cause:
+
+- `GITHUB_TOKEN` is insufficient for existing private package namespace state.
+
+Actions:
+
+1. Configure repository Actions secrets:
+   - `GHCR_USERNAME`
+   - `GHCR_PAT` (scope: `write:packages`)
+2. Re-run `.github/workflows/publish-and-pin-images.yml`.
+3. Confirm latest publish run is green and package timestamps update.
+
 ### Labs stuck in pending/queued
 
 Check scheduler pressure and events:

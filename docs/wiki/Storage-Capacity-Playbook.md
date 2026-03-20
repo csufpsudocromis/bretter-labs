@@ -1,6 +1,6 @@
 # Storage Capacity Playbook
 
-Last reviewed: March 9, 2026.
+Last reviewed: March 19, 2026.
 
 Use this playbook when node filesystem or PVC utilization is rising.
 
@@ -24,6 +24,7 @@ kubectl describe nodes | rg -n 'DiskPressure|nodefs|imagefs'
 kubectl -n labs get pvc
 kubectl -n longhorn-system get volumes.longhorn.io
 kubectl -n labs get pods | rg 'Pending|ContainerCreating|Evicted'
+kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | tail -n 40
 ```
 
 ## Cleanup order (least risk to most disruptive)
@@ -35,12 +36,24 @@ kubectl -n labs get pods | rg 'Pending|ContainerCreating|Evicted'
 5. Prune orphaned `ctsvc-*` services and stale temporary artifacts.
 6. Expand storage if pressure persists.
 
+Useful cleanup commands:
+
+```bash
+kubectl -n labs get pods --field-selector=status.phase=Failed -o name | xargs -r kubectl -n labs delete
+kubectl -n labs get pods --field-selector=status.phase=Succeeded -o name | xargs -r kubectl -n labs delete
+```
+
 ## Expansion order
 
 1. Expand node filesystem for kubelet/container runtime paths.
 2. Expand Longhorn backing disk capacity.
 3. Expand app PVC sizes (golden images/postgres/backend data).
 4. Rebalance workloads across nodes if one node is hot.
+
+Upload/import capacity note:
+
+- Upload/import flows rely on temporary PVCs; baseline minimum is `BLABS_MIN_UPLOAD_PVC_GIB` (default `80`).
+- If image finalization/import fails due capacity, raise this value and redeploy.
 
 ## Longhorn-specific guidance
 
@@ -61,6 +74,7 @@ kubectl -n labs get pods | rg 'Pending|ContainerCreating|Evicted'
 - No PVC > 95% utilization.
 - New VM and container launches complete successfully.
 - Upload/finalization path completes without retries/timeouts.
+- New VM launches and connect flows pass after cleanup.
 
 ## Related pages
 

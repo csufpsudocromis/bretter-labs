@@ -63,6 +63,9 @@ class Settings(BaseSettings):
     container_scan_enabled: bool = True
     container_scan_interval_minutes: int = 360
     container_scan_severity: str = "HIGH,CRITICAL"
+    userflow_slo_rdp_stuck_minutes: int = 12
+    userflow_slo_rdp_stuck_warn_max: int = 0
+    userflow_slo_rdp_stuck_max: int = 2
     container_start_queue_enabled: bool = True
     container_start_queue_base_delay_seconds: int = 20
     container_start_queue_max_delay_seconds: int = 300
@@ -92,6 +95,8 @@ class Settings(BaseSettings):
     connect_session_ttl_seconds: int = 3600
     connect_cookie_samesite: str = "lax"
     connect_cookie_secure: bool = True
+    image_upload_watchdog_enabled: bool = True
+    image_upload_watchdog_max_tasks: int = 25
     vm_connect_insecure_tls: bool = False
     container_connect_insecure_tls: bool = False
     secrets_encryption_key: str = ""

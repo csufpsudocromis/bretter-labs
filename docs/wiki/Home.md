@@ -15,7 +15,9 @@ Last reviewed: March 19, 2026.
 - Secrets/Ops: [Secret Operations Runbook](Secret-Operations-Runbook)
 - Troubleshooting: [Error Catalog](Error-Catalog) + [Operations Runbook](Operations-Runbook)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive) + [Template Best Practices](Template-Best-Practices)
+- Console/RDP operations: [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - Security: [Security and Auth](Security-and-Auth) + [LDAP Authentication](LDAP-Authentication) + [Hardened Deployment Guide](Hardened-Deployment-Guide)
+- GitHub/release ops: [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
 
 ## Core pages
 
@@ -32,6 +34,7 @@ Last reviewed: March 19, 2026.
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
+- [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - [Template Best Practices](Template-Best-Practices)
 - [VM Image Formats](VM-Image-Formats)
 - [Container Labs](Container-Labs)
@@ -39,6 +42,7 @@ Last reviewed: March 19, 2026.
 - [Security and Auth](Security-and-Auth)
 - [LDAP Authentication](LDAP-Authentication)
 - [Community and Roadmap](Community-and-Roadmap)
+- [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist)
 - [Setup and Configuration](Setup-and-Configuration)
 

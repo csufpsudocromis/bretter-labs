@@ -70,27 +70,65 @@ def main() -> int:
             return 0
 
         if check_type == "rdp_readiness":
-            stuck = int(
+            totals = (
                 conn.execute(
                     text(
                         """
-                        SELECT COUNT(*)
-                        FROM instance i
-                        JOIN template t ON t.id = i.template_id
-                        WHERE i.started_at <= :stuck_cutoff
-                        AND lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting')
-                        AND lower(COALESCE(t.console_provider, '')) IN
-                          ('guacamole_rdp', 'guacamole-rdp', 'guac-rdp', 'rdp')
-                        """
+                    SELECT
+                      COUNT(*) AS total,
+                      SUM(CASE WHEN lower(COALESCE(i.status, '')) = 'running' THEN 1 ELSE 0 END) AS running,
+                      SUM(CASE WHEN lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting') THEN 1 ELSE 0 END) AS pending,
+                      SUM(
+                        CASE
+                          WHEN i.started_at <= :stuck_cutoff
+                           AND lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting')
+                          THEN 1 ELSE 0
+                        END
+                      ) AS stuck
+                    FROM instance i
+                    JOIN template t ON t.id = i.template_id
+                    WHERE lower(COALESCE(t.console_provider, '')) IN
+                      ('guacamole_rdp', 'guacamole-rdp', 'guac-rdp', 'rdp')
+                    """
                     ),
                     {"stuck_cutoff": rdp_stuck_cutoff},
-                ).scalar_one()
-                or 0
+                )
+                .mappings()
+                .one()
             )
+            total = int(totals.get("total") or 0)
+            running = int(totals.get("running") or 0)
+            pending = int(totals.get("pending") or 0)
+            stuck = int(totals.get("stuck") or 0)
+
+            oldest_stuck = (
+                conn.execute(
+                    text(
+                        """
+                    SELECT i.id, i.owner, i.started_at
+                    FROM instance i
+                    JOIN template t ON t.id = i.template_id
+                    WHERE i.started_at <= :stuck_cutoff
+                    AND lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting')
+                    AND lower(COALESCE(t.console_provider, '')) IN
+                      ('guacamole_rdp', 'guacamole-rdp', 'guac-rdp', 'rdp')
+                    ORDER BY i.started_at ASC
+                    LIMIT 3
+                    """
+                    ),
+                    {"stuck_cutoff": rdp_stuck_cutoff},
+                )
+                .mappings()
+                .all()
+            )
+            sample = ",".join(f"{str(row['owner'])}/{str(row['id'])[:8]}" for row in oldest_stuck)
             print(
-                f"rdp_readiness_slo: stuck_instances={stuck} "
-                f"stuck_minutes={rdp_stuck_minutes} max_allowed={rdp_stuck_max}"
+                "rdp_readiness_slo: "
+                f"total_rdp_instances={total} running={running} pending_or_starting={pending} "
+                f"stuck_instances={stuck} stuck_minutes={rdp_stuck_minutes} max_allowed={rdp_stuck_max}"
             )
+            if sample:
+                print(f"rdp_readiness_oldest_stuck: {sample}")
             if stuck > rdp_stuck_max:
                 print("FAIL: rdp readiness stuck-instance threshold breached.", file=sys.stderr)
                 return 1

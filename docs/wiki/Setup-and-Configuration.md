@@ -190,6 +190,7 @@ ENABLE_MONITORING=1 \
 - Post-deploy admin API smoke validation now runs by default (`RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1`) using authenticated `/admin/*` read paths.
 - Setup deploy phase now installs recurring GHCR access checks (`bretter-ghcr-access-check`) and user-flow SLO probe CronJobs (`bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
 - For image publish workflows, set repo Actions secrets `GHCR_USERNAME` and `GHCR_PAT` (`write:packages`) when publishing to pre-existing private GHCR packages; workflow falls back to `GITHUB_TOKEN` when those secrets are absent.
+- Admin container image registration uses direct OCI image references; if signature verification returns `no signatures found`, registration continues with warning-only policy messaging.
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
 - If setup generated a new bootstrap admin secret and `ADMIN_API_SMOKE_PASSWORD` is not set, setup auto-disables the post-deploy admin API smoke check to avoid login failures against existing admin credentials.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
@@ -197,7 +198,7 @@ ENABLE_MONITORING=1 \
 - When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.
-- LDAP requires backend schema migration `0018` and current frontend bundle to render settings tile.
+- LDAP requires backend schema at current Alembic head and a current frontend bundle to render settings tile.
 
 ## Related pages
 
@@ -210,3 +211,5 @@ ENABLE_MONITORING=1 \
 - [Scaling and Quotas](Scaling-and-Quotas)
 - [Security and Auth](Security-and-Auth)
 - [LDAP Authentication](LDAP-Authentication)
+- [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
+- [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)

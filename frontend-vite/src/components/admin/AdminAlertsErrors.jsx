@@ -132,6 +132,28 @@ const AdminAlertsErrors = () => {
             )}
           </div>
 
+          <div className="card" style={{ marginBottom: "1rem" }}>
+            <h3>RDP Readiness Telemetry</h3>
+            <div className="specs">
+              <span>status: {data.rdp_readiness.status}</span>
+              <span>total: {data.rdp_readiness.total_instances}</span>
+              <span>pending/starting: {data.rdp_readiness.pending_or_starting_instances}</span>
+              <span>stuck: {data.rdp_readiness.stuck_instances}</span>
+            </div>
+            <div className="muted small">
+              Thresholds: warning &gt; {data.rdp_readiness.warning_threshold}, critical &gt;{" "}
+              {data.rdp_readiness.critical_threshold}, age {data.rdp_readiness.stuck_minutes_threshold} minutes.
+            </div>
+            {data.rdp_readiness.sample_instances?.length > 0 && (
+              <div className="muted small">Oldest stuck samples: {data.rdp_readiness.sample_instances.join(", ")}</div>
+            )}
+            {data.rdp_readiness.slo_alert_active && (
+              <div className="error">
+                Active RDP SLO alert(s): {data.rdp_readiness.slo_alert_names?.join(", ") || "unknown"}
+              </div>
+            )}
+          </div>
+
           <div className="card">
             <h3>Error Logs</h3>
             <div className="muted small">Source: {data.error_log.source}</div>

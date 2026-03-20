@@ -1,6 +1,6 @@
 # Production Architecture
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 Use this page as the production target state for Bretter Labs deployments.
 

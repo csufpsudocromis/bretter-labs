@@ -1,6 +1,6 @@
 # Error Catalog
 
-Last reviewed: March 16, 2026.
+Last reviewed: March 19, 2026.
 
 Use this page for exact UI/API errors and first-response fixes.
 
@@ -138,6 +138,21 @@ Fix:
 - Re-import known-good image
 - Validate template network/boot config before enabling for users
 
+### `BLABS_ERROR=input missing: <filename>`
+
+Likely causes:
+
+- Finalize/import job cannot find staged source file.
+- Upload/finalize path mismatch (direct vs fallback flow).
+- Staged artifact cleaned before finalize consumed it.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=500 | rg -i 'input missing|upload|finaliz|copy|normalize|cdi'
+kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | rg -i 'upload|finaliz|copy|import|cdi'
+```
+
 ## Storage and scheduling
 
 ### `A PVC in namespace labs is above 95% usage`
@@ -263,6 +278,27 @@ Fix:
 - Use HTTPS connect URLs only.
 - Ensure TLS termination and forwarded proto headers are correct.
 
+### Guacamole RDP shows `Connected. Waiting for desktop frame...` for too long
+
+Likely causes:
+
+- Guest RDP service not ready yet.
+- Guest is on a login/policy state that does not produce desktop frames.
+- Runner networking mode mismatch for RDP path.
+
+Checks:
+
+```bash
+kubectl -n labs logs deploy/bretter-backend --tail=400 | rg -i 'rdp-ready|connect-token|waiting for rdp|409'
+kubectl -n labs logs <vm-runner-pod> --tail=400 | rg -i 'guac|rdp|tunnel|disconnect'
+```
+
+Fix:
+
+- Wait until VM status transitions to `Running` from RDP readiness gate.
+- Verify template console provider is `guacamole_rdp`.
+- Ensure platform uses `VM_NET_BACKEND=user` for RDP templates.
+
 ## API/schema operations
 
 ### `StorageClass <name> lookup failed: Forbidden`
@@ -306,6 +342,31 @@ Operational note:
 
 - Re-running a failed historical workflow run may still fail because it executes the old commit.
 - Trigger a fresh run from latest `main`.
+
+### Publish workflow fails with GHCR `403 Forbidden`
+
+Likely causes:
+
+- Workflow uses `GITHUB_TOKEN` and cannot push to pre-existing private package namespace state.
+
+Fix:
+
+- Set repository Actions secrets:
+  - `GHCR_USERNAME`
+  - `GHCR_PAT` (`write:packages`)
+- Re-run `.github/workflows/publish-and-pin-images.yml`.
+
+### Publish workflow fails with `\"/rdp.html\": not found`
+
+Likely causes:
+
+- Runner image build context is incorrect, so `runner/rdp.html` is missing at Docker build time.
+
+Fix:
+
+- Ensure publish workflow runner build uses:
+  - `context: runner`
+  - `file: runner/Dockerfile`
 
 ## Quick triage bundle
 

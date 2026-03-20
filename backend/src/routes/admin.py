@@ -44,6 +44,7 @@ from ..models import (
     LDAPSettingsUpdate,
     RuntimeDriftItem,
     RuntimeHealthCheck,
+    RdpReadinessTelemetry,
     StorageSettingsRead,
     StorageSettingsUpdate,
     SiteBackgroundAsset,
@@ -1099,6 +1100,98 @@ def _fetch_alertmanager_alerts() -> tuple[list[AlertManagerAlert], str]:
         )
     alerts.sort(key=lambda alert: (alert.state.lower() != "active", alert.name))
     return alerts, ""
+
+
+def _collect_rdp_readiness_telemetry(
+    session: Session,
+    *,
+    alerts: list[AlertManagerAlert],
+) -> RdpReadinessTelemetry:
+    stuck_minutes = max(2, int(getattr(settings, "userflow_slo_rdp_stuck_minutes", 12) or 12))
+    warning_threshold = max(0, int(getattr(settings, "userflow_slo_rdp_stuck_warn_max", 0) or 0))
+    critical_threshold = max(0, int(getattr(settings, "userflow_slo_rdp_stuck_max", 2) or 2))
+    if warning_threshold > critical_threshold:
+        warning_threshold = critical_threshold
+    cutoff = utc_now() - timedelta(minutes=stuck_minutes)
+
+    totals_row = (
+        session.exec(
+            text(
+                """
+                SELECT
+                  COUNT(*) AS total_instances,
+                  SUM(
+                    CASE WHEN lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting')
+                    THEN 1 ELSE 0 END
+                  ) AS pending_or_starting_instances,
+                  SUM(
+                    CASE
+                      WHEN i.started_at <= :cutoff
+                       AND lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting')
+                      THEN 1 ELSE 0
+                    END
+                  ) AS stuck_instances
+                FROM instance i
+                JOIN template t ON t.id = i.template_id
+                WHERE lower(COALESCE(t.console_provider, '')) IN
+                  ('guacamole_rdp', 'guacamole-rdp', 'guac-rdp', 'rdp')
+                """
+            ).bindparams(cutoff=cutoff)
+        )
+        .mappings()
+        .one()
+    )
+
+    sample_rows = (
+        session.exec(
+            text(
+                """
+                SELECT i.owner AS owner, i.id AS instance_id
+                FROM instance i
+                JOIN template t ON t.id = i.template_id
+                WHERE i.started_at <= :cutoff
+                AND lower(COALESCE(i.status, '')) IN ('pending', 'building', 'starting')
+                AND lower(COALESCE(t.console_provider, '')) IN
+                  ('guacamole_rdp', 'guacamole-rdp', 'guac-rdp', 'rdp')
+                ORDER BY i.started_at ASC
+                LIMIT 5
+                """
+            ).bindparams(cutoff=cutoff)
+        )
+        .mappings()
+        .all()
+    )
+    sample_instances = [f"{str(row['owner'])}/{str(row['instance_id'])[:8]}" for row in sample_rows]
+
+    stuck_instances = int(totals_row.get("stuck_instances") or 0)
+    if critical_threshold == 0 and stuck_instances > 0:
+        computed_status = "critical"
+    elif stuck_instances > critical_threshold:
+        computed_status = "critical"
+    elif stuck_instances > warning_threshold:
+        computed_status = "warning"
+    else:
+        computed_status = "ok"
+
+    active_rdp_alerts = sorted(
+        {
+            alert.name
+            for alert in alerts
+            if str(alert.state or "").lower() == "active" and "rdpreadinessslo" in str(alert.name or "").lower()
+        }
+    )
+    return RdpReadinessTelemetry(
+        status=computed_status,
+        total_instances=int(totals_row.get("total_instances") or 0),
+        pending_or_starting_instances=int(totals_row.get("pending_or_starting_instances") or 0),
+        stuck_instances=stuck_instances,
+        stuck_minutes_threshold=stuck_minutes,
+        warning_threshold=warning_threshold,
+        critical_threshold=critical_threshold,
+        sample_instances=sample_instances,
+        slo_alert_active=bool(active_rdp_alerts),
+        slo_alert_names=active_rdp_alerts,
+    )
 
 
 def _helper_overrides(worker_image: str, claim_name: str) -> str:
@@ -2721,6 +2814,44 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.error_message = str(exc)
             _commit_task()
     return task
+
+
+def run_upload_task_watchdog(session: Session, *, max_tasks: int | None = None) -> dict[str, int]:
+    """Refresh active upload/finalize tasks so progress/retries continue without client polling."""
+    limit = max(1, int(max_tasks or getattr(settings, "image_upload_watchdog_max_tasks", 25) or 25))
+    tasks = session.exec(
+        select(ImageUploadTask)
+        .where(ImageUploadTask.status.notin_(["completed", "failed"]))
+        .order_by(ImageUploadTask.updated_at.asc())
+        .limit(limit)
+    ).all()
+
+    stats = {"scanned": 0, "completed": 0, "failed": 0, "errors": 0}
+    for task in tasks:
+        stats["scanned"] += 1
+        try:
+            refreshed = _refresh_upload_task(task, session)
+        except Exception as exc:
+            stats["errors"] += 1
+            logger.error("Upload watchdog failed to refresh task %s: %s", task.id, exc, exc_info=True)
+            session.rollback()
+            failed_task = session.get(ImageUploadTask, task.id)
+            if failed_task:
+                failed_task.status = "failed"
+                failed_task.stage = "failed"
+                failed_task.detail = "Watchdog refresh failed"
+                failed_task.error_message = str(exc)[:4096]
+                failed_task.updated_at = utc_now()
+                session.add(failed_task)
+                session.commit()
+            continue
+
+        current_status = str(getattr(refreshed, "status", "") or "").strip().lower()
+        if current_status == "completed":
+            stats["completed"] += 1
+        elif current_status == "failed":
+            stats["failed"] += 1
+    return stats
 
 
 def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
@@ -4824,10 +4955,11 @@ def cluster_resources() -> dict:
     response_model=AlertsAndErrorsView,
     dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
 )
-def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
+def alerts_and_errors(page: int = Query(1, ge=1), session: Session = Depends(get_session)) -> AlertsAndErrorsView:
     max_bytes = min(max(1024, int(settings.error_log_max_bytes)), ALERTS_ERRORS_MAX_LOG_BYTES)
     per_page = max(1, int(ERROR_LOG_PAGE_SIZE))
     alerts, alertmanager_error = _fetch_alertmanager_alerts()
+    rdp_readiness = _collect_rdp_readiness_telemetry(session, alerts=alerts)
     log_file_path = _to_str(settings.error_log_file_path)
     if log_file_path:
         error_log = _read_error_log_file(Path(log_file_path), max_bytes=max_bytes, page=page, per_page=per_page)
@@ -4849,6 +4981,7 @@ def alerts_and_errors(page: int = Query(1, ge=1)) -> AlertsAndErrorsView:
         alertmanager_url=_to_str(settings.alertmanager_api_url),
         alertmanager_error=alertmanager_error,
         alerts=alerts,
+        rdp_readiness=rdp_readiness,
         error_log=error_log,
         error_log_clear_supported=clear_supported,
         error_log_clear_reason=clear_reason,
