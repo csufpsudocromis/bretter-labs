@@ -55,7 +55,7 @@ jobs:
           echo "image_namespace=${namespace_input}" >>"${GITHUB_OUTPUT}"
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR (PAT)
         if: ${{ env.GHCR_PAT != '' && env.GHCR_USERNAME != '' }}
