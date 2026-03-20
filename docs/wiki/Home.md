@@ -19,12 +19,16 @@ Last reviewed: March 20, 2026.
 - Security: [Security and Auth](Security-and-Auth) + [LDAP Authentication](LDAP-Authentication) + [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - GitHub/release ops: [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
 - Platform engineering: [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
+- Operator incidents: [Operator Incident Runbook](Operator-Incident-Runbook)
+- CRD evolution: [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)
 
 ## Core pages
 
 - [Architecture](../architecture.md)
 - [Production Architecture](Production-Architecture)
 - [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
+- [Operator Incident Runbook](Operator-Incident-Runbook)
+- [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Production Readiness Checklist](Production-Readiness-Checklist)

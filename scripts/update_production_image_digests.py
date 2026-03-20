@@ -30,11 +30,13 @@ def main() -> int:
         help="Path to values file (default: deploy/helm/values-production.yaml).",
     )
     parser.add_argument("--backend-image", required=True, help="Digest-pinned backend image ref.")
+    parser.add_argument("--backend-admin-image", required=True, help="Digest-pinned backend admin image ref.")
     parser.add_argument("--frontend-image", required=True, help="Digest-pinned frontend image ref.")
     parser.add_argument("--runner-image", required=True, help="Digest-pinned runner image ref.")
     args = parser.parse_args()
 
     backend_ref = _validate_digest_ref("backend-image", args.backend_image)
+    backend_admin_ref = _validate_digest_ref("backend-admin-image", args.backend_admin_image)
     frontend_ref = _validate_digest_ref("frontend-image", args.frontend_image)
     runner_ref = _validate_digest_ref("runner-image", args.runner_image)
 
@@ -45,6 +47,7 @@ def main() -> int:
     original = values_path.read_text(encoding="utf-8")
     updated = original
     updated = _replace_key(updated, "BACKEND_IMAGE", backend_ref)
+    updated = _replace_key(updated, "BACKEND_ADMIN_IMAGE", backend_admin_ref)
     updated = _replace_key(updated, "FRONTEND_IMAGE", frontend_ref)
     updated = _replace_key(updated, "RUNNER_IMAGE", runner_ref)
 

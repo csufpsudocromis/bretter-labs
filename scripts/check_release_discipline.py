@@ -114,7 +114,7 @@ def main() -> int:
     else:
         values_site_template = _read_text(values_prod_site_template_path)
 
-    for key in ("BACKEND_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
+    for key in ("BACKEND_IMAGE", "BACKEND_ADMIN_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
         image_ref = _extract_yaml_scalar(values_production, key)
         if not image_ref:
             errors.append(f"deploy/helm/values-production.yaml missing {key}.")
@@ -249,6 +249,8 @@ def main() -> int:
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must call scripts/update_production_image_digests.py."
             )
+        if "--backend-admin-image" not in publish_workflow:
+            errors.append(".github/workflows/publish-and-pin-images.yml must update BACKEND_ADMIN_IMAGE digest pins.")
 
     setup_script = _read_text(setup_script_path)
     if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:

@@ -38,7 +38,7 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 
 ## Image pinning policy
 
-- `appTemplateValues.BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` must remain digest-pinned (`@sha256:...`).
+- `appTemplateValues.BACKEND_IMAGE`, `BACKEND_ADMIN_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` must remain digest-pinned (`@sha256:...`).
 - Production refs must not use local/dev patterns (`localhost/*`, `:local*`, `local-*`).
 - This is CI-enforced by `scripts/check_release_discipline.py`.
 - `scripts/setup.sh` also enforces digest pinning when `PRODUCTION_PROFILE=1`.
@@ -47,7 +47,7 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 
 - `appTemplateValues` includes:
   - deployment coordinates (`NAMESPACE`, `CONTROL_NODE`, `NODE_EXTERNAL_HOST`)
-  - image refs (`BACKEND_IMAGE`, `FRONTEND_IMAGE`, `RUNNER_IMAGE`)
+  - image refs (`BACKEND_IMAGE`, `BACKEND_ADMIN_IMAGE`, `FRONTEND_IMAGE`, `RUNNER_IMAGE`)
   - TLS/public URL controls (`PUBLIC_SCHEME`, `TLS_SECRET_NAME`)
   - auth/cors hardening values
   - runtime/storage/network options consumed by `deploy/helm/files/app.yaml.tpl`

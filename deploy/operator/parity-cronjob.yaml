@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-labinstance-parity
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: bretter-labinstance-parity
+    app.kubernetes.io/part-of: bretter-labs
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: bretter-labinstance-parity
+            app.kubernetes.io/part-of: bretter-labs
+        spec:
+          restartPolicy: Never
+          serviceAccountName: bretter-labinstance-operator
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: parity
+              image: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - -m
+                - backend.src.tools.orchestration_parity_probe
+              env:
+                - name: BLABS_KUBE_NAMESPACE
+                  value: labs
+                - name: BLABS_ORCHESTRATION_BACKEND
+                  value: dual
+                - name: BLABS_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: BLABS_DATABASE_URL
+                - name: PARITY_MAX_MISSING
+                  value: "0"
+                - name: PARITY_MAX_MISMATCH
+                  value: "0"

@@ -16,6 +16,7 @@ def test_update_production_image_digests_rewrites_target_keys(tmp_path: Path) ->
             [
                 "appTemplateValues:",
                 "  BACKEND_IMAGE: ghcr.io/example/backend@sha256:" + ("1" * 64),
+                "  BACKEND_ADMIN_IMAGE: ghcr.io/example/backend-admin@sha256:" + ("4" * 64),
                 "  FRONTEND_IMAGE: ghcr.io/example/frontend@sha256:" + ("2" * 64),
                 "  RUNNER_IMAGE: ghcr.io/example/runner@sha256:" + ("3" * 64),
             ]
@@ -31,6 +32,8 @@ def test_update_production_image_digests_rewrites_target_keys(tmp_path: Path) ->
         str(values),
         "--backend-image",
         "ghcr.io/new/backend@sha256:" + ("a" * 64),
+        "--backend-admin-image",
+        "ghcr.io/new/backend-admin@sha256:" + ("d" * 64),
         "--frontend-image",
         "ghcr.io/new/frontend@sha256:" + ("b" * 64),
         "--runner-image",
@@ -41,6 +44,7 @@ def test_update_production_image_digests_rewrites_target_keys(tmp_path: Path) ->
 
     updated = values.read_text(encoding="utf-8")
     assert "BACKEND_IMAGE: ghcr.io/new/backend@sha256:" + ("a" * 64) in updated
+    assert "BACKEND_ADMIN_IMAGE: ghcr.io/new/backend-admin@sha256:" + ("d" * 64) in updated
     assert "FRONTEND_IMAGE: ghcr.io/new/frontend@sha256:" + ("b" * 64) in updated
     assert "RUNNER_IMAGE: ghcr.io/new/runner@sha256:" + ("c" * 64) in updated
 
@@ -52,6 +56,7 @@ def test_update_production_image_digests_rejects_non_digest_refs(tmp_path: Path)
             [
                 "appTemplateValues:",
                 "  BACKEND_IMAGE: ghcr.io/example/backend@sha256:" + ("1" * 64),
+                "  BACKEND_ADMIN_IMAGE: ghcr.io/example/backend-admin@sha256:" + ("4" * 64),
                 "  FRONTEND_IMAGE: ghcr.io/example/frontend@sha256:" + ("2" * 64),
                 "  RUNNER_IMAGE: ghcr.io/example/runner@sha256:" + ("3" * 64),
             ]
@@ -66,6 +71,8 @@ def test_update_production_image_digests_rejects_non_digest_refs(tmp_path: Path)
         str(values),
         "--backend-image",
         "ghcr.io/new/backend:latest",
+        "--backend-admin-image",
+        "ghcr.io/new/backend-admin@sha256:" + ("d" * 64),
         "--frontend-image",
         "ghcr.io/new/frontend@sha256:" + ("b" * 64),
         "--runner-image",

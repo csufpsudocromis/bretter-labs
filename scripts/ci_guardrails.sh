@@ -10,7 +10,14 @@ fi
 cd "$ROOT_DIR"
 
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_release_discipline.py"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/check_no_plaintext_tokens.py"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/lint_crd_schema.py"
+if ! command -v kubectl >/dev/null 2>&1; then
+  echo "ERROR: kubectl is required for CRD rendering checks." >&2
+  exit 1
+fi
+kubectl kustomize "$ROOT_DIR/deploy/crds" >/dev/null
 SKIP_CLUSTER_CHECKS=1 "$ROOT_DIR/scripts/deploy_preflight.sh"
 if ! "$PYTHON_BIN" -c "import pytest" >/dev/null 2>&1; then
   echo "ERROR: pytest is not installed for ${PYTHON_BIN}. Install backend/requirements-dev.txt." >&2
@@ -29,6 +36,9 @@ fi
   backend/src \
   backend/tests \
   scripts/check_release_discipline.py \
+  scripts/check_no_plaintext_tokens.py \
+  scripts/lint_crd_schema.py \
+  scripts/backfill_labinstances_from_db.py \
   scripts/bump_version.py \
   scripts/validate_production_profile.py \
   scripts/update_production_image_digests.py

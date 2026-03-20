@@ -1,5 +1,5 @@
-# Backend image for Bretter Labs (FastAPI + Uvicorn)
-FROM python:3.11-slim AS base
+# Backend runtime image (FastAPI + Uvicorn)
+FROM python:3.11-slim AS runtime-base
 LABEL org.opencontainers.image.source="https://github.com/csufpsudocromis/bretter-labs" \
       org.opencontainers.image.url="https://github.com/csufpsudocromis/bretter-labs" \
       org.opencontainers.image.licenses="MIT"
@@ -14,7 +14,22 @@ COPY VERSION /app/VERSION
 COPY backend/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# Admin image validation/conversion uses kubectl helper pods.
+COPY backend /app/backend
+RUN chmod +x /app/backend/entrypoint.sh
+
+# Default envs can be overridden at runtime
+ENV BLABS_KUBE_NAMESPACE=labs \
+    BLABS_KUBE_IMAGE_PVC=golden-images \
+    BLABS_STORAGE_ROOT=/mnt/lab-images \
+    BLABS_DATABASE_PATH=/data/app.db
+
+EXPOSE 8000
+
+FROM runtime-base AS runtime
+CMD ["/app/backend/entrypoint.sh"]
+
+FROM runtime AS admin-tools
+# Admin image validation/conversion utilities.
 ARG KUBECTL_VERSION=v1.30.14
 ARG COSIGN_VERSION=v3.0.5
 ARG TRIVY_VERSION=v0.69.3
@@ -44,16 +59,5 @@ RUN set -eux; \
       "/tmp/${TRIVY_BASENAME}.tar.gz"; \
     apt-get purge -y --auto-remove curl; \
     rm -rf /var/lib/apt/lists/*
-
-COPY backend /app/backend
-RUN chmod +x /app/backend/entrypoint.sh
-
-# Default envs can be overridden at runtime
-ENV BLABS_KUBE_NAMESPACE=labs \
-    BLABS_KUBE_IMAGE_PVC=golden-images \
-    BLABS_STORAGE_ROOT=/mnt/lab-images \
-    BLABS_DATABASE_PATH=/data/app.db
-
-EXPOSE 8000
 
 CMD ["/app/backend/entrypoint.sh"]

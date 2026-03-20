@@ -53,6 +53,17 @@ def _validate_startup_config() -> None:
             "(admin/password/changeme/admin123). Provide a one-time bootstrap secret."
         )
 
+    orchestration_backend = str(getattr(settings, "orchestration_backend", "db") or "db").strip().lower()
+    if orchestration_backend not in {"db", "dual", "crd"}:
+        raise RuntimeError("BLABS_ORCHESTRATION_BACKEND must be one of: db, dual, crd.")
+    if orchestration_backend in {"dual", "crd"}:
+        if not str(getattr(settings, "labinstance_crd_group", "") or "").strip():
+            raise RuntimeError("BLABS_LABINSTANCE_CRD_GROUP must be set when orchestration backend is dual/crd.")
+        if not str(getattr(settings, "labinstance_crd_version", "") or "").strip():
+            raise RuntimeError("BLABS_LABINSTANCE_CRD_VERSION must be set when orchestration backend is dual/crd.")
+        if not str(getattr(settings, "labinstance_crd_plural", "") or "").strip():
+            raise RuntimeError("BLABS_LABINSTANCE_CRD_PLURAL must be set when orchestration backend is dual/crd.")
+
     if not bool(getattr(settings, "production_profile", False)):
         return
 

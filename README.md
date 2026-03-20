@@ -134,8 +134,24 @@ The platform is moving from backend-imperative orchestration toward Kubernetes-n
 
 - Migration blueprint: [docs/operator-crd-migration-plan.md](docs/operator-crd-migration-plan.md)
 - Initial CRD definitions: [deploy/crds/](deploy/crds/)
+- Operator deployment/alerts manifests: [deploy/operator/](deploy/operator/)
 
 Current status: `v1alpha1` CRDs are checked in for phased rollout (`LabInstance`, `LabImageImport`), with staged cutover documented in the migration plan.
+
+Migration helper commands:
+
+```bash
+# apply CRDs + operator manifests
+kubectl apply -k deploy/crds
+kubectl apply -k deploy/operator
+
+# backfill active DB instances into LabInstance CRDs
+.venv/bin/python scripts/backfill_labinstances_from_db.py --dry-run
+.venv/bin/python scripts/backfill_labinstances_from_db.py
+
+# canary lifecycle check (requires controller + valid template id)
+NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh
+```
 
 ## Quick Start
 
@@ -195,12 +211,14 @@ PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 Proof artifact and operator docs:
 
 - Go-live proof script: [scripts/production_go_live_proof.sh](scripts/production_go_live_proof.sh)
+- CRD canary script: [scripts/crd_canary_labinstance.sh](scripts/crd_canary_labinstance.sh)
 - Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
 - Default report dir: [artifacts/go-live/](artifacts/go-live/)
 - Production values reference: [docs/wiki/Production-Helm-Values-Reference.md](docs/wiki/Production-Helm-Values-Reference.md)
 - Secret operations: [docs/wiki/Secret-Operations-Runbook.md](docs/wiki/Secret-Operations-Runbook.md)
 - Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
 - Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
+- Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - GitHub release/packages runbook: [docs/wiki/GitHub-Release-and-Packages-Operations.md](docs/wiki/GitHub-Release-and-Packages-Operations.md)
 
 ## Key Setup Variables
@@ -212,6 +230,7 @@ Proof artifact and operator docs:
 | `NODE_EXTERNAL_HOST` | auto | Public host/IP used in generated URLs |
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `PRODUCTION_PROFILE` | `0` | Enables backend startup hardening checks (set `1` for production) |
+| `ORCHESTRATION_BACKEND` | `db` | VM orchestration mode: `db` (legacy), `dual` (legacy + LabInstance CRD shadow write), `crd` (LabInstance CRD-first) |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
@@ -226,6 +245,7 @@ Proof artifact and operator docs:
 | `APPLY_GOLDEN_HOSTPATH` | `1` | HostPath-backed golden image PVC |
 | `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` instead |
 | `BACKEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend:v<VERSION>` | Backend image reference |
+| `BACKEND_ADMIN_IMAGE` | `same as BACKEND_IMAGE` | Backend admin-tools image for ops jobs (cleanup/CSR approver) |
 | `FRONTEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-frontend:v<VERSION>` | Frontend image reference |
 | `RUNNER_IMAGE` | `ghcr.io/csufpsudocromis/win-vm-runner:v<VERSION>` | Runner image reference |
 | `BACKEND_REPLICAS` | `1` | Backend deployment replica count |
@@ -284,9 +304,9 @@ Metrics-server TLS guidance:
 - Use `METRICS_SERVER_INSECURE_TLS=1` only for local/dev clusters when proper kubelet PKI is unavailable.
 - `setup.sh` installs a kubelet-serving CSR auto-approver CronJob (default enabled) that only approves pending requests when requester/subject/SANs match the target node.
 - By default, `setup.sh` rejects mutable image refs (for example `:latest` or missing tag). Use immutable tags/digests, or set `ALLOW_MUTABLE_IMAGE_TAGS=1` only for dev workflows.
-- When `PRODUCTION_PROFILE=1`, `setup.sh` requires digest-pinned image refs (`@sha256`) for backend/frontend/runner.
+- When `PRODUCTION_PROFILE=1`, `setup.sh` requires digest-pinned image refs (`@sha256`) for backend/backend-admin/frontend/runner.
 - `setup.sh` no longer falls back to `:latest` when `VERSION` is invalid; fix `VERSION` or pass explicit immutable image refs.
-- `deploy/helm/values-production.yaml` is digest-pinned and CI-enforced for `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE`.
+- `deploy/helm/values-production.yaml` is digest-pinned and CI-enforced for `BACKEND_IMAGE`, `BACKEND_ADMIN_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE`.
 
 Setup phase guidance:
 
@@ -488,6 +508,12 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, test, and PR guidance.
 
 See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reporting.
 
+Token hygiene:
+
+- Never commit or paste PATs in repo files or automation logs.
+- Rotate exposed GitHub/GHCR tokens immediately and replace them via repo/org secrets.
+- CI enforces plaintext token guardrails with `scripts/check_no_plaintext_tokens.py`.
+
 ## Community and Roadmap
 
 - Discussions: https://github.com/csufpsudocromis/bretter-labs/discussions
@@ -503,6 +529,8 @@ See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reportin
 - Repository wiki source pages: [docs/wiki/](docs/wiki/)
 - Architecture deep dive: [docs/architecture.md](docs/architecture.md)
 - Operator/CRD migration blueprint: [docs/operator-crd-migration-plan.md](docs/operator-crd-migration-plan.md)
+- Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
+- Operator CRD versioning plan: [docs/wiki/Operator-CRD-Versioning-Plan.md](docs/wiki/Operator-CRD-Versioning-Plan.md)
 - Upgrade procedure: [docs/upgrade-path.md](docs/upgrade-path.md)
 
 ## Project Structure
@@ -513,6 +541,7 @@ frontend-vite/   React app (Vite)
 runner/          VM runner image (QEMU + SPICE/Guacamole console paths)
 scripts/         Setup/bootstrap automation
 deploy/          Kubernetes manifests/templates
+deploy/operator/ LabInstance controller deployment, ServiceMonitor, PrometheusRule
 docs/            Architecture and wiki source docs
 images/          README/wiki assets
 ```

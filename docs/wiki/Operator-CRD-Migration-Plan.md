@@ -29,8 +29,46 @@ Canonical design document:
   - `deploy/crds/labinstances.labs.bretter.io.yaml`
   - `deploy/crds/labimageimports.labs.bretter.io.yaml`
   - `deploy/crds/kustomization.yaml`
+- Controller + migration tools:
+  - `backend/src/tools/labinstance_controller.py`
+  - `scripts/backfill_labinstances_from_db.py`
+  - `backend/src/tools/orchestration_parity_probe.py`
+  - `scripts/crd_canary_labinstance.sh`
+  - `deploy/operator/backfill-job.yaml` (manual one-shot backfill job template)
+  - `deploy/operator/parity-cronjob.yaml` (scheduled DB↔CRD parity check)
 - Phase-by-phase migration/rollback strategy:
   - [../operator-crd-migration-plan.md](../operator-crd-migration-plan.md)
+
+## Deploy controller resources
+
+```bash
+kubectl apply -k deploy/crds
+kubectl apply -k deploy/operator
+```
+
+## Backfill active DB instances into CRDs
+
+```bash
+.venv/bin/python scripts/backfill_labinstances_from_db.py --dry-run
+.venv/bin/python scripts/backfill_labinstances_from_db.py
+```
+
+## Canary lifecycle validation
+
+```bash
+NAMESPACE=labs \
+CRD_CANARY_TEMPLATE_ID=<template-id> \
+./scripts/crd_canary_labinstance.sh
+```
+
+## Runtime parity checks
+
+- API endpoint: `GET /admin/settings/runtime/orchestration-parity` (admin/settings-read access)
+- Cron/CLI probe:
+
+```bash
+.venv/bin/python -m backend.src.tools.orchestration_parity_probe
+```
 
 ## Validate and inspect CRDs
 
@@ -53,3 +91,8 @@ kubectl explain labimageimport.status
 - Preserve backend fallback path for at least one full release after cutover.
 - Do not store plaintext secret values in CRD `spec` or `status`.
 - Use condition-based status (`type/reason/message`) as the source of truth for UI and alerts.
+
+## Related pages
+
+- [Operator Incident Runbook](Operator-Incident-Runbook)
+- [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)

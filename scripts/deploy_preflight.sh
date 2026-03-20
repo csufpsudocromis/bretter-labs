@@ -19,6 +19,7 @@ SKIP_CLUSTER_CHECKS="${SKIP_CLUSTER_CHECKS:-0}"
 PREDEPLOY_VERIFY_NODE_IMAGE_PULLS="${PREDEPLOY_VERIFY_NODE_IMAGE_PULLS:-1}"
 PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS="${PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS:-120}"
 PREDEPLOY_IMAGE_PULL_SECRET_NAME="${PREDEPLOY_IMAGE_PULL_SECRET_NAME:-ghcr-creds}"
+PREDEPLOY_VALIDATE_CRDS="${PREDEPLOY_VALIDATE_CRDS:-1}"
 
 fail_count=0
 VALUES_FILES=()
@@ -119,7 +120,7 @@ for item in sys.argv[1:]:
     merged = deep_merge(merged, read_yaml(path))
 
 app = merged.get("appTemplateValues") or {}
-for key in ("BACKEND_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
+for key in ("BACKEND_IMAGE", "BACKEND_ADMIN_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
     value = str(app.get(key) or "").strip()
     if value:
         print(f"{key}={value}")
@@ -241,6 +242,7 @@ EOF
 log "Deploy preflight started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Namespace: ${NAMESPACE}"
 validate_toggle "REQUIRE_SITE_VALUES_FILE" "$REQUIRE_SITE_VALUES_FILE"
+validate_toggle "PREDEPLOY_VALIDATE_CRDS" "$PREDEPLOY_VALIDATE_CRDS"
 validate_positive_int "PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS" "$PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS"
 collect_value_files
 if [ "${#VALUES_FILES[@]}" -gt 0 ]; then
@@ -253,6 +255,7 @@ for value_file in "${VALUES_FILES[@]}"; do
   validate_cmd+=(-f "$value_file")
 done
 run_check "strict production values validation (merged values files)" "${validate_cmd[@]}"
+run_check "CRD schema lint" "$PYTHON_BIN" "$ROOT_DIR/scripts/lint_crd_schema.py"
 
 if [ "$SKIP_CLUSTER_CHECKS" = "1" ]; then
   log "Cluster checks skipped (SKIP_CLUSTER_CHECKS=1)."
@@ -264,6 +267,12 @@ fi
 
 run_check "kubectl access" bash -lc "kubectl version --request-timeout=10s >/dev/null"
 run_check "namespace exists" bash -lc "kubectl get namespace '$NAMESPACE' >/dev/null"
+if [ "$PREDEPLOY_VALIDATE_CRDS" = "1" ]; then
+  run_check "CRD server-side dry-run apply" \
+    bash -lc "kubectl apply --dry-run=server -k '$ROOT_DIR/deploy/crds' >/dev/null"
+else
+  log "CRD server-side dry-run apply skipped (PREDEPLOY_VALIDATE_CRDS=0)."
+fi
 
 runtime_secret_data="$(fetch_secret_key_data_b64 "$NAMESPACE" "$RUNTIME_SECRET_NAME" "$RUNTIME_SECRET_KEY")"
 if [ -n "$runtime_secret_data" ]; then

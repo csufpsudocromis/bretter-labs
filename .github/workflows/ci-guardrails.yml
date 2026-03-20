@@ -24,10 +24,10 @@ jobs:
           sudo apt-get install -y shellcheck shfmt
 
       - name: Run shellcheck
-        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/production_go_live_proof.sh scripts/rollback_release.sh frontend-vite/nginx-entrypoint.sh
+        run: shellcheck scripts/setup.sh scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/smoke_labinstance_controller.sh scripts/production_go_live_proof.sh scripts/crd_canary_labinstance.sh scripts/rollback_release.sh frontend-vite/nginx-entrypoint.sh
 
       - name: Run shfmt
-        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/production_go_live_proof.sh scripts/rollback_release.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
+        run: shfmt -d -i 2 -ci scripts/ci_guardrails.sh scripts/smoke_setup.sh scripts/smoke_tls_login.sh scripts/smoke_labinstance_controller.sh scripts/production_go_live_proof.sh scripts/crd_canary_labinstance.sh scripts/rollback_release.sh backend/entrypoint.sh frontend-vite/nginx-entrypoint.sh
 
       - name: Run hadolint
         run: |
@@ -36,7 +36,7 @@ jobs:
           docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < runner/Dockerfile
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.24.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: fs
           scan-ref: .
@@ -56,6 +56,18 @@ jobs:
           helm lint ./deploy/helm
           helm template bretter-labs ./deploy/helm -f deploy/helm/values.yaml >/tmp/helm-values.yaml
           helm template bretter-labs ./deploy/helm -f deploy/helm/values.yaml -f deploy/helm/values-production.yaml >/tmp/helm-values-production.yaml
+          kubectl kustomize deploy/crds >/tmp/crds-rendered.yaml
+
+      - name: Setup kind for CRD server-side dry-run
+        run: |
+          curl -fsSL -o /tmp/kind https://kind.sigs.k8s.io/dl/v0.23.0/kind-linux-amd64
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          kind create cluster --name crd-check --wait 120s
+
+      - name: Validate CRDs (schema lint + server dry-run)
+        run: |
+          kubectl apply --dry-run=server -k deploy/crds
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -72,7 +84,7 @@ jobs:
           .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 
       - name: Check Python formatting
-        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py
+        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py
 
       - name: Run pip-audit
         run: |
@@ -82,11 +94,21 @@ jobs:
       - name: Run release/version guardrail
         run: .venv/bin/python scripts/check_release_discipline.py
 
+      - name: Run plaintext token guardrail
+        run: .venv/bin/python scripts/check_no_plaintext_tokens.py
+
       - name: Validate production profile (strict gate)
         run: .venv/bin/python scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
 
+      - name: Run LabInstance controller smoke (kind, dry-run)
+        run: NAMESPACE=labs PYTHON=.venv/bin/python ./scripts/smoke_labinstance_controller.sh
+
       - name: Run CI guardrails
         run: ./scripts/ci_guardrails.sh
+
+      - name: Teardown kind cluster
+        if: always()
+        run: kind delete cluster --name crd-check || true
 
       - name: Setup Node
         uses: actions/setup-node@v4

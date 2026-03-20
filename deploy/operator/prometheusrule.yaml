@@ -1,0 +1,43 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: bretter-labinstance-operator
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: bretter-labinstance-operator
+      rules:
+        - alert: BretterLabInstanceControllerDown
+          expr: absent(up{job=~".*bretter-labinstance-operator.*"} == 1)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "LabInstance controller metrics target is missing"
+            description: "Prometheus cannot scrape the LabInstance controller metrics endpoint."
+        - alert: BretterLabInstanceReconcileErrors
+          expr: increase(blabs_labinstance_reconcile_total{result="error"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "LabInstance reconcile errors detected"
+            description: "LabInstance controller reported reconcile errors in the last 10 minutes."
+        - alert: BretterLabInstanceFinalizerBacklog
+          expr: blabs_labinstance_finalizer_backlog > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "LabInstance finalizer backlog detected"
+            description: "One or more LabInstances are stuck in deletion with finalizers for over 15 minutes."
+        - alert: BretterLabInstanceStuckPending
+          expr: blabs_labinstance_stuck_instances > 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "LabInstances stuck in pending/start phases"
+            description: "LabInstance controller reports stuck instances beyond configured threshold."

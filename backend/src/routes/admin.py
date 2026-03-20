@@ -44,6 +44,8 @@ from ..models import (
     LDAPSettingsUpdate,
     RuntimeDriftItem,
     RuntimeHealthCheck,
+    OrchestrationParityItem,
+    OrchestrationParityReport,
     RdpReadinessTelemetry,
     StorageSettingsRead,
     StorageSettingsUpdate,
@@ -328,6 +330,94 @@ def _runtime_drift(values: dict[str, object], kube_namespace: str) -> tuple[list
                 )
 
     return drift, len(pods)
+
+
+def _phase_to_db_status(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"running", "pending", "completed", "stopped", "failed"}:
+        return normalized
+    if normalized in {"starting", "building"}:
+        return "pending"
+    return "unknown"
+
+
+def _runtime_orchestration_parity_report(session: Session) -> OrchestrationParityReport:
+    mode = str(getattr(settings, "orchestration_backend", "db") or "db").strip().lower()
+    if mode not in {"dual", "crd"}:
+        return OrchestrationParityReport(
+            available=False,
+            detail=f"ORCHESTRATION_BACKEND={mode or 'db'} does not use LabInstance CRDs.",
+            mode=mode or "db",
+        )
+
+    db_rows = session.exec(select(Instance)).all()
+    db_map = {row.id: str(row.status or "").strip().lower() for row in db_rows}
+
+    try:
+        kube._client()
+        custom = client.CustomObjectsApi()
+        payload = custom.list_namespaced_custom_object(
+            group=str(settings.labinstance_crd_group or "labs.bretter.io"),
+            version=str(settings.labinstance_crd_version or "v1alpha1"),
+            namespace=settings.kube_namespace,
+            plural=str(settings.labinstance_crd_plural or "labinstances"),
+        )
+    except ApiException as exc:
+        return OrchestrationParityReport(
+            available=False,
+            detail=f"Unable to list LabInstance CRDs ({exc.status} {exc.reason}).",
+            mode=mode,
+            db_instances=len(db_map),
+        )
+    except Exception as exc:
+        return OrchestrationParityReport(
+            available=False,
+            detail=f"Unable to list LabInstance CRDs ({exc}).",
+            mode=mode,
+            db_instances=len(db_map),
+        )
+
+    crd_items = payload.get("items") if isinstance(payload, dict) else []
+    if not isinstance(crd_items, list):
+        crd_items = []
+    crd_map: dict[str, str] = {}
+    for item in crd_items:
+        if not isinstance(item, dict):
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        status_obj = item.get("status") if isinstance(item.get("status"), dict) else {}
+        name = str(metadata.get("name") or "").strip()
+        if not name:
+            continue
+        crd_map[name] = _phase_to_db_status(status_obj.get("phase"))
+
+    missing_in_crd = sorted(instance_id for instance_id in db_map if instance_id not in crd_map)
+    missing_in_db = sorted(instance_id for instance_id in crd_map if instance_id not in db_map)
+
+    status_mismatch: list[OrchestrationParityItem] = []
+    for instance_id, db_status in db_map.items():
+        crd_phase = crd_map.get(instance_id)
+        if not crd_phase:
+            continue
+        if db_status != crd_phase:
+            status_mismatch.append(
+                OrchestrationParityItem(instance_id=instance_id, db_status=db_status, crd_phase=crd_phase)
+            )
+    status_mismatch.sort(key=lambda item: item.instance_id)
+
+    return OrchestrationParityReport(
+        available=True,
+        detail=f"Compared {len(db_map)} DB instance(s) with {len(crd_map)} LabInstance CRD object(s).",
+        mode=mode,
+        db_instances=len(db_map),
+        crd_instances=len(crd_map),
+        missing_in_crd=len(missing_in_crd),
+        missing_in_db=len(missing_in_db),
+        status_mismatch=len(status_mismatch),
+        missing_in_crd_samples=missing_in_crd[:25],
+        missing_in_db_samples=missing_in_db[:25],
+        status_mismatch_samples=status_mismatch[:25],
+    )
 
 
 def _build_runtime_health(
@@ -5170,6 +5260,15 @@ def update_storage_settings(
 def get_runtime_settings(session: Session = Depends(get_session)) -> RuntimeSettingsRead:
     cfg = session.get(Config, 1)
     return _runtime_settings_view(cfg)
+
+
+@router.get(
+    "/settings/runtime/orchestration-parity",
+    response_model=OrchestrationParityReport,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def get_runtime_orchestration_parity(session: Session = Depends(get_session)) -> OrchestrationParityReport:
+    return _runtime_orchestration_parity_report(session)
 
 
 @router.patch(

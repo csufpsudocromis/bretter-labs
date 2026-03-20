@@ -1,6 +1,6 @@
 # Operations Runbook
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 ## Production pre-rollout gate
 
@@ -79,6 +79,29 @@ kubectl -n labs get pods | rg '^vm-|^virt-launcher-'
 kubectl -n labs rollout status deploy/bretter-backend --timeout=300s
 kubectl -n labs rollout status deploy/bretter-frontend --timeout=300s
 kubectl -n labs get pods -o wide
+```
+
+## Operator/CRD checks (when `ORCHESTRATION_BACKEND=dual|crd`)
+
+Controller health:
+
+```bash
+kubectl -n labs get deploy bretter-labinstance-operator
+kubectl -n labs logs deploy/bretter-labinstance-operator --tail=300
+kubectl -n labs get labinstances.labs.bretter.io
+```
+
+Backfill active DB rows into CRDs:
+
+```bash
+.venv/bin/python scripts/backfill_labinstances_from_db.py --dry-run
+.venv/bin/python scripts/backfill_labinstances_from_db.py
+```
+
+Canary lifecycle test:
+
+```bash
+NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh
 ```
 
 ## Pre-deploy gate

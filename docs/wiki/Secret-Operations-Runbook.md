@@ -1,6 +1,6 @@
 # Secret Operations Runbook
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 Use this runbook for production secret creation, validation, and rotation tasks.
 
@@ -94,6 +94,18 @@ Runtime encryption key rotation:
 - Rotation is a controlled change: replacing the key without re-encrypting stored values causes decryption failures.
 - Use a maintenance window and validate application behavior immediately after key change.
 - Confirm by running go-live proof and checking backend logs for decryption errors.
+
+GitHub/GHCR token rotation:
+
+1. Revoke and replace any exposed PAT immediately in GitHub settings.
+2. Update repository/org Actions secrets only:
+   - `GHCR_USERNAME`
+   - `GHCR_PAT`
+3. Re-run package publish and guardrail workflows.
+4. Confirm no plaintext tokens are committed:
+   ```bash
+   python3 scripts/check_no_plaintext_tokens.py
+   ```
 
 ## Failure modes
 

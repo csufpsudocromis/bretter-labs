@@ -49,6 +49,8 @@ Track release-critical work with labels + milestones.
 - Initial migration artifacts in-repo:
   - `deploy/crds/labinstances.labs.bretter.io.yaml`
   - `deploy/crds/labimageimports.labs.bretter.io.yaml`
+  - `deploy/operator/operator.yaml`
+  - `deploy/operator/prometheusrule.yaml`
 - Near-term implementation order:
   1. `LabInstance` shadow mode and status parity checks
   2. VM lifecycle cutover with backend fallback flag

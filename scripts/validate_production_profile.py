@@ -123,7 +123,7 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             errors.append(f"{key} must be an integer >= 1 (found: {raw!r}).")
         return parsed
 
-    for key in ("BACKEND_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
+    for key in ("BACKEND_IMAGE", "BACKEND_ADMIN_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
         image_ref = get_text(key)
         if not image_ref:
             errors.append(f"{key} is required.")
@@ -155,6 +155,18 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
         errors.append("METRICS_SERVER_INSECURE_TLS must be false for production.")
     if not get_bool("CORS_ENTERPRISE_PROFILE", default=False):
         errors.append("CORS_ENTERPRISE_PROFILE must be enabled for production.")
+    orchestration_backend = get_text("ORCHESTRATION_BACKEND").lower() or "db"
+    if orchestration_backend not in {"db", "dual", "crd"}:
+        errors.append("ORCHESTRATION_BACKEND must be one of: db, dual, crd.")
+    if orchestration_backend in {"dual", "crd"}:
+        if not get_text("LABINSTANCE_CRD_GROUP"):
+            errors.append("LABINSTANCE_CRD_GROUP is required when ORCHESTRATION_BACKEND is dual/crd.")
+        if not get_text("LABINSTANCE_CRD_VERSION"):
+            errors.append("LABINSTANCE_CRD_VERSION is required when ORCHESTRATION_BACKEND is dual/crd.")
+        if not get_text("LABINSTANCE_CRD_PLURAL"):
+            errors.append("LABINSTANCE_CRD_PLURAL is required when ORCHESTRATION_BACKEND is dual/crd.")
+        if not get_text("LABINSTANCE_CRD_FINALIZER"):
+            errors.append("LABINSTANCE_CRD_FINALIZER is required when ORCHESTRATION_BACKEND is dual/crd.")
 
     public_scheme = get_text("PUBLIC_SCHEME").lower() or "https"
     if public_scheme != "https":

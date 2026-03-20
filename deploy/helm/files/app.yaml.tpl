@@ -476,6 +476,16 @@ spec:
               value: __PUBLIC_SCHEME__
             - name: BLABS_KUBE_TLS_SECRET
               value: __TLS_SECRET_NAME__
+            - name: BLABS_ORCHESTRATION_BACKEND
+              value: "__ORCHESTRATION_BACKEND__"
+            - name: BLABS_LABINSTANCE_CRD_GROUP
+              value: "__LABINSTANCE_CRD_GROUP__"
+            - name: BLABS_LABINSTANCE_CRD_VERSION
+              value: "__LABINSTANCE_CRD_VERSION__"
+            - name: BLABS_LABINSTANCE_CRD_PLURAL
+              value: "__LABINSTANCE_CRD_PLURAL__"
+            - name: BLABS_LABINSTANCE_CRD_FINALIZER
+              value: "__LABINSTANCE_CRD_FINALIZER__"
             - name: BLABS_KUBE_NODE_SELECTOR_VALUE
               value: "__RUNNER_NODE_SELECTOR_VALUE__"
             - name: BLABS_RUNNER_IMAGE

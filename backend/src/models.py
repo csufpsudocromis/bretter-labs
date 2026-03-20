@@ -334,6 +334,26 @@ class RuntimeSettingsRead(BaseModel):
     backend_pod_count: int = 0
 
 
+class OrchestrationParityItem(BaseModel):
+    instance_id: str
+    db_status: str = ""
+    crd_phase: str = ""
+
+
+class OrchestrationParityReport(BaseModel):
+    available: bool = False
+    detail: str = ""
+    mode: str = "db"
+    db_instances: int = 0
+    crd_instances: int = 0
+    missing_in_crd: int = 0
+    missing_in_db: int = 0
+    status_mismatch: int = 0
+    missing_in_crd_samples: list[str] = Field(default_factory=list)
+    missing_in_db_samples: list[str] = Field(default_factory=list)
+    status_mismatch_samples: list[OrchestrationParityItem] = Field(default_factory=list)
+
+
 class StorageValidationCheck(BaseModel):
     key: str
     status: Literal["ok", "warn", "error", "info"]

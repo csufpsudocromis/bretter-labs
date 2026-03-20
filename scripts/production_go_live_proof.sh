@@ -10,6 +10,11 @@ PUBLIC_SCHEME_OVERRIDE="${PUBLIC_SCHEME:-}"
 BASE_VALUES_FILE="${BASE_VALUES_FILE:-$ROOT_DIR/deploy/helm/values-production.yaml}"
 SITE_VALUES_FILE="${SITE_VALUES_FILE:-$ROOT_DIR/deploy/helm/values-prod-site.yaml}"
 REQUIRE_SITE_VALUES_FILE="${REQUIRE_SITE_VALUES_FILE:-1}"
+RUN_CRD_OPERATOR_CANARY="${RUN_CRD_OPERATOR_CANARY:-auto}"
+CRD_CANARY_TEMPLATE_ID="${CRD_CANARY_TEMPLATE_ID:-}"
+CRD_CANARY_WAIT_SECONDS="${CRD_CANARY_WAIT_SECONDS:-300}"
+CRD_CANARY_RUNNING_SLO_SECONDS="${CRD_CANARY_RUNNING_SLO_SECONDS:-180}"
+CRD_CANARY_DELETE_WAIT_SECONDS="${CRD_CANARY_DELETE_WAIT_SECONDS:-180}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="${REPORT_DIR}/production-go-live-${timestamp}.txt"
@@ -175,6 +180,7 @@ print(f"signature_secret_name={signature_secret_name}")
 print(f"node_external_host={env_values.get('BLABS_KUBE_NODE_EXTERNAL_HOST', '')}")
 print(f"public_scheme={env_values.get('BLABS_PUBLIC_SCHEME', '')}")
 print(f"cors_allowed_origins={cors_origins}")
+print(f"orchestration_backend={env_values.get('BLABS_ORCHESTRATION_BACKEND', '')}")
 PY
 )" || fail_check "backend deployment production env + secret wiring"
 
@@ -185,6 +191,7 @@ signature_secret_name=""
 node_external_host=""
 public_scheme=""
 cors_allowed_origins=""
+orchestration_backend=""
 if [ "$fail_count" -eq 0 ] || [ -n "$backend_meta" ]; then
   while IFS='=' read -r key value; do
     case "$key" in
@@ -195,11 +202,49 @@ if [ "$fail_count" -eq 0 ] || [ -n "$backend_meta" ]; then
       node_external_host) node_external_host="$value" ;;
       public_scheme) public_scheme="$value" ;;
       cors_allowed_origins) cors_allowed_origins="$value" ;;
+      orchestration_backend) orchestration_backend="$value" ;;
     esac
   done <<<"$backend_meta"
   if [ -n "$backend_meta" ]; then
     pass_check "backend deployment production env + secret wiring"
   fi
+fi
+
+should_run_crd_canary=0
+case "$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    should_run_crd_canary=1
+    ;;
+  0|false|no|off)
+    should_run_crd_canary=0
+    ;;
+  auto)
+    case "$(printf '%s' "$orchestration_backend" | tr '[:upper:]' '[:lower:]')" in
+      crd|dual) should_run_crd_canary=1 ;;
+      *) should_run_crd_canary=0 ;;
+    esac
+    ;;
+  *)
+    fail_check "RUN_CRD_OPERATOR_CANARY must be one of: auto, 0, 1."
+    should_run_crd_canary=0
+    ;;
+esac
+
+if [ "$should_run_crd_canary" -eq 1 ]; then
+  if [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
+    fail_check "operator LabInstance canary (missing CRD_CANARY_TEMPLATE_ID)"
+  else
+    run_check "operator LabInstance canary" \
+      env \
+        NAMESPACE="$NAMESPACE" \
+        CRD_CANARY_TEMPLATE_ID="$CRD_CANARY_TEMPLATE_ID" \
+        CRD_CANARY_WAIT_SECONDS="$CRD_CANARY_WAIT_SECONDS" \
+        CRD_CANARY_RUNNING_SLO_SECONDS="$CRD_CANARY_RUNNING_SLO_SECONDS" \
+        CRD_CANARY_DELETE_WAIT_SECONDS="$CRD_CANARY_DELETE_WAIT_SECONDS" \
+        "$ROOT_DIR/scripts/crd_canary_labinstance.sh"
+  fi
+else
+  log "CRD operator canary skipped (RUN_CRD_OPERATOR_CANARY=${RUN_CRD_OPERATOR_CANARY}, backend=${orchestration_backend:-db})."
 fi
 
 if [ -n "$runtime_secret_name" ] && [ -n "$runtime_secret_key" ]; then

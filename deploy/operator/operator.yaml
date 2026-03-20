@@ -1,0 +1,136 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: bretter-labinstance-operator
+  namespace: labs
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: bretter-labinstance-operator
+  namespace: labs
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "persistentvolumeclaims", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["labs.bretter.io"]
+    resources: ["labinstances", "labinstances/status", "labinstances/finalizers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: bretter-labinstance-operator
+  namespace: labs
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: bretter-labinstance-operator
+subjects:
+  - kind: ServiceAccount
+    name: bretter-labinstance-operator
+    namespace: labs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-labinstance-operator
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: bretter-labinstance-operator
+    app.kubernetes.io/part-of: bretter-labs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bretter-labinstance-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bretter-labinstance-operator
+        app.kubernetes.io/part-of: bretter-labs
+    spec:
+      serviceAccountName: bretter-labinstance-operator
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: controller
+          image: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - backend.src.tools.labinstance_controller
+          env:
+            - name: BLABS_KUBE_NAMESPACE
+              value: labs
+            - name: BLABS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: BLABS_DATABASE_URL
+            - name: BLABS_KUBE_IMAGE_PVC
+              value: golden-images
+            - name: BLABS_KUBE_VM_STORAGE_CLASS
+              value: longhorn-r1
+            - name: BLABS_RUNNER_IMAGE
+              value: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1
+            - name: BLABS_IMAGE_PULL_SECRET
+              value: ghcr-creds
+            - name: BLABS_KUBE_NODE_SELECTOR_VALUE
+              value: ""
+            - name: BLABS_KUBE_TLS_SECRET
+              value: bretter-tls
+            - name: BLABS_LABINSTANCE_CONTROLLER_ENABLED
+              value: "true"
+            - name: BLABS_LABINSTANCE_CONTROLLER_POLL_SECONDS
+              value: "15"
+            - name: BLABS_LABINSTANCE_CONTROLLER_STUCK_SECONDS
+              value: "600"
+            - name: BLABS_LABINSTANCE_CONTROLLER_METRICS_BIND
+              value: 0.0.0.0
+            - name: BLABS_LABINSTANCE_CONTROLLER_METRICS_PORT
+              value: "9408"
+            - name: BLABS_LABINSTANCE_CRD_GROUP
+              value: labs.bretter.io
+            - name: BLABS_LABINSTANCE_CRD_VERSION
+              value: v1alpha1
+            - name: BLABS_LABINSTANCE_CRD_PLURAL
+              value: labinstances
+            - name: BLABS_LABINSTANCE_CRD_FINALIZER
+              value: labs.bretter.io/finalizer
+          ports:
+            - name: metrics
+              containerPort: 9408
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-labinstance-operator
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: bretter-labinstance-operator
+    app.kubernetes.io/part-of: bretter-labs
+spec:
+  selector:
+    app.kubernetes.io/name: bretter-labinstance-operator
+  ports:
+    - name: metrics
+      port: 9408
+      targetPort: metrics

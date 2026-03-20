@@ -267,6 +267,24 @@ status:
   - CRUD only for managed resource kinds in managed namespace.
 - Preserve existing auth/session/token hardening in backend.
 
+## CRD versioning strategy (`v1alpha1` -> `v1beta1`)
+
+- Current storage/served version is `v1alpha1`.
+- `v1beta1` promotion requires:
+  - stable condition vocabulary
+  - stable required `spec` fields
+  - compatibility aliases for renamed fields
+- Conversion strategy:
+  - short term: structural compatibility and defaulting (no webhook)
+  - target: conversion webhook before deprecating `v1alpha1`
+- Deprecation window:
+  - announce field deprecation one release ahead
+  - keep deprecated fields readable for at least one minor release
+
+Detailed versioning policy:
+
+- [wiki/Operator-CRD-Versioning-Plan.md](wiki/Operator-CRD-Versioning-Plan.md)
+
 ## Deliverables checklist
 
 - [ ] CRD manifests checked in under `deploy/crds/`.
@@ -274,4 +292,3 @@ status:
 - [ ] Backend adapter layer (`db|dual|crd`) with parity tests.
 - [ ] End-to-end canary in CI + post-deploy smoke.
 - [ ] Operator runbook and rollback SOP.
-

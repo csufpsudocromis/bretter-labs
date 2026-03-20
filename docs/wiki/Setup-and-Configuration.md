@@ -1,6 +1,6 @@
 # Setup and Configuration
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 ## Quick install
 
@@ -27,9 +27,14 @@ Core:
 - `NODE_EXTERNAL_HOST`
 - `PUBLIC_SCHEME` (`https` recommended)
 - `PRODUCTION_PROFILE` (`1` recommended for production)
+- `ORCHESTRATION_BACKEND` (`db`/`dual`/`crd`; default `db`)
 - `REQUIRE_SCHEMA_READY` (default `1`; fail startup if DB schema/head is not ready)
 - `EXPECTED_ALEMBIC_REVISION` (optional explicit expected Alembic revision)
 - `TLS_ENABLED`, `TLS_SECRET_NAME`
+- `LABINSTANCE_CRD_GROUP` (default `labs.bretter.io`)
+- `LABINSTANCE_CRD_VERSION` (default `v1alpha1`)
+- `LABINSTANCE_CRD_PLURAL` (default `labinstances`)
+- `LABINSTANCE_CRD_FINALIZER` (default `labs.bretter.io/finalizer`)
 
 Storage:
 
@@ -41,6 +46,7 @@ Storage:
 Images:
 
 - `BACKEND_IMAGE`
+- `BACKEND_ADMIN_IMAGE` (defaults to `BACKEND_IMAGE`; used by ops jobs that need admin tooling)
 - `FRONTEND_IMAGE`
 - `RUNNER_IMAGE`
 - `BACKEND_REPLICAS` (default `1`)

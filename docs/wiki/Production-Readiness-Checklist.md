@@ -1,6 +1,6 @@
 # Production Readiness Checklist
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 Use this checklist before first production deployment and for each release.
 
@@ -24,7 +24,7 @@ Use this checklist before first production deployment and for each release.
 
 ## Image and supply chain
 
-- Keep `BACKEND_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` digest-pinned (`@sha256:...`).
+- Keep `BACKEND_IMAGE`, `BACKEND_ADMIN_IMAGE`, `FRONTEND_IMAGE`, and `RUNNER_IMAGE` digest-pinned (`@sha256:...`).
 - Verify digest refs exist in your registry before rollout.
 - Keep mutable-tag override disabled (`ALLOW_MUTABLE_IMAGE_TAGS=0`).
 - Ensure production image refs are not local/dev references (`localhost/*`, `:local*`, `local-*`).
@@ -49,8 +49,13 @@ Use this checklist before first production deployment and for each release.
 
 - Run CI guardrails (including TLS login smoke path) on release branch/PR.
 - Run strict production profile validation before rollout (`-f values-production.yaml -f <site-overlay>.yaml`).
+- Validate CRD schema and server-side apply path:
+  - `python3 scripts/lint_crd_schema.py`
+  - `kubectl apply --dry-run=server -k deploy/crds`
 - Run `scripts/production_go_live_proof.sh` after rollout and archive the generated report.
 - Keep `RUN_PRODUCTION_GO_LIVE_PROOF=1` for production postdeploy automation (default when `PRODUCTION_PROFILE=1`).
+- If using `ORCHESTRATION_BACKEND=dual|crd`, run operator canary:
+  - `NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh`
 - Run post-deploy API health, admin API smoke, and synthetic checks.
 - Verify recurring probe CronJobs are healthy (`bretter-ghcr-access-check`, `bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
 - Verify backup/restore path for Postgres before go-live.
@@ -61,3 +66,4 @@ Use this checklist before first production deployment and for each release.
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Operations Runbook](Operations-Runbook)
+- [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)

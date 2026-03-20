@@ -30,6 +30,17 @@ class Settings(BaseSettings):
     kube_spice_embed_configmap: str = "spice-embed"  # ConfigMap with spice-embed.html to slim the console UI
     kube_node_external_host: str = ""
     kube_tls_secret: str = "bretter-tls"
+    orchestration_backend: str = "db"  # db|dual|crd
+    labinstance_crd_group: str = "labs.bretter.io"
+    labinstance_crd_version: str = "v1alpha1"
+    labinstance_crd_plural: str = "labinstances"
+    labinstance_crd_finalizer: str = "labs.bretter.io/finalizer"
+    labinstance_controller_enabled: bool = False
+    labinstance_controller_dry_run: bool = False
+    labinstance_controller_poll_seconds: int = 15
+    labinstance_controller_stuck_seconds: int = 600
+    labinstance_controller_metrics_bind: str = "0.0.0.0"
+    labinstance_controller_metrics_port: int = 9408
     # Default Windows to UEFI/q35; can be overridden per environment.
     windows_efi_enabled: bool = True
     windows_machine_type: str = "q35"
@@ -60,6 +71,7 @@ class Settings(BaseSettings):
     container_allowed_registries: str = "docker.io,ghcr.io,quay.io,mcr.microsoft.com,gcr.io,registry.k8s.io,lscr.io"
     container_signature_verification_enabled: bool = False
     container_signature_key_ref: str = ""
+    container_signature_key_secret_name: str = "bretter-cosign-public-key"
     container_scan_enabled: bool = True
     container_scan_interval_minutes: int = 360
     container_scan_severity: str = "HIGH,CRITICAL"

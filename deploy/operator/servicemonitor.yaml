@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bretter-labinstance-operator
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - labs
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: bretter-labinstance-operator
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics

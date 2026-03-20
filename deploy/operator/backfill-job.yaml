@@ -1,0 +1,36 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bretter-labinstance-backfill
+  namespace: labs
+  labels:
+    app.kubernetes.io/name: bretter-labinstance-backfill
+    app.kubernetes.io/part-of: bretter-labs
+spec:
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: bretter-labinstance-backfill
+        app.kubernetes.io/part-of: bretter-labs
+    spec:
+      restartPolicy: Never
+      serviceAccountName: bretter-labinstance-operator
+      imagePullSecrets:
+        - name: ghcr-creds
+      containers:
+        - name: backfill
+          image: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - backend.src.tools.backfill_labinstances
+          env:
+            - name: BLABS_KUBE_NAMESPACE
+              value: labs
+            - name: BLABS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: BLABS_DATABASE_URL

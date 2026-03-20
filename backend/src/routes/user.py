@@ -26,6 +26,14 @@ from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
 from ..network_modes import normalize_vm_network_mode
 from ..secret_codec import decrypt_secret, secret_is_configured
 from ..services.launch_lock import lock_user_launch_slot
+from ..services.labinstance_crd import (
+    delete_vm_labinstance,
+    delete_vm_labinstance_best_effort,
+    patch_vm_labinstance_desired_state,
+    upsert_vm_labinstance,
+    vm_orchestration_uses_legacy_path,
+    vm_orchestration_writes_crd,
+)
 from ..services.kubernetes import PodRequest, PodStatus, kube
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
@@ -1087,49 +1095,56 @@ def start_vm(
         requested_idle_timeout_minutes=template.idle_timeout_minutes or settings.idle_timeout_minutes,
     )
 
+    use_legacy_orchestration = vm_orchestration_uses_legacy_path()
+    write_crd_shadow = vm_orchestration_writes_crd()
     instance_id = str(uuid4())
-    try:
-        warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, instance_id, user.username)
-    except Exception:
-        warm_pool_pvc = None
     console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
     spice_password = _generate_spice_password() if console_provider == "spice" else ""
     rdp_default_username, rdp_default_password = (None, None)
     if console_provider == "guacamole_rdp":
         rdp_default_username, rdp_default_password = _resolve_template_rdp_defaults(template)
-    pod_request = PodRequest(
-        instance_id=instance_id,
-        template_id=template.id,
-        image_path=Path(image.filename).name,
-        image_source_pvc=image.source_pvc,
-        os_type=template.os_type,
-        cpu_cores=template.cpu_cores,
-        ram_mb=template.ram_mb,
-        owner=user.username,
-        network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
-        instance_disk_pvc=warm_pool_pvc,
-        console_provider=console_provider,
-        spice_password=(spice_password or None),
-        rdp_default_username=rdp_default_username,
-        rdp_default_password=rdp_default_password,
-    )
-    try:
-        pod_status = kube.create_pod(pod_request)
-    except Exception:
-        if warm_pool_pvc:
-            try:
-                kube._client().delete_namespaced_persistent_volume_claim(
-                    name=warm_pool_pvc,
-                    namespace=settings.kube_namespace,
-                )
-            except Exception:
-                pass
-        raise
-    # Keep VM console service internal; browser access goes through authenticated backend proxy.
-    service_name = f"svc-{instance_id[:8]}"
-    kube.create_service_for_pod(
-        pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
-    )
+    pod_status: PodStatus | None = None
+    disk_pvc: str | None = None
+    if use_legacy_orchestration:
+        try:
+            warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, instance_id, user.username)
+        except Exception:
+            warm_pool_pvc = None
+        pod_request = PodRequest(
+            instance_id=instance_id,
+            template_id=template.id,
+            image_path=Path(image.filename).name,
+            image_source_pvc=image.source_pvc,
+            os_type=template.os_type,
+            cpu_cores=template.cpu_cores,
+            ram_mb=template.ram_mb,
+            owner=user.username,
+            network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
+            instance_disk_pvc=warm_pool_pvc,
+            console_provider=console_provider,
+            spice_password=(spice_password or None),
+            rdp_default_username=rdp_default_username,
+            rdp_default_password=rdp_default_password,
+        )
+        try:
+            pod_status = kube.create_pod(pod_request)
+        except Exception:
+            if warm_pool_pvc:
+                try:
+                    kube._client().delete_namespaced_persistent_volume_claim(
+                        name=warm_pool_pvc,
+                        namespace=settings.kube_namespace,
+                    )
+                except Exception:
+                    pass
+            raise
+        disk_pvc = pod_status.disk_pvc
+        # Keep VM console service internal; browser access goes through authenticated backend proxy.
+        service_name = f"svc-{instance_id[:8]}"
+        kube.create_service_for_pod(
+            pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
+        )
+
     console_url = _vm_console_connect_url(
         instance_id=instance_id,
         title=template.name,
@@ -1143,7 +1158,7 @@ def start_vm(
         template_id=template.id,
         owner=user.username,
         status="pending",
-        disk_pvc=pod_status.disk_pvc,
+        disk_pvc=disk_pvc,
         started_at=utc_now(),
         last_active_at=utc_now(),
         console_url=console_url,
@@ -1151,7 +1166,32 @@ def start_vm(
     session.add(instance)
     session.commit()
     session.refresh(instance)
+
+    if write_crd_shadow:
+        try:
+            upsert_vm_labinstance(
+                instance_id=instance.id,
+                owner=instance.owner,
+                template=template,
+                image=image,
+                desired_state="running",
+                status_phase="Pending",
+                status_message="Queued for operator reconciliation.",
+            )
+        except Exception as exc:
+            if use_legacy_orchestration:
+                logger.warning("Failed to shadow-write LabInstance CRD for %s: %s", instance.id, exc, exc_info=True)
+            else:
+                session.delete(instance)
+                session.commit()
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="LabInstance CRD is unavailable; VM launch cannot be queued.",
+                ) from exc
+
     stage, detail = _status_feedback(instance.status, pod_status)
+    if not use_legacy_orchestration:
+        detail = "Queued for operator reconciliation."
     return VMInstance(
         id=instance.id,
         template_id=instance.template_id,
@@ -1172,7 +1212,26 @@ def stop_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    kube.stop_pod(instance_id, record.owner)
+    use_legacy_orchestration = vm_orchestration_uses_legacy_path()
+    write_crd_shadow = vm_orchestration_writes_crd()
+    if use_legacy_orchestration:
+        kube.stop_pod(instance_id, record.owner)
+    if write_crd_shadow:
+        try:
+            patch_vm_labinstance_desired_state(instance_id, "stopped")
+        except Exception as exc:
+            if use_legacy_orchestration:
+                logger.warning(
+                    "Failed to patch LabInstance desired state=stopped for %s: %s",
+                    instance_id,
+                    exc,
+                    exc_info=True,
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="LabInstance CRD is unavailable; VM stop cannot be queued.",
+                ) from exc
     record.status = "stopped"
     record.last_active_at = utc_now()
     session.add(record)
@@ -1237,54 +1296,60 @@ def restart_vm(
         exclude_vm_instance_id=record.id,
     )
 
-    # Ensure any old pod with the same name is removed before re-create.
-    try:
-        kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc)
-    except ApiException as exc:
-        if exc.status != 404:
-            raise
-
-    try:
-        warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, record.id, user.username)
-    except Exception:
-        warm_pool_pvc = None
+    use_legacy_orchestration = vm_orchestration_uses_legacy_path()
+    write_crd_shadow = vm_orchestration_writes_crd()
     console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
     spice_password = _generate_spice_password() if console_provider == "spice" else ""
     rdp_default_username, rdp_default_password = (None, None)
     if console_provider == "guacamole_rdp":
         rdp_default_username, rdp_default_password = _resolve_template_rdp_defaults(template)
-    pod_request = PodRequest(
-        instance_id=record.id,
-        template_id=template.id,
-        image_path=Path(image.filename).name,
-        image_source_pvc=image.source_pvc,
-        os_type=template.os_type,
-        cpu_cores=template.cpu_cores,
-        ram_mb=template.ram_mb,
-        owner=user.username,
-        network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
-        instance_disk_pvc=warm_pool_pvc,
-        console_provider=console_provider,
-        spice_password=(spice_password or None),
-        rdp_default_username=rdp_default_username,
-        rdp_default_password=rdp_default_password,
-    )
-    try:
-        pod_status = kube.create_pod(pod_request)
-    except Exception:
-        if warm_pool_pvc:
-            try:
-                kube._client().delete_namespaced_persistent_volume_claim(
-                    name=warm_pool_pvc,
-                    namespace=settings.kube_namespace,
-                )
-            except Exception:
-                pass
-        raise
-    service_name = f"svc-{instance_id[:8]}"
-    kube.create_service_for_pod(
-        pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
-    )
+    pod_status: PodStatus | None = None
+    disk_pvc = record.disk_pvc
+    if use_legacy_orchestration:
+        # Ensure any old pod with the same name is removed before re-create.
+        try:
+            kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+
+        try:
+            warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, record.id, user.username)
+        except Exception:
+            warm_pool_pvc = None
+        pod_request = PodRequest(
+            instance_id=record.id,
+            template_id=template.id,
+            image_path=Path(image.filename).name,
+            image_source_pvc=image.source_pvc,
+            os_type=template.os_type,
+            cpu_cores=template.cpu_cores,
+            ram_mb=template.ram_mb,
+            owner=user.username,
+            network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
+            instance_disk_pvc=warm_pool_pvc,
+            console_provider=console_provider,
+            spice_password=(spice_password or None),
+            rdp_default_username=rdp_default_username,
+            rdp_default_password=rdp_default_password,
+        )
+        try:
+            pod_status = kube.create_pod(pod_request)
+        except Exception:
+            if warm_pool_pvc:
+                try:
+                    kube._client().delete_namespaced_persistent_volume_claim(
+                        name=warm_pool_pvc,
+                        namespace=settings.kube_namespace,
+                    )
+                except Exception:
+                    pass
+            raise
+        disk_pvc = pod_status.disk_pvc
+        service_name = f"svc-{instance_id[:8]}"
+        kube.create_service_for_pod(
+            pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
+        )
     console_url = _vm_console_connect_url(
         instance_id=record.id,
         title=template.name,
@@ -1294,14 +1359,35 @@ def restart_vm(
     )
 
     record.status = "pending"
-    record.disk_pvc = pod_status.disk_pvc
+    record.disk_pvc = disk_pvc
     record.started_at = utc_now()
     record.last_active_at = utc_now()
     record.console_url = console_url
     session.add(record)
     session.commit()
     session.refresh(record)
+    if write_crd_shadow:
+        try:
+            upsert_vm_labinstance(
+                instance_id=record.id,
+                owner=record.owner,
+                template=template,
+                image=image,
+                desired_state="running",
+                status_phase="Pending",
+                status_message="Queued for operator reconciliation.",
+            )
+        except Exception as exc:
+            if use_legacy_orchestration:
+                logger.warning("Failed to shadow-write LabInstance CRD for %s: %s", record.id, exc, exc_info=True)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="LabInstance CRD is unavailable; VM restart cannot be queued.",
+                ) from exc
     stage, detail = _status_feedback(record.status, pod_status)
+    if not use_legacy_orchestration:
+        detail = "Queued for operator reconciliation."
     return VMInstance(
         id=record.id,
         template_id=record.template_id,
@@ -1320,18 +1406,32 @@ def delete_vm(instance_id: str, user: User = Depends(require_user), session: Ses
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    try:
-        kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc)
-    except ApiException as exc:
-        # VM teardown can race with Kubernetes garbage collection.
-        # Treat not-found/conflict during delete as best-effort success.
-        if exc.status not in {404, 409, 422}:
-            raise
-        logger.warning(
-            "Best-effort VM delete fallback for instance %s (owner=%s): %s",
-            instance_id,
-            record.owner,
-            exc,
-        )
+    use_legacy_orchestration = vm_orchestration_uses_legacy_path()
+    write_crd_shadow = vm_orchestration_writes_crd()
+    if use_legacy_orchestration:
+        try:
+            kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc)
+        except ApiException as exc:
+            # VM teardown can race with Kubernetes garbage collection.
+            # Treat not-found/conflict during delete as best-effort success.
+            if exc.status not in {404, 409, 422}:
+                raise
+            logger.warning(
+                "Best-effort VM delete fallback for instance %s (owner=%s): %s",
+                instance_id,
+                record.owner,
+                exc,
+            )
+    if write_crd_shadow:
+        if use_legacy_orchestration:
+            delete_vm_labinstance_best_effort(instance_id)
+        else:
+            try:
+                delete_vm_labinstance(instance_id, missing_ok=True)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="LabInstance CRD is unavailable; VM delete cannot be queued.",
+                ) from exc
     session.delete(record)
     session.commit()

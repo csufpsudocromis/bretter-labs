@@ -20,6 +20,7 @@ else
   DEFAULT_RUNNER_IMAGE="ghcr.io/csufpsudocromis/win-vm-runner"
 fi
 BACKEND_IMAGE="${BACKEND_IMAGE:-$DEFAULT_BACKEND_IMAGE}"
+BACKEND_ADMIN_IMAGE="${BACKEND_ADMIN_IMAGE:-$BACKEND_IMAGE}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-$DEFAULT_FRONTEND_IMAGE}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-$DEFAULT_RUNNER_IMAGE}"
 BACKEND_REPLICAS="${BACKEND_REPLICAS:-1}"
@@ -496,7 +497,7 @@ validate_image_reference_policy() {
 
   local invalid_refs=()
   local image_var image_ref
-  for image_var in BACKEND_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
+  for image_var in BACKEND_IMAGE BACKEND_ADMIN_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
     image_ref="${!image_var}"
     if is_mutable_image_reference "$image_ref"; then
       invalid_refs+=("${image_var}=${image_ref}")
@@ -509,7 +510,7 @@ validate_image_reference_policy() {
   if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
     local non_digest_refs=()
     local local_refs=()
-    for image_var in BACKEND_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
+    for image_var in BACKEND_IMAGE BACKEND_ADMIN_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
       image_ref="${!image_var}"
       if ! is_digest_image_reference "$image_ref"; then
         non_digest_refs+=("${image_var}=${image_ref}")
@@ -2122,7 +2123,7 @@ prepare_rendered_manifests() {
 render_helm_values_override() {
   local output_file="$1"
   local control_node node_external_host runner_node_selector_value vm_storage_class
-  local backend_image frontend_image runner_image public_scheme tls_secret_name
+  local backend_image backend_admin_image frontend_image runner_image public_scheme tls_secret_name
   local backend_replicas frontend_replicas
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
@@ -2144,6 +2145,7 @@ render_helm_values_override() {
   runner_node_selector_value="$(yaml_escape "$RUNNER_NODE_SELECTOR_VALUE")"
   vm_storage_class="$(yaml_escape "$VM_STORAGE_CLASS")"
   backend_image="$(yaml_escape "$BACKEND_IMAGE")"
+  backend_admin_image="$(yaml_escape "$BACKEND_ADMIN_IMAGE")"
   frontend_image="$(yaml_escape "$FRONTEND_IMAGE")"
   runner_image="$(yaml_escape "$RUNNER_IMAGE")"
   backend_replicas="$(yaml_escape "$BACKEND_REPLICAS")"
@@ -2215,6 +2217,7 @@ appTemplateValues:
   RUNNER_NODE_SELECTOR_VALUE: "${runner_node_selector_value}"
   VM_STORAGE_CLASS: "${vm_storage_class}"
   BACKEND_IMAGE: "${backend_image}"
+  BACKEND_ADMIN_IMAGE: "${backend_admin_image}"
   FRONTEND_IMAGE: "${frontend_image}"
   RUNNER_IMAGE: "${runner_image}"
   BACKEND_REPLICAS: "${backend_replicas}"
@@ -2358,7 +2361,11 @@ build_images() {
   local vite_api_base="${VITE_API_BASE:-/api}"
 
   log "Building backend image: $BACKEND_IMAGE"
-  podman build -t "$BACKEND_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
+  podman build --target admin-tools -t "$BACKEND_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
+  if [ "$BACKEND_ADMIN_IMAGE" != "$BACKEND_IMAGE" ]; then
+    log "Building backend admin image: $BACKEND_ADMIN_IMAGE"
+    podman build --target admin-tools -t "$BACKEND_ADMIN_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"
+  fi
 
   log "Building frontend image: $FRONTEND_IMAGE"
   podman build --build-arg "VITE_API_BASE=${vite_api_base}" -t "$FRONTEND_IMAGE" -f "$ROOT_DIR/frontend-vite/Dockerfile" "$ROOT_DIR"
@@ -2370,6 +2377,10 @@ build_images() {
 push_images() {
   log "Pushing backend image..."
   podman push "$BACKEND_IMAGE"
+  if [ "$BACKEND_ADMIN_IMAGE" != "$BACKEND_IMAGE" ]; then
+    log "Pushing backend admin image..."
+    podman push "$BACKEND_ADMIN_IMAGE"
+  fi
 
   log "Pushing frontend image..."
   podman push "$FRONTEND_IMAGE"
@@ -2383,13 +2394,21 @@ load_images_into_containerd() {
     fail "ctr is required to load local images into containerd."
   fi
 
-  local backend_tar frontend_tar runner_tar
+  local backend_tar backend_admin_tar frontend_tar runner_tar
   backend_tar="$(mktemp /tmp/bretter-backend-image.XXXXXX.tar)"
+  backend_admin_tar=""
+  if [ "$BACKEND_ADMIN_IMAGE" != "$BACKEND_IMAGE" ]; then
+    backend_admin_tar="$(mktemp /tmp/bretter-backend-admin-image.XXXXXX.tar)"
+  fi
   frontend_tar="$(mktemp /tmp/bretter-frontend-image.XXXXXX.tar)"
   runner_tar="$(mktemp /tmp/bretter-runner-image.XXXXXX.tar)"
 
   log "Saving local backend image tar..."
   podman save -o "$backend_tar" "$BACKEND_IMAGE"
+  if [ -n "$backend_admin_tar" ]; then
+    log "Saving local backend admin image tar..."
+    podman save -o "$backend_admin_tar" "$BACKEND_ADMIN_IMAGE"
+  fi
   log "Saving local frontend image tar..."
   podman save -o "$frontend_tar" "$FRONTEND_IMAGE"
   log "Saving local runner image tar..."
@@ -2397,6 +2416,10 @@ load_images_into_containerd() {
 
   log "Importing backend image into containerd..."
   sudo_cmd ctr -n k8s.io images import "$backend_tar"
+  if [ -n "$backend_admin_tar" ]; then
+    log "Importing backend admin image into containerd..."
+    sudo_cmd ctr -n k8s.io images import "$backend_admin_tar"
+  fi
   log "Importing frontend image into containerd..."
   sudo_cmd ctr -n k8s.io images import "$frontend_tar"
   log "Importing runner image into containerd..."
@@ -2404,7 +2427,7 @@ load_images_into_containerd() {
 
   preload_runner_image_on_worker_nodes "$runner_tar"
 
-  rm -f "$backend_tar" "$frontend_tar" "$runner_tar"
+  rm -f "$backend_tar" "$backend_admin_tar" "$frontend_tar" "$runner_tar"
 }
 
 cleanup_node_debugger_pods() {
@@ -2990,7 +3013,7 @@ spec:
             - name: ghcr-creds
           containers:
             - name: cleanup
-              image: ${BACKEND_IMAGE}
+              image: ${BACKEND_ADMIN_IMAGE}
               imagePullPolicy: IfNotPresent
               env:
                 - name: BACKEND_DATA_HOSTPATH
@@ -3212,7 +3235,7 @@ spec:
                 - name: GHCR_TIMEOUT_SECONDS
                   value: "${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}"
                 - name: IMAGE_REFS
-                  value: "${BACKEND_IMAGE},${FRONTEND_IMAGE},${RUNNER_IMAGE}"
+                  value: "${BACKEND_IMAGE},${BACKEND_ADMIN_IMAGE},${FRONTEND_IMAGE},${RUNNER_IMAGE}"
               volumeMounts:
                 - name: ghcr-creds
                   mountPath: /var/run/ghcr-creds
@@ -3600,7 +3623,7 @@ spec:
             - name: ghcr-creds
           containers:
             - name: approver
-              image: ${BACKEND_IMAGE}
+              image: ${BACKEND_ADMIN_IMAGE}
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/bash
@@ -4354,6 +4377,7 @@ log_runtime_configuration() {
     log "External pull secret management: $EXTERNAL_PULL_SECRET_ENABLED"
   fi
   log "Using VM storage class: $VM_STORAGE_CLASS"
+  log "Backend images (runtime/admin jobs): ${BACKEND_IMAGE} / ${BACKEND_ADMIN_IMAGE}"
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"

@@ -88,3 +88,5 @@ Database:
 - [Operations Runbook](Operations-Runbook)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
+- [Operator Incident Runbook](Operator-Incident-Runbook)
+- [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)
