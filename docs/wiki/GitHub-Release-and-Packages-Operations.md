@@ -92,6 +92,10 @@ When `commit_digest_update=true`, workflow writes release-tagged digest refs
 Primary CI gate:
 
 - `.github/workflows/ci-guardrails.yml`
+- Release branch runtime gates:
+  - `.github/workflows/post-deploy-synthetic.yml`
+  - `.github/workflows/nightly-restore-drill.yml`
+  - `.github/workflows/playwright-rdp-smoke.yml`
 
 It validates:
 
@@ -100,6 +104,13 @@ It validates:
 - Python tests/guardrails
 - Frontend lint/format/build
 - Security scans and smoke checks
+
+Release branch (`release/**`) expectations:
+
+- Post-deploy synthetic/API smoke runs on push + PR.
+- Restore drill workflow runs on push + PR.
+- Playwright Guacamole RDP browser smoke runs on push + PR.
+- Configure these jobs as required branch checks in GitHub rulesets/branch protection.
 
 ## Common GitHub-side failures
 

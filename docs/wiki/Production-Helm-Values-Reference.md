@@ -31,6 +31,8 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.LABIMAGEIMPORT_CONTROLLER_ENABLED` should remain `"1"` in production profile
 - `appTemplateValues.CONTAINER_SIGNATURE_KEY_REF`
 - `appTemplateValues.CONTAINER_SIGNATURE_KEY_SECRET_NAME`
+- `appTemplateValues.KYVERNO_SIGNATURE_SCOPE` (`namespace_first_party` for production)
+- `appTemplateValues.KYVERNO_SIGNATURE_IMAGE_PATTERNS` (first-party image patterns to enforce)
 - `appTemplateValues.TEAM_NAMESPACE_MODE` (`per_team` recommended for stronger tenant isolation)
 - `appTemplateValues.TEAM_NAMESPACE_PREFIX` (team namespace naming convention)
 - `appTemplateValues.BACKEND_REPLICAS`
@@ -39,6 +41,8 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.PRODUCTION_PROFILE` should remain `"1"` in production
 - `appTemplateValues.REQUIRE_SCHEMA_READY` should remain `"1"` in production
 - `appTemplateValues.SECRETS_ENCRYPTION_KEY` should remain empty in committed production values (inject runtime secret at deploy time)
+- `appTemplateValues.POST_DEPLOY_AUTH_SECRET_NAME` and credential key names for authenticated postdeploy checks
+- `appTemplateValues.ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE` should remain `"1"` with secret-backed auth keys
 
 ## Image pinning policy
 

@@ -1,6 +1,12 @@
 name: Nightly Restore Drill
 
 on:
+  pull_request:
+    branches:
+      - "release/**"
+  push:
+    branches:
+      - "release/**"
   workflow_dispatch:
     inputs:
       namespace:

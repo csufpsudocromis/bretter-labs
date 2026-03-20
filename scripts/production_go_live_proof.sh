@@ -17,6 +17,11 @@ CRD_CANARY_RUNNING_SLO_SECONDS="${CRD_CANARY_RUNNING_SLO_SECONDS:-180}"
 CRD_CANARY_DELETE_WAIT_SECONDS="${CRD_CANARY_DELETE_WAIT_SECONDS:-180}"
 RUN_RESTORE_DRILL="${RUN_RESTORE_DRILL:-0}"
 RESTORE_DRILL_KEEP_DB="${RESTORE_DRILL_KEEP_DB:-0}"
+POST_DEPLOY_AUTH_SECRET_NAME="${POST_DEPLOY_AUTH_SECRET_NAME:-bretter-postdeploy-auth}"
+POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admin_password}"
+POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
+RDP_SLO_AUTH_SECRET_NAME="${RDP_SLO_AUTH_SECRET_NAME:-bretter-userflow-slo-api-auth}"
+RDP_SLO_AUTH_PASSWORD_KEY="${RDP_SLO_AUTH_PASSWORD_KEY:-password}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="${REPORT_DIR}/production-go-live-${timestamp}.txt"
@@ -273,6 +278,29 @@ if [[ "$signature_key_ref" == /etc/bretter-signing/* ]]; then
     fi
   fi
 fi
+
+postdeploy_admin_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY" 2>/dev/null || true)"
+if [ -n "$postdeploy_admin_b64" ]; then
+  pass_check "postdeploy admin auth secret exists with password key"
+else
+  fail_check "postdeploy admin auth secret exists with password key"
+fi
+
+postdeploy_synthetic_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" 2>/dev/null || true)"
+if [ -n "$postdeploy_synthetic_b64" ]; then
+  pass_check "postdeploy synthetic auth secret exists with password key"
+else
+  fail_check "postdeploy synthetic auth secret exists with password key"
+fi
+
+rdp_slo_auth_b64="$(secret_data_value_b64 "$NAMESPACE" "$RDP_SLO_AUTH_SECRET_NAME" "$RDP_SLO_AUTH_PASSWORD_KEY" 2>/dev/null || true)"
+if [ -n "$rdp_slo_auth_b64" ]; then
+  pass_check "rdp slo auth secret exists with password key"
+else
+  fail_check "rdp slo auth secret exists with password key"
+fi
+run_check "rdp connect-latency cronjob present" \
+  kubectl -n "$NAMESPACE" get cronjob bretter-slo-rdp-connect-latency
 
 node_external_host="${NODE_EXTERNAL_HOST_OVERRIDE:-$node_external_host}"
 public_scheme="${PUBLIC_SCHEME_OVERRIDE:-$public_scheme}"

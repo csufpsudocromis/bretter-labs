@@ -14,6 +14,7 @@ Last reviewed: March 20, 2026.
 - Operations/SRE: [Operations Runbook](Operations-Runbook)
 - Restore/DR ops: [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - Secrets/Ops: [Secret Operations Runbook](Secret-Operations-Runbook)
+- Alert routing: [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - Troubleshooting: [Error Catalog](Error-Catalog) + [Operations Runbook](Operations-Runbook)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive) + [Template Best Practices](Template-Best-Practices)
 - Console/RDP operations: [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
@@ -37,8 +38,10 @@ Last reviewed: March 20, 2026.
 - [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
+- [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
+- [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
 - [Error Catalog](Error-Catalog)
@@ -94,6 +97,9 @@ Reference pages:
 - Automatic production go-live proof in `postdeploy` when `PRODUCTION_PROFILE=1`
 - Post-deploy admin API smoke validation job (`bretter-post-deploy-admin-api-smoke`)
 - Recurring GHCR access and user-flow SLO probe CronJobs with Prometheus alert rules
+- Secret-backed postdeploy auth checks and RDP connect-latency probe credentials
+- Optional encrypted off-cluster backup replication CronJob (`bretter-postgres-backup-replication`)
+- Release-branch smoke gates for post-deploy synthetic, restore drill, and Playwright Guacamole RDP browser checks
 - Dedicated LabImageImport controller with leader-election and metrics endpoints
 - OpenAPI snapshot + frontend API type drift checks in CI guardrails
 - Tenant namespace bootstrap script for per-team quota/policy scaffolding

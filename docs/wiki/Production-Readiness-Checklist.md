@@ -20,7 +20,10 @@ Use this checklist before first production deployment and for each release.
 - Set `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (required for production profile).
 - Set `CONTAINER_SIGNATURE_KEY_REF` and `CONTAINER_SIGNATURE_KEY_SECRET_NAME` for managed-key verification.
 - Verify `bretter-cosign-public-key` matches the expected official key fingerprint before rollout.
+- Set `KYVERNO_SIGNATURE_SCOPE=namespace_first_party` and define `KYVERNO_SIGNATURE_IMAGE_PATTERNS`.
 - Keep `REQUIRE_SCHEMA_READY=1` in production values/overlays.
+- Set `POST_DEPLOY_AUTH_SECRET_NAME` and credential key names for authenticated post-deploy checks.
+- Enable RDP connect-latency probe (`ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE=1`) with secret-based auth (`USERFLOW_SLO_API_AUTH_SECRET_NAME`, `USERFLOW_SLO_API_AUTH_*_KEY`, `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0`).
 
 ## Image and supply chain
 
@@ -44,6 +47,7 @@ Use this checklist before first production deployment and for each release.
 - Keep `METRICS_SERVER_INSECURE_TLS=0` for production.
 - Keep `VM_CONNECT_INSECURE_TLS=0` and `CONTAINER_CONNECT_INSECURE_TLS=0`.
 - Verify admission policies are enabled and enforced.
+- Configure Alertmanager default receiver/grouping explicitly and wire webhook receiver secrets when external paging is required.
 
 ## Validation and operations
 
@@ -57,10 +61,12 @@ Use this checklist before first production deployment and for each release.
 - If using `ORCHESTRATION_BACKEND=dual|crd`, run operator canary:
   - `NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh`
 - Run post-deploy API health, admin API smoke, and synthetic checks.
+- Ensure release-branch required checks include post-deploy synthetic + restore drill + Playwright RDP smoke workflows.
 - Verify recurring probe CronJobs are healthy (`bretter-ghcr-access-check`, `bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
 - Verify backup/restore path for Postgres before go-live:
   - `NAMESPACE=labs ./scripts/restore_drill_postgres.sh`
   - or `NAMESPACE=labs RUN_RESTORE_DRILL=1 ./scripts/production_go_live_proof.sh`
+- If off-cluster backup replication is enabled, verify `bretter-postgres-backup-replication` CronJob succeeds and encrypted object uploads are present.
 - Verify OpenAPI and frontend API type artifacts are up to date:
   - `python3 scripts/check_openapi_drift.py`
   - `npm --prefix frontend-vite run generate:api-types` (no diff expected)

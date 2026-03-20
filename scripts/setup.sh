@@ -150,6 +150,19 @@ POSTGRES_BACKUP_PVC_SIZE="${POSTGRES_BACKUP_PVC_SIZE:-20Gi}"
 POSTGRES_BACKUP_STORAGE_CLASS="${POSTGRES_BACKUP_STORAGE_CLASS:-}"
 POSTGRES_BACKUP_MOUNT_PATH="${POSTGRES_BACKUP_MOUNT_PATH:-/backups}"
 POSTGRES_BACKUP_IMAGE="${POSTGRES_BACKUP_IMAGE:-postgres:16.4}"
+ENABLE_POSTGRES_BACKUP_REPLICATION="${ENABLE_POSTGRES_BACKUP_REPLICATION:-0}"
+POSTGRES_BACKUP_REPLICATION_SCHEDULE="${POSTGRES_BACKUP_REPLICATION_SCHEDULE:-47 3 * * *}"
+POSTGRES_BACKUP_REPLICATION_BUCKET="${POSTGRES_BACKUP_REPLICATION_BUCKET:-}"
+POSTGRES_BACKUP_REPLICATION_PREFIX="${POSTGRES_BACKUP_REPLICATION_PREFIX:-postgres}"
+POSTGRES_BACKUP_REPLICATION_REGION="${POSTGRES_BACKUP_REPLICATION_REGION:-us-east-1}"
+POSTGRES_BACKUP_REPLICATION_ENDPOINT="${POSTGRES_BACKUP_REPLICATION_ENDPOINT:-}"
+POSTGRES_BACKUP_REPLICATION_SECRET_NAME="${POSTGRES_BACKUP_REPLICATION_SECRET_NAME:-bretter-postgres-backup-replication}"
+POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY="${POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY:-aws_access_key_id}"
+POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY="${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY:-aws_secret_access_key}"
+POSTGRES_BACKUP_REPLICATION_SESSION_TOKEN_KEY="${POSTGRES_BACKUP_REPLICATION_SESSION_TOKEN_KEY:-aws_session_token}"
+POSTGRES_BACKUP_REPLICATION_SSE_MODE="${POSTGRES_BACKUP_REPLICATION_SSE_MODE:-AES256}"
+POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID="${POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID:-}"
+POSTGRES_BACKUP_REPLICATION_IMAGE="${POSTGRES_BACKUP_REPLICATION_IMAGE:-amazon/aws-cli:2.17.44}"
 USE_EXTERNAL_SECRETS="${USE_EXTERNAL_SECRETS:-0}"
 INSTALL_EXTERNAL_SECRETS_OPERATOR="${INSTALL_EXTERNAL_SECRETS_OPERATOR:-1}"
 EXTERNAL_SECRETS_NAMESPACE="${EXTERNAL_SECRETS_NAMESPACE:-external-secrets}"
@@ -206,6 +219,10 @@ USERFLOW_SLO_API_BASE="${USERFLOW_SLO_API_BASE:-}"
 USERFLOW_SLO_API_VERIFY_TLS="${USERFLOW_SLO_API_VERIFY_TLS:-}"
 USERFLOW_SLO_API_USERNAME="${USERFLOW_SLO_API_USERNAME:-admin}"
 USERFLOW_SLO_API_PASSWORD="${USERFLOW_SLO_API_PASSWORD:-}"
+USERFLOW_SLO_API_AUTH_SECRET_NAME="${USERFLOW_SLO_API_AUTH_SECRET_NAME:-bretter-userflow-slo-api-auth}"
+USERFLOW_SLO_API_AUTH_USERNAME_KEY="${USERFLOW_SLO_API_AUTH_USERNAME_KEY:-username}"
+USERFLOW_SLO_API_AUTH_PASSWORD_KEY="${USERFLOW_SLO_API_AUTH_PASSWORD_KEY:-password}"
+USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP="${USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP:-1}"
 ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL="${ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL:-1}"
 KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE="${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE:-*/5 * * * *}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
@@ -220,7 +237,19 @@ INSTALL_KYVERNO="${INSTALL_KYVERNO:-1}"
 KYVERNO_NAMESPACE="${KYVERNO_NAMESPACE:-kyverno}"
 KYVERNO_RELEASE_NAME="${KYVERNO_RELEASE_NAME:-kyverno}"
 KYVERNO_CHART_VERSION="${KYVERNO_CHART_VERSION:-v3.7.1}"
+KYVERNO_SIGNATURE_SCOPE="${KYVERNO_SIGNATURE_SCOPE:-namespace_first_party}"
+KYVERNO_SIGNATURE_IMAGE_PATTERNS="${KYVERNO_SIGNATURE_IMAGE_PATTERNS:-ghcr.io/csufpsudocromis/*}"
 ADMISSION_POLICY_TEMPLATE="${ADMISSION_POLICY_TEMPLATE:-$ROOT_DIR/deploy/policies/kyverno/clusterpolicies.yaml.tpl}"
+ALERTMANAGER_DEFAULT_RECEIVER_NAME="${ALERTMANAGER_DEFAULT_RECEIVER_NAME:-null-receiver}"
+ALERTMANAGER_ROUTE_GROUP_BY="${ALERTMANAGER_ROUTE_GROUP_BY:-alertname,namespace}"
+ALERTMANAGER_ROUTE_GROUP_WAIT="${ALERTMANAGER_ROUTE_GROUP_WAIT:-30s}"
+ALERTMANAGER_ROUTE_GROUP_INTERVAL="${ALERTMANAGER_ROUTE_GROUP_INTERVAL:-5m}"
+ALERTMANAGER_ROUTE_REPEAT_INTERVAL="${ALERTMANAGER_ROUTE_REPEAT_INTERVAL:-4h}"
+ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED="${ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED:-0}"
+ALERTMANAGER_WEBHOOK_RECEIVER_NAME="${ALERTMANAGER_WEBHOOK_RECEIVER_NAME:-ops-webhook}"
+ALERTMANAGER_WEBHOOK_SECRET_NAME="${ALERTMANAGER_WEBHOOK_SECRET_NAME:-}"
+ALERTMANAGER_WEBHOOK_SECRET_KEY="${ALERTMANAGER_WEBHOOK_SECRET_KEY:-url}"
+ALERTMANAGER_WEBHOOK_MATCHERS="${ALERTMANAGER_WEBHOOK_MATCHERS:-severity=~\"critical|warning\"}"
 RUN_POST_DEPLOY_API_HEALTH_CHECK="${RUN_POST_DEPLOY_API_HEALTH_CHECK:-1}"
 POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS="${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS:-120}"
 RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK="${RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK:-1}"
@@ -232,6 +261,11 @@ SYNTHETIC_CHECK_USERNAME="${SYNTHETIC_CHECK_USERNAME:-admin}"
 SYNTHETIC_CHECK_PASSWORD="${SYNTHETIC_CHECK_PASSWORD:-}"
 SYNTHETIC_CHECK_TIMEOUT_SECONDS="${SYNTHETIC_CHECK_TIMEOUT_SECONDS:-420}"
 SYNTHETIC_CHECK_REQUIRE_TEMPLATES="${SYNTHETIC_CHECK_REQUIRE_TEMPLATES:-0}"
+POST_DEPLOY_AUTH_SECRET_NAME="${POST_DEPLOY_AUTH_SECRET_NAME:-}"
+POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY:-admin_username}"
+POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admin_password}"
+POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY:-synthetic_username}"
+POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
 RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK="${RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK:-1}"
 POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS="${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS:-120}"
 POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY="${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY:-IfNotPresent}"
@@ -248,6 +282,7 @@ SYNTHETIC_CHECK_PASSWORD_AUTOSET=0
 SYNTHETIC_CHECK_AUTO_DISABLED=0
 ADMIN_API_SMOKE_PASSWORD_AUTOSET=0
 ADMIN_API_SMOKE_AUTO_DISABLED=0
+POST_DEPLOY_AUTH_SECRET_USED=0
 ADMIN_BOOTSTRAP_SECRET_FILE=""
 
 log() {
@@ -285,13 +320,26 @@ EOF
   ADMIN_BOOTSTRAP_SECRET_FILE="$secret_file_path"
 }
 
+postdeploy_admin_uses_secret_credentials() {
+  [ -n "$POST_DEPLOY_AUTH_SECRET_NAME" ] && [ -n "$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY" ]
+}
+
+postdeploy_synthetic_uses_secret_credentials() {
+  [ -n "$POST_DEPLOY_AUTH_SECRET_NAME" ] && [ -n "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" ]
+}
+
 configure_admin_bootstrap_credentials() {
   if [ -z "$ADMIN_BOOTSTRAP_PASSWORD" ]; then
     ADMIN_BOOTSTRAP_PASSWORD="$(generate_random_bootstrap_secret)"
     ADMIN_BOOTSTRAP_PASSWORD_GENERATED=1
     persist_generated_bootstrap_secret
   fi
-  if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 1 ] && [ -z "$SYNTHETIC_CHECK_PASSWORD" ]; then
+  if postdeploy_synthetic_uses_secret_credentials; then
+    POST_DEPLOY_AUTH_SECRET_USED=1
+  elif [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 1 ] && [ -z "$SYNTHETIC_CHECK_PASSWORD" ]; then
+    if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+      fail "RUN_POST_DEPLOY_SYNTHETIC_CHECK=1 requires explicit non-bootstrap credentials in production. Set SYNTHETIC_CHECK_PASSWORD or configure POST_DEPLOY_AUTH_SECRET_NAME + POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY."
+    fi
     if [ "$ADMIN_BOOTSTRAP_PASSWORD_GENERATED" -eq 1 ]; then
       RUN_POST_DEPLOY_SYNTHETIC_CHECK=0
       SYNTHETIC_CHECK_AUTO_DISABLED=1
@@ -300,7 +348,12 @@ configure_admin_bootstrap_credentials() {
       SYNTHETIC_CHECK_PASSWORD_AUTOSET=1
     fi
   fi
-  if [ "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" -eq 1 ] && [ -z "$ADMIN_API_SMOKE_PASSWORD" ]; then
+  if postdeploy_admin_uses_secret_credentials; then
+    POST_DEPLOY_AUTH_SECRET_USED=1
+  elif [ "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" -eq 1 ] && [ -z "$ADMIN_API_SMOKE_PASSWORD" ]; then
+    if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+      fail "RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1 requires explicit non-bootstrap credentials in production. Set ADMIN_API_SMOKE_PASSWORD or configure POST_DEPLOY_AUTH_SECRET_NAME + POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY."
+    fi
     if [ "$ADMIN_BOOTSTRAP_PASSWORD_GENERATED" -eq 1 ]; then
       RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=0
       ADMIN_API_SMOKE_AUTO_DISABLED=1
@@ -869,6 +922,10 @@ validate_postgres_config() {
     0 | 1) ;;
     *) fail "ENABLE_POSTGRES_BACKUP_AUTOMATION must be either 0 or 1." ;;
   esac
+  case "$ENABLE_POSTGRES_BACKUP_REPLICATION" in
+    0 | 1) ;;
+    *) fail "ENABLE_POSTGRES_BACKUP_REPLICATION must be either 0 or 1." ;;
+  esac
   [ -n "$POSTGRES_USER" ] || fail "POSTGRES_USER cannot be empty."
   [ -n "$POSTGRES_PASSWORD" ] || fail "POSTGRES_PASSWORD cannot be empty."
   [ -n "$POSTGRES_DB" ] || fail "POSTGRES_DB cannot be empty."
@@ -885,6 +942,22 @@ validate_postgres_config() {
       fail "POSTGRES_BACKUP_MOUNT_PATH must be an absolute path."
     fi
     [ -n "$POSTGRES_BACKUP_IMAGE" ] || fail "POSTGRES_BACKUP_IMAGE cannot be empty when backup automation is enabled."
+  fi
+  if [ "$ENABLE_POSTGRES_BACKUP_REPLICATION" -eq 1 ]; then
+    [ "$ENABLE_POSTGRES_BACKUP_AUTOMATION" -eq 1 ] || fail "ENABLE_POSTGRES_BACKUP_REPLICATION=1 requires ENABLE_POSTGRES_BACKUP_AUTOMATION=1."
+    [ -n "$POSTGRES_BACKUP_REPLICATION_SCHEDULE" ] || fail "POSTGRES_BACKUP_REPLICATION_SCHEDULE cannot be empty when backup replication is enabled."
+    [ -n "$POSTGRES_BACKUP_REPLICATION_BUCKET" ] || fail "POSTGRES_BACKUP_REPLICATION_BUCKET cannot be empty when backup replication is enabled."
+    [ -n "$POSTGRES_BACKUP_REPLICATION_SECRET_NAME" ] || fail "POSTGRES_BACKUP_REPLICATION_SECRET_NAME cannot be empty when backup replication is enabled."
+    [ -n "$POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY" ] || fail "POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY cannot be empty when backup replication is enabled."
+    [ -n "$POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY" ] || fail "POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY cannot be empty when backup replication is enabled."
+    [ -n "$POSTGRES_BACKUP_REPLICATION_IMAGE" ] || fail "POSTGRES_BACKUP_REPLICATION_IMAGE cannot be empty when backup replication is enabled."
+    case "${POSTGRES_BACKUP_REPLICATION_SSE_MODE,,}" in
+      aes256 | aws:kms) ;;
+      *) fail "POSTGRES_BACKUP_REPLICATION_SSE_MODE must be AES256 or aws:kms." ;;
+    esac
+    if [ "${POSTGRES_BACKUP_REPLICATION_SSE_MODE,,}" = "aws:kms" ] && [ -z "$POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID" ]; then
+      fail "POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID is required when POSTGRES_BACKUP_REPLICATION_SSE_MODE=aws:kms."
+    fi
   fi
 }
 
@@ -974,6 +1047,21 @@ validate_monitoring_config() {
   if [ "$MONITORING_WARM_POOL_MIN_READY" -lt 0 ]; then
     fail "MONITORING_WARM_POOL_MIN_READY must be an integer >= 0."
   fi
+  [ -n "$ALERTMANAGER_DEFAULT_RECEIVER_NAME" ] || fail "ALERTMANAGER_DEFAULT_RECEIVER_NAME cannot be empty."
+  [ -n "$ALERTMANAGER_ROUTE_GROUP_BY" ] || fail "ALERTMANAGER_ROUTE_GROUP_BY cannot be empty."
+  [ -n "$ALERTMANAGER_ROUTE_GROUP_WAIT" ] || fail "ALERTMANAGER_ROUTE_GROUP_WAIT cannot be empty."
+  [ -n "$ALERTMANAGER_ROUTE_GROUP_INTERVAL" ] || fail "ALERTMANAGER_ROUTE_GROUP_INTERVAL cannot be empty."
+  [ -n "$ALERTMANAGER_ROUTE_REPEAT_INTERVAL" ] || fail "ALERTMANAGER_ROUTE_REPEAT_INTERVAL cannot be empty."
+  case "$ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED" in
+    0 | 1) ;;
+    *) fail "ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ "$ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED" -eq 1 ]; then
+    [ -n "$ALERTMANAGER_WEBHOOK_RECEIVER_NAME" ] || fail "ALERTMANAGER_WEBHOOK_RECEIVER_NAME cannot be empty when webhook receiver is enabled."
+    [ -n "$ALERTMANAGER_WEBHOOK_SECRET_NAME" ] || fail "ALERTMANAGER_WEBHOOK_SECRET_NAME cannot be empty when webhook receiver is enabled."
+    [ -n "$ALERTMANAGER_WEBHOOK_SECRET_KEY" ] || fail "ALERTMANAGER_WEBHOOK_SECRET_KEY cannot be empty when webhook receiver is enabled."
+    [ -n "$ALERTMANAGER_WEBHOOK_MATCHERS" ] || fail "ALERTMANAGER_WEBHOOK_MATCHERS cannot be empty when webhook receiver is enabled."
+  fi
   case "$ENABLE_GHCR_ACCESS_HEALTHCHECK" in
     0 | 1) ;;
     *) fail "ENABLE_GHCR_ACCESS_HEALTHCHECK must be either 0 or 1." ;;
@@ -1039,12 +1127,26 @@ validate_monitoring_config() {
       "" | 0 | 1) ;;
       *) fail "USERFLOW_SLO_API_VERIFY_TLS must be 0, 1, or empty (auto)." ;;
     esac
+    case "$USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP" in
+      0 | 1) ;;
+      *) fail "USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP must be either 0 or 1." ;;
+    esac
     if [ -n "$USERFLOW_SLO_API_BASE" ] && [[ "$USERFLOW_SLO_API_BASE" != http://* ]] && [[ "$USERFLOW_SLO_API_BASE" != https://* ]]; then
       fail "USERFLOW_SLO_API_BASE must start with http:// or https:// when set."
     fi
     if [ "$ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE" -eq 1 ]; then
-      [ -n "$USERFLOW_SLO_API_USERNAME" ] || fail "USERFLOW_SLO_API_USERNAME is required when RDP connect latency probe is enabled."
-      [ -n "$USERFLOW_SLO_API_PASSWORD" ] || fail "USERFLOW_SLO_API_PASSWORD is required when RDP connect latency probe is enabled."
+      [ -n "$USERFLOW_SLO_API_AUTH_SECRET_NAME" ] || fail "USERFLOW_SLO_API_AUTH_SECRET_NAME is required when RDP connect latency probe is enabled."
+      [ -n "$USERFLOW_SLO_API_AUTH_USERNAME_KEY" ] || fail "USERFLOW_SLO_API_AUTH_USERNAME_KEY is required when RDP connect latency probe is enabled."
+      [ -n "$USERFLOW_SLO_API_AUTH_PASSWORD_KEY" ] || fail "USERFLOW_SLO_API_AUTH_PASSWORD_KEY is required when RDP connect latency probe is enabled."
+      if [ "$USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP" -eq 0 ] && [ -n "$USERFLOW_SLO_API_PASSWORD" ]; then
+        fail "USERFLOW_SLO_API_PASSWORD must be empty when USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0."
+      fi
+      if [ "$PRODUCTION_PROFILE" -eq 1 ] && [ "$USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP" -ne 0 ]; then
+        fail "USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP must be 0 when PRODUCTION_PROFILE=1."
+      fi
+      if [ "$USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP" -eq 1 ] && [ -n "$USERFLOW_SLO_API_PASSWORD" ] && [ -z "$USERFLOW_SLO_API_USERNAME" ]; then
+        fail "USERFLOW_SLO_API_USERNAME is required when USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=1 and USERFLOW_SLO_API_PASSWORD is set."
+      fi
     fi
   fi
   if [ -z "$HELM_VERSION" ]; then
@@ -1086,6 +1188,11 @@ validate_admission_policy_config() {
   if ! is_semver_tag "$KYVERNO_CHART_VERSION"; then
     fail "KYVERNO_CHART_VERSION must look like X.Y.Z."
   fi
+  case "$KYVERNO_SIGNATURE_SCOPE" in
+    enforced_label | namespace_first_party) ;;
+    *) fail "KYVERNO_SIGNATURE_SCOPE must be one of: enforced_label, namespace_first_party." ;;
+  esac
+  [ -n "$KYVERNO_SIGNATURE_IMAGE_PATTERNS" ] || fail "KYVERNO_SIGNATURE_IMAGE_PATTERNS cannot be empty when ENABLE_ADMISSION_POLICIES=1."
   [ -n "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
   [ -f "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE does not exist: $ADMISSION_POLICY_TEMPLATE"
 }
@@ -1111,8 +1218,12 @@ validate_admin_api_smoke_check_config() {
   if [ "$RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK" -eq 0 ]; then
     return
   fi
-  [ -n "$ADMIN_API_SMOKE_USERNAME" ] || fail "ADMIN_API_SMOKE_USERNAME cannot be empty when admin API smoke checks are enabled."
-  [ -n "$ADMIN_API_SMOKE_PASSWORD" ] || fail "ADMIN_API_SMOKE_PASSWORD cannot be empty when admin API smoke checks are enabled."
+  if postdeploy_admin_uses_secret_credentials; then
+    [ -n "$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY" ] || fail "POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY cannot be empty when using secret-based admin API smoke credentials."
+  else
+    [ -n "$ADMIN_API_SMOKE_USERNAME" ] || fail "ADMIN_API_SMOKE_USERNAME cannot be empty when admin API smoke checks are enabled."
+    [ -n "$ADMIN_API_SMOKE_PASSWORD" ] || fail "ADMIN_API_SMOKE_PASSWORD cannot be empty when admin API smoke checks are enabled."
+  fi
   if ! is_uint "$POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS" || [ "$POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS" -lt 60 ]; then
     fail "POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS must be an integer >= 60."
   fi
@@ -1130,8 +1241,12 @@ validate_synthetic_check_config() {
   if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -eq 0 ]; then
     return
   fi
-  [ -n "$SYNTHETIC_CHECK_USERNAME" ] || fail "SYNTHETIC_CHECK_USERNAME cannot be empty when synthetic checks are enabled."
-  [ -n "$SYNTHETIC_CHECK_PASSWORD" ] || fail "SYNTHETIC_CHECK_PASSWORD cannot be empty when synthetic checks are enabled."
+  if postdeploy_synthetic_uses_secret_credentials; then
+    [ -n "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" ] || fail "POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY cannot be empty when using secret-based synthetic credentials."
+  else
+    [ -n "$SYNTHETIC_CHECK_USERNAME" ] || fail "SYNTHETIC_CHECK_USERNAME cannot be empty when synthetic checks are enabled."
+    [ -n "$SYNTHETIC_CHECK_PASSWORD" ] || fail "SYNTHETIC_CHECK_PASSWORD cannot be empty when synthetic checks are enabled."
+  fi
   if ! is_uint "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" || [ "$SYNTHETIC_CHECK_TIMEOUT_SECONDS" -lt 60 ]; then
     fail "SYNTHETIC_CHECK_TIMEOUT_SECONDS must be an integer >= 60."
   fi
@@ -1506,12 +1621,55 @@ install_monitoring_stack() {
     return
   fi
 
+  local values_file alertmanager_group_by_yaml alertmanager_route_children_yaml
+  local alertmanager_receivers_extra_yaml alertmanager_webhook_url
+  local alertmanager_webhook_url_escaped alertmanager_webhook_matchers_escaped
+
   install_helm
   log "Installing kube-prometheus-stack in namespace ${MONITORING_NAMESPACE}..."
   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts >/dev/null 2>&1 || true
   helm repo update >/dev/null
 
-  local values_file
+  alertmanager_group_by_yaml="$(
+    python3 - "$ALERTMANAGER_ROUTE_GROUP_BY" <<'PY'
+import sys
+
+raw = str(sys.argv[1] if len(sys.argv) > 1 else "").strip()
+items = [item.strip() for item in raw.split(",") if item.strip()]
+if not items:
+    items = ["alertname", "namespace"]
+for item in items:
+    print(f"        - {item}")
+PY
+  )"
+  alertmanager_route_children_yaml="          []"
+  alertmanager_receivers_extra_yaml=""
+  alertmanager_webhook_url=""
+  alertmanager_webhook_url_escaped=""
+  alertmanager_webhook_matchers_escaped=""
+  if [ "$ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED" -eq 1 ]; then
+    alertmanager_webhook_url="$(secret_data_plaintext "$NAMESPACE" "$ALERTMANAGER_WEBHOOK_SECRET_NAME" "$ALERTMANAGER_WEBHOOK_SECRET_KEY" || true)"
+    if [ -z "$alertmanager_webhook_url" ]; then
+      fail "Alertmanager webhook receiver is enabled but secret ${ALERTMANAGER_WEBHOOK_SECRET_NAME}/${ALERTMANAGER_WEBHOOK_SECRET_KEY} is missing."
+    fi
+    alertmanager_webhook_url_escaped="$(yaml_escape "$alertmanager_webhook_url")"
+    alertmanager_webhook_matchers_escaped="$(yaml_escape "$ALERTMANAGER_WEBHOOK_MATCHERS")"
+    alertmanager_route_children_yaml="$(cat <<EOF
+          - receiver: "${ALERTMANAGER_WEBHOOK_RECEIVER_NAME}"
+            matchers:
+              - "${alertmanager_webhook_matchers_escaped}"
+            continue: false
+EOF
+)"
+    alertmanager_receivers_extra_yaml="$(cat <<EOF
+        - name: "${ALERTMANAGER_WEBHOOK_RECEIVER_NAME}"
+          webhook_configs:
+            - url: "${alertmanager_webhook_url_escaped}"
+              send_resolved: true
+EOF
+)"
+  fi
+
   values_file="$(mktemp /tmp/bretter-monitoring-values.XXXXXX.yaml)"
   cat >"$values_file" <<EOF
 grafana:
@@ -1519,6 +1677,22 @@ grafana:
   defaultDashboardsEnabled: true
 alertmanager:
   enabled: true
+  alertmanagerSpec:
+    config:
+      global:
+        resolve_timeout: 5m
+      route:
+        receiver: "${ALERTMANAGER_DEFAULT_RECEIVER_NAME}"
+        group_by:
+${alertmanager_group_by_yaml}
+        group_wait: "${ALERTMANAGER_ROUTE_GROUP_WAIT}"
+        group_interval: "${ALERTMANAGER_ROUTE_GROUP_INTERVAL}"
+        repeat_interval: "${ALERTMANAGER_ROUTE_REPEAT_INTERVAL}"
+        routes:
+${alertmanager_route_children_yaml}
+      receivers:
+        - name: "${ALERTMANAGER_DEFAULT_RECEIVER_NAME}"
+${alertmanager_receivers_extra_yaml}
 kubeEtcd:
   enabled: false
 kubeControllerManager:
@@ -1796,6 +1970,7 @@ PY
 
 apply_admission_signature_verification_policy() {
   local key_file_name public_key public_key_indented validation_action
+  local rule_match_yaml image_pattern_yaml
   if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -ne 1 ]; then
     log "Skipping Kyverno verifyImages policy (CONTAINER_SIGNATURE_VERIFICATION_ENABLED=0)."
     kubectl delete clusterpolicy bretter-verify-image-signatures --ignore-not-found >/dev/null 2>&1 || true
@@ -1821,18 +1996,32 @@ apply_admission_signature_verification_policy() {
   if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
     validation_action="Enforce"
   fi
+  image_pattern_yaml="$(
+    python3 - "$KYVERNO_SIGNATURE_IMAGE_PATTERNS" <<'PY'
+import sys
 
-  log "Applying Kyverno verifyImages policy for enforced Bretter workloads (mode=${validation_action})."
-  kubectl apply -f - <<EOF
-apiVersion: kyverno.io/v1
-kind: ClusterPolicy
-metadata:
-  name: bretter-verify-image-signatures
-spec:
-  validationFailureAction: ${validation_action}
-  background: true
-  rules:
-    - name: verify-image-signatures-on-enforced-workloads
+raw = str(sys.argv[1] if len(sys.argv) > 1 else "").strip()
+items = [item.strip() for item in raw.split(",") if item.strip()]
+for item in items:
+    print(f"            - {item}")
+PY
+  )"
+  if [ -z "$image_pattern_yaml" ]; then
+    fail "KYVERNO_SIGNATURE_IMAGE_PATTERNS must include at least one image pattern."
+  fi
+  if [ "$KYVERNO_SIGNATURE_SCOPE" = "namespace_first_party" ]; then
+    rule_match_yaml="$(cat <<EOF
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - ${NAMESPACE}
+EOF
+)"
+  else
+    rule_match_yaml="$(cat <<EOF
       match:
         any:
           - resources:
@@ -1843,9 +2032,25 @@ spec:
               selector:
                 matchLabels:
                   security.bretter-labs.io/enforce-admission: "true"
+EOF
+)"
+  fi
+
+  log "Applying Kyverno verifyImages policy (mode=${validation_action} scope=${KYVERNO_SIGNATURE_SCOPE} images=${KYVERNO_SIGNATURE_IMAGE_PATTERNS})."
+  kubectl apply -f - <<EOF
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: bretter-verify-image-signatures
+spec:
+  validationFailureAction: ${validation_action}
+  background: true
+  rules:
+    - name: verify-image-signatures
+${rule_match_yaml}
       verifyImages:
         - imageReferences:
-            - "*"
+${image_pattern_yaml}
           mutateDigest: false
           required: true
           verifyDigest: true
@@ -3266,6 +3471,110 @@ spec:
 EOF
 }
 
+apply_postgres_backup_replication() {
+  local access_key_b64 secret_key_b64
+  if [ "$ENABLE_POSTGRES_BACKUP_REPLICATION" -ne 1 ]; then
+    log "Skipping postgres backup replication (ENABLE_POSTGRES_BACKUP_REPLICATION=0)."
+    kubectl -n "$NAMESPACE" delete cronjob bretter-postgres-backup-replication --ignore-not-found=true >/dev/null 2>&1 || true
+    return
+  fi
+
+  access_key_b64="$(kubectl -n "$NAMESPACE" get secret "$POSTGRES_BACKUP_REPLICATION_SECRET_NAME" -o "go-template={{ index .data \"$POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY\" }}" 2>/dev/null || true)"
+  secret_key_b64="$(kubectl -n "$NAMESPACE" get secret "$POSTGRES_BACKUP_REPLICATION_SECRET_NAME" -o "go-template={{ index .data \"$POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY\" }}" 2>/dev/null || true)"
+  if [ -z "$access_key_b64" ] || [ -z "$secret_key_b64" ]; then
+    fail "Backup replication secret is missing required keys (${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY}, ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY})."
+  fi
+
+  log "Applying off-cluster postgres backup replication CronJob (schedule: ${POSTGRES_BACKUP_REPLICATION_SCHEDULE} bucket: ${POSTGRES_BACKUP_REPLICATION_BUCKET})."
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-postgres-backup-replication
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${POSTGRES_BACKUP_REPLICATION_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: backup-replication
+              image: ${POSTGRES_BACKUP_REPLICATION_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}
+                      key: ${POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY}
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}
+                      key: ${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY}
+                - name: AWS_SESSION_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}
+                      key: ${POSTGRES_BACKUP_REPLICATION_SESSION_TOKEN_KEY}
+                      optional: true
+                - name: AWS_DEFAULT_REGION
+                  value: "${POSTGRES_BACKUP_REPLICATION_REGION}"
+                - name: S3_BUCKET
+                  value: "${POSTGRES_BACKUP_REPLICATION_BUCKET}"
+                - name: S3_PREFIX
+                  value: "${POSTGRES_BACKUP_REPLICATION_PREFIX}"
+                - name: S3_ENDPOINT
+                  value: "${POSTGRES_BACKUP_REPLICATION_ENDPOINT}"
+                - name: S3_SSE_MODE
+                  value: "${POSTGRES_BACKUP_REPLICATION_SSE_MODE}"
+                - name: S3_SSE_KMS_KEY_ID
+                  value: "${POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID}"
+                - name: BACKUP_MOUNT_PATH
+                  value: "${POSTGRES_BACKUP_MOUNT_PATH}"
+              command:
+                - /bin/sh
+                - -lc
+                - |
+                  set -eu
+                  latest=""
+                  latest="$(find "\$BACKUP_MOUNT_PATH" -maxdepth 1 -type f -name '*.dump' -print | sort | tail -n 1 || true)"
+                  if [ -z "\$latest" ]; then
+                    echo "no_backup_files_found; skipping replication"
+                    exit 0
+                  fi
+                  file_name="$(basename "\$latest")"
+                  target_prefix="\${S3_PREFIX%/}"
+                  if [ -n "\$target_prefix" ]; then
+                    target_path="s3://\${S3_BUCKET}/\${target_prefix}/\${file_name}"
+                  else
+                    target_path="s3://\${S3_BUCKET}/\${file_name}"
+                  fi
+                  set -- s3 cp "\$latest" "\$target_path" --region "\$AWS_DEFAULT_REGION" --sse "\$S3_SSE_MODE"
+                  if [ -n "\${S3_ENDPOINT}" ]; then
+                    set -- "\$@" --endpoint-url "\$S3_ENDPOINT"
+                  fi
+                  if [ "\$S3_SSE_MODE" = "aws:kms" ] && [ -n "\${S3_SSE_KMS_KEY_ID}" ]; then
+                    set -- "\$@" --sse-kms-key-id "\$S3_SSE_KMS_KEY_ID"
+                  fi
+                  aws "\$@"
+                  echo "backup_replicated path=\$target_path"
+              volumeMounts:
+                - name: backups
+                  mountPath: ${POSTGRES_BACKUP_MOUNT_PATH}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: ${POSTGRES_BACKUP_PVC_NAME}
+EOF
+}
+
 generate_runtime_secrets_encryption_key() {
   local generated
   generated="$(head -c 32 /dev/urandom | base64 | tr -d '\n=' | tr '/+' '_-')"
@@ -4027,6 +4336,8 @@ EOF
 
 apply_userflow_slo_probes() {
   local probe_command slo_api_base slo_api_verify_tls
+  local slo_api_auth_secret_name slo_api_auth_username_key slo_api_auth_password_key
+  local auth_username_b64 auth_password_b64
   if [ "$ENABLE_USERFLOW_SLO_PROBES" -ne 1 ]; then
     log "Skipping user-flow SLO probes (ENABLE_USERFLOW_SLO_PROBES=0)."
     kubectl -n "$NAMESPACE" delete cronjob \
@@ -4235,10 +4546,20 @@ EOF
     slo_api_verify_tls="1"
   fi
 
-  kubectl -n "$NAMESPACE" create secret generic bretter-userflow-slo-api-auth \
-    --from-literal=username="$USERFLOW_SLO_API_USERNAME" \
-    --from-literal=password="$USERFLOW_SLO_API_PASSWORD" \
-    --dry-run=client -o yaml | kubectl apply -f -
+  slo_api_auth_secret_name="$USERFLOW_SLO_API_AUTH_SECRET_NAME"
+  slo_api_auth_username_key="$USERFLOW_SLO_API_AUTH_USERNAME_KEY"
+  slo_api_auth_password_key="$USERFLOW_SLO_API_AUTH_PASSWORD_KEY"
+  if [ "$USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP" -eq 1 ] && [ -n "$USERFLOW_SLO_API_PASSWORD" ]; then
+    kubectl -n "$NAMESPACE" create secret generic "$slo_api_auth_secret_name" \
+      --from-literal="${slo_api_auth_username_key}=$USERFLOW_SLO_API_USERNAME" \
+      --from-literal="${slo_api_auth_password_key}=$USERFLOW_SLO_API_PASSWORD" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  fi
+  auth_username_b64="$(kubectl -n "$NAMESPACE" get secret "$slo_api_auth_secret_name" -o "go-template={{ index .data \"$slo_api_auth_username_key\" }}" 2>/dev/null || true)"
+  auth_password_b64="$(kubectl -n "$NAMESPACE" get secret "$slo_api_auth_secret_name" -o "go-template={{ index .data \"$slo_api_auth_password_key\" }}" 2>/dev/null || true)"
+  if [ -z "$auth_username_b64" ] || [ -z "$auth_password_b64" ]; then
+    fail "RDP connect-latency SLO auth secret is missing required keys (${slo_api_auth_secret_name}/${slo_api_auth_username_key}, ${slo_api_auth_secret_name}/${slo_api_auth_password_key})."
+  fi
 
   kubectl -n "$NAMESPACE" apply -f - <<EOF
 apiVersion: batch/v1
@@ -4277,13 +4598,13 @@ spec:
                 - name: SLO_API_USERNAME
                   valueFrom:
                     secretKeyRef:
-                      name: bretter-userflow-slo-api-auth
-                      key: username
+                      name: ${slo_api_auth_secret_name}
+                      key: ${slo_api_auth_username_key}
                 - name: SLO_API_PASSWORD
                   valueFrom:
                     secretKeyRef:
-                      name: bretter-userflow-slo-api-auth
-                      key: password
+                      name: ${slo_api_auth_secret_name}
+                      key: ${slo_api_auth_password_key}
               command:
                 - /bin/bash
                 - -lc
@@ -4533,6 +4854,7 @@ apply_manifests() {
   apply_vault_cluster_secret_store
   apply_external_secrets_bindings
   apply_postgres_backup_automation
+  apply_postgres_backup_replication
   apply_cleanup_automation
   apply_kubelet_serving_csr_autoapproval
 
@@ -4639,14 +4961,45 @@ run_post_deploy_admin_api_smoke_check() {
     return
   fi
 
-  local username_b64 password_b64 admin_api_base admin_verify_tls
-  username_b64="$(printf '%s' "$ADMIN_API_SMOKE_USERNAME" | base64 -w0)"
-  password_b64="$(printf '%s' "$ADMIN_API_SMOKE_PASSWORD" | base64 -w0)"
+  local username_b64 password_b64 admin_api_base admin_verify_tls admin_auth_env_yaml
+  username_b64=""
+  password_b64=""
+  admin_auth_env_yaml=""
   admin_api_base="http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
   admin_verify_tls="1"
   if [ "$TLS_ENABLED" -eq 1 ]; then
     admin_api_base="https://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
     admin_verify_tls="0"
+  fi
+  if postdeploy_admin_uses_secret_credentials; then
+    admin_auth_env_yaml="$(cat <<EOF
+            - name: USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: ${POST_DEPLOY_AUTH_SECRET_NAME}
+                  key: ${POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY}
+                  optional: true
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${POST_DEPLOY_AUTH_SECRET_NAME}
+                  key: ${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY}
+            - name: USERNAME_FALLBACK
+              value: "${ADMIN_API_SMOKE_USERNAME}"
+EOF
+)"
+  else
+    username_b64="$(printf '%s' "$ADMIN_API_SMOKE_USERNAME" | base64 -w0)"
+    password_b64="$(printf '%s' "$ADMIN_API_SMOKE_PASSWORD" | base64 -w0)"
+    admin_auth_env_yaml="$(cat <<EOF
+            - name: USERNAME_B64
+              value: "${username_b64}"
+            - name: PASSWORD_B64
+              value: "${password_b64}"
+            - name: USERNAME_FALLBACK
+              value: "${ADMIN_API_SMOKE_USERNAME}"
+EOF
+)"
   fi
 
   log "Running post-deploy admin API smoke validation job..."
@@ -4674,10 +5027,7 @@ spec:
               value: "${admin_api_base}"
             - name: VERIFY_TLS
               value: "${admin_verify_tls}"
-            - name: USERNAME_B64
-              value: "${username_b64}"
-            - name: PASSWORD_B64
-              value: "${password_b64}"
+${admin_auth_env_yaml}
             - name: TIMEOUT_SECONDS
               value: "${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS}"
           command:
@@ -4696,8 +5046,18 @@ spec:
 
               API_BASE = str(os.environ.get("API_BASE") or "").rstrip("/")
               VERIFY_TLS = str(os.environ.get("VERIFY_TLS") or "1") == "1"
-              USERNAME = base64.b64decode(str(os.environ.get("USERNAME_B64") or "")).decode("utf-8")
-              PASSWORD = base64.b64decode(str(os.environ.get("PASSWORD_B64") or "")).decode("utf-8")
+              USERNAME = str(os.environ.get("USERNAME") or "").strip()
+              PASSWORD = str(os.environ.get("PASSWORD") or "").strip()
+              if not USERNAME:
+                  USERNAME = str(os.environ.get("USERNAME_FALLBACK") or "").strip()
+              if not USERNAME:
+                  encoded_user = str(os.environ.get("USERNAME_B64") or "")
+                  if encoded_user:
+                      USERNAME = base64.b64decode(encoded_user).decode("utf-8")
+              if not PASSWORD:
+                  encoded_password = str(os.environ.get("PASSWORD_B64") or "")
+                  if encoded_password:
+                      PASSWORD = base64.b64decode(encoded_password).decode("utf-8")
               TIMEOUT_SECONDS = max(60, int(os.environ.get("TIMEOUT_SECONDS") or "180"))
               DEADLINE = time.time() + TIMEOUT_SECONDS
 
@@ -4771,14 +5131,45 @@ run_post_deploy_synthetic_check() {
     return
   fi
 
-  local username_b64 password_b64 synthetic_api_base synthetic_verify_tls
-  username_b64="$(printf '%s' "$SYNTHETIC_CHECK_USERNAME" | base64 -w0)"
-  password_b64="$(printf '%s' "$SYNTHETIC_CHECK_PASSWORD" | base64 -w0)"
+  local username_b64 password_b64 synthetic_api_base synthetic_verify_tls synthetic_auth_env_yaml
+  username_b64=""
+  password_b64=""
+  synthetic_auth_env_yaml=""
   synthetic_api_base="http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
   synthetic_verify_tls="1"
   if [ "$TLS_ENABLED" -eq 1 ]; then
     synthetic_api_base="https://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
     synthetic_verify_tls="0"
+  fi
+  if postdeploy_synthetic_uses_secret_credentials; then
+    synthetic_auth_env_yaml="$(cat <<EOF
+            - name: SYNTHETIC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: ${POST_DEPLOY_AUTH_SECRET_NAME}
+                  key: ${POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY}
+                  optional: true
+            - name: SYNTHETIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: ${POST_DEPLOY_AUTH_SECRET_NAME}
+                  key: ${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY}
+            - name: SYNTHETIC_USERNAME_FALLBACK
+              value: "${SYNTHETIC_CHECK_USERNAME}"
+EOF
+)"
+  else
+    username_b64="$(printf '%s' "$SYNTHETIC_CHECK_USERNAME" | base64 -w0)"
+    password_b64="$(printf '%s' "$SYNTHETIC_CHECK_PASSWORD" | base64 -w0)"
+    synthetic_auth_env_yaml="$(cat <<EOF
+            - name: SYNTHETIC_USERNAME_B64
+              value: "${username_b64}"
+            - name: SYNTHETIC_PASSWORD_B64
+              value: "${password_b64}"
+            - name: SYNTHETIC_USERNAME_FALLBACK
+              value: "${SYNTHETIC_CHECK_USERNAME}"
+EOF
+)"
   fi
 
   log "Running post-deploy synthetic validation job..."
@@ -4806,10 +5197,7 @@ spec:
               value: "${synthetic_api_base}"
             - name: SYNTHETIC_VERIFY_TLS
               value: "${synthetic_verify_tls}"
-            - name: SYNTHETIC_USERNAME_B64
-              value: "${username_b64}"
-            - name: SYNTHETIC_PASSWORD_B64
-              value: "${password_b64}"
+${synthetic_auth_env_yaml}
             - name: SYNTHETIC_TIMEOUT_SECONDS
               value: "${SYNTHETIC_CHECK_TIMEOUT_SECONDS}"
             - name: SYNTHETIC_REQUIRE_TEMPLATES
@@ -4829,8 +5217,18 @@ spec:
               import requests
               
               API_BASE = str(os.environ.get("API_BASE") or "").rstrip("/")
-              USERNAME = base64.b64decode(str(os.environ.get("SYNTHETIC_USERNAME_B64") or "")).decode("utf-8")
-              PASSWORD = base64.b64decode(str(os.environ.get("SYNTHETIC_PASSWORD_B64") or "")).decode("utf-8")
+              USERNAME = str(os.environ.get("SYNTHETIC_USERNAME") or "").strip()
+              PASSWORD = str(os.environ.get("SYNTHETIC_PASSWORD") or "").strip()
+              if not USERNAME:
+                  USERNAME = str(os.environ.get("SYNTHETIC_USERNAME_FALLBACK") or "").strip()
+              if not USERNAME:
+                  encoded_user = str(os.environ.get("SYNTHETIC_USERNAME_B64") or "")
+                  if encoded_user:
+                      USERNAME = base64.b64decode(encoded_user).decode("utf-8")
+              if not PASSWORD:
+                  encoded_password = str(os.environ.get("SYNTHETIC_PASSWORD_B64") or "")
+                  if encoded_password:
+                      PASSWORD = base64.b64decode(encoded_password).decode("utf-8")
               TIMEOUT_SECONDS = max(60, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "420"))
               REQUIRE_TEMPLATES = str(os.environ.get("SYNTHETIC_REQUIRE_TEMPLATES") or "0") == "1"
               VERIFY_TLS = str(os.environ.get("SYNTHETIC_VERIFY_TLS") or "1") == "1"
@@ -5112,6 +5510,7 @@ log_runtime_configuration() {
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
   log "Postgres backup automation: $ENABLE_POSTGRES_BACKUP_AUTOMATION (schedule: ${POSTGRES_BACKUP_SCHEDULE} retention: ${POSTGRES_BACKUP_RETENTION_DAYS}d pvc: ${POSTGRES_BACKUP_PVC_NAME} size: ${POSTGRES_BACKUP_PVC_SIZE} storageClass: ${POSTGRES_BACKUP_STORAGE_CLASS:-default})"
+  log "Postgres backup replication: $ENABLE_POSTGRES_BACKUP_REPLICATION (schedule: ${POSTGRES_BACKUP_REPLICATION_SCHEDULE} bucket: ${POSTGRES_BACKUP_REPLICATION_BUCKET:-unset} prefix: ${POSTGRES_BACKUP_REPLICATION_PREFIX} secret: ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY},${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY} sse: ${POSTGRES_BACKUP_REPLICATION_SSE_MODE})"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "External Secrets enabled: $USE_EXTERNAL_SECRETS (store: $EXTERNAL_SECRETS_STORE_NAME)"
   if [ "$USE_EXTERNAL_SECRETS" -eq 1 ]; then
@@ -5150,15 +5549,19 @@ log_runtime_configuration() {
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION})"
+  log "Alertmanager routing defaults: receiver=${ALERTMANAGER_DEFAULT_RECEIVER_NAME} group_by=${ALERTMANAGER_ROUTE_GROUP_BY} webhook_receiver=${ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED}"
   log "GHCR access health check enabled: $ENABLE_GHCR_ACCESS_HEALTHCHECK (schedule: ${GHCR_ACCESS_HEALTHCHECK_SCHEDULE} timeout: ${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}s secret: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET})"
-  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-fail>${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% queue-age-fail>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}% queue-age>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES}m rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m rdp-connect-probe=${ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE} rdp-connect-threshold=${USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS}s rdp-connect-fail>${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}%)"
+  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-fail>${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% queue-age-fail>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}% queue-age>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES}m rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m rdp-connect-probe=${ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE} rdp-connect-threshold=${USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS}s rdp-connect-fail>${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}% auth-secret=${USERFLOW_SLO_API_AUTH_SECRET_NAME}/${USERFLOW_SLO_API_AUTH_USERNAME_KEY},${USERFLOW_SLO_API_AUTH_PASSWORD_KEY} managed=${USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP})"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
-  log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION})"
+  log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION} signature-scope: ${KYVERNO_SIGNATURE_SCOPE} signature-images: ${KYVERNO_SIGNATURE_IMAGE_PATTERNS})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
   log "Post-deploy admin API smoke enabled: $RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK (timeout: ${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS}s user: ${ADMIN_API_SMOKE_USERNAME})"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
+  if [ "$POST_DEPLOY_AUTH_SECRET_USED" -eq 1 ]; then
+    log "Post-deploy authenticated checks use secret-backed credentials from ${POST_DEPLOY_AUTH_SECRET_NAME}."
+  fi
   log "Post-deploy runner smoke enabled: $RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK (timeout: ${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS}s pull-policy: ${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY})"
   log "Production go-live proof enabled: $RUN_PRODUCTION_GO_LIVE_PROOF (report dir: $PRODUCTION_GO_LIVE_REPORT_DIR health-timeout: ${PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS}s)"
   if [ "$ADMIN_API_SMOKE_AUTO_DISABLED" -eq 1 ]; then

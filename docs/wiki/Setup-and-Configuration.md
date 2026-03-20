@@ -120,7 +120,14 @@ Monitoring/ops:
 - `ENABLE_ADMISSION_POLICIES` (default `1`)
 - `INSTALL_KYVERNO` (default `1`)
 - `KYVERNO_NAMESPACE`, `KYVERNO_RELEASE_NAME`, `KYVERNO_CHART_VERSION` (default `v3.7.1`)
+- `KYVERNO_SIGNATURE_SCOPE` (`namespace_first_party` recommended for production)
+- `KYVERNO_SIGNATURE_IMAGE_PATTERNS` (default `ghcr.io/csufpsudocromis/*`)
 - `MONITORING_CHART_VERSION` (default `v82.10.4`)
+- `ALERTMANAGER_DEFAULT_RECEIVER_NAME`
+- `ALERTMANAGER_ROUTE_GROUP_BY`, `ALERTMANAGER_ROUTE_GROUP_WAIT`, `ALERTMANAGER_ROUTE_GROUP_INTERVAL`, `ALERTMANAGER_ROUTE_REPEAT_INTERVAL`
+- `ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED`
+- `ALERTMANAGER_WEBHOOK_SECRET_NAME`, `ALERTMANAGER_WEBHOOK_SECRET_KEY`
+- `ALERTMANAGER_WEBHOOK_MATCHERS`
 - `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL`
 - `KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE`
 - `RUN_POST_DEPLOY_API_HEALTH_CHECK`
@@ -130,6 +137,9 @@ Monitoring/ops:
 - `ADMIN_API_SMOKE_USERNAME`, `ADMIN_API_SMOKE_PASSWORD`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
 - `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
+- `POST_DEPLOY_AUTH_SECRET_NAME`
+- `POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY`, `POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY`
+- `POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY`, `POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY`
 - `RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK`
 - `POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS`
 - `POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY`
@@ -139,6 +149,14 @@ Monitoring/ops:
 - `POSTGRES_BACKUP_PVC_NAME`, `POSTGRES_BACKUP_PVC_SIZE`
 - `POSTGRES_BACKUP_STORAGE_CLASS`, `POSTGRES_BACKUP_MOUNT_PATH`
 - `POSTGRES_BACKUP_IMAGE`
+- `ENABLE_POSTGRES_BACKUP_REPLICATION`
+- `POSTGRES_BACKUP_REPLICATION_SCHEDULE`
+- `POSTGRES_BACKUP_REPLICATION_BUCKET`, `POSTGRES_BACKUP_REPLICATION_PREFIX`
+- `POSTGRES_BACKUP_REPLICATION_REGION`, `POSTGRES_BACKUP_REPLICATION_ENDPOINT`
+- `POSTGRES_BACKUP_REPLICATION_SECRET_NAME`
+- `POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY`, `POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY`, `POSTGRES_BACKUP_REPLICATION_SESSION_TOKEN_KEY`
+- `POSTGRES_BACKUP_REPLICATION_SSE_MODE`, `POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID`
+- `POSTGRES_BACKUP_REPLICATION_IMAGE`
 - `ENABLE_GHCR_ACCESS_HEALTHCHECK`
 - `GHCR_ACCESS_HEALTHCHECK_SCHEDULE`
 - `GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS`
@@ -158,6 +176,8 @@ Monitoring/ops:
 - `USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT`
 - `USERFLOW_SLO_API_BASE`, `USERFLOW_SLO_API_VERIFY_TLS`
 - `USERFLOW_SLO_API_USERNAME`, `USERFLOW_SLO_API_PASSWORD`
+- `USERFLOW_SLO_API_AUTH_SECRET_NAME`, `USERFLOW_SLO_API_AUTH_USERNAME_KEY`, `USERFLOW_SLO_API_AUTH_PASSWORD_KEY`
+- `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP`
 - `RUN_PRODUCTION_GO_LIVE_PROOF` (defaults to `PRODUCTION_PROFILE`)
 - `PRODUCTION_GO_LIVE_REPORT_DIR`
 - `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS`
@@ -234,9 +254,10 @@ ENABLE_MONITORING=1 \
 - Use `scripts/restore_drill_postgres.sh` to validate PostgreSQL logical restore, optionally from `scripts/production_go_live_proof.sh` via `RUN_RESTORE_DRILL=1`.
 - For image publish workflows, set repo Actions secrets `GHCR_USERNAME` and `GHCR_PAT` (`write:packages`) when publishing to pre-existing private GHCR packages; workflow falls back to `GITHUB_TOKEN` when those secrets are absent.
 - Admin container image registration uses direct OCI image references; if signature verification returns `no signatures found`, registration continues with warning-only policy messaging.
-- If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
-- If setup generated a new bootstrap admin secret and `ADMIN_API_SMOKE_PASSWORD` is not set, setup auto-disables the post-deploy admin API smoke check to avoid login failures against existing admin credentials.
+- In production profile, post-deploy authenticated checks require explicit non-bootstrap credentials (`ADMIN_API_SMOKE_PASSWORD`/`SYNTHETIC_CHECK_PASSWORD`) or secret-backed auth via `POST_DEPLOY_AUTH_SECRET_NAME`.
+- In non-production profiles, if setup generated a new bootstrap admin secret and explicit check credentials were not set, setup can auto-disable authenticated checks to avoid false failures.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
+- For production RDP connect-latency probe auth, use pre-provisioned secret mode: `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0`.
 - After first-login reset, verify bootstrap env pruning: `kubectl -n labs get deploy bretter-backend -o yaml | grep BLABS_ADMIN_DEFAULT_PASSWORD` should return nothing.
 - When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.
 - Storage settings page supports clearing overrides back to env defaults.
@@ -250,6 +271,7 @@ ENABLE_MONITORING=1 \
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Operations Runbook](Operations-Runbook)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
+- [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Scaling and Quotas](Scaling-and-Quotas)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)

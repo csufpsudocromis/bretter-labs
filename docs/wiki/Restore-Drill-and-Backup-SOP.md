@@ -42,6 +42,29 @@ Optional:
 NAMESPACE=labs RUN_RESTORE_DRILL=1 RESTORE_DRILL_KEEP_DB=1 ./scripts/production_go_live_proof.sh
 ```
 
+## Off-cluster encrypted backup replication (optional)
+
+Setup can deploy `bretter-postgres-backup-replication` to copy the latest dump to S3-compatible object storage with SSE.
+
+Key settings:
+
+- `ENABLE_POSTGRES_BACKUP_REPLICATION=1`
+- `POSTGRES_BACKUP_REPLICATION_BUCKET`
+- `POSTGRES_BACKUP_REPLICATION_SECRET_NAME`
+- `POSTGRES_BACKUP_REPLICATION_SSE_MODE` (`AES256` or `aws:kms`)
+
+Quick verification:
+
+```bash
+kubectl -n labs get cronjob bretter-postgres-backup-replication
+kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | rg bretter-postgres-backup-replication
+kubectl -n labs logs job/<latest-replication-job> --all-containers=true
+```
+
+Expected log marker:
+
+- `backup_replicated path=s3://...`
+
 ## Failure handling
 
 If drill fails:

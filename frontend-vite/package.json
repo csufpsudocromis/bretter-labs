@@ -6,10 +6,11 @@
   "scripts": {
     "dev": "vite",
     "lint": "eslint src --ext .js,.jsx --max-warnings=0",
-    "format": "prettier --write \"src/**/*.{js,jsx}\"",
-    "format:check": "prettier --check \"src/**/*.{js,jsx}\"",
+    "format": "prettier --write \"src/**/*.{js,jsx}\" \"tests/**/*.{js,jsx}\" \"e2e/**/*.{js,jsx}\" \"playwright.rdp.config.js\"",
+    "format:check": "prettier --check \"src/**/*.{js,jsx}\" \"tests/**/*.{js,jsx}\" \"e2e/**/*.{js,jsx}\" \"playwright.rdp.config.js\"",
     "generate:api-types": "openapi-typescript ../backend/openapi/openapi.json -o src/api/openapi-types.d.ts",
     "test": "vitest run",
+    "test:e2e:rdp": "playwright test -c playwright.rdp.config.js",
     "build": "vite build",
     "preview": "vite preview"
   },
@@ -20,17 +21,18 @@
     "react-router-dom": "^6.30.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.6.1",
+    "@vitejs/plugin-react": "^5.2.0",
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^15.15.0",
     "jsdom": "^22.1.0",
     "openapi-typescript": "^7.10.1",
-    "@vitejs/plugin-react": "^5.2.0",
-    "vitest": "^3.2.4",
+    "prettier": "^3.6.2",
     "vite": "^6.4.1",
-    "prettier": "^3.6.2"
+    "vitest": "^3.2.4"
   }
 }

@@ -11,6 +11,7 @@
 - [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
+- [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)

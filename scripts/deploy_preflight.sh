@@ -15,6 +15,14 @@ RUNTIME_SECRET_NAME="${RUNTIME_SECRET_NAME:-bretter-runtime-secrets}"
 RUNTIME_SECRET_KEY="${RUNTIME_SECRET_KEY:-secrets_encryption_key}"
 SIGNATURE_SECRET_NAME="${SIGNATURE_SECRET_NAME:-bretter-cosign-public-key}"
 SIGNATURE_SECRET_KEY="${SIGNATURE_SECRET_KEY:-cosign.pub}"
+POST_DEPLOY_AUTH_SECRET_NAME="${POST_DEPLOY_AUTH_SECRET_NAME:-bretter-postdeploy-auth}"
+POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admin_password}"
+POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
+RDP_SLO_AUTH_SECRET_NAME="${RDP_SLO_AUTH_SECRET_NAME:-bretter-userflow-slo-api-auth}"
+RDP_SLO_AUTH_PASSWORD_KEY="${RDP_SLO_AUTH_PASSWORD_KEY:-password}"
+ENABLE_POSTGRES_BACKUP_REPLICATION="${ENABLE_POSTGRES_BACKUP_REPLICATION:-0}"
+POSTGRES_BACKUP_REPLICATION_SECRET_NAME="${POSTGRES_BACKUP_REPLICATION_SECRET_NAME:-bretter-postgres-backup-replication}"
+POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY="${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY:-aws_secret_access_key}"
 SKIP_CLUSTER_CHECKS="${SKIP_CLUSTER_CHECKS:-0}"
 PREDEPLOY_VERIFY_NODE_IMAGE_PULLS="${PREDEPLOY_VERIFY_NODE_IMAGE_PULLS:-1}"
 PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS="${PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS:-120}"
@@ -243,6 +251,7 @@ log "Deploy preflight started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Namespace: ${NAMESPACE}"
 validate_toggle "REQUIRE_SITE_VALUES_FILE" "$REQUIRE_SITE_VALUES_FILE"
 validate_toggle "PREDEPLOY_VALIDATE_CRDS" "$PREDEPLOY_VALIDATE_CRDS"
+validate_toggle "ENABLE_POSTGRES_BACKUP_REPLICATION" "$ENABLE_POSTGRES_BACKUP_REPLICATION"
 validate_positive_int "PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS" "$PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS"
 collect_value_files
 if [ "${#VALUES_FILES[@]}" -gt 0 ]; then
@@ -286,6 +295,36 @@ if [ -n "$signature_secret_data" ]; then
   pass_check "signature key secret present (${SIGNATURE_SECRET_NAME}/${SIGNATURE_SECRET_KEY})"
 else
   fail_check "signature key secret present (${SIGNATURE_SECRET_NAME}/${SIGNATURE_SECRET_KEY})"
+fi
+
+postdeploy_admin_secret_data="$(fetch_secret_key_data_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY")"
+if [ -n "$postdeploy_admin_secret_data" ]; then
+  pass_check "postdeploy admin auth secret/key present (${POST_DEPLOY_AUTH_SECRET_NAME}/${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY})"
+else
+  fail_check "postdeploy admin auth secret/key present (${POST_DEPLOY_AUTH_SECRET_NAME}/${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY})"
+fi
+
+postdeploy_synthetic_secret_data="$(fetch_secret_key_data_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY")"
+if [ -n "$postdeploy_synthetic_secret_data" ]; then
+  pass_check "postdeploy synthetic auth secret/key present (${POST_DEPLOY_AUTH_SECRET_NAME}/${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY})"
+else
+  fail_check "postdeploy synthetic auth secret/key present (${POST_DEPLOY_AUTH_SECRET_NAME}/${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY})"
+fi
+
+rdp_slo_secret_data="$(fetch_secret_key_data_b64 "$NAMESPACE" "$RDP_SLO_AUTH_SECRET_NAME" "$RDP_SLO_AUTH_PASSWORD_KEY")"
+if [ -n "$rdp_slo_secret_data" ]; then
+  pass_check "rdp slo auth secret/key present (${RDP_SLO_AUTH_SECRET_NAME}/${RDP_SLO_AUTH_PASSWORD_KEY})"
+else
+  fail_check "rdp slo auth secret/key present (${RDP_SLO_AUTH_SECRET_NAME}/${RDP_SLO_AUTH_PASSWORD_KEY})"
+fi
+
+if [ "$ENABLE_POSTGRES_BACKUP_REPLICATION" = "1" ]; then
+  backup_replication_secret_data="$(fetch_secret_key_data_b64 "$NAMESPACE" "$POSTGRES_BACKUP_REPLICATION_SECRET_NAME" "$POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY")"
+  if [ -n "$backup_replication_secret_data" ]; then
+    pass_check "backup replication secret/key present (${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY})"
+  else
+    fail_check "backup replication secret/key present (${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY})"
+  fi
 fi
 
 run_node_image_pull_smoke_checks || true

@@ -201,10 +201,22 @@ python3 scripts/validate_production_profile.py --strict \
 # 3) run deploy preflight (strict merged values + required cluster secrets + per-node image pull smoke)
 NAMESPACE=labs ./scripts/deploy_preflight.sh
 
-# 4) run repository guardrails (includes strict production profile validation + preflight static mode)
+# 4) ensure post-deploy auth + RDP SLO probe auth secrets exist in cluster
+kubectl -n labs create secret generic bretter-postdeploy-auth \
+  --from-literal=admin_username='admin' \
+  --from-literal=admin_password='<admin-password>' \
+  --from-literal=synthetic_username='admin' \
+  --from-literal=synthetic_password='<admin-password>' \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n labs create secret generic bretter-userflow-slo-api-auth \
+  --from-literal=username='admin' \
+  --from-literal=password='<rdp-probe-password>' \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 5) run repository guardrails (includes strict production profile validation + preflight static mode)
 ./scripts/ci_guardrails.sh
 
-# 5) deploy with production profile; postdeploy runs go-live proof by default
+# 6) deploy with production profile; postdeploy runs go-live proof by default
 PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 ```
 
@@ -218,9 +230,11 @@ Proof artifact and operator docs:
 - Userflow smoke workflow: [.github/workflows/deploy-userflow-smoke.yml](.github/workflows/deploy-userflow-smoke.yml)
 - Post-deploy synthetic workflow: [.github/workflows/post-deploy-synthetic.yml](.github/workflows/post-deploy-synthetic.yml)
 - Nightly restore drill workflow: [.github/workflows/nightly-restore-drill.yml](.github/workflows/nightly-restore-drill.yml)
+- Playwright Guacamole RDP smoke workflow: [.github/workflows/playwright-rdp-smoke.yml](.github/workflows/playwright-rdp-smoke.yml)
 - Default report dir: [artifacts/go-live/](artifacts/go-live/)
 - Production values reference: [docs/wiki/Production-Helm-Values-Reference.md](docs/wiki/Production-Helm-Values-Reference.md)
 - Secret operations: [docs/wiki/Secret-Operations-Runbook.md](docs/wiki/Secret-Operations-Runbook.md)
+- Alert routing defaults: [docs/wiki/Alert-Routing-and-Receiver-Defaults.md](docs/wiki/Alert-Routing-and-Receiver-Defaults.md)
 - Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
 - Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
@@ -285,6 +299,8 @@ Proof artifact and operator docs:
 | `CONTAINER_SIGNATURE_KEY_SECRET_NAME` | `bretter-cosign-public-key` | Secret mounted at `/etc/bretter-signing` to provide the public key file referenced by `CONTAINER_SIGNATURE_KEY_REF` |
 | `CONTAINER_SIGNATURE_PUBLIC_KEY` | empty | Optional setup input: inline cosign public key content used to create/update `CONTAINER_SIGNATURE_KEY_SECRET_NAME` |
 | `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` | empty | Optional setup input: file path to a cosign public key used to create/update `CONTAINER_SIGNATURE_KEY_SECRET_NAME` |
+| `KYVERNO_SIGNATURE_SCOPE` | `namespace_first_party` | Signature policy scope (`namespace_first_party` or `enforced_label`) |
+| `KYVERNO_SIGNATURE_IMAGE_PATTERNS` | `ghcr.io/csufpsudocromis/*` | Comma-separated image reference patterns covered by Kyverno `verifyImages` |
 | `METRICS_SERVER_VERSION` | `v0.8.1` | Metrics-server release used to build default manifest URL |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
@@ -297,10 +313,17 @@ Proof artifact and operator docs:
 | `POSTGRES_BACKUP_RETENTION_DAYS` | `7` | Retention window (days) for backup dump files |
 | `POSTGRES_BACKUP_PVC_NAME` | `bretter-postgres-backups` | PVC name used by backup automation |
 | `POSTGRES_BACKUP_PVC_SIZE` | `20Gi` | Backup PVC requested size |
+| `ENABLE_POSTGRES_BACKUP_REPLICATION` | `0` | Enable encrypted off-cluster replication of latest backup dump to S3-compatible storage |
+| `POSTGRES_BACKUP_REPLICATION_BUCKET` | empty | Target S3 bucket for backup replication |
+| `POSTGRES_BACKUP_REPLICATION_SECRET_NAME` | `bretter-postgres-backup-replication` | Secret containing replication credentials (`aws_access_key_id`/`aws_secret_access_key`) |
+| `POSTGRES_BACKUP_REPLICATION_SSE_MODE` | `AES256` | Server-side encryption mode for replicated backups (`AES256` or `aws:kms`) |
 | `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK` | `1` | Run authenticated admin API smoke suite during postdeploy |
 | `POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS` | `180` | Timeout budget for admin API smoke job |
 | `ADMIN_API_SMOKE_USERNAME` | `admin` | Admin username used by postdeploy admin smoke validation |
 | `ADMIN_API_SMOKE_PASSWORD` | empty | Admin password used by postdeploy admin smoke validation |
+| `POST_DEPLOY_AUTH_SECRET_NAME` | empty | Optional secret-backed credential source for admin + synthetic post-deploy checks |
+| `POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY` | `admin_password` | Password key inside `POST_DEPLOY_AUTH_SECRET_NAME` for admin API smoke |
+| `POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY` | `synthetic_password` | Password key inside `POST_DEPLOY_AUTH_SECRET_NAME` for synthetic check |
 | `ENABLE_GHCR_ACCESS_HEALTHCHECK` | `1` | Deploy recurring GHCR registry access CronJob |
 | `GHCR_ACCESS_HEALTHCHECK_SCHEDULE` | `*/10 * * * *` | Cron schedule for GHCR access checks |
 | `GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS` | `120` | Timeout budget for each GHCR access probe run |
@@ -321,6 +344,12 @@ Proof artifact and operator docs:
 | `USERFLOW_SLO_API_VERIFY_TLS` | auto | Optional TLS verify override for authenticated SLO probes (`0`/`1`) |
 | `USERFLOW_SLO_API_USERNAME` | `admin` | Username used by authenticated RDP connect-latency probe |
 | `USERFLOW_SLO_API_PASSWORD` | empty | Password used by authenticated RDP connect-latency probe |
+| `USERFLOW_SLO_API_AUTH_SECRET_NAME` | `bretter-userflow-slo-api-auth` | Secret name used by RDP connect-latency probe auth |
+| `USERFLOW_SLO_API_AUTH_USERNAME_KEY` | `username` | Username key in RDP probe auth secret |
+| `USERFLOW_SLO_API_AUTH_PASSWORD_KEY` | `password` | Password key in RDP probe auth secret |
+| `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP` | `1` | `1`: setup can bootstrap auth secret from env credentials, `0`: require pre-provisioned secret (recommended for production) |
+| `ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED` | `0` | Enable Alertmanager webhook receiver routing in setup-managed monitoring values |
+| `ALERTMANAGER_WEBHOOK_SECRET_NAME` | empty | Secret name containing webhook URL used when webhook receiver is enabled |
 | `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
 | `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
 | `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |

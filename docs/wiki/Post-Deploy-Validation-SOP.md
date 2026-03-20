@@ -1,6 +1,6 @@
 # Post-Deploy Validation SOP
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 Run this after every deployment before closing the change.
 
@@ -75,8 +75,10 @@ Pass criteria:
 
 Notes:
 
-- Setup auto-disables admin API smoke validation when it generated a fresh bootstrap admin secret and no `ADMIN_API_SMOKE_PASSWORD` was supplied.
-- Setup auto-disables synthetic validation when it generated a fresh bootstrap admin secret and no `SYNTHETIC_CHECK_PASSWORD` was supplied.
+- In production profile, setup requires explicit non-bootstrap credentials for admin/synthetic checks:
+  - direct env (`ADMIN_API_SMOKE_PASSWORD`, `SYNTHETIC_CHECK_PASSWORD`), or
+  - secret-backed mode via `POST_DEPLOY_AUTH_SECRET_NAME` + key variables.
+- For non-production runs, setup can still auto-disable checks when a new bootstrap secret is generated and no explicit credentials are supplied.
 - Setup runs a runner image smoke pod during `postdeploy` by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - For existing deployments, run authenticated synthetic validation with explicit credentials:
 
@@ -88,6 +90,18 @@ SYNTHETIC_CHECK_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
 RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1 \
 ADMIN_API_SMOKE_USERNAME=admin \
 ADMIN_API_SMOKE_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
+./scripts/setup.sh
+```
+
+Secret-backed credential example (recommended):
+
+```bash
+SETUP_PHASES=postdeploy \
+POST_DEPLOY_AUTH_SECRET_NAME=bretter-postdeploy-auth \
+POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY=admin_username \
+POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY=admin_password \
+POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY=synthetic_username \
+POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY=synthetic_password \
 ./scripts/setup.sh
 ```
 

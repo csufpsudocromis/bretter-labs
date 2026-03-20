@@ -59,6 +59,24 @@ Expected:
 - First two commands print a value greater than `0`.
 - Third command prints the expected SHA256 fingerprint for your official cosign public key.
 
+Post-deploy auth + RDP probe auth secrets:
+
+```bash
+kubectl -n labs get secret bretter-postdeploy-auth -o go-template='{{index .data "admin_password"}}' | wc -c
+kubectl -n labs get secret bretter-postdeploy-auth -o go-template='{{index .data "synthetic_password"}}' | wc -c
+kubectl -n labs get secret bretter-userflow-slo-api-auth -o go-template='{{index .data "password"}}' | wc -c
+```
+
+Expected: each command prints a value greater than `0`.
+
+If off-cluster backup replication is enabled:
+
+```bash
+kubectl -n labs get cronjob bretter-postgres-backup-replication
+kubectl -n labs get secret bretter-postgres-backup-replication -o go-template='{{index .data "aws_access_key_id"}}' | wc -c
+kubectl -n labs get secret bretter-postgres-backup-replication -o go-template='{{index .data "aws_secret_access_key"}}' | wc -c
+```
+
 ## VM and container workload visibility
 
 List only user runtime pods:
@@ -140,6 +158,8 @@ GitHub workflow:
 
 - `.github/workflows/deploy-userflow-smoke.yml`
 - `.github/workflows/post-deploy-synthetic.yml`
+- `.github/workflows/nightly-restore-drill.yml`
+- `.github/workflows/playwright-rdp-smoke.yml`
 
 Coverage:
 
@@ -147,6 +167,16 @@ Coverage:
 - Kind-based LabInstance controller smoke
 - Kind-based LabImageImport controller smoke
 - Post-deploy API synthetic flow (login, VM launch, Guacamole RDP readiness/frame, teardown)
+- Browser-level Guacamole RDP launch/connect smoke (Playwright)
+- Restore-drill execution gate for release branches
+
+Release-branch required checks:
+
+- `post-deploy-synthetic.yml` and `nightly-restore-drill.yml` now run on push/PR to `release/**`.
+- Configure branch protection/rulesets to require:
+  - `synthetic` job from post-deploy synthetic workflow
+  - `restore-drill` job from nightly restore workflow
+  - `rdp-smoke` job from Playwright RDP smoke workflow
 
 Manual trigger in GitHub Actions:
 
@@ -219,12 +249,35 @@ By default this script:
 - `bretter-slo-image-import-queue-age`: fails when oldest in-progress image import exceeds configured max age.
 - `bretter-slo-rdp-connect-latency` (optional): authenticated RDP connect-token/page latency probe.
 
+RDP connect-latency probe auth model:
+
+- Uses `USERFLOW_SLO_API_AUTH_SECRET_NAME` (`username` + `password` keys by default).
+- In production, keep `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0` and pre-provision the secret.
+- Avoid plaintext probe passwords in setup env for production runs.
+
 Quick status:
 
 ```bash
 kubectl -n labs get cronjob bretter-ghcr-access-check bretter-slo-vm-launch bretter-slo-rdp-readiness bretter-slo-upload-finalize bretter-slo-image-import-queue-age bretter-slo-rdp-connect-latency
 kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | rg 'bretter-ghcr-access-check|bretter-slo-'
 ```
+
+## Alert routing
+
+Alertmanager routing defaults are now explicit in setup-managed monitoring values.
+
+- Default receiver/grouping fields are controlled by:
+  - `ALERTMANAGER_DEFAULT_RECEIVER_NAME`
+  - `ALERTMANAGER_ROUTE_GROUP_BY`
+  - `ALERTMANAGER_ROUTE_GROUP_WAIT`
+  - `ALERTMANAGER_ROUTE_GROUP_INTERVAL`
+  - `ALERTMANAGER_ROUTE_REPEAT_INTERVAL`
+- Optional webhook routing uses secret-backed URL keys:
+  - `ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED=1`
+  - `ALERTMANAGER_WEBHOOK_SECRET_NAME`
+  - `ALERTMANAGER_WEBHOOK_SECRET_KEY`
+
+See full procedure: [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults).
 
 ## Quotas and scaling checks
 

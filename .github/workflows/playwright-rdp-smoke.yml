@@ -1,0 +1,73 @@
+name: Playwright Guacamole RDP Smoke
+
+on:
+  pull_request:
+    branches:
+      - "release/**"
+  push:
+    branches:
+      - "release/**"
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: "Base UI URL (for example https://labs.example.com:30073)"
+        required: false
+      template_name:
+        description: "VM template name to launch/connect (must be guacamole_rdp)"
+        required: false
+      connect_timeout_seconds:
+        description: "Timeout budget for VM boot/connect"
+        required: false
+        default: "900"
+  schedule:
+    - cron: "11 11 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  rdp-smoke:
+    runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_BASE_URL: ${{ github.event.inputs.base_url || secrets.PLAYWRIGHT_BASE_URL }}
+      PLAYWRIGHT_USERNAME: ${{ secrets.PLAYWRIGHT_USERNAME }}
+      PLAYWRIGHT_PASSWORD: ${{ secrets.PLAYWRIGHT_PASSWORD }}
+      PLAYWRIGHT_TEMPLATE_NAME: ${{ github.event.inputs.template_name || secrets.PLAYWRIGHT_TEMPLATE_NAME || 'Windows Lab' }}
+      PLAYWRIGHT_CONNECT_TIMEOUT_SECONDS: ${{ github.event.inputs.connect_timeout_seconds || '900' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend-vite/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend-vite ci
+
+      - name: Install Playwright browser
+        run: npx --prefix frontend-vite playwright install --with-deps chromium
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          [ -n "${PLAYWRIGHT_BASE_URL}" ] || { echo "PLAYWRIGHT_BASE_URL is required (input or secret)." >&2; exit 1; }
+          [ -n "${PLAYWRIGHT_USERNAME}" ] || { echo "PLAYWRIGHT_USERNAME secret is required." >&2; exit 1; }
+          [ -n "${PLAYWRIGHT_PASSWORD}" ] || { echo "PLAYWRIGHT_PASSWORD secret is required." >&2; exit 1; }
+          [ -n "${PLAYWRIGHT_TEMPLATE_NAME}" ] || { echo "PLAYWRIGHT_TEMPLATE_NAME is required (input or secret)." >&2; exit 1; }
+
+      - name: Run Playwright RDP smoke
+        run: npm --prefix frontend-vite run test:e2e:rdp
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: playwright-rdp-smoke-artifacts
+          path: |
+            frontend-vite/playwright-report-rdp
+            frontend-vite/test-results
+          if-no-files-found: warn

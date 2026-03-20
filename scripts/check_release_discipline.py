@@ -89,10 +89,16 @@ def main() -> int:
     values_prod_site_template_path = root / "deploy" / "helm" / "values-production-site.template.yaml"
     setup_script_path = root / "scripts" / "setup.sh"
     publish_workflow_path = root / ".github" / "workflows" / "publish-and-pin-images.yml"
+    post_deploy_synthetic_workflow_path = root / ".github" / "workflows" / "post-deploy-synthetic.yml"
+    nightly_restore_workflow_path = root / ".github" / "workflows" / "nightly-restore-drill.yml"
+    playwright_rdp_workflow_path = root / ".github" / "workflows" / "playwright-rdp-smoke.yml"
     digest_update_script_path = root / "scripts" / "update_production_image_digests.py"
     rollback_script_path = root / "scripts" / "rollback_release.sh"
     frontend_dockerfile_path = root / "frontend-vite" / "Dockerfile"
     backend_dockerfile_path = root / "backend" / "Dockerfile"
+    playwright_config_path = root / "frontend-vite" / "playwright.rdp.config.js"
+    playwright_test_path = root / "frontend-vite" / "e2e" / "guacamole_rdp_smoke.spec.js"
+    alertmanager_doc_path = root / "docs" / "wiki" / "Alert-Routing-and-Receiver-Defaults.md"
 
     errors: list[str] = []
 
@@ -236,6 +242,48 @@ def main() -> int:
         errors.append(
             "deploy/helm/values-production.yaml must set CONTAINER_SIGNATURE_KEY_SECRET_NAME when using /etc/bretter-signing key refs."
         )
+    kyverno_signature_scope = _extract_yaml_scalar(values_production, "KYVERNO_SIGNATURE_SCOPE").strip().lower()
+    if kyverno_signature_scope != "namespace_first_party":
+        errors.append(
+            "deploy/helm/values-production.yaml must set KYVERNO_SIGNATURE_SCOPE=namespace_first_party for production."
+        )
+    kyverno_signature_patterns = _extract_yaml_scalar(values_production, "KYVERNO_SIGNATURE_IMAGE_PATTERNS").strip()
+    if not kyverno_signature_patterns:
+        errors.append("deploy/helm/values-production.yaml must set KYVERNO_SIGNATURE_IMAGE_PATTERNS for production.")
+
+    postdeploy_auth_secret_name = _extract_yaml_scalar(values_production, "POST_DEPLOY_AUTH_SECRET_NAME").strip()
+    if _looks_placeholder(postdeploy_auth_secret_name):
+        errors.append("deploy/helm/values-production.yaml must set POST_DEPLOY_AUTH_SECRET_NAME.")
+    for key in (
+        "POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY",
+        "POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY",
+        "POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY",
+        "POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY",
+    ):
+        value = _extract_yaml_scalar(values_production, key).strip()
+        if _looks_placeholder(value):
+            errors.append(f"deploy/helm/values-production.yaml must set {key}.")
+
+    rdp_probe_enabled = (
+        _extract_yaml_scalar(values_production, "ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE").strip().lower()
+    )
+    if rdp_probe_enabled not in {"1", "true", "yes", "on"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must enable ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE for production."
+        )
+    for key in (
+        "USERFLOW_SLO_API_AUTH_SECRET_NAME",
+        "USERFLOW_SLO_API_AUTH_USERNAME_KEY",
+        "USERFLOW_SLO_API_AUTH_PASSWORD_KEY",
+    ):
+        value = _extract_yaml_scalar(values_production, key).strip()
+        if _looks_placeholder(value):
+            errors.append(f"deploy/helm/values-production.yaml must set {key}.")
+    rdp_auth_managed = _extract_yaml_scalar(values_production, "USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP").strip().lower()
+    if rdp_auth_managed not in {"0", "false", "no", "off"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must set USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0 for production."
+        )
 
     if values_site_template:
         for key in (
@@ -248,6 +296,10 @@ def main() -> int:
             "CORS_ALLOWED_ORIGINS",
             "TLS_SECRET_NAME",
             "REQUIRE_SCHEMA_READY",
+            "POST_DEPLOY_AUTH_SECRET_NAME",
+            "USERFLOW_SLO_API_AUTH_SECRET_NAME",
+            "POSTGRES_BACKUP_REPLICATION_BUCKET",
+            "POSTGRES_BACKUP_REPLICATION_SECRET_NAME",
         ):
             if not _extract_yaml_scalar(values_site_template, key).strip():
                 errors.append(
@@ -304,6 +356,32 @@ def main() -> int:
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must enable provenance attestations for image builds."
             )
+
+    for workflow_path, label in (
+        (post_deploy_synthetic_workflow_path, "post-deploy synthetic"),
+        (nightly_restore_workflow_path, "nightly restore drill"),
+    ):
+        if not workflow_path.exists():
+            errors.append(f"{workflow_path.relative_to(root)} is missing.")
+            continue
+        workflow_text = _read_text(workflow_path)
+        if "pull_request:" not in workflow_text or "release/**" not in workflow_text:
+            errors.append(
+                f"{workflow_path.relative_to(root)} must run on pull_request to release/** for required release gates."
+            )
+        if "push:" not in workflow_text or "release/**" not in workflow_text:
+            errors.append(
+                f"{workflow_path.relative_to(root)} must run on push to release/** for required release gates."
+            )
+
+    if not playwright_rdp_workflow_path.exists():
+        errors.append(".github/workflows/playwright-rdp-smoke.yml is missing.")
+    if not playwright_config_path.exists():
+        errors.append("frontend-vite/playwright.rdp.config.js is missing.")
+    if not playwright_test_path.exists():
+        errors.append("frontend-vite/e2e/guacamole_rdp_smoke.spec.js is missing.")
+    if not alertmanager_doc_path.exists():
+        errors.append("docs/wiki/Alert-Routing-and-Receiver-Defaults.md is missing.")
 
     errors.extend(_validate_workflow_action_pins(root=root))
 

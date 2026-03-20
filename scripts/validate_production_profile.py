@@ -227,6 +227,65 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             "CONTAINER_SIGNATURE_KEY_SECRET_NAME must be set when CONTAINER_SIGNATURE_KEY_REF points to /etc/bretter-signing/."
         )
 
+    kyverno_signature_scope = get_text("KYVERNO_SIGNATURE_SCOPE").lower()
+    if kyverno_signature_scope not in {"namespace_first_party", "enforced_label"}:
+        errors.append("KYVERNO_SIGNATURE_SCOPE must be one of: namespace_first_party, enforced_label.")
+    elif kyverno_signature_scope != "namespace_first_party":
+        errors.append("KYVERNO_SIGNATURE_SCOPE must be namespace_first_party for production.")
+    if not get_text("KYVERNO_SIGNATURE_IMAGE_PATTERNS"):
+        errors.append("KYVERNO_SIGNATURE_IMAGE_PATTERNS must be set for production.")
+
+    postdeploy_auth_secret_name = get_text("POST_DEPLOY_AUTH_SECRET_NAME")
+    if _looks_placeholder(postdeploy_auth_secret_name):
+        errors.append("POST_DEPLOY_AUTH_SECRET_NAME must be set for production authenticated post-deploy checks.")
+    for key in (
+        "POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY",
+        "POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY",
+        "POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY",
+        "POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY",
+    ):
+        if _looks_placeholder(get_text(key)):
+            errors.append(f"{key} must be set for production authenticated post-deploy checks.")
+
+    rdp_probe_enabled = get_bool("ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE", default=False)
+    if not rdp_probe_enabled:
+        errors.append("ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE must be enabled for production.")
+    if rdp_probe_enabled:
+        if _looks_placeholder(get_text("USERFLOW_SLO_API_AUTH_SECRET_NAME")):
+            errors.append("USERFLOW_SLO_API_AUTH_SECRET_NAME must be set when RDP connect latency probe is enabled.")
+        if _looks_placeholder(get_text("USERFLOW_SLO_API_AUTH_USERNAME_KEY")):
+            errors.append("USERFLOW_SLO_API_AUTH_USERNAME_KEY must be set when RDP connect latency probe is enabled.")
+        if _looks_placeholder(get_text("USERFLOW_SLO_API_AUTH_PASSWORD_KEY")):
+            errors.append("USERFLOW_SLO_API_AUTH_PASSWORD_KEY must be set when RDP connect latency probe is enabled.")
+        if get_bool("USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP", default=True):
+            errors.append("USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP must be disabled (0/false) for production.")
+
+    backup_replication_enabled = get_bool("ENABLE_POSTGRES_BACKUP_REPLICATION", default=False)
+    if not backup_replication_enabled:
+        warnings.append(
+            "ENABLE_POSTGRES_BACKUP_REPLICATION is disabled; off-cluster encrypted backup replication is recommended."
+        )
+    else:
+        if _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_BUCKET")):
+            errors.append("POSTGRES_BACKUP_REPLICATION_BUCKET must be set when backup replication is enabled.")
+        if _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_SECRET_NAME")):
+            errors.append("POSTGRES_BACKUP_REPLICATION_SECRET_NAME must be set when backup replication is enabled.")
+        if _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY")):
+            errors.append(
+                "POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY must be set when backup replication is enabled."
+            )
+        if _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY")):
+            errors.append(
+                "POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY must be set when backup replication is enabled."
+            )
+        sse_mode = get_text("POSTGRES_BACKUP_REPLICATION_SSE_MODE").lower()
+        if sse_mode not in {"aes256", "aws:kms"}:
+            errors.append(
+                "POSTGRES_BACKUP_REPLICATION_SSE_MODE must be AES256 or aws:kms when backup replication is enabled."
+            )
+        if sse_mode == "aws:kms" and _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID")):
+            errors.append("POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID must be set when SSE mode is aws:kms.")
+
     if get_bool("CONTAINER_INGRESS_ENABLED", default=False):
         if not get_text("CONTAINER_INGRESS_CLASS"):
             errors.append("CONTAINER_INGRESS_CLASS is required when CONTAINER_INGRESS_ENABLED is true.")
