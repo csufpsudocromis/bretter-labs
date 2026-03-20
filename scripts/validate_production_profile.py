@@ -138,12 +138,7 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
         get_percent(target_key)
         if max_replicas and min_replicas and max_replicas < min_replicas:
             errors.append(f"{max_key} must be >= {min_key}.")
-        if (
-            replicas
-            and min_replicas
-            and max_replicas
-            and (replicas < min_replicas or replicas > max_replicas)
-        ):
+        if replicas and min_replicas and max_replicas and (replicas < min_replicas or replicas > max_replicas):
             errors.append(f"{component}_REPLICAS must be between {min_key} and {max_key}.")
 
     for key in ("BACKEND_IMAGE", "BACKEND_ADMIN_IMAGE", "FRONTEND_IMAGE", "RUNNER_IMAGE"):
