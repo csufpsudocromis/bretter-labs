@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     kube_image_pvc: str = "golden-images"
     kube_runtime_class: str = ""  # set to your RuntimeClass name if needed
     reaper_interval_seconds: int = 60
+    backend_image: str = "ghcr.io/csufpsudocromis/bretter-backend-runtime:v0.3.1"
+    backend_admin_image: str = "ghcr.io/csufpsudocromis/bretter-backend:v0.3.1"
     runner_image: str = "ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1"
     image_pull_secret: str = "ghcr-creds"  # optional: name of imagePullSecret in the namespace
     kube_node_selector_key: str = "kubernetes.io/hostname"
@@ -36,11 +38,21 @@ class Settings(BaseSettings):
     labinstance_crd_plural: str = "labinstances"
     labinstance_crd_finalizer: str = "labs.bretter.io/finalizer"
     labinstance_controller_enabled: bool = False
+    labinstance_controller_leader_election_enabled: bool = True
+    labinstance_controller_lease_name: str = "bretter-labinstance-controller-leader"
+    labinstance_controller_lease_duration_seconds: int = 30
+    labinstance_controller_renew_deadline_seconds: int = 20
+    labinstance_controller_retry_period_seconds: int = 5
     labinstance_controller_dry_run: bool = False
     labinstance_controller_poll_seconds: int = 15
     labinstance_controller_stuck_seconds: int = 600
     labinstance_controller_metrics_bind: str = "0.0.0.0"
     labinstance_controller_metrics_port: int = 9408
+    image_import_backend: str = "db"  # db|dual|crd
+    labimageimport_crd_group: str = "labs.bretter.io"
+    labimageimport_crd_version: str = "v1alpha1"
+    labimageimport_crd_plural: str = "labimageimports"
+    labimageimport_crd_finalizer: str = "labs.bretter.io/imageimport-finalizer"
     # Default Windows to UEFI/q35; can be overridden per environment.
     windows_efi_enabled: bool = True
     windows_machine_type: str = "q35"

@@ -104,7 +104,7 @@ GitHub/GHCR token rotation:
 3. Re-run package publish and guardrail workflows.
 4. Confirm no plaintext tokens are committed:
    ```bash
-   python3 scripts/check_no_plaintext_tokens.py
+   python3 scripts/check_no_plaintext_tokens.py --history
    ```
 
 ## Failure modes

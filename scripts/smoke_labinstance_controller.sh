@@ -11,6 +11,7 @@ NAMESPACE="${NAMESPACE:-labs}"
 WAIT_SECONDS="${LABINSTANCE_SMOKE_WAIT_SECONDS:-120}"
 POLL_SECONDS="${LABINSTANCE_SMOKE_POLL_SECONDS:-2}"
 METRICS_PORT="${LABINSTANCE_CONTROLLER_METRICS_PORT:-19408}"
+ORCHESTRATION_BACKEND="${BLABS_ORCHESTRATION_BACKEND:-crd}"
 INSTANCE_NAME="smoke-labinstance-$(date +%s)"
 CONTROLLER_LOG_PATH="${LABINSTANCE_CONTROLLER_LOG_PATH:-/tmp/blabs-labinstance-controller-smoke.log}"
 CONTROLLER_PID=""
@@ -20,7 +21,7 @@ if ! [[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] || [ "$WAIT_SECONDS" -lt 10 ]; then
   exit 1
 fi
 
-# shellcheck disable=SC2317  # Invoked indirectly via EXIT trap.
+# shellcheck disable=SC2317,SC2329  # Invoked indirectly via EXIT trap.
 cleanup() {
   kubectl -n "$NAMESPACE" delete labinstance "$INSTANCE_NAME" --ignore-not-found=true >/dev/null 2>&1 || true
   if [ -n "$CONTROLLER_PID" ] && kill -0 "$CONTROLLER_PID" >/dev/null 2>&1; then
@@ -41,6 +42,7 @@ kubectl apply -k "$ROOT_DIR/deploy/crds" >/dev/null
   export BLABS_LABINSTANCE_CONTROLLER_STUCK_SECONDS=300
   export BLABS_LABINSTANCE_CONTROLLER_METRICS_BIND=127.0.0.1
   export BLABS_LABINSTANCE_CONTROLLER_METRICS_PORT="$METRICS_PORT"
+  export BLABS_ORCHESTRATION_BACKEND="$ORCHESTRATION_BACKEND"
   export BLABS_DATABASE_PATH="${BLABS_DATABASE_PATH:-/tmp/blabs-controller-smoke.db}"
   export BLABS_REQUIRE_SCHEMA_READY=0
   cd "$ROOT_DIR"
@@ -62,6 +64,16 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
 done
 if ! curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" >/dev/null 2>&1; then
   echo "ERROR: LabInstance controller metrics endpoint did not become ready in time." >&2
+  cat "$CONTROLLER_LOG_PATH" >&2 || true
+  exit 1
+fi
+if ! curl -fsS "http://127.0.0.1:${METRICS_PORT}/livez" >/dev/null 2>&1; then
+  echo "ERROR: LabInstance controller liveness endpoint failed." >&2
+  cat "$CONTROLLER_LOG_PATH" >&2 || true
+  exit 1
+fi
+if ! curl -fsS "http://127.0.0.1:${METRICS_PORT}/readyz" >/dev/null 2>&1; then
+  echo "ERROR: LabInstance controller readiness endpoint failed." >&2
   cat "$CONTROLLER_LOG_PATH" >&2 || true
   exit 1
 fi

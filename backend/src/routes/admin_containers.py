@@ -1,8 +1,6 @@
 import json
 import logging
-import os
 import re
-import subprocess
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
@@ -117,54 +115,23 @@ def _enforce_registry_policy(image_ref: str) -> None:
 def _verify_image_signature(image_ref: str) -> str | None:
     if not settings.container_signature_verification_enabled:
         return None
-    cosign_home = "/tmp/blabs-cosign/home"
-    cosign_cache = "/tmp/blabs-cosign/cache"
     try:
-        os.makedirs(cosign_home, mode=0o700, exist_ok=True)
-        os.makedirs(cosign_cache, mode=0o700, exist_ok=True)
-    except OSError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"failed to prepare local signature verification cache: {exc}",
-        ) from exc
-    cosign_env = os.environ.copy()
-    cosign_env["HOME"] = cosign_home
-    cosign_env["XDG_CACHE_HOME"] = cosign_cache
-    cmd = ["cosign", "verify"]
-    key_ref = (settings.container_signature_key_ref or "").strip()
-    if key_ref:
-        cmd.extend(["--key", key_ref])
-    else:
-        # Cosign v3 requires identity/issuer constraints for keyless verification.
-        # Use permissive regex defaults to preserve existing "any keyless signer" policy.
-        cmd.extend(
-            [
-                "--certificate-identity-regexp",
-                ".*",
-                "--certificate-oidc-issuer-regexp",
-                ".*",
-            ]
-        )
-    cmd.append(image_ref)
-    try:
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=60, env=cosign_env)
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="cosign is required for signature verification but is not installed",
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
+        warning = kube.verify_container_image_signature(image_ref)
+    except TimeoutError as exc:
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail="image signature verification timed out"
         ) from exc
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "signature verification failed").strip()
+    except RuntimeError as exc:
+        detail = str(exc or "").strip()
         if "no signatures found" in detail.lower():
             warning = "Image has no signatures; continuing with warning-only policy."
             logger.warning("Container image %s has no signatures; allowing registration by policy.", image_ref)
             return warning
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=detail[:500])
-    return None
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(detail or "signature verification failed")[:500],
+        ) from exc
+    return warning
 
 
 def _normalize_template_key(value: str) -> str:

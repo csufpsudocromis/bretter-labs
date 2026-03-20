@@ -64,6 +64,17 @@ def _validate_startup_config() -> None:
         if not str(getattr(settings, "labinstance_crd_plural", "") or "").strip():
             raise RuntimeError("BLABS_LABINSTANCE_CRD_PLURAL must be set when orchestration backend is dual/crd.")
 
+    image_import_backend = str(getattr(settings, "image_import_backend", "db") or "db").strip().lower()
+    if image_import_backend not in {"db", "dual", "crd"}:
+        raise RuntimeError("BLABS_IMAGE_IMPORT_BACKEND must be one of: db, dual, crd.")
+    if image_import_backend in {"dual", "crd"}:
+        if not str(getattr(settings, "labimageimport_crd_group", "") or "").strip():
+            raise RuntimeError("BLABS_LABIMAGEIMPORT_CRD_GROUP must be set when image import backend is dual/crd.")
+        if not str(getattr(settings, "labimageimport_crd_version", "") or "").strip():
+            raise RuntimeError("BLABS_LABIMAGEIMPORT_CRD_VERSION must be set when image import backend is dual/crd.")
+        if not str(getattr(settings, "labimageimport_crd_plural", "") or "").strip():
+            raise RuntimeError("BLABS_LABIMAGEIMPORT_CRD_PLURAL must be set when image import backend is dual/crd.")
+
     if not bool(getattr(settings, "production_profile", False)):
         return
 
@@ -250,7 +261,8 @@ async def reaper_loop() -> None:
             with Session(engine) as session:
                 kube.reaper_tick(session)
                 _scan_due_container_image(session)
-                if settings.image_upload_watchdog_enabled:
+                image_import_backend = str(getattr(settings, "image_import_backend", "db") or "db").strip().lower()
+                if settings.image_upload_watchdog_enabled and image_import_backend in {"db", "dual", "crd"}:
                     watchdog_stats = admin.run_upload_task_watchdog(
                         session,
                         max_tasks=settings.image_upload_watchdog_max_tasks,

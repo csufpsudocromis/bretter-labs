@@ -10,7 +10,12 @@ fi
 cd "$ROOT_DIR"
 
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_release_discipline.py"
-"$PYTHON_BIN" "$ROOT_DIR/scripts/check_no_plaintext_tokens.py"
+TOKEN_SCAN_HISTORY="${TOKEN_SCAN_HISTORY:-1}"
+if [ "$TOKEN_SCAN_HISTORY" = "1" ]; then
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/check_no_plaintext_tokens.py" --history
+else
+  "$PYTHON_BIN" "$ROOT_DIR/scripts/check_no_plaintext_tokens.py"
+fi
 "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/lint_crd_schema.py"
 if ! command -v kubectl >/dev/null 2>&1; then

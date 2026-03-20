@@ -18,6 +18,10 @@ kubectl -n labs get deploy bretter-labinstance-operator
 kubectl -n labs get pods -l app.kubernetes.io/name=bretter-labinstance-operator
 kubectl -n labs logs deploy/bretter-labinstance-operator --tail=300
 kubectl -n labs get labinstances.labs.bretter.io
+# if port-forwarded locally:
+curl -fsS http://127.0.0.1:9408/livez
+curl -fsS http://127.0.0.1:9408/readyz
+curl -fsS http://127.0.0.1:9408/metrics | head
 ```
 
 If the operator is crash-looping:

@@ -7,6 +7,10 @@ PYTHON_BIN="${PYTHON:-python3}"
 if [ -x "$ROOT_DIR/.venv/bin/python" ]; then
   PYTHON_BIN="$ROOT_DIR/.venv/bin/python"
 fi
+PROD_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend-runtime@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe"
+PROD_BACKEND_ADMIN_IMAGE="ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe"
+PROD_FRONTEND_IMAGE="ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a"
+PROD_RUNNER_IMAGE="ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76"
 
 run_success() {
   local name="$1"
@@ -78,18 +82,16 @@ run_failure "reject invalid runner smoke toggle" \
 
 run_failure "reject production profile with missing explicit control-node override" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
-  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
-  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
+  BACKEND_IMAGE="$PROD_BACKEND_IMAGE" BACKEND_ADMIN_IMAGE="$PROD_BACKEND_ADMIN_IMAGE" \
+  FRONTEND_IMAGE="$PROD_FRONTEND_IMAGE" RUNNER_IMAGE="$PROD_RUNNER_IMAGE" \
   RUNNER_NODE_SELECTOR_VALUE=runner-pool NODE_EXTERNAL_HOST=prod-labs.internal VM_STORAGE_CLASS=prod-vm-storage \
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"
 
 run_success "allow production dry-run with explicit hardened overrides" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
-  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
-  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
+  BACKEND_IMAGE="$PROD_BACKEND_IMAGE" BACKEND_ADMIN_IMAGE="$PROD_BACKEND_ADMIN_IMAGE" \
+  FRONTEND_IMAGE="$PROD_FRONTEND_IMAGE" RUNNER_IMAGE="$PROD_RUNNER_IMAGE" \
   CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"
@@ -97,17 +99,15 @@ run_success "allow production dry-run with explicit hardened overrides" \
 run_failure "reject production profile with local/dev image references" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
   BACKEND_IMAGE=localhost/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
-  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
-  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
+  BACKEND_ADMIN_IMAGE="$PROD_BACKEND_ADMIN_IMAGE" FRONTEND_IMAGE="$PROD_FRONTEND_IMAGE" RUNNER_IMAGE="$PROD_RUNNER_IMAGE" \
   CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"
 
 run_failure "reject production profile when schema gate is disabled" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 REQUIRE_SCHEMA_READY=0 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
-  BACKEND_IMAGE=ghcr.io/csufpsudocromis/bretter-backend@sha256:9431c8a0774ae07529d74c5b57b35a0cf93f66642955d67da884c3953d1ab2fe \
-  FRONTEND_IMAGE=ghcr.io/csufpsudocromis/bretter-frontend@sha256:ab276331c5c9f9125b3ed4b67fbfd057358f3d2132de713d20c4cc4db49a947a \
-  RUNNER_IMAGE=ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76 \
+  BACKEND_IMAGE="$PROD_BACKEND_IMAGE" BACKEND_ADMIN_IMAGE="$PROD_BACKEND_ADMIN_IMAGE" \
+  FRONTEND_IMAGE="$PROD_FRONTEND_IMAGE" RUNNER_IMAGE="$PROD_RUNNER_IMAGE" \
   CONTROL_NODE=control-plane-1 NODE_EXTERNAL_HOST=prod-labs.internal RUNNER_NODE_SELECTOR_VALUE=runner-pool VM_STORAGE_CLASS=prod-vm-storage \
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import socket
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -55,6 +57,9 @@ class _Metrics:
         self.finalizer_backlog = 0
         self.stuck_instances = 0
         self.last_cycle_unix = 0
+        self.last_liveness_unix = int(time.time())
+        self.ready = 0
+        self.leader = 0
 
     def observe(self, result: str, seconds: float) -> None:
         with self._lock:
@@ -71,6 +76,23 @@ class _Metrics:
             self.finalizer_backlog = max(0, int(finalizer_backlog))
             self.stuck_instances = max(0, int(stuck_instances))
             self.last_cycle_unix = int(time.time())
+
+    def touch_liveness(self) -> None:
+        with self._lock:
+            self.last_liveness_unix = int(time.time())
+
+    def set_health(self, *, ready: bool, leader: bool) -> None:
+        with self._lock:
+            self.ready = 1 if ready else 0
+            self.leader = 1 if leader else 0
+
+    def is_live(self, *, stale_after_seconds: int = 180) -> bool:
+        with self._lock:
+            return int(time.time()) - self.last_liveness_unix <= max(30, int(stale_after_seconds or 180))
+
+    def is_ready(self) -> bool:
+        with self._lock:
+            return self.ready == 1
 
     def render_prometheus(self) -> str:
         with self._lock:
@@ -95,6 +117,12 @@ class _Metrics:
                 "# HELP blabs_labinstance_last_reconcile_unix Latest successful reconcile cycle timestamp.",
                 "# TYPE blabs_labinstance_last_reconcile_unix gauge",
                 f"blabs_labinstance_last_reconcile_unix {self.last_cycle_unix}",
+                "# HELP blabs_labinstance_controller_ready Controller readiness state.",
+                "# TYPE blabs_labinstance_controller_ready gauge",
+                f"blabs_labinstance_controller_ready {self.ready}",
+                "# HELP blabs_labinstance_controller_leader Controller lease leadership state.",
+                "# TYPE blabs_labinstance_controller_leader gauge",
+                f"blabs_labinstance_controller_leader {self.leader}",
                 "",
             ]
             return "\n".join(lines)
@@ -104,7 +132,22 @@ class _MetricsHandler(BaseHTTPRequestHandler):
     metrics: _Metrics
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path not in {"/metrics", "/metrics/"}:
+        path = self.path.split("?", 1)[0]
+        if path in {"/livez", "/livez/"}:
+            status_code = 200 if self.metrics.is_live() else 503
+            self.send_response(status_code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"ok\n" if status_code == 200 else b"stale\n")
+            return
+        if path in {"/readyz", "/readyz/"}:
+            status_code = 200 if self.metrics.is_ready() else 503
+            self.send_response(status_code)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"ready\n" if status_code == 200 else b"not-ready\n")
+            return
+        if path not in {"/metrics", "/metrics/"}:
             self.send_response(404)
             self.end_headers()
             return
@@ -123,6 +166,144 @@ class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+class _LeaderElector:
+    def __init__(
+        self,
+        *,
+        enabled: bool,
+        namespace: str,
+        lease_name: str,
+        identity: str,
+        lease_duration_seconds: int,
+        retry_period_seconds: int,
+    ) -> None:
+        self.enabled = enabled
+        self.namespace = namespace
+        self.lease_name = lease_name
+        self.identity = identity
+        self.lease_duration_seconds = max(15, int(lease_duration_seconds or 30))
+        self.retry_period_seconds = max(2, int(retry_period_seconds or 5))
+        self._coord: client.CoordinationV1Api | None = None
+        self._last_state: bool | None = None
+
+    def bind_client(self, coord: client.CoordinationV1Api) -> None:
+        self._coord = coord
+
+    @staticmethod
+    def _normalize_time(raw: Any) -> datetime | None:
+        if isinstance(raw, datetime):
+            return raw.astimezone(UTC) if raw.tzinfo else raw.replace(tzinfo=UTC)
+        value = str(raw or "").strip()
+        if not value:
+            return None
+        if value.endswith("Z"):
+            value = value[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+    def _is_lease_expired(self, lease: client.V1Lease, now_utc: datetime) -> bool:
+        spec = lease.spec or client.V1LeaseSpec()
+        renew_time = self._normalize_time(spec.renew_time)
+        if renew_time is None:
+            renew_time = self._normalize_time(spec.acquire_time)
+        if renew_time is None:
+            return True
+        duration = int(spec.lease_duration_seconds or self.lease_duration_seconds)
+        return now_utc > (renew_time + timedelta(seconds=max(1, duration)))
+
+    @staticmethod
+    def _fmt_micro(now: datetime) -> str:
+        return now.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    def _build_spec(
+        self,
+        *,
+        previous: client.V1Lease | None,
+        now: datetime,
+    ) -> dict[str, Any]:
+        now_micro = self._fmt_micro(now)
+        prev_spec = previous.spec if previous and previous.spec else client.V1LeaseSpec()
+        previous_holder = str(prev_spec.holder_identity or "").strip()
+        transitions = int(prev_spec.lease_transitions or 0)
+        if previous_holder and previous_holder != self.identity:
+            transitions += 1
+        acquire_time_obj = self._normalize_time(prev_spec.acquire_time)
+        acquire_time = self._fmt_micro(acquire_time_obj) if acquire_time_obj is not None else ""
+        if not previous_holder or previous_holder != self.identity or not acquire_time:
+            acquire_time = now_micro
+        return {
+            "holderIdentity": self.identity,
+            "acquireTime": acquire_time,
+            "renewTime": now_micro,
+            "leaseDurationSeconds": self.lease_duration_seconds,
+            "leaseTransitions": transitions,
+        }
+
+    def _log_state(self, is_leader: bool) -> None:
+        if self._last_state is None or self._last_state != is_leader:
+            if is_leader:
+                logger.info("Leader election: acquired lease %s/%s", self.namespace, self.lease_name)
+            else:
+                logger.info("Leader election: standby mode for lease %s/%s", self.namespace, self.lease_name)
+        self._last_state = is_leader
+
+    def should_run_reconcile(self) -> bool:
+        if not self.enabled:
+            return True
+        if self._coord is None:
+            raise RuntimeError("leader elector client is not bound")
+        now = datetime.now(UTC)
+        try:
+            lease = self._coord.read_namespaced_lease(name=self.lease_name, namespace=self.namespace)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            body = {
+                "apiVersion": "coordination.k8s.io/v1",
+                "kind": "Lease",
+                "metadata": {"name": self.lease_name, "namespace": self.namespace},
+                "spec": self._build_spec(previous=None, now=now),
+            }
+            try:
+                self._coord.create_namespaced_lease(namespace=self.namespace, body=body)
+                self._log_state(True)
+                return True
+            except ApiException as create_exc:
+                if create_exc.status not in {409, 422}:
+                    raise
+                self._log_state(False)
+                return False
+
+        holder = str((lease.spec or client.V1LeaseSpec()).holder_identity or "").strip()
+        expired = self._is_lease_expired(lease, now)
+        if holder and holder != self.identity and not expired:
+            self._log_state(False)
+            return False
+
+        body = {
+            "apiVersion": "coordination.k8s.io/v1",
+            "kind": "Lease",
+            "metadata": {
+                "name": self.lease_name,
+                "namespace": self.namespace,
+                "resourceVersion": (lease.metadata.resource_version if lease.metadata else None),
+            },
+            "spec": self._build_spec(previous=lease, now=now),
+        }
+        try:
+            self._coord.replace_namespaced_lease(name=self.lease_name, namespace=self.namespace, body=body)
+            self._log_state(True)
+            return True
+        except ApiException as exc:
+            if exc.status not in {409, 422}:
+                raise
+            self._log_state(False)
+            return False
+
+
 class LabInstanceController:
     def __init__(self, metrics: _Metrics) -> None:
         self.metrics = metrics
@@ -134,8 +315,22 @@ class LabInstanceController:
         self.dry_run = bool(getattr(settings, "labinstance_controller_dry_run", False))
         self.poll_seconds = max(3, int(settings.labinstance_controller_poll_seconds or 15))
         self.stuck_seconds = max(60, int(settings.labinstance_controller_stuck_seconds or 600))
+        self.leader_retry_seconds = max(2, int(settings.labinstance_controller_retry_period_seconds or 5))
 
         self._custom: client.CustomObjectsApi | None = None
+        self._coord: client.CoordinationV1Api | None = None
+        identity = f"{socket.gethostname()}-{os.getpid()}"
+        self._leader_elector = _LeaderElector(
+            enabled=bool(getattr(settings, "labinstance_controller_leader_election_enabled", True)),
+            namespace=self.namespace,
+            lease_name=str(
+                getattr(settings, "labinstance_controller_lease_name", "bretter-labinstance-controller-leader")
+                or "bretter-labinstance-controller-leader"
+            ).strip(),
+            identity=identity,
+            lease_duration_seconds=int(getattr(settings, "labinstance_controller_lease_duration_seconds", 30) or 30),
+            retry_period_seconds=self.leader_retry_seconds,
+        )
 
     def _load_kube(self) -> None:
         try:
@@ -143,6 +338,8 @@ class LabInstanceController:
         except config.ConfigException:
             config.load_kube_config()
         self._custom = client.CustomObjectsApi()
+        self._coord = client.CoordinationV1Api()
+        self._leader_elector.bind_client(self._coord)
         kube._client()
 
     def _api(self) -> client.CustomObjectsApi:
@@ -497,15 +694,32 @@ class LabInstanceController:
         return "ok"
 
     def run_forever(self) -> None:
+        self._load_kube()
         logger.info(
-            "LabInstance controller started namespace=%s group=%s version=%s plural=%s poll=%ss",
+            "LabInstance controller started namespace=%s group=%s version=%s plural=%s poll=%ss leaderElection=%s",
             self.namespace,
             self.group,
             self.version,
             self.plural,
             self.poll_seconds,
+            "enabled" if self._leader_elector.enabled else "disabled",
         )
+        self.metrics.set_health(ready=False, leader=False)
         while True:
+            self.metrics.touch_liveness()
+            try:
+                can_reconcile = self._leader_elector.should_run_reconcile()
+            except Exception:
+                logger.exception("Leader election check failed")
+                self.metrics.set_health(ready=False, leader=False)
+                time.sleep(self.leader_retry_seconds)
+                continue
+            if not can_reconcile:
+                self.metrics.set_health(ready=False, leader=False)
+                time.sleep(self.leader_retry_seconds)
+                continue
+
+            self.metrics.set_health(ready=True, leader=True)
             started = time.monotonic()
             result = "ok"
             try:
@@ -538,6 +752,7 @@ class LabInstanceController:
             except Exception:
                 result = "error"
                 logger.exception("LabInstance reconcile cycle failed")
+                self.metrics.set_health(ready=False, leader=True)
                 self.metrics.observe("error", max(0.0, time.monotonic() - started))
             if result == "ok":
                 elapsed = time.monotonic() - started
@@ -553,7 +768,11 @@ def _start_metrics_server(metrics: _Metrics) -> _ThreadingHTTPServer:
     server = _ThreadingHTTPServer((bind_host, bind_port), _MetricsHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    logger.info("LabInstance controller metrics endpoint listening on %s:%s/metrics", bind_host, bind_port)
+    logger.info(
+        "LabInstance controller health endpoints listening on %s:%s (metrics=/metrics, livez=/livez, readyz=/readyz)",
+        bind_host,
+        bind_port,
+    )
     return server
 
 

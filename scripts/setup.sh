@@ -11,16 +11,18 @@ fi
 
 NAMESPACE="${NAMESPACE:-labs}"
 if [ -n "$DEFAULT_IMAGE_TAG" ]; then
-  DEFAULT_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend:${DEFAULT_IMAGE_TAG}"
+  DEFAULT_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend-runtime:${DEFAULT_IMAGE_TAG}"
+  DEFAULT_BACKEND_ADMIN_IMAGE="ghcr.io/csufpsudocromis/bretter-backend:${DEFAULT_IMAGE_TAG}"
   DEFAULT_FRONTEND_IMAGE="ghcr.io/csufpsudocromis/bretter-frontend:${DEFAULT_IMAGE_TAG}"
   DEFAULT_RUNNER_IMAGE="ghcr.io/csufpsudocromis/win-vm-runner:${DEFAULT_IMAGE_TAG}"
 else
-  DEFAULT_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend"
+  DEFAULT_BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend-runtime"
+  DEFAULT_BACKEND_ADMIN_IMAGE="ghcr.io/csufpsudocromis/bretter-backend"
   DEFAULT_FRONTEND_IMAGE="ghcr.io/csufpsudocromis/bretter-frontend"
   DEFAULT_RUNNER_IMAGE="ghcr.io/csufpsudocromis/win-vm-runner"
 fi
 BACKEND_IMAGE="${BACKEND_IMAGE:-$DEFAULT_BACKEND_IMAGE}"
-BACKEND_ADMIN_IMAGE="${BACKEND_ADMIN_IMAGE:-$BACKEND_IMAGE}"
+BACKEND_ADMIN_IMAGE="${BACKEND_ADMIN_IMAGE:-$DEFAULT_BACKEND_ADMIN_IMAGE}"
 FRONTEND_IMAGE="${FRONTEND_IMAGE:-$DEFAULT_FRONTEND_IMAGE}"
 RUNNER_IMAGE="${RUNNER_IMAGE:-$DEFAULT_RUNNER_IMAGE}"
 BACKEND_REPLICAS="${BACKEND_REPLICAS:-1}"
@@ -80,6 +82,16 @@ VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
 BACKEND_NODEPORT_ENABLED="${BACKEND_NODEPORT_ENABLED:-0}"
 BACKEND_NODEPORT="${BACKEND_NODEPORT:-30080}"
 PRODUCTION_PROFILE="${PRODUCTION_PROFILE:-0}"
+ORCHESTRATION_BACKEND="${ORCHESTRATION_BACKEND:-db}"
+IMAGE_IMPORT_BACKEND="${IMAGE_IMPORT_BACKEND:-db}"
+LABINSTANCE_CRD_GROUP="${LABINSTANCE_CRD_GROUP:-labs.bretter.io}"
+LABINSTANCE_CRD_VERSION="${LABINSTANCE_CRD_VERSION:-v1alpha1}"
+LABINSTANCE_CRD_PLURAL="${LABINSTANCE_CRD_PLURAL:-labinstances}"
+LABINSTANCE_CRD_FINALIZER="${LABINSTANCE_CRD_FINALIZER:-labs.bretter.io/finalizer}"
+LABIMAGEIMPORT_CRD_GROUP="${LABIMAGEIMPORT_CRD_GROUP:-labs.bretter.io}"
+LABIMAGEIMPORT_CRD_VERSION="${LABIMAGEIMPORT_CRD_VERSION:-v1alpha1}"
+LABIMAGEIMPORT_CRD_PLURAL="${LABIMAGEIMPORT_CRD_PLURAL:-labimageimports}"
+LABIMAGEIMPORT_CRD_FINALIZER="${LABIMAGEIMPORT_CRD_FINALIZER:-labs.bretter.io/imageimport-finalizer}"
 REQUIRE_SCHEMA_READY="${REQUIRE_SCHEMA_READY:-1}"
 EXPECTED_ALEMBIC_REVISION="${EXPECTED_ALEMBIC_REVISION:-}"
 CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
@@ -2125,6 +2137,9 @@ render_helm_values_override() {
   local control_node node_external_host runner_node_selector_value vm_storage_class
   local backend_image backend_admin_image frontend_image runner_image public_scheme tls_secret_name
   local backend_replicas frontend_replicas
+  local orchestration_backend image_import_backend
+  local labinstance_crd_group labinstance_crd_version labinstance_crd_plural labinstance_crd_finalizer
+  local labimageimport_crd_group labimageimport_crd_version labimageimport_crd_plural labimageimport_crd_finalizer
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local backend_service_type backend_service_nodeport_line
@@ -2150,6 +2165,16 @@ render_helm_values_override() {
   runner_image="$(yaml_escape "$RUNNER_IMAGE")"
   backend_replicas="$(yaml_escape "$BACKEND_REPLICAS")"
   frontend_replicas="$(yaml_escape "$FRONTEND_REPLICAS")"
+  orchestration_backend="$(yaml_escape "$ORCHESTRATION_BACKEND")"
+  image_import_backend="$(yaml_escape "$IMAGE_IMPORT_BACKEND")"
+  labinstance_crd_group="$(yaml_escape "$LABINSTANCE_CRD_GROUP")"
+  labinstance_crd_version="$(yaml_escape "$LABINSTANCE_CRD_VERSION")"
+  labinstance_crd_plural="$(yaml_escape "$LABINSTANCE_CRD_PLURAL")"
+  labinstance_crd_finalizer="$(yaml_escape "$LABINSTANCE_CRD_FINALIZER")"
+  labimageimport_crd_group="$(yaml_escape "$LABIMAGEIMPORT_CRD_GROUP")"
+  labimageimport_crd_version="$(yaml_escape "$LABIMAGEIMPORT_CRD_VERSION")"
+  labimageimport_crd_plural="$(yaml_escape "$LABIMAGEIMPORT_CRD_PLURAL")"
+  labimageimport_crd_finalizer="$(yaml_escape "$LABIMAGEIMPORT_CRD_FINALIZER")"
   public_scheme="$(yaml_escape "$PUBLIC_SCHEME")"
   tls_secret_name="$(yaml_escape "$TLS_SECRET_NAME")"
   windows_machine_type="$(yaml_escape "$WINDOWS_MACHINE_TYPE")"
@@ -2222,6 +2247,16 @@ appTemplateValues:
   RUNNER_IMAGE: "${runner_image}"
   BACKEND_REPLICAS: "${backend_replicas}"
   FRONTEND_REPLICAS: "${frontend_replicas}"
+  ORCHESTRATION_BACKEND: "${orchestration_backend}"
+  IMAGE_IMPORT_BACKEND: "${image_import_backend}"
+  LABINSTANCE_CRD_GROUP: "${labinstance_crd_group}"
+  LABINSTANCE_CRD_VERSION: "${labinstance_crd_version}"
+  LABINSTANCE_CRD_PLURAL: "${labinstance_crd_plural}"
+  LABINSTANCE_CRD_FINALIZER: "${labinstance_crd_finalizer}"
+  LABIMAGEIMPORT_CRD_GROUP: "${labimageimport_crd_group}"
+  LABIMAGEIMPORT_CRD_VERSION: "${labimageimport_crd_version}"
+  LABIMAGEIMPORT_CRD_PLURAL: "${labimageimport_crd_plural}"
+  LABIMAGEIMPORT_CRD_FINALIZER: "${labimageimport_crd_finalizer}"
   PUBLIC_SCHEME: "${public_scheme}"
   TLS_SECRET_NAME: "${tls_secret_name}"
   ADMIN_BOOTSTRAP_PASSWORD: "${admin_bootstrap_password}"
@@ -4378,6 +4413,7 @@ log_runtime_configuration() {
   fi
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Backend images (runtime/admin jobs): ${BACKEND_IMAGE} / ${BACKEND_ADMIN_IMAGE}"
+  log "Orchestration backends (vm/image): ${ORCHESTRATION_BACKEND} / ${IMAGE_IMPORT_BACKEND}"
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"

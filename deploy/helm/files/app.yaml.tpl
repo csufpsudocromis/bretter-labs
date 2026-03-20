@@ -63,6 +63,12 @@ rules:
   - apiGroups: ["upload.cdi.kubevirt.io"]
     resources: ["uploadtokenrequests"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["labs.bretter.io"]
+    resources: ["labinstances", "labinstances/status", "labimageimports", "labimageimports/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -478,6 +484,8 @@ spec:
               value: __TLS_SECRET_NAME__
             - name: BLABS_ORCHESTRATION_BACKEND
               value: "__ORCHESTRATION_BACKEND__"
+            - name: BLABS_IMAGE_IMPORT_BACKEND
+              value: "__IMAGE_IMPORT_BACKEND__"
             - name: BLABS_LABINSTANCE_CRD_GROUP
               value: "__LABINSTANCE_CRD_GROUP__"
             - name: BLABS_LABINSTANCE_CRD_VERSION
@@ -486,6 +494,18 @@ spec:
               value: "__LABINSTANCE_CRD_PLURAL__"
             - name: BLABS_LABINSTANCE_CRD_FINALIZER
               value: "__LABINSTANCE_CRD_FINALIZER__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_GROUP
+              value: "__LABIMAGEIMPORT_CRD_GROUP__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_VERSION
+              value: "__LABIMAGEIMPORT_CRD_VERSION__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_PLURAL
+              value: "__LABIMAGEIMPORT_CRD_PLURAL__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_FINALIZER
+              value: "__LABIMAGEIMPORT_CRD_FINALIZER__"
+            - name: BLABS_BACKEND_IMAGE
+              value: "__BACKEND_IMAGE__"
+            - name: BLABS_BACKEND_ADMIN_IMAGE
+              value: "__BACKEND_ADMIN_IMAGE__"
             - name: BLABS_KUBE_NODE_SELECTOR_VALUE
               value: "__RUNNER_NODE_SELECTOR_VALUE__"
             - name: BLABS_RUNNER_IMAGE
@@ -908,3 +928,14 @@ spec:
   selector:
     matchLabels:
       app: bretter-frontend
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bretter-labinstance-controller
+  namespace: __NAMESPACE__
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bretter-labinstance-controller

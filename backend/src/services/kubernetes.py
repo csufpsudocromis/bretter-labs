@@ -9,7 +9,6 @@ import math
 import json
 import hashlib
 import ipaddress
-import subprocess
 import re
 import shlex
 import time
@@ -138,6 +137,143 @@ class KubernetesService:
 
     def _instance_netpol_name(self, instance_id: str, owner: str) -> str:
         return f"{self._find_pod_name(instance_id, owner)}-egress-only"
+
+    @staticmethod
+    def _admin_helper_pod_name() -> str:
+        return f"backend-admin-{uuid4().hex[:8]}"
+
+    def _run_admin_helper_pod(
+        self,
+        *,
+        command: list[str],
+        timeout_seconds: int = 180,
+        env: dict[str, str] | None = None,
+        mount_signature_key: bool = False,
+    ) -> tuple[int, str]:
+        core = self._client()
+        pod_name = self._admin_helper_pod_name()
+        helper_image = (
+            str(getattr(settings, "backend_admin_image", "") or "").strip()
+            or str(getattr(settings, "backend_image", "") or "").strip()
+        )
+        if not helper_image:
+            helper_image = "ghcr.io/csufpsudocromis/bretter-backend:v0.3.1"
+        volumes: list[client.V1Volume] = []
+        volume_mounts: list[client.V1VolumeMount] = []
+        if mount_signature_key and str(settings.container_signature_key_secret_name or "").strip():
+            volumes.append(
+                client.V1Volume(
+                    name="container-signature-key",
+                    secret=client.V1SecretVolumeSource(
+                        secret_name=str(settings.container_signature_key_secret_name).strip(),
+                        optional=True,
+                    ),
+                )
+            )
+            volume_mounts.append(
+                client.V1VolumeMount(name="container-signature-key", mount_path="/etc/bretter-signing", read_only=True)
+            )
+
+        pod = client.V1Pod(
+            metadata=client.V1ObjectMeta(
+                name=pod_name,
+                namespace=settings.kube_namespace,
+                labels={"app.kubernetes.io/part-of": "bretter-labs", "job-type": "backend-admin-tool"},
+            ),
+            spec=client.V1PodSpec(
+                restart_policy="Never",
+                image_pull_secrets=(
+                    [client.V1LocalObjectReference(name=settings.image_pull_secret)]
+                    if settings.image_pull_secret
+                    else None
+                ),
+                containers=[
+                    client.V1Container(
+                        name="worker",
+                        image=helper_image,
+                        image_pull_policy="IfNotPresent",
+                        command=command,
+                        env=[client.V1EnvVar(name=key, value=value) for key, value in sorted((env or {}).items())],
+                        volume_mounts=volume_mounts or None,
+                    )
+                ],
+                volumes=volumes or None,
+            ),
+        )
+
+        logs = ""
+        try:
+            core.create_namespaced_pod(namespace=settings.kube_namespace, body=pod)
+            deadline = time.time() + max(30, int(timeout_seconds or 180))
+            last_phase = ""
+            while time.time() < deadline:
+                snapshot = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+                last_phase = str(snapshot.status.phase or "").strip().lower()
+                if last_phase in {"succeeded", "failed"}:
+                    break
+                time.sleep(2)
+            else:
+                raise TimeoutError(f"admin helper pod timed out after {timeout_seconds}s")
+
+            try:
+                logs = core.read_namespaced_pod_log(
+                    name=pod_name,
+                    namespace=settings.kube_namespace,
+                    container="worker",
+                    tail_lines=2000,
+                )
+            except ApiException:
+                logs = ""
+
+            status_list = snapshot.status.container_statuses or []
+            if status_list and status_list[0].state and status_list[0].state.terminated:
+                code = int(status_list[0].state.terminated.exit_code or 0)
+                return code, logs
+            if last_phase == "succeeded":
+                return 0, logs
+            return 1, logs
+        finally:
+            try:
+                core.delete_namespaced_pod(
+                    name=pod_name,
+                    namespace=settings.kube_namespace,
+                    grace_period_seconds=0,
+                    propagation_policy="Background",
+                )
+            except Exception:
+                pass
+
+    def verify_container_image_signature(self, image_ref: str) -> str | None:
+        if not settings.container_signature_verification_enabled:
+            return None
+        key_ref = (settings.container_signature_key_ref or "").strip()
+        if key_ref:
+            cmd = ["cosign", "verify", "--key", key_ref, image_ref]
+        else:
+            cmd = [
+                "cosign",
+                "verify",
+                "--certificate-identity-regexp",
+                ".*",
+                "--certificate-oidc-issuer-regexp",
+                ".*",
+                image_ref,
+            ]
+        mount_signature_key = key_ref.startswith("/etc/bretter-signing/")
+        try:
+            code, output = self._run_admin_helper_pod(
+                command=cmd,
+                timeout_seconds=120,
+                mount_signature_key=mount_signature_key,
+            )
+        except TimeoutError as exc:
+            raise RuntimeError("image signature verification timed out") from exc
+        if code == 0:
+            return None
+        detail = str(output or "signature verification failed").strip()
+        if "no signatures found" in detail.lower():
+            return "Image has no signatures; continuing with warning-only policy."
+        raise RuntimeError(detail[:500])
 
     def _pool_pvc_name(self, template_id: str) -> str:
         return f"pool-{template_id[:8]}-{uuid4().hex[:6]}"
@@ -1280,28 +1416,40 @@ class KubernetesService:
         return deduped
 
     def scan_container_image(self, image_ref: str, severity: str = "HIGH,CRITICAL") -> tuple[str, str]:
-        cmd = [
-            "trivy",
-            "image",
-            "--quiet",
-            "--no-progress",
-            "--format",
-            "json",
-            "--severity",
-            severity or "HIGH,CRITICAL",
-            image_ref,
-        ]
+        script = r"""
+set +e
+trivy image --quiet --no-progress --format json --severity "$SEVERITY" "$IMAGE_REF" >/tmp/trivy.json 2>/tmp/trivy.err
+rc=$?
+printf '__BLABS_TRIVY_JSON_BEGIN__\n'
+cat /tmp/trivy.json 2>/dev/null || true
+printf '\n__BLABS_TRIVY_JSON_END__\n'
+printf '__BLABS_TRIVY_ERR_BEGIN__\n'
+cat /tmp/trivy.err 2>/dev/null || true
+printf '\n__BLABS_TRIVY_ERR_END__\n'
+exit "$rc"
+"""
+        env = {"IMAGE_REF": str(image_ref or "").strip(), "SEVERITY": str(severity or "HIGH,CRITICAL").strip()}
         try:
-            result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=180)
-        except FileNotFoundError:
-            return "skipped", "trivy is not installed in backend runtime"
-        except subprocess.TimeoutExpired:
+            code, output = self._run_admin_helper_pod(
+                command=["/bin/sh", "-c", script],
+                timeout_seconds=240,
+                env=env,
+            )
+        except TimeoutError:
             return "error", "scan timed out"
-        if result.returncode not in {0, 1}:
-            detail = (result.stderr or result.stdout or "scan command failed").strip()
+        logs = str(output or "")
+        json_match = re.search(r"__BLABS_TRIVY_JSON_BEGIN__\n(.*?)\n__BLABS_TRIVY_JSON_END__", logs, re.DOTALL)
+        err_match = re.search(r"__BLABS_TRIVY_ERR_BEGIN__\n(.*?)\n__BLABS_TRIVY_ERR_END__", logs, re.DOTALL)
+        json_payload = (json_match.group(1) if json_match else "").strip()
+        err_payload = (err_match.group(1) if err_match else "").strip()
+
+        if code == 127:
+            return "skipped", "trivy is not installed in backend admin image"
+        if code not in {0, 1}:
+            detail = (err_payload or logs or "scan command failed").strip()
             return "error", detail[:512]
         try:
-            payload = json.loads(result.stdout or "{}")
+            payload = json.loads(json_payload or "{}")
         except Exception:
             return "error", "scan output could not be parsed"
         critical = 0

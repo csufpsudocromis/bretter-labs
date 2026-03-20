@@ -12,6 +12,8 @@ appTemplateValues:
   # Optionally override replica counts per environment.
   BACKEND_REPLICAS: "1"
   FRONTEND_REPLICAS: "2"
+  BACKEND_IMAGE: ""
+  BACKEND_ADMIN_IMAGE: ""
   CONTROL_NODE: "<control-node-hostname>"
   NODE_EXTERNAL_HOST: "<public-node-host-or-ip>"
   RUNNER_NODE_SELECTOR_VALUE: "<runner-node-selector-value>"
@@ -19,6 +21,7 @@ appTemplateValues:
   CORS_ALLOWED_ORIGINS: "https://<ui-origin-host>:30073"
   TLS_SECRET_NAME: "<tls-secret-name>"
   ORCHESTRATION_BACKEND: "db"
+  IMAGE_IMPORT_BACKEND: "db"
   REQUIRE_SCHEMA_READY: "1"
   EXPECTED_ALEMBIC_REVISION: ""
   # Keep empty in committed values files. Inject key material via runtime Kubernetes Secret.

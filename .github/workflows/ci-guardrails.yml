@@ -16,7 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: Install shellcheck and shfmt
         run: |
@@ -36,7 +38,7 @@ jobs:
           docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < runner/Dockerfile
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@0.35.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         with:
           scan-type: fs
           scan-ref: .
@@ -47,7 +49,7 @@ jobs:
           exit-code: "1"
 
       - name: Setup Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
         with:
           version: v3.15.4
 
@@ -70,7 +72,7 @@ jobs:
           kubectl apply --dry-run=server -k deploy/crds
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -95,13 +97,16 @@ jobs:
         run: .venv/bin/python scripts/check_release_discipline.py
 
       - name: Run plaintext token guardrail
-        run: .venv/bin/python scripts/check_no_plaintext_tokens.py
+        run: .venv/bin/python scripts/check_no_plaintext_tokens.py --history
 
       - name: Validate production profile (strict gate)
         run: .venv/bin/python scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
 
       - name: Run LabInstance controller smoke (kind, dry-run)
         run: NAMESPACE=labs PYTHON=.venv/bin/python ./scripts/smoke_labinstance_controller.sh
+
+      - name: Run LabInstance controller smoke (kind, CRD mode)
+        run: NAMESPACE=labs PYTHON=.venv/bin/python BLABS_ORCHESTRATION_BACKEND=crd ./scripts/smoke_labinstance_controller.sh
 
       - name: Run CI guardrails
         run: ./scripts/ci_guardrails.sh
@@ -111,7 +116,7 @@ jobs:
         run: kind delete cluster --name crd-check || true
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: "npm"

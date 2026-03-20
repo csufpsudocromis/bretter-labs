@@ -7,9 +7,9 @@ import re
 import shlex
 import shutil
 import sqlite3
-import subprocess
 import time
 from collections import Counter, defaultdict, deque
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote as urlquote
@@ -77,6 +77,11 @@ from ..rbac import (
     list_permissions_for_role,
     normalize_requested_role,
     role_for_user,
+)
+from ..services.labimageimport_crd import (
+    image_import_writes_crd,
+    patch_labimageimport_status_for_task,
+    upsert_labimageimport_for_task,
 )
 from ..services.kubernetes import kube
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
@@ -1284,27 +1289,6 @@ def _collect_rdp_readiness_telemetry(
     )
 
 
-def _helper_overrides(worker_image: str, claim_name: str) -> str:
-    spec: dict = {
-        "spec": {
-            "volumes": [{"name": "images", "persistentVolumeClaim": {"claimName": claim_name}}],
-            "containers": [
-                {
-                    "name": "worker",
-                    "image": worker_image,
-                    "imagePullPolicy": "IfNotPresent",
-                    "command": ["/bin/sh", "-c", "sleep 3600"],
-                    "volumeMounts": [{"name": "images", "mountPath": "/images"}],
-                }
-            ],
-            "restartPolicy": "Never",
-        }
-    }
-    if settings.image_pull_secret:
-        spec["spec"]["imagePullSecrets"] = [{"name": settings.image_pull_secret}]
-    return json.dumps(spec, separators=(",", ":"))
-
-
 def _ensure_config_columns() -> None:
     if not SQLITE_DB:
         return
@@ -1742,6 +1726,23 @@ def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
+
+
+def _sync_labimageimport_crd(task: ImageUploadTask, *, create_if_missing: bool) -> None:
+    if not image_import_writes_crd():
+        return
+    try:
+        if create_if_missing:
+            upsert_labimageimport_for_task(task)
+            return
+        patch_labimageimport_status_for_task(task)
+    except ApiException as exc:
+        if not create_if_missing and exc.status == 404:
+            upsert_labimageimport_for_task(task)
+            return
+        logger.warning("Failed to sync LabImageImport CRD for task=%s: %s", task.id, exc, exc_info=True)
+    except Exception:
+        logger.warning("Failed to sync LabImageImport CRD for task=%s", task.id, exc_info=True)
 
 
 def _update_upload_task(
@@ -2937,6 +2938,7 @@ def run_upload_task_watchdog(session: Session, *, max_tasks: int | None = None) 
             continue
 
         current_status = str(getattr(refreshed, "status", "") or "").strip().lower()
+        _sync_labimageimport_crd(refreshed, create_if_missing=False)
         if current_status == "completed":
             stats["completed"] += 1
         elif current_status == "failed":
@@ -2944,17 +2946,11 @@ def run_upload_task_watchdog(session: Session, *, max_tasks: int | None = None) 
     return stats
 
 
-def _run(cmd: list[str], *, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE if capture else None,
-        stderr=subprocess.PIPE if capture else None,
-        text=True,
-    )
-    if check and result.returncode != 0:
-        msg = result.stderr.strip() or result.stdout.strip() or "command failed"
-        raise RuntimeError(msg)
-    return result
+@dataclass
+class _HelperCommandResult:
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
 
 
 def _ensure_free_space(required_free_bytes: int, *, context: str) -> None:
@@ -3007,46 +3003,47 @@ def _with_pvc_helper(
     image: str | None = None,
     capture_output: bool = True,
     claim_name: str | None = None,
-) -> subprocess.CompletedProcess:
+) -> _HelperCommandResult:
     helper = f"image-sync-{uuid4().hex[:8]}"
     helper_image = image or PVC_HELPER_IMAGE
     claim = claim_name or settings.kube_image_pvc
+    namespace = settings.kube_namespace
+    core = kube._client()
     _cleanup_stale_helper_pods()
-    pod_spec = _helper_overrides(helper_image, claim)
+    pod = client.V1Pod(
+        metadata=client.V1ObjectMeta(
+            name=helper,
+            namespace=namespace,
+            labels={"app.kubernetes.io/part-of": "bretter-labs", "job-type": "image-helper"},
+        ),
+        spec=client.V1PodSpec(
+            restart_policy="Never",
+            containers=[
+                client.V1Container(
+                    name="worker",
+                    image=helper_image,
+                    image_pull_policy="IfNotPresent",
+                    command=["/bin/sh", "-c", "sleep 3600"],
+                    volume_mounts=[client.V1VolumeMount(name="images", mount_path="/images")],
+                )
+            ],
+            volumes=[
+                client.V1Volume(
+                    name="images",
+                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=claim),
+                )
+            ],
+            image_pull_secrets=(
+                [client.V1LocalObjectReference(name=settings.image_pull_secret)] if settings.image_pull_secret else None
+            ),
+        ),
+    )
     try:
-        _run(
-            [
-                "kubectl",
-                "run",
-                helper,
-                "-n",
-                settings.kube_namespace,
-                "--restart=Never",
-                "--image",
-                helper_image,
-                "--overrides",
-                pod_spec,
-                "--command",
-                "--",
-                "sleep",
-                "3600",
-            ]
-        )
+        core.create_namespaced_pod(namespace=namespace, body=pod)
         deadline = time.time() + POD_READY_WAIT_SECONDS
         while time.time() < deadline:
-            phase = _run(
-                [
-                    "kubectl",
-                    "get",
-                    "pod",
-                    helper,
-                    "-n",
-                    settings.kube_namespace,
-                    "-o",
-                    "jsonpath={.status.phase}",
-                ],
-                check=False,
-            ).stdout.strip()
+            snapshot = core.read_namespaced_pod(name=helper, namespace=namespace)
+            phase = str(getattr(snapshot.status, "phase", "") or "").strip()
             if phase.lower() in {"running", "succeeded"}:
                 break
             if phase.lower() in {"failed", "unknown"}:
@@ -3054,14 +3051,49 @@ def _with_pvc_helper(
             time.sleep(POD_READY_SLEEP)
         else:
             raise RuntimeError("timed out waiting for helper pod")
-        return _run(
-            ["kubectl", "exec", "-n", settings.kube_namespace, helper, "--request-timeout=0", "--"] + command,
-            capture=capture_output,
+
+        exec_stream = stream(
+            core.connect_get_namespaced_pod_exec,
+            helper,
+            namespace,
+            container="worker",
+            command=command,
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+            _preload_content=False,
         )
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        while exec_stream.is_open():
+            exec_stream.update(timeout=1)
+            if exec_stream.peek_stdout():
+                chunk = exec_stream.read_stdout()
+                if capture_output:
+                    stdout_parts.append(chunk)
+            if exec_stream.peek_stderr():
+                chunk = exec_stream.read_stderr()
+                if capture_output:
+                    stderr_parts.append(chunk)
+            if exec_stream.returncode is not None:
+                break
+        exec_stream.close()
+        rc = int(exec_stream.returncode if exec_stream.returncode is not None else 1)
+        result = _HelperCommandResult(
+            returncode=rc,
+            stdout="".join(stdout_parts) if capture_output else "",
+            stderr="".join(stderr_parts) if capture_output else "",
+        )
+        if rc != 0:
+            msg = (result.stderr or result.stdout or "").strip() or "helper command failed"
+            raise RuntimeError(msg)
+        return result
     finally:
-        _run(
-            ["kubectl", "delete", "pod", helper, "-n", settings.kube_namespace, "--ignore-not-found=true"], check=False
-        )
+        try:
+            core.delete_namespaced_pod(name=helper, namespace=namespace, grace_period_seconds=0)
+        except Exception:
+            pass
 
 
 def _copy_file_to_pvc(source_path: Path, filename: str, *, claim_name: str | None = None) -> None:
@@ -3878,6 +3910,7 @@ def upload_image(
         session.commit()
         session.refresh(task)
 
+    _sync_labimageimport_crd(task, create_if_missing=True)
     return _upload_task_out(task)
 
 
@@ -3968,6 +4001,7 @@ def start_direct_upload(
         session.refresh(task)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
+    _sync_labimageimport_crd(task, create_if_missing=True)
     return DirectUploadSession(task=_upload_task_out(task), upload_url=upload_url, upload_token=token)
 
 
@@ -3992,6 +4026,7 @@ def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> Im
         session.add(task)
         session.commit()
         session.refresh(task)
+    _sync_labimageimport_crd(task, create_if_missing=False)
     return _upload_task_out(task)
 
 

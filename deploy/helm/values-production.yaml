@@ -12,7 +12,7 @@ appTemplateValues:
   RUNNER_NODE_SELECTOR_VALUE: runner-pool
   VM_STORAGE_CLASS: prod-vm-storage
   # Production profile requires immutable digest pins.
-  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend@sha256:a8648ba6ec5711c3a173c28faa6a8a9e8f4e51a8543805b2447dab43a6b286bf
+  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend-runtime@sha256:a8648ba6ec5711c3a173c28faa6a8a9e8f4e51a8543805b2447dab43a6b286bf
   BACKEND_ADMIN_IMAGE: ghcr.io/csufpsudocromis/bretter-backend@sha256:a8648ba6ec5711c3a173c28faa6a8a9e8f4e51a8543805b2447dab43a6b286bf
   FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend@sha256:088143b83edb58870acdce26518ea71c370c4a250cb159926e25305af0f5f461
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76
@@ -21,10 +21,15 @@ appTemplateValues:
   PUBLIC_SCHEME: https
   TLS_SECRET_NAME: bretter-tls
   ORCHESTRATION_BACKEND: "db"
+  IMAGE_IMPORT_BACKEND: "db"
   LABINSTANCE_CRD_GROUP: labs.bretter.io
   LABINSTANCE_CRD_VERSION: v1alpha1
   LABINSTANCE_CRD_PLURAL: labinstances
   LABINSTANCE_CRD_FINALIZER: labs.bretter.io/finalizer
+  LABIMAGEIMPORT_CRD_GROUP: labs.bretter.io
+  LABIMAGEIMPORT_CRD_VERSION: v1alpha1
+  LABIMAGEIMPORT_CRD_PLURAL: labimageimports
+  LABIMAGEIMPORT_CRD_FINALIZER: labs.bretter.io/imageimport-finalizer
   ADMIN_BOOTSTRAP_PASSWORD: ""
   WINDOWS_MACHINE_TYPE: q35
   WINDOWS_EFI_ENABLED: "true"

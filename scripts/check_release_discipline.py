@@ -12,6 +12,7 @@ SEMVER_RE = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+ACTION_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
 
 
 def _load_json(path: Path) -> dict:
@@ -33,6 +34,30 @@ def _extract_yaml_scalar(text: str, key: str) -> str:
     if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
         return raw[1:-1].strip()
     return raw
+
+
+def _validate_workflow_action_pins(*, root: Path) -> list[str]:
+    errors: list[str] = []
+    workflows_dir = root / ".github" / "workflows"
+    for workflow_path in sorted(workflows_dir.glob("*.yml")):
+        content = _read_text(workflow_path)
+        for lineno, line in enumerate(content.splitlines(), start=1):
+            match = re.match(r"^\s*uses:\s*([^\s#]+)", line)
+            if not match:
+                continue
+            action_ref = match.group(1).strip()
+            if action_ref.startswith("./") or action_ref.startswith("docker://"):
+                continue
+            if "@" not in action_ref:
+                errors.append(
+                    f"{workflow_path.relative_to(root)}:{lineno} uses without @ref is not allowed ({action_ref})."
+                )
+                continue
+            if not ACTION_SHA_RE.search(action_ref):
+                errors.append(
+                    f"{workflow_path.relative_to(root)}:{lineno} must pin actions to a full commit SHA ({action_ref})."
+                )
+    return errors
 
 
 def _looks_placeholder(value: str) -> bool:
@@ -251,6 +276,20 @@ def main() -> int:
             )
         if "--backend-admin-image" not in publish_workflow:
             errors.append(".github/workflows/publish-and-pin-images.yml must update BACKEND_ADMIN_IMAGE digest pins.")
+        if '--backend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-runtime@' not in (
+            publish_workflow
+        ):
+            errors.append(
+                ".github/workflows/publish-and-pin-images.yml must pin BACKEND_IMAGE from backend_runtime digest output."
+            )
+        if "sbom: true" not in publish_workflow:
+            errors.append(".github/workflows/publish-and-pin-images.yml must enable SBOM generation for image builds.")
+        if "provenance: mode=max" not in publish_workflow and "provenance: true" not in publish_workflow:
+            errors.append(
+                ".github/workflows/publish-and-pin-images.yml must enable provenance attestations for image builds."
+            )
+
+    errors.extend(_validate_workflow_action_pins(root=root))
 
     setup_script = _read_text(setup_script_path)
     if 'DEFAULT_IMAGE_TAG="latest"' in setup_script:

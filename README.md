@@ -231,6 +231,7 @@ Proof artifact and operator docs:
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `PRODUCTION_PROFILE` | `0` | Enables backend startup hardening checks (set `1` for production) |
 | `ORCHESTRATION_BACKEND` | `db` | VM orchestration mode: `db` (legacy), `dual` (legacy + LabInstance CRD shadow write), `crd` (LabInstance CRD-first) |
+| `IMAGE_IMPORT_BACKEND` | `db` | Image import tracking mode: `db`, `dual` (DB + LabImageImport shadow), `crd` |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
@@ -244,8 +245,8 @@ Proof artifact and operator docs:
 | `KYVERNO_CHART_VERSION` | `v3.7.1` | Kyverno chart version |
 | `APPLY_GOLDEN_HOSTPATH` | `1` | HostPath-backed golden image PVC |
 | `APPLY_GOLDEN_PVC` | `0` | Use `deploy/golden-pvc.yaml` instead |
-| `BACKEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend:v<VERSION>` | Backend image reference |
-| `BACKEND_ADMIN_IMAGE` | `same as BACKEND_IMAGE` | Backend admin-tools image for ops jobs (cleanup/CSR approver) |
+| `BACKEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend-runtime:v<VERSION>` | Backend runtime image reference (no kubectl/cosign/trivy binaries) |
+| `BACKEND_ADMIN_IMAGE` | `ghcr.io/csufpsudocromis/bretter-backend:v<VERSION>` | Backend admin-tools image for ops jobs (cleanup/signature scan helpers) |
 | `FRONTEND_IMAGE` | `ghcr.io/csufpsudocromis/bretter-frontend:v<VERSION>` | Frontend image reference |
 | `RUNNER_IMAGE` | `ghcr.io/csufpsudocromis/win-vm-runner:v<VERSION>` | Runner image reference |
 | `BACKEND_REPLICAS` | `1` | Backend deployment replica count |
@@ -426,6 +427,12 @@ Publish images + auto-pin production digests:
 #   commit_digest_update=true
 ```
 
+Release workflow hardening:
+
+- GitHub Actions are pinned to immutable commit SHAs.
+- Published images include SBOM + provenance attestations.
+- Production digest auto-pin updates `BACKEND_IMAGE` from the runtime image digest and `BACKEND_ADMIN_IMAGE` from the admin image digest.
+
 For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
 
 - `GHCR_USERNAME`
@@ -512,7 +519,8 @@ Token hygiene:
 
 - Never commit or paste PATs in repo files or automation logs.
 - Rotate exposed GitHub/GHCR tokens immediately and replace them via repo/org secrets.
-- CI enforces plaintext token guardrails with `scripts/check_no_plaintext_tokens.py`.
+- CI enforces plaintext token guardrails for tracked files and full git history:
+  - `python3 scripts/check_no_plaintext_tokens.py --history`
 
 ## Community and Roadmap
 
