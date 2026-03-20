@@ -42,12 +42,20 @@ def test_alembic_upgrade_head_on_clean_db(tmp_path: Path) -> None:
 
     with engine.connect() as conn:
         table_names = set(inspect(conn).get_table_names())
+        image_upload_columns = {column["name"] for column in inspect(conn).get_columns("imageuploadtask")}
 
     assert "alembic_version" in table_names
     assert "template" in table_names
     assert "containertemplate" in table_names
     assert "connecttoken" in table_names
     assert "adminauditevent" in table_names
+    assert "stage" in image_upload_columns
+    assert "progress_percent" in image_upload_columns
+    assert "retry_count" in image_upload_columns
+    assert "max_retries" in image_upload_columns
+    assert "next_retry_at" in image_upload_columns
+    assert "last_retry_error" in image_upload_columns
+    assert "finalize_started_at" in image_upload_columns
 
 
 def test_alembic_does_not_stamp_legacy_baseline_for_newer_partial_tables(tmp_path: Path) -> None:
@@ -81,7 +89,7 @@ def test_alembic_does_not_stamp_legacy_baseline_for_newer_partial_tables(tmp_pat
     assert "template" in table_names
     assert "image" in table_names
     assert "adminauditevent" in table_names
-    assert str(applied_revision) == "0023"
+    assert str(applied_revision) == "0024"
 
 
 def test_alembic_schema_guard_rejects_unexpected_expected_revision(tmp_path: Path) -> None:
