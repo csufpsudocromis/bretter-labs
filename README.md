@@ -114,11 +114,11 @@ QCOW uploads are normalized to raw during finalization.
 
 Core components:
 
-- `frontend-vite/`: UI for admin and user workflows
-- `backend/`: API, auth/session, orchestration, migrations
-- `runner/`: VM runtime image (QEMU with SPICE, Guacamole VNC, or Guacamole RDP console modes)
-- `deploy/helm/`: Helm chart and production values used by setup
-- `scripts/setup.sh`: bootstrap, deploy (Helm), and tuning automation
+- [frontend-vite/](frontend-vite/): UI for admin and user workflows
+- [backend/](backend/): API, auth/session, orchestration, migrations
+- [runner/](runner/): VM runtime image (QEMU with SPICE, Guacamole VNC, or Guacamole RDP console modes)
+- [deploy/helm/](deploy/helm/): Helm chart and production values used by setup
+- [scripts/setup.sh](scripts/setup.sh): bootstrap, deploy (Helm), and tuning automation
 
 High-level flow:
 
@@ -184,12 +184,14 @@ PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 
 Proof artifact and operator docs:
 
-- Go-live proof script: `scripts/production_go_live_proof.sh`
-- Pre-deploy script: `scripts/deploy_preflight.sh`
-- Default report dir: `artifacts/go-live/`
-- Production values reference: `docs/wiki/Production-Helm-Values-Reference.md`
-- Secret operations: `docs/wiki/Secret-Operations-Runbook.md`
-- Post-deploy validation SOP: `docs/wiki/Post-Deploy-Validation-SOP.md`
+- Go-live proof script: [scripts/production_go_live_proof.sh](scripts/production_go_live_proof.sh)
+- Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
+- Default report dir: [artifacts/go-live/](artifacts/go-live/)
+- Production values reference: [docs/wiki/Production-Helm-Values-Reference.md](docs/wiki/Production-Helm-Values-Reference.md)
+- Secret operations: [docs/wiki/Secret-Operations-Runbook.md](docs/wiki/Secret-Operations-Runbook.md)
+- Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
+- Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
+- GitHub release/packages runbook: [docs/wiki/GitHub-Release-and-Packages-Operations.md](docs/wiki/GitHub-Release-and-Packages-Operations.md)
 
 ## Key Setup Variables
 
@@ -483,14 +485,14 @@ See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reportin
 - Operator Q&A thread: https://github.com/csufpsudocromis/bretter-labs/discussions/3
 - Identity design thread: https://github.com/csufpsudocromis/bretter-labs/discussions/4
 - Issues: https://github.com/csufpsudocromis/bretter-labs/issues
-- Roadmap page: `docs/wiki/Community-and-Roadmap.md`
+- Roadmap page: [docs/wiki/Community-and-Roadmap.md](docs/wiki/Community-and-Roadmap.md)
 
 ## Documentation and Wiki
 
 - GitHub wiki: https://github.com/csufpsudocromis/bretter-labs/wiki
-- Repository wiki source pages: `docs/wiki/`
-- Architecture deep dive: `docs/architecture.md`
-- Upgrade procedure: `docs/upgrade-path.md`
+- Repository wiki source pages: [docs/wiki/](docs/wiki/)
+- Architecture deep dive: [docs/architecture.md](docs/architecture.md)
+- Upgrade procedure: [docs/upgrade-path.md](docs/upgrade-path.md)
 
 ## Project Structure
 
