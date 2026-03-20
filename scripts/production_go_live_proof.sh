@@ -212,15 +212,15 @@ fi
 
 should_run_crd_canary=0
 case "$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')" in
-  1|true|yes|on)
+  1 | true | yes | on)
     should_run_crd_canary=1
     ;;
-  0|false|no|off)
+  0 | false | no | off)
     should_run_crd_canary=0
     ;;
   auto)
     case "$(printf '%s' "$orchestration_backend" | tr '[:upper:]' '[:lower:]')" in
-      crd|dual) should_run_crd_canary=1 ;;
+      crd | dual) should_run_crd_canary=1 ;;
       *) should_run_crd_canary=0 ;;
     esac
     ;;
@@ -236,12 +236,12 @@ if [ "$should_run_crd_canary" -eq 1 ]; then
   else
     run_check "operator LabInstance canary" \
       env \
-        NAMESPACE="$NAMESPACE" \
-        CRD_CANARY_TEMPLATE_ID="$CRD_CANARY_TEMPLATE_ID" \
-        CRD_CANARY_WAIT_SECONDS="$CRD_CANARY_WAIT_SECONDS" \
-        CRD_CANARY_RUNNING_SLO_SECONDS="$CRD_CANARY_RUNNING_SLO_SECONDS" \
-        CRD_CANARY_DELETE_WAIT_SECONDS="$CRD_CANARY_DELETE_WAIT_SECONDS" \
-        "$ROOT_DIR/scripts/crd_canary_labinstance.sh"
+      NAMESPACE="$NAMESPACE" \
+      CRD_CANARY_TEMPLATE_ID="$CRD_CANARY_TEMPLATE_ID" \
+      CRD_CANARY_WAIT_SECONDS="$CRD_CANARY_WAIT_SECONDS" \
+      CRD_CANARY_RUNNING_SLO_SECONDS="$CRD_CANARY_RUNNING_SLO_SECONDS" \
+      CRD_CANARY_DELETE_WAIT_SECONDS="$CRD_CANARY_DELETE_WAIT_SECONDS" \
+      "$ROOT_DIR/scripts/crd_canary_labinstance.sh"
   fi
 else
   log "CRD operator canary skipped (RUN_CRD_OPERATOR_CANARY=${RUN_CRD_OPERATOR_CANARY}, backend=${orchestration_backend:-db})."

@@ -48,7 +48,7 @@ kubectl apply -k "$ROOT_DIR/deploy/crds" >/dev/null
 ) &
 CONTROLLER_PID="$!"
 
-deadline=$(( $(date +%s) + WAIT_SECONDS ))
+deadline=$(($(date +%s) + WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" >/dev/null 2>&1; then
     break
@@ -90,7 +90,7 @@ spec:
 EOF
 
 phase=""
-deadline=$(( $(date +%s) + WAIT_SECONDS ))
+deadline=$(($(date +%s) + WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   phase="$(kubectl -n "$NAMESPACE" get labinstance "$INSTANCE_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   if [ "${phase,,}" = "running" ]; then
@@ -106,7 +106,7 @@ fi
 
 kubectl -n "$NAMESPACE" patch labinstance "$INSTANCE_NAME" --type=merge -p '{"spec":{"lifecycle":{"desiredState":"stopped"}}}' >/dev/null
 phase=""
-deadline=$(( $(date +%s) + WAIT_SECONDS ))
+deadline=$(($(date +%s) + WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   phase="$(kubectl -n "$NAMESPACE" get labinstance "$INSTANCE_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   if [ "${phase,,}" = "stopped" ]; then
@@ -121,7 +121,7 @@ if [ "${phase,,}" != "stopped" ]; then
 fi
 
 kubectl -n "$NAMESPACE" delete labinstance "$INSTANCE_NAME" --wait=false >/dev/null
-deadline=$(( $(date +%s) + WAIT_SECONDS ))
+deadline=$(($(date +%s) + WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if ! kubectl -n "$NAMESPACE" get labinstance "$INSTANCE_NAME" >/dev/null 2>&1; then
     echo "PASS: LabInstance controller dry-run smoke passed."

@@ -75,14 +75,14 @@ if [ "${phase,,}" != "running" ]; then
   exit 1
 fi
 
-running_seconds=$(( $(date +%s) - start_epoch ))
+running_seconds=$(($(date +%s) - start_epoch))
 if [ "$running_seconds" -gt "$CRD_CANARY_RUNNING_SLO_SECONDS" ]; then
   echo "ERROR: canary Running SLO breached (${running_seconds}s > ${CRD_CANARY_RUNNING_SLO_SECONDS}s)." >&2
   exit 1
 fi
 
 kubectl -n "$NAMESPACE" patch labinstance "$CRD_NAME" --type=merge -p '{"spec":{"lifecycle":{"desiredState":"stopped"}}}' >/dev/null
-deadline=$(( $(date +%s) + CRD_CANARY_WAIT_SECONDS ))
+deadline=$(($(date +%s) + CRD_CANARY_WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   phase="$(kubectl -n "$NAMESPACE" get labinstance "$CRD_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)"
   if [ "${phase,,}" = "stopped" ]; then
@@ -97,7 +97,7 @@ if [ "${phase,,}" != "stopped" ]; then
 fi
 
 kubectl -n "$NAMESPACE" delete labinstance "$CRD_NAME" --wait=false >/dev/null
-deadline=$(( $(date +%s) + CRD_CANARY_DELETE_WAIT_SECONDS ))
+deadline=$(($(date +%s) + CRD_CANARY_DELETE_WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   if ! kubectl -n "$NAMESPACE" get labinstance "$CRD_NAME" >/dev/null 2>&1; then
     echo "PASS: LabInstance canary passed (running_seconds=${running_seconds})."
