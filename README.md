@@ -257,7 +257,7 @@ Proof artifact and operator docs:
 | `LABIMAGEIMPORT_CONTROLLER_LEASE_NAME` | `bretter-labimageimport-controller-leader` | Coordination lease name used by image-import controller |
 | `LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS` | `10` | Reconcile interval for upload-task watchdog controller loop |
 | `LABIMAGEIMPORT_CONTROLLER_METRICS_PORT` | `9410` | Metrics/liveness/readiness port for image-import controller |
-| `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`) for tenant isolation planning |
+| `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`); production hardening requires `per_team` (namespace-first isolation) |
 | `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |

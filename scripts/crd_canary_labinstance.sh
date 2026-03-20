@@ -8,6 +8,10 @@ CRD_CANARY_OWNER="${CRD_CANARY_OWNER:-admin}"
 CRD_CANARY_WAIT_SECONDS="${CRD_CANARY_WAIT_SECONDS:-300}"
 CRD_CANARY_RUNNING_SLO_SECONDS="${CRD_CANARY_RUNNING_SLO_SECONDS:-180}"
 CRD_CANARY_DELETE_WAIT_SECONDS="${CRD_CANARY_DELETE_WAIT_SECONDS:-180}"
+LABINSTANCE_DESIRED_STATE_MODE="${LABINSTANCE_DESIRED_STATE_MODE:-auto}"
+DESIRED_STATE_MODE=""
+DESIRED_STATE_CREATE_YAML=""
+DESIRED_STATE_PATCH_JSON=""
 
 if [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
   echo "ERROR: CRD_CANARY_TEMPLATE_ID is required for LabInstance canary." >&2
@@ -27,7 +31,47 @@ require_int "CRD_CANARY_WAIT_SECONDS" "$CRD_CANARY_WAIT_SECONDS"
 require_int "CRD_CANARY_RUNNING_SLO_SECONDS" "$CRD_CANARY_RUNNING_SLO_SECONDS"
 require_int "CRD_CANARY_DELETE_WAIT_SECONDS" "$CRD_CANARY_DELETE_WAIT_SECONDS"
 
+resolve_desired_state_mode() {
+  local requested mode_value
+  requested="$(printf '%s' "$LABINSTANCE_DESIRED_STATE_MODE" | tr '[:upper:]' '[:lower:]')"
+  case "$requested" in
+    lifecycle | nested)
+      DESIRED_STATE_MODE="lifecycle"
+      return
+      ;;
+    legacy | flat)
+      DESIRED_STATE_MODE="legacy"
+      return
+      ;;
+    auto | "")
+      ;;
+    *)
+      echo "ERROR: LABINSTANCE_DESIRED_STATE_MODE must be one of: auto, lifecycle, legacy." >&2
+      exit 1
+      ;;
+  esac
+
+  mode_value="$(
+    kubectl get crd labinstances.labs.bretter.io \
+      -o jsonpath='{.spec.versions[?(@.name=="v1alpha1")].schema.openAPIV3Schema.properties.spec.properties.lifecycle.type}' \
+      2>/dev/null || true
+  )"
+  if [ "$mode_value" = "object" ]; then
+    DESIRED_STATE_MODE="lifecycle"
+  else
+    DESIRED_STATE_MODE="legacy"
+  fi
+}
+
 kubectl get crd labinstances.labs.bretter.io >/dev/null
+resolve_desired_state_mode
+if [ "$DESIRED_STATE_MODE" = "lifecycle" ]; then
+  DESIRED_STATE_CREATE_YAML=$'  lifecycle:\n    desiredState: running'
+  DESIRED_STATE_PATCH_JSON='{"spec":{"lifecycle":{"desiredState":"stopped"}}}'
+else
+  DESIRED_STATE_CREATE_YAML='  desiredState: running'
+  DESIRED_STATE_PATCH_JSON='{"spec":{"desiredState":"stopped"}}'
+fi
 
 start_epoch="$(date +%s)"
 cat <<EOF | kubectl -n "$NAMESPACE" apply -f -
@@ -50,8 +94,7 @@ spec:
   network:
     mode: bridge
   idleTimeoutMinutes: 30
-  lifecycle:
-    desiredState: running
+${DESIRED_STATE_CREATE_YAML}
 EOF
 
 phase=""
@@ -81,7 +124,7 @@ if [ "$running_seconds" -gt "$CRD_CANARY_RUNNING_SLO_SECONDS" ]; then
   exit 1
 fi
 
-kubectl -n "$NAMESPACE" patch labinstance "$CRD_NAME" --type=merge -p '{"spec":{"lifecycle":{"desiredState":"stopped"}}}' >/dev/null
+kubectl -n "$NAMESPACE" patch labinstance "$CRD_NAME" --type=merge -p "$DESIRED_STATE_PATCH_JSON" >/dev/null
 deadline=$(($(date +%s) + CRD_CANARY_WAIT_SECONDS))
 while [ "$(date +%s)" -lt "$deadline" ]; do
   phase="$(kubectl -n "$NAMESPACE" get labinstance "$CRD_NAME" -o jsonpath='{.status.phase}' 2>/dev/null || true)"

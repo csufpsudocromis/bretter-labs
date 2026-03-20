@@ -46,6 +46,7 @@ class Image(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     filename: str
+    tenant: str = Field(default="global", index=True)
     source_pvc: Optional[str] = None
     checksum: str
     size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))
@@ -56,6 +57,7 @@ class ImageUploadTask(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     original_filename: str
     filename: str
+    tenant: str = Field(default="global", index=True)
     size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "queued"
     stage: str = "queued"
@@ -80,6 +82,7 @@ class ImageUploadTask(SQLModel, table=True):
 class Template(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
+    tenant: str = Field(default="global", index=True)
     description: str = ""
     os_type: str = "windows"
     image_id: str = Field(foreign_key="image.id")
@@ -102,6 +105,8 @@ class Instance(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     template_id: str = Field(foreign_key="template.id")
     owner: str = Field(foreign_key="user.username")
+    tenant: str = Field(default="default", index=True)
+    namespace: str = Field(default="labs", index=True)
     status: str = "pending"
     disk_pvc: Optional[str] = None
     started_at: datetime = Field(default_factory=utc_now)
@@ -113,6 +118,7 @@ class ContainerImage(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     image_ref: str
+    tenant: str = Field(default="global", index=True)
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
     last_scan_summary: str = ""
@@ -127,6 +133,7 @@ class ContainerTemplate(SQLModel, table=True):
     version: int = 1
     is_default: bool = True
     name: str
+    tenant: str = Field(default="global", index=True)
     description: str = ""
     container_image_id: str = Field(foreign_key="containerimage.id")
     cpu_millicores: int = 500
@@ -156,6 +163,8 @@ class ContainerInstance(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     template_id: str = Field(foreign_key="containertemplate.id")
     owner: str = Field(foreign_key="user.username")
+    tenant: str = Field(default="default", index=True)
+    namespace: str = Field(default="labs", index=True)
     status: str = "pending"
     pod_name: Optional[str] = None
     queue_attempts: int = 0
@@ -237,6 +246,7 @@ class TeamQuota(SQLModel, table=True):
 class AdminAuditEvent(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     actor: str = Field(default="unknown", index=True)
+    tenant: str = Field(default="global", index=True)
     action: str = Field(index=True)
     target_type: str = Field(index=True)
     target_id: str = Field(default="")

@@ -9,6 +9,7 @@ class Role:
     IMAGE_MANAGER = "image_manager"
     TEMPLATE_MANAGER = "template_manager"
     LAB_OPERATOR = "lab_operator"
+    TENANT_ADMIN = "tenant_admin"
     PLATFORM_ADMIN = "platform_admin"
 
 
@@ -32,6 +33,7 @@ VALID_ROLES: tuple[str, ...] = (
     Role.IMAGE_MANAGER,
     Role.TEMPLATE_MANAGER,
     Role.LAB_OPERATOR,
+    Role.TENANT_ADMIN,
     Role.PLATFORM_ADMIN,
 )
 
@@ -65,6 +67,17 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.OPERATIONS_READ,
         Permission.OPERATIONS_WRITE,
         Permission.SETTINGS_READ,
+    },
+    Role.TENANT_ADMIN: {
+        Permission.ADMIN_ACCESS,
+        Permission.USERS_READ,
+        Permission.USERS_WRITE,
+        Permission.IMAGES_READ,
+        Permission.IMAGES_WRITE,
+        Permission.TEMPLATES_READ,
+        Permission.TEMPLATES_WRITE,
+        Permission.OPERATIONS_READ,
+        Permission.OPERATIONS_WRITE,
     },
     Role.PLATFORM_ADMIN: {"*"},
 }

@@ -223,6 +223,16 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             continue
         errors.append(f"{key} appears unset/placeholder and must be overridden for production.")
 
+    team_namespace_mode = get_text("TEAM_NAMESPACE_MODE").lower() or "shared"
+    if team_namespace_mode != "per_team":
+        errors.append("TEAM_NAMESPACE_MODE must be per_team for production namespace isolation.")
+    team_namespace_prefix = get_text("TEAM_NAMESPACE_PREFIX")
+    if team_namespace_mode == "per_team":
+        if _looks_placeholder(team_namespace_prefix):
+            errors.append("TEAM_NAMESPACE_PREFIX must be set when TEAM_NAMESPACE_MODE=per_team.")
+        elif not team_namespace_prefix.endswith("-"):
+            errors.append("TEAM_NAMESPACE_PREFIX must end with '-' for deterministic tenant namespace names.")
+
     runtime_secret_name = get_text("RUNTIME_SECRETS_SECRET_NAME")
     if _looks_placeholder(runtime_secret_name):
         errors.append("RUNTIME_SECRETS_SECRET_NAME must be set for production secret injection.")

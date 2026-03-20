@@ -112,7 +112,7 @@ def test_stop_vm_crd_mode_patches_desired_state_without_legacy_stop(login_user, 
     monkeypatch.setattr(
         user_routes,
         "patch_vm_labinstance_desired_state",
-        lambda instance_id, desired_state: seen.__setitem__("patched", 1),
+        lambda instance_id, desired_state, **_kwargs: seen.__setitem__("patched", 1),
     )
 
     response = login_user.post("/user/pods/vm-alice-1/stop")

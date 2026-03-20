@@ -34,6 +34,7 @@ from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
+from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
@@ -160,8 +161,21 @@ def _container_access_url_for_target(node_port: int | None, ingress_host: str | 
     return f"http://{host}:{int(node_port)}/"
 
 
-def _container_service_host(instance_id: str) -> str:
-    return f"ctsvc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
+def _container_runtime_namespace(user: User) -> str:
+    return tenant_namespace_for_user(user)
+
+
+def _container_instance_namespace(record: ContainerInstanceTable, user: User | None = None) -> str:
+    explicit = str(getattr(record, "namespace", "") or "").strip()
+    if explicit:
+        return explicit
+    if user is not None:
+        return _container_runtime_namespace(user)
+    return str(settings.kube_namespace or "labs").strip() or "labs"
+
+
+def _container_service_host(instance_id: str, namespace: str) -> str:
+    return f"ctsvc-{instance_id[:8]}.{namespace}.svc.cluster.local"
 
 
 def _container_prefers_tls(template: ContainerTemplateTable | None, container_port: int) -> bool:
@@ -703,6 +717,7 @@ def _inject_container_idle_bridge_html(
 
 def _container_service_ready(
     instance_id: str,
+    namespace: str,
     container_port: int,
     *,
     protocol: str = "tcp",
@@ -710,7 +725,7 @@ def _container_service_ready(
     expected_http_status: int = 200,
     success_path: str | None = None,
 ) -> bool:
-    host = _container_service_host(instance_id)
+    host = _container_service_host(instance_id, namespace)
     port = max(1, min(65535, int(container_port or 80)))
     normalized_protocol = str(protocol or "tcp").lower()
     path = _normalize_http_path(healthcheck_path) or "/"
@@ -810,6 +825,7 @@ def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | Non
         version=max(1, int(getattr(record, "version", 1) or 1)),
         is_default=bool(getattr(record, "is_default", True)),
         name=record.name,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         description=record.description,
         container_image_id=record.container_image_id,
         cpu_millicores=record.cpu_millicores,
@@ -849,6 +865,8 @@ def _instance_out(
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default="default"),
+        namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
         status=record.status,
         status_stage=stage or resolved_stage,
         status_detail=detail or resolved_detail,
@@ -923,12 +941,17 @@ def _normalized_template_command(value: object) -> str | None:
 
 
 def _container_launch_request(
-    instance_id: str, owner: str, template: ContainerTemplateTable, image_ref: str
+    instance_id: str,
+    owner: str,
+    template: ContainerTemplateTable,
+    image_ref: str,
+    namespace: str,
 ) -> ContainerPodRequest:
     return ContainerPodRequest(
         instance_id=instance_id,
         owner=owner,
         image_ref=image_ref,
+        namespace=namespace,
         cpu_millicores=template.cpu_millicores,
         memory_mb=template.memory_mb,
         container_port=max(1, int(getattr(template, "container_port", 80) or 80)),
@@ -1075,6 +1098,7 @@ async def proxy_container_connect(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container is not running")
+    instance_namespace = _container_instance_namespace(record, user)
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
@@ -1082,7 +1106,7 @@ async def proxy_container_connect(
     template = session.get(ContainerTemplateTable, record.template_id)
     is_kasm = _is_kasm_template(session, template)
     container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
-    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
+    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
     template_idle_minutes = max(
         1,
         int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
@@ -1101,7 +1125,7 @@ async def proxy_container_connect(
             _attach_connect_session_cookie(response, request, instance_id, issued_connect_session)
         return response
 
-    upstream_host = _container_service_host(record.id)
+    upstream_host = _container_service_host(record.id, instance_namespace)
     upstream_path = _normalized_upstream_path(proxy_path)
     query_items = [(key, value) for key, value in request.query_params.multi_items() if key != "ct"]
     upstream_query = urlencode(query_items, doseq=True)
@@ -1222,6 +1246,7 @@ async def proxy_container_connect_ws(
     if record.status not in {"pending", "running"}:
         await websocket.close(code=4409, reason="container not running")
         return
+    instance_namespace = _container_instance_namespace(record, user)
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
@@ -1229,7 +1254,7 @@ async def proxy_container_connect_ws(
     template = session.get(ContainerTemplateTable, record.template_id)
     is_kasm = _is_kasm_template(session, template)
     container_port = max(1, int(getattr(template, "container_port", 80) or 80)) if template else 80
-    upstream_host = _container_service_host(record.id)
+    upstream_host = _container_service_host(record.id, instance_namespace)
     upstream_path = _normalized_upstream_path(proxy_path)
     query_items = [(key, value) for key, value in websocket.query_params.multi_items() if key != "ct"]
     upstream_query = urlencode(query_items, doseq=True)
@@ -1330,10 +1355,13 @@ def _create_container_runtime(
     *,
     instance_id: str,
     owner: str,
+    namespace: str,
     template: ContainerTemplateTable,
     image_ref: str,
 ) -> tuple[PodStatus, str | None, int]:
-    pod_status = kube.create_container_pod(_container_launch_request(instance_id, owner, template, image_ref))
+    pod_status = kube.create_container_pod(
+        _container_launch_request(instance_id, owner, template, image_ref, namespace)
+    )
     container_port = max(1, int(getattr(template, "container_port", 80) or 80))
     expose_strategy = str(getattr(template, "expose_strategy", "nodeport") or "nodeport")
     ingress_enabled = (
@@ -1343,18 +1371,35 @@ def _create_container_runtime(
     )
     service_type = "ClusterIP" if ingress_enabled else "NodePort"
     try:
-        node_port = kube.ensure_container_service(instance_id, owner, container_port, service_type=service_type)
+        node_port = kube.ensure_container_service(
+            instance_id,
+            owner,
+            container_port,
+            service_type=service_type,
+            namespace=namespace,
+        )
         ingress_host = None
         if ingress_enabled:
-            ingress_host = kube.ensure_container_ingress(instance_id, f"ctsvc-{instance_id[:8]}", container_port)
+            ingress_host = kube.ensure_container_ingress(
+                instance_id,
+                f"ctsvc-{instance_id[:8]}",
+                container_port,
+                namespace=namespace,
+            )
             if ingress_host is None:
-                node_port = kube.ensure_container_service(instance_id, owner, container_port, service_type="NodePort")
+                node_port = kube.ensure_container_service(
+                    instance_id,
+                    owner,
+                    container_port,
+                    service_type="NodePort",
+                    namespace=namespace,
+                )
         access_url = _container_access_url_for_target(node_port=node_port, ingress_host=ingress_host)
         return pod_status, access_url, container_port
     except Exception:
         try:
-            kube.delete_container_pod(instance_id, owner)
-            kube.delete_container_service(instance_id)
+            kube.delete_container_pod(instance_id, owner, namespace=namespace)
+            kube.delete_container_service(instance_id, namespace=namespace)
         except Exception:
             pass
         raise
@@ -1365,11 +1410,17 @@ def list_user_container_templates(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerTemplateView]:
-    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
+    runtime_namespace = _container_runtime_namespace(user)
+    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
+    tenant_scope = {
+        normalize_tenant(getattr(user, "team", None), default="default"),
+        GLOBAL_TENANT,
+    }
     rows = session.exec(
         select(ContainerTemplateTable)
         .where(ContainerTemplateTable.enabled == True)  # noqa: E712
         .where(ContainerTemplateTable.is_default == True)  # noqa: E712
+        .where(ContainerTemplateTable.tenant.in_(tenant_scope))
     ).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row, idle_timeout_cap=team_idle_cap) for row in rows]
@@ -1394,6 +1445,7 @@ def list_user_containers(
     to_delete: list[ContainerInstanceTable] = []
 
     for record in instances:
+        record_namespace = _container_instance_namespace(record, user)
         if record.status in {"running", "pending"}:
             # Match VM behavior so active user polling keeps running labs from being reaped.
             record.last_active_at = utc_now()
@@ -1461,6 +1513,7 @@ def list_user_containers(
                         pod_status, access_url, _ = _create_container_runtime(
                             instance_id=record.id,
                             owner=record.owner,
+                            namespace=record_namespace,
                             template=tmpl,
                             image_ref=image.image_ref,
                         )
@@ -1496,7 +1549,7 @@ def list_user_containers(
 
         pod_status: PodStatus | None = None
         try:
-            pod_status = kube.get_container_status(record.id, record.owner)
+            pod_status = kube.get_container_status(record.id, record.owner, namespace=record_namespace)
             mapped = _phase_to_status(pod_status.phase)
         except ApiException as exc:
             if exc.status == 404:
@@ -1507,7 +1560,11 @@ def list_user_containers(
         stage, detail = _status_feedback(mapped, pod_status)
         feedback[record.id] = (stage, detail)
         try:
-            diagnostics_map[record.id] = kube.get_container_launch_diagnostics(record.id, record.owner)
+            diagnostics_map[record.id] = kube.get_container_launch_diagnostics(
+                record.id,
+                record.owner,
+                namespace=record_namespace,
+            )
         except Exception:
             diagnostics_map[record.id] = []
         if mapped in {"pending", "running"} and tmpl:
@@ -1517,21 +1574,29 @@ def list_user_containers(
                     record.owner,
                     container_port,
                     service_type=service_type,
+                    namespace=record_namespace,
                 )
                 ingress_host = None
                 if ingress_enabled:
-                    ingress_host = kube.ensure_container_ingress(record.id, f"ctsvc-{record.id[:8]}", container_port)
+                    ingress_host = kube.ensure_container_ingress(
+                        record.id,
+                        f"ctsvc-{record.id[:8]}",
+                        container_port,
+                        namespace=record_namespace,
+                    )
                     if ingress_host is None:
                         node_port = kube.ensure_container_service(
                             record.id,
                             record.owner,
                             container_port,
                             service_type="NodePort",
+                            namespace=record_namespace,
                         )
                 if (
                     mapped == "running"
                     and _container_service_ready(
                         record.id,
+                        record_namespace,
                         container_port,
                         protocol=healthcheck_protocol,
                         healthcheck_path=healthcheck_path,
@@ -1567,7 +1632,7 @@ def list_user_containers(
         else:
             access_map[record.id] = None
             try:
-                kube.delete_container_service(record.id)
+                kube.delete_container_service(record.id, namespace=record_namespace)
             except Exception:
                 pass
 
@@ -1581,8 +1646,8 @@ def list_user_containers(
             )
             if "unschedulable" in reason_text or "failedscheduling" in reason_text:
                 try:
-                    kube.delete_container_pod(record.id, record.owner)
-                    kube.delete_container_service(record.id)
+                    kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
+                    kube.delete_container_service(record.id, namespace=record_namespace)
                 except Exception:
                     pass
                 _mark_queued(record, detail or "Waiting for available resources.")
@@ -1606,8 +1671,8 @@ def list_user_containers(
             cutoff = utc_now() - timedelta(minutes=max(1, int(tmpl.auto_delete_minutes or 60)))
             if record.last_active_at < cutoff:
                 try:
-                    kube.delete_container_pod(record.id, record.owner)
-                    kube.delete_container_service(record.id)
+                    kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
+                    kube.delete_container_service(record.id, namespace=record_namespace)
                 except Exception:
                     pass
                 to_delete.append(record)
@@ -1648,12 +1713,22 @@ def start_container_template(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ContainerInstanceView:
+    runtime_namespace = _container_runtime_namespace(user)
+    user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(ContainerTemplateTable, template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
+    template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
+    if template_tenant not in {user_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     image = session.get(ContainerImageTable, template.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {template_tenant, GLOBAL_TENANT}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="container template image tenant scope is invalid"
+        )
     if not lock_user_launch_slot(session, user.username):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
 
@@ -1681,7 +1756,7 @@ def start_container_template(
     quota_check = enforce_team_quota(
         session,
         team=getattr(user, "team", None),
-        namespace=settings.kube_namespace,
+        namespace=runtime_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
         requested_memory_mb=max(1, int(getattr(template, "memory_mb", 512) or 512)),
@@ -1708,6 +1783,8 @@ def start_container_template(
             id=instance_id,
             template_id=template.id,
             owner=user.username,
+            tenant=user_tenant,
+            namespace=runtime_namespace,
             status="queued",
             pod_name=kube.container_pod_name(instance_id=instance_id, owner=user.username),
             queue_attempts=0,
@@ -1744,6 +1821,7 @@ def start_container_template(
         pod_status, access_url, container_port = _create_container_runtime(
             instance_id=instance_id,
             owner=user.username,
+            namespace=runtime_namespace,
             template=template,
             image_ref=image.image_ref,
         )
@@ -1751,6 +1829,8 @@ def start_container_template(
             id=instance_id,
             template_id=template.id,
             owner=user.username,
+            tenant=user_tenant,
+            namespace=runtime_namespace,
             status="pending",
             pod_name=pod_name,
             started_at=now,
@@ -1760,7 +1840,11 @@ def start_container_template(
         session.commit()
         session.refresh(record)
         stage, detail = _status_feedback(record.status, pod_status)
-        diagnostics = kube.get_container_launch_diagnostics(record.id, record.owner)
+        diagnostics = kube.get_container_launch_diagnostics(
+            record.id,
+            record.owner,
+            namespace=runtime_namespace,
+        )
         return _instance_out(
             record,
             stage=stage,
@@ -1776,6 +1860,8 @@ def start_container_template(
                 id=instance_id,
                 template_id=template.id,
                 owner=user.username,
+                tenant=user_tenant,
+                namespace=runtime_namespace,
                 status="queued",
                 pod_name=pod_name,
                 queue_attempts=1,
@@ -1807,11 +1893,12 @@ def stop_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    instance_namespace = _container_instance_namespace(record, user)
 
     if record.status != "queued":
-        kube.stop_container_pod(instance_id, user.username)
+        kube.stop_container_pod(instance_id, user.username, namespace=instance_namespace)
         try:
-            kube.delete_container_service(instance_id)
+            kube.delete_container_service(instance_id, namespace=instance_namespace)
         except Exception:
             pass
     record.status = "stopped"
@@ -1835,13 +1922,25 @@ def restart_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    runtime_namespace = _container_instance_namespace(record, user)
+    user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
+    record.tenant = user_tenant
+    record.namespace = runtime_namespace
 
     template = session.get(ContainerTemplateTable, record.template_id)
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
+    template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
+    if template_tenant not in {user_tenant, GLOBAL_TENANT}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     image = session.get(ContainerImageTable, template.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {template_tenant, GLOBAL_TENANT}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="container template image tenant scope is invalid"
+        )
     config = session.get(Config, 1) or Config()
     active_count = _active_workload_count(session)
     is_already_active = str(record.status or "").lower() in {"queued", "pending", "running"}
@@ -1882,7 +1981,7 @@ def restart_container(
     quota_check = enforce_team_quota(
         session,
         team=getattr(user, "team", None),
-        namespace=settings.kube_namespace,
+        namespace=runtime_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
         requested_memory_mb=max(1, int(getattr(template, "memory_mb", 512) or 512)),
@@ -1933,7 +2032,7 @@ def restart_container(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
 
     try:
-        kube.delete_container_pod(instance_id, user.username)
+        kube.delete_container_pod(instance_id, user.username, namespace=runtime_namespace)
     except ApiException as exc:
         if exc.status != 404:
             raise
@@ -1941,11 +2040,14 @@ def restart_container(
     pod_status, access_url, container_port = _create_container_runtime(
         instance_id=record.id,
         owner=user.username,
+        namespace=runtime_namespace,
         template=template,
         image_ref=image.image_ref,
     )
 
     record.status = "pending"
+    record.tenant = user_tenant
+    record.namespace = runtime_namespace
     record.pod_name = kube.container_pod_name(instance_id=record.id, owner=user.username)
     record.queue_attempts = 0
     record.queue_not_before = None
@@ -1956,7 +2058,7 @@ def restart_container(
     session.commit()
     session.refresh(record)
     stage, detail = _status_feedback(record.status, pod_status)
-    diagnostics = kube.get_container_launch_diagnostics(record.id, record.owner)
+    diagnostics = kube.get_container_launch_diagnostics(record.id, record.owner, namespace=runtime_namespace)
     return _instance_out(
         record,
         stage=stage,
@@ -1992,10 +2094,11 @@ def delete_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    instance_namespace = _container_instance_namespace(record, user)
 
-    kube.delete_container_pod(instance_id, user.username)
+    kube.delete_container_pod(instance_id, user.username, namespace=instance_namespace)
     try:
-        kube.delete_container_service(instance_id)
+        kube.delete_container_service(instance_id, namespace=instance_namespace)
     except Exception:
         pass
     session.delete(record)

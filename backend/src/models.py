@@ -83,6 +83,7 @@ class TeamQuotaOut(BaseModel):
 class ImageMeta(BaseModel):
     id: str
     name: str
+    tenant: str = "global"
     checksum: str
     size_bytes: int
     created_at: datetime
@@ -114,6 +115,7 @@ class ImageUploadTaskStatus(BaseModel):
 class AdminAuditEventOut(BaseModel):
     id: str
     actor: str
+    tenant: str = "global"
     action: str
     target_type: str
     target_id: str
@@ -124,17 +126,20 @@ class AdminAuditEventOut(BaseModel):
 class ContainerImageCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     image_ref: str = Field(..., min_length=1, max_length=255)
+    tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 class ContainerImageUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     image_ref: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 class ContainerImageMeta(BaseModel):
     id: str
     name: str
     image_ref: str
+    tenant: str = "global"
     signature_warning: Optional[str] = None
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
@@ -151,6 +156,7 @@ class ContainerDependencyCheck(BaseModel):
 
 class VMTemplateCreate(BaseModel):
     name: str
+    tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     os_type: str = Field(default="windows", pattern="^(windows|linux)$")
     image_id: str
@@ -170,6 +176,7 @@ class VMTemplateCreate(BaseModel):
 
 class VMTemplateUpdate(BaseModel):
     name: Optional[str] = None
+    tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     os_type: Optional[str] = Field(default=None, pattern="^(windows|linux)$")
     image_id: Optional[str] = None
@@ -190,6 +197,7 @@ class VMTemplateUpdate(BaseModel):
 class VMTemplate(BaseModel):
     id: str
     name: str
+    tenant: str = "global"
     description: Optional[str] = None
     os_type: str
     image_id: str
@@ -210,6 +218,7 @@ class VMTemplate(BaseModel):
 
 class ContainerTemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
+    tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     container_image_id: str
     cpu_millicores: int = Field(default=500, ge=50, le=16000)
@@ -237,6 +246,7 @@ class ContainerTemplateCreate(BaseModel):
 class ContainerTemplateUpdate(BaseModel):
     is_default: Optional[bool] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     container_image_id: Optional[str] = None
     cpu_millicores: Optional[int] = Field(default=None, ge=50, le=16000)
@@ -267,6 +277,7 @@ class ContainerTemplate(BaseModel):
     version: int = 1
     is_default: bool = True
     name: str
+    tenant: str = "global"
     description: Optional[str] = None
     container_image_id: str
     cpu_millicores: int
@@ -536,6 +547,8 @@ class VMInstance(BaseModel):
     id: str
     template_id: str
     owner: str
+    tenant: str = "default"
+    namespace: str = "labs"
     status: Literal["pending", "running", "stopped", "completed", "failed", "unknown"]
     status_stage: Optional[str] = None
     status_detail: Optional[str] = None
@@ -548,6 +561,8 @@ class ContainerInstance(BaseModel):
     id: str
     template_id: str
     owner: str
+    tenant: str = "default"
+    namespace: str = "labs"
     status: Literal["queued", "pending", "running", "stopped", "completed", "failed", "unknown"]
     status_stage: Optional[str] = None
     status_detail: Optional[str] = None

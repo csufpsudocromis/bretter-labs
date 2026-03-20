@@ -93,12 +93,57 @@ def _condition(
     }
 
 
+def _api_exception_message(exc: ApiException) -> str:
+    body = str(getattr(exc, "body", "") or "")
+    reason = str(getattr(exc, "reason", "") or "")
+    return f"{body} {reason}".strip().lower()
+
+
+def _is_legacy_desired_state_schema_error(exc: ApiException) -> bool:
+    if int(getattr(exc, "status", 0) or 0) not in {400, 422}:
+        return False
+    message = _api_exception_message(exc)
+    return "spec.lifecycle" in message and "unknown field" in message
+
+
+def _as_legacy_desired_state_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(spec)
+    lifecycle = copied.pop("lifecycle", {})
+    if isinstance(lifecycle, dict):
+        desired_state = str(lifecycle.get("desiredState") or "").strip().lower()
+        if desired_state:
+            copied["desiredState"] = desired_state
+    return copied
+
+
+def _fallback_body_for_legacy_desired_state(body: dict[str, Any]) -> dict[str, Any]:
+    updated = dict(body)
+    updated_spec = _as_legacy_desired_state_spec(dict(body.get("spec", {})))
+    updated_status = dict(body.get("status", {}))
+    desired_state = str(updated_spec.get("desiredState") or "running").strip().lower() or "running"
+    conditions = updated_status.get("conditions")
+    if isinstance(conditions, list):
+        rewritten: list[dict[str, Any]] = []
+        for condition in conditions:
+            if not isinstance(condition, dict):
+                continue
+            copy_cond = dict(condition)
+            if copy_cond.get("type") == "DesiredStateAccepted":
+                copy_cond["message"] = f"API accepted desired state {desired_state}."
+            rewritten.append(copy_cond)
+        updated_status["conditions"] = rewritten
+    updated["spec"] = updated_spec
+    updated["status"] = updated_status
+    return updated
+
+
 def _labinstance_body(
     *,
     instance_id: str,
     owner: str,
     template: Template,
     image: Image,
+    namespace: str,
     desired_state: str,
     status_phase: str | None,
     status_message: str | None,
@@ -111,6 +156,8 @@ def _labinstance_body(
     else:
         provider_value = "spice"
 
+    desired_state_value = str(desired_state or "running").strip().lower() or "running"
+
     spec: dict[str, Any] = {
         "owner": {"username": owner},
         "templateRef": {"name": str(template.id)},
@@ -121,7 +168,7 @@ def _labinstance_body(
         },
         "network": {"mode": normalize_vm_network_mode(getattr(template, "network_mode", "bridge"))},
         "idleTimeoutMinutes": max(1, int(getattr(template, "idle_timeout_minutes", 30) or 30)),
-        "lifecycle": {"desiredState": str(desired_state or "running").strip().lower() or "running"},
+        "lifecycle": {"desiredState": desired_state_value},
         "image": {
             "id": str(image.id),
             "filename": str(image.filename),
@@ -139,7 +186,7 @@ def _labinstance_body(
                 condition_type="DesiredStateAccepted",
                 condition_status="True",
                 reason="ApiAccepted",
-                message=f"API accepted desired state {spec['lifecycle']['desiredState']}.",
+                message=f"API accepted desired state {desired_state_value}.",
             ),
             _condition(
                 condition_type="ReconcileReady",
@@ -152,7 +199,7 @@ def _labinstance_body(
 
     metadata: dict[str, Any] = {
         "name": instance_id,
-        "namespace": settings.kube_namespace,
+        "namespace": namespace,
         "labels": {
             "labs.bretter.io/owner": owner,
             "labs.bretter.io/template-id": str(template.id),
@@ -178,6 +225,7 @@ def upsert_vm_labinstance(
     owner: str,
     template: Template,
     image: Image,
+    namespace: str | None = None,
     desired_state: str = "running",
     status_phase: str | None = None,
     status_message: str | None = None,
@@ -187,62 +235,102 @@ def upsert_vm_labinstance(
         owner=owner,
         template=template,
         image=image,
+        namespace=str(namespace or settings.kube_namespace),
         desired_state=desired_state,
         status_phase=status_phase,
         status_message=status_message,
     )
     custom = _custom_objects()
-    namespace = settings.kube_namespace
+    target_namespace = str(namespace or settings.kube_namespace)
+    create_body = body
     try:
         custom.create_namespaced_custom_object(
             group=_group(),
             version=_version(),
-            namespace=namespace,
+            namespace=target_namespace,
             plural=_plural(),
-            body=body,
+            body=create_body,
         )
         return
     except ApiException as exc:
-        if exc.status != 409:
+        if _is_legacy_desired_state_schema_error(exc):
+            create_body = _fallback_body_for_legacy_desired_state(body)
+            try:
+                custom.create_namespaced_custom_object(
+                    group=_group(),
+                    version=_version(),
+                    namespace=target_namespace,
+                    plural=_plural(),
+                    body=create_body,
+                )
+                logger.info(
+                    "Detected legacy LabInstance desiredState schema; using spec.desiredState compatibility mode."
+                )
+                return
+            except ApiException as legacy_exc:
+                if legacy_exc.status != 409:
+                    raise
+        elif exc.status != 409:
             raise
+        else:
+            create_body = body
 
     custom.patch_namespaced_custom_object(
         group=_group(),
         version=_version(),
-        namespace=namespace,
+        namespace=target_namespace,
         plural=_plural(),
         name=instance_id,
-        body={"spec": body["spec"], "metadata": {"labels": body["metadata"].get("labels", {})}},
+        body={"spec": create_body["spec"], "metadata": {"labels": create_body["metadata"].get("labels", {})}},
     )
     custom.patch_namespaced_custom_object_status(
         group=_group(),
         version=_version(),
-        namespace=namespace,
+        namespace=target_namespace,
         plural=_plural(),
         name=instance_id,
-        body={"status": body["status"]},
+        body={"status": create_body["status"]},
     )
 
 
-def patch_vm_labinstance_desired_state(instance_id: str, desired_state: str) -> None:
+def patch_vm_labinstance_desired_state(
+    instance_id: str,
+    desired_state: str,
+    *,
+    namespace: str | None = None,
+) -> None:
     custom = _custom_objects()
-    custom.patch_namespaced_custom_object(
-        group=_group(),
-        version=_version(),
-        namespace=settings.kube_namespace,
-        plural=_plural(),
-        name=instance_id,
-        body={"spec": {"lifecycle": {"desiredState": str(desired_state or "running").strip().lower()}}},
-    )
+    desired_state_value = str(desired_state or "running").strip().lower() or "running"
+    target_namespace = str(namespace or settings.kube_namespace)
+    try:
+        custom.patch_namespaced_custom_object(
+            group=_group(),
+            version=_version(),
+            namespace=target_namespace,
+            plural=_plural(),
+            name=instance_id,
+            body={"spec": {"lifecycle": {"desiredState": desired_state_value}}},
+        )
+    except ApiException as exc:
+        if not _is_legacy_desired_state_schema_error(exc):
+            raise
+        custom.patch_namespaced_custom_object(
+            group=_group(),
+            version=_version(),
+            namespace=target_namespace,
+            plural=_plural(),
+            name=instance_id,
+            body={"spec": {"desiredState": desired_state_value}},
+        )
 
 
-def delete_vm_labinstance(instance_id: str, *, missing_ok: bool = True) -> None:
+def delete_vm_labinstance(instance_id: str, *, namespace: str | None = None, missing_ok: bool = True) -> None:
     custom = _custom_objects()
     try:
         custom.delete_namespaced_custom_object(
             group=_group(),
             version=_version(),
-            namespace=settings.kube_namespace,
+            namespace=str(namespace or settings.kube_namespace),
             plural=_plural(),
             name=instance_id,
         )
@@ -252,8 +340,8 @@ def delete_vm_labinstance(instance_id: str, *, missing_ok: bool = True) -> None:
         raise
 
 
-def delete_vm_labinstance_best_effort(instance_id: str) -> None:
+def delete_vm_labinstance_best_effort(instance_id: str, *, namespace: str | None = None) -> None:
     try:
-        delete_vm_labinstance(instance_id, missing_ok=True)
+        delete_vm_labinstance(instance_id, namespace=namespace, missing_ok=True)
     except Exception:
         logger.warning("Failed to delete LabInstance CRD for %s", instance_id, exc_info=True)

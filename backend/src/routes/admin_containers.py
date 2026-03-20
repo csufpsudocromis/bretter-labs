@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlmodel import Session, select
 
-from ..auth import require_permission
+from ..auth import require_permission, require_user
 from ..config import settings
 from ..db import get_session, session_scope
 from ..models import (
@@ -22,7 +22,16 @@ from ..models import (
 from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
+from ..tables import User
 from ..services.kubernetes import kube
+from ..services.tenant_context import (
+    GLOBAL_TENANT,
+    actor_tenant,
+    assert_actor_can_manage_tenant,
+    is_platform_admin,
+    normalize_tenant,
+    resolve_resource_tenant,
+)
 from ..time_utils import utc_now
 from ..rbac import Permission
 
@@ -32,6 +41,15 @@ logger = logging.getLogger(__name__)
 _ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$")
 _TEMPLATE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
+
+
+def _tenant_scope_for_actor(actor: User, *, include_global: bool = True) -> set[str] | None:
+    if is_platform_admin(actor):
+        return None
+    scoped = {actor_tenant(actor)}
+    if include_global:
+        scoped.add(GLOBAL_TENANT)
+    return scoped
 
 
 def _normalize_container_image_ref(value: str) -> str:
@@ -239,6 +257,7 @@ def _image_out(record: ContainerImageTable, signature_warning: str | None = None
         id=record.id,
         name=record.name,
         image_ref=record.image_ref,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         signature_warning=signature_warning,
         last_scan_at=getattr(record, "last_scan_at", None),
         last_scan_status=str(getattr(record, "last_scan_status", "never") or "never"),
@@ -274,6 +293,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         version=max(1, int(getattr(record, "version", 1) or 1)),
         is_default=bool(getattr(record, "is_default", True)),
         name=record.name,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         description=record.description,
         container_image_id=record.container_image_id,
         cpu_millicores=record.cpu_millicores,
@@ -310,6 +330,8 @@ def _instance_out(record: ContainerInstanceTable) -> ContainerInstanceView:
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default="default"),
+        namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
         status=str(record.status or "unknown"),
         status_stage=None,
         status_detail=None,
@@ -330,8 +352,15 @@ def _instance_out(record: ContainerInstanceTable) -> ContainerInstanceView:
     response_model=list[ContainerInstanceView],
     dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
 )
-def list_container_instances(session: Session = Depends(get_session)) -> list[ContainerInstanceView]:
-    rows = session.exec(select(ContainerInstanceTable)).all()
+def list_container_instances(
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[ContainerInstanceView]:
+    stmt = select(ContainerInstanceTable)
+    scope = _tenant_scope_for_actor(actor, include_global=False)
+    if scope is not None:
+        stmt = stmt.where(ContainerInstanceTable.tenant.in_(scope))
+    rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.started_at, reverse=True)
     return [_instance_out(row) for row in rows]
 
@@ -341,15 +370,26 @@ def list_container_instances(session: Session = Depends(get_session)) -> list[Co
     response_model=ContainerInstanceView,
     dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
 )
-def stop_container_instance(instance_id: str, session: Session = Depends(get_session)) -> ContainerInstanceView:
+def stop_container_instance(
+    instance_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ContainerInstanceView:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
     if record.status != "queued":
-        kube.stop_container_pod(record.id, record.owner)
+        kube.stop_container_pod(
+            record.id,
+            record.owner,
+            namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+        )
         try:
-            kube.delete_container_service(record.id)
+            kube.delete_container_service(
+                record.id, namespace=str(getattr(record, "namespace", "") or settings.kube_namespace)
+            )
         except Exception:
             pass
     record.status = "stopped"
@@ -367,14 +407,20 @@ def stop_container_instance(instance_id: str, session: Session = Depends(get_ses
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
 )
-def delete_container_instance(instance_id: str, session: Session = Depends(get_session)) -> None:
+def delete_container_instance(
+    instance_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
-    kube.delete_container_pod(record.id, record.owner)
+    namespace = str(getattr(record, "namespace", "") or settings.kube_namespace)
+    kube.delete_container_pod(record.id, record.owner, namespace=namespace)
     try:
-        kube.delete_container_service(record.id)
+        kube.delete_container_service(record.id, namespace=namespace)
     except Exception:
         pass
     session.delete(record)
@@ -391,11 +437,17 @@ def create_container_image(
     payload: ContainerImageCreate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> ContainerImageMeta:
+    resource_tenant = resolve_resource_tenant(actor, payload.tenant)
     image_ref = _normalize_container_image_ref(payload.image_ref)
     _enforce_registry_policy(image_ref)
     signature_warning = _verify_image_signature(image_ref)
-    existing = session.exec(select(ContainerImageTable).where(ContainerImageTable.image_ref == image_ref)).first()
+    existing = session.exec(
+        select(ContainerImageTable)
+        .where(ContainerImageTable.image_ref == image_ref)
+        .where(ContainerImageTable.tenant == resource_tenant)
+    ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
 
@@ -404,6 +456,7 @@ def create_container_image(
         id=str(uuid4()),
         name=name,
         image_ref=image_ref,
+        tenant=resource_tenant,
         last_scan_at=utc_now() if settings.container_scan_enabled else None,
         last_scan_status="queued" if settings.container_scan_enabled else "never",
         last_scan_summary="scan queued" if settings.container_scan_enabled else "",
@@ -424,8 +477,15 @@ def create_container_image(
     response_model=list[ContainerImageMeta],
     dependencies=[Depends(require_permission(Permission.IMAGES_READ))],
 )
-def list_container_images(session: Session = Depends(get_session)) -> list[ContainerImageMeta]:
-    rows = session.exec(select(ContainerImageTable)).all()
+def list_container_images(
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[ContainerImageMeta]:
+    stmt = select(ContainerImageTable)
+    scope = _tenant_scope_for_actor(actor, include_global=True)
+    if scope is not None:
+        stmt = stmt.where(ContainerImageTable.tenant.in_(scope))
+    rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_image_out(row) for row in rows]
 
@@ -440,10 +500,14 @@ def update_container_image(
     payload: ContainerImageUpdate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> ContainerImageMeta:
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+    next_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    if payload.tenant is not None:
+        next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
 
     updates = payload.model_dump(exclude_unset=True)
     signature_warning = None
@@ -460,6 +524,7 @@ def update_container_image(
             select(ContainerImageTable)
             .where(ContainerImageTable.image_ref == image_ref)
             .where(ContainerImageTable.id != image_id)
+            .where(ContainerImageTable.tenant == next_tenant)
         ).first()
         if existing:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
@@ -468,6 +533,7 @@ def update_container_image(
             record.last_scan_at = utc_now()
             record.last_scan_status = "queued"
             record.last_scan_summary = "scan queued"
+    record.tenant = next_tenant
 
     session.add(record)
     session.commit()
@@ -485,10 +551,15 @@ def update_container_image(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
-def delete_container_image(image_id: str, session: Session = Depends(get_session)) -> None:
+def delete_container_image(
+    image_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+    assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
     template_refs = session.exec(
         select(ContainerTemplateTable).where(ContainerTemplateTable.container_image_id == image_id)
@@ -530,10 +601,12 @@ def prepull_container_image(
     image_id: str,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> dict[str, str]:
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+    assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     background_tasks.add_task(_run_image_prepull, record.image_ref)
     return {"detail": f"Pre-pull queued for {record.image_ref}"}
 
@@ -547,10 +620,12 @@ def scan_container_image(
     image_id: str,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> ContainerImageMeta:
     record = session.get(ContainerImageTable, image_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+    assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     record.last_scan_at = utc_now()
     record.last_scan_status = "queued"
     record.last_scan_summary = "scan queued"
@@ -571,10 +646,18 @@ def create_container_template(
     payload: ContainerTemplateCreate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> ContainerTemplate:
+    resource_tenant = resolve_resource_tenant(actor, payload.tenant)
     image = session.get(ContainerImageTable, payload.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"container template tenant {resource_tenant} cannot use image tenant {image_tenant}",
+        )
 
     args = [str(item).strip() for item in (payload.args or []) if str(item).strip()]
     env = _validate_env(payload.env or {})
@@ -589,6 +672,7 @@ def create_container_template(
         version=1,
         is_default=True,
         name=(payload.name or "").strip(),
+        tenant=resource_tenant,
         description=(payload.description or "").strip(),
         container_image_id=payload.container_image_id,
         cpu_millicores=payload.cpu_millicores,
@@ -626,10 +710,15 @@ def create_container_template(
     response_model=list[ContainerTemplate],
     dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
 )
-def list_container_templates(session: Session = Depends(get_session)) -> list[ContainerTemplate]:
-    rows = session.exec(
-        select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)
-    ).all()  # noqa: E712
+def list_container_templates(
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[ContainerTemplate]:
+    stmt = select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)  # noqa: E712
+    scope = _tenant_scope_for_actor(actor, include_global=True)
+    if scope is not None:
+        stmt = stmt.where(ContainerTemplateTable.tenant.in_(scope))
+    rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
 
@@ -644,14 +733,18 @@ def update_container_template(
     payload: ContainerTemplateUpdate,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
 ) -> ContainerTemplate:
     record = session.get(ContainerTemplateTable, template_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
+    next_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         return _template_out(record)
+    if "tenant" in updates:
+        next_tenant = assert_actor_can_manage_tenant(actor, updates.get("tenant"))
 
     was_enabled = bool(record.enabled)
     previous_image_id = str(record.container_image_id or "").strip()
@@ -664,6 +757,12 @@ def update_container_template(
         image = session.get(ContainerImageTable, image_id)
         if not image:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
+        image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+        if image_tenant not in {next_tenant, GLOBAL_TENANT}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
+            )
         _enforce_registry_policy(image.image_ref)
         _verify_image_signature(image.image_ref)
 
@@ -720,6 +819,15 @@ def update_container_template(
     if "is_default" in updates:
         # Versioning is disabled; keep this as an accepted no-op for old clients.
         record.is_default = True
+    if "tenant" in updates and not image_changed:
+        image_for_tenant = session.get(ContainerImageTable, record.container_image_id)
+        image_tenant = normalize_tenant(getattr(image_for_tenant, "tenant", None), default=GLOBAL_TENANT)
+        if image_tenant not in {next_tenant, GLOBAL_TENANT}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
+            )
+    record.tenant = next_tenant
 
     session.add(record)
     session.commit()
@@ -738,10 +846,15 @@ def update_container_template(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission(Permission.TEMPLATES_WRITE))],
 )
-def delete_container_template(template_id: str, session: Session = Depends(get_session)) -> None:
+def delete_container_template(
+    template_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
     record = session.get(ContainerTemplateTable, template_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
+    assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
     template_key = str(getattr(record, "template_key", "") or "").strip()
     if template_key:

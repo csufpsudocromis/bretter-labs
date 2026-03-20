@@ -85,6 +85,16 @@ from ..services.labimageimport_crd import (
 )
 from ..services.kubernetes import kube
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
+from ..services.tenant_context import (
+    GLOBAL_TENANT,
+    actor_can_access_tenant,
+    actor_tenant,
+    assert_actor_can_manage_tenant,
+    is_platform_admin,
+    normalize_tenant,
+    resolve_resource_tenant,
+    tenant_namespace_for_team,
+)
 from ..secret_codec import encrypt_secret, secret_is_configured
 from ..tables import Config, Image, ImageUploadTask, Instance, TeamQuota, Template, User
 from ..tables import AdminAuditEvent
@@ -192,6 +202,23 @@ def _to_str(value: object) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _tenant_scope_for_actor(actor: User, *, include_global: bool = True) -> set[str] | None:
+    if is_platform_admin(actor):
+        return None
+    scoped = {actor_tenant(actor)}
+    if include_global:
+        scoped.add(GLOBAL_TENANT)
+    return scoped
+
+
+def _tenant_scoped_record(record: object, actor: User, *, include_global: bool = True) -> bool:
+    if is_platform_admin(actor):
+        return True
+    tenant = normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT)
+    scope = _tenant_scope_for_actor(actor, include_global=include_global) or set()
+    return tenant in scope
 
 
 def _format_bytes(value: int) -> str:
@@ -1433,6 +1460,8 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN rdp_default_username TEXT DEFAULT ''")
         if "rdp_default_password" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN rdp_default_password TEXT DEFAULT ''")
+        if "tenant" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN tenant TEXT DEFAULT 'global'")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1453,6 +1482,7 @@ def _ensure_template_columns() -> None:
             cur.execute("UPDATE template SET max_active_instances = 2 WHERE max_active_instances IS NULL")
             cur.execute("UPDATE template SET rdp_default_username = '' WHERE rdp_default_username IS NULL")
             cur.execute("UPDATE template SET rdp_default_password = '' WHERE rdp_default_password IS NULL")
+            cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             conn.commit()
         cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
         if "console_provider" in cols:
@@ -1473,7 +1503,10 @@ def _ensure_template_columns() -> None:
             cur.execute("UPDATE template SET rdp_default_username = '' WHERE rdp_default_username IS NULL")
         if "rdp_default_password" in cols:
             cur.execute("UPDATE template SET rdp_default_password = '' WHERE rdp_default_password IS NULL")
-        if "rdp_default_username" in cols or "rdp_default_password" in cols:
+        if "tenant" in cols:
+            cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_template_tenant ON template(tenant)")
+        if "rdp_default_username" in cols or "rdp_default_password" in cols or "tenant" in cols:
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -1494,7 +1527,12 @@ def _ensure_image_columns() -> None:
         cols = {row[1] for row in cur.execute("PRAGMA table_info(image)")}
         if "source_pvc" not in cols:
             cur.execute("ALTER TABLE image ADD COLUMN source_pvc TEXT")
-            conn.commit()
+        if "tenant" not in cols:
+            cur.execute("ALTER TABLE image ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "tenant" in {row[1] for row in cur.execute("PRAGMA table_info(image)")}:
+            cur.execute("UPDATE image SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_image_tenant ON image(tenant)")
+        conn.commit()
     except Exception:
         logger.exception("Failed to ensure image columns")
     finally:
@@ -1517,7 +1555,18 @@ def _ensure_instance_columns() -> None:
         cols = {row[1] for row in cur.execute("PRAGMA table_info(instance)")}
         if "disk_pvc" not in cols:
             cur.execute("ALTER TABLE instance ADD COLUMN disk_pvc TEXT")
-            conn.commit()
+        if "tenant" not in cols:
+            cur.execute("ALTER TABLE instance ADD COLUMN tenant TEXT DEFAULT 'default'")
+        if "namespace" not in cols:
+            cur.execute("ALTER TABLE instance ADD COLUMN namespace TEXT DEFAULT 'labs'")
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(instance)")}
+        if "tenant" in cols:
+            cur.execute("UPDATE instance SET tenant = 'default' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_tenant ON instance(tenant)")
+        if "namespace" in cols:
+            cur.execute("UPDATE instance SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_namespace ON instance(namespace)")
+        conn.commit()
     except Exception:
         logger.exception("Failed to ensure instance columns")
     finally:
@@ -1563,6 +1612,8 @@ def _ensure_upload_task_columns() -> None:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN last_retry_error TEXT")
         if "finalize_started_at" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_started_at TIMESTAMP")
+        if "tenant" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN tenant TEXT DEFAULT 'global'")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1580,6 +1631,9 @@ def _ensure_upload_task_columns() -> None:
                 "UPDATE imageuploadtask SET max_retries = ? WHERE max_retries IS NULL OR max_retries < 0",
                 (FINALIZE_MAX_RETRIES,),
             )
+        if "tenant" in cols:
+            cur.execute("UPDATE imageuploadtask SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_imageuploadtask_tenant ON imageuploadtask(tenant)")
         conn.commit()
     except Exception:
         logger.exception("Failed to ensure image upload task columns")
@@ -1602,6 +1656,7 @@ def _ensure_admin_audit_table() -> None:
                 CREATE TABLE IF NOT EXISTS adminauditevent (
                     id TEXT PRIMARY KEY,
                     actor TEXT NOT NULL DEFAULT 'unknown',
+                    tenant TEXT NOT NULL DEFAULT 'global',
                     action TEXT NOT NULL,
                     target_type TEXT NOT NULL,
                     target_id TEXT NOT NULL DEFAULT '',
@@ -1610,7 +1665,12 @@ def _ensure_admin_audit_table() -> None:
                 )
                 """
             )
+            cols = {row[1] for row in cur.execute("PRAGMA table_info(adminauditevent)")}
+            if "tenant" not in cols:
+                cur.execute("ALTER TABLE adminauditevent ADD COLUMN tenant TEXT NOT NULL DEFAULT 'global'")
+            cur.execute("UPDATE adminauditevent SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_tenant ON adminauditevent(tenant)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_created_at ON adminauditevent(created_at)")
@@ -1624,6 +1684,7 @@ def _ensure_admin_audit_table() -> None:
                     CREATE TABLE IF NOT EXISTS adminauditevent (
                         id TEXT PRIMARY KEY,
                         actor VARCHAR(128) NOT NULL DEFAULT 'unknown',
+                        tenant VARCHAR(64) NOT NULL DEFAULT 'global',
                         action VARCHAR(128) NOT NULL,
                         target_type VARCHAR(64) NOT NULL,
                         target_id VARCHAR(128) NOT NULL DEFAULT '',
@@ -1633,7 +1694,14 @@ def _ensure_admin_audit_table() -> None:
                     """
                 )
             )
+            session.exec(
+                text(
+                    "ALTER TABLE adminauditevent ADD COLUMN IF NOT EXISTS tenant VARCHAR(64) NOT NULL DEFAULT 'global'"
+                )
+            )
+            session.exec(text("UPDATE adminauditevent SET tenant = 'global' WHERE tenant IS NULL OR tenant = ''"))
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)"))
+            session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_tenant ON adminauditevent(tenant)"))
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)"))
             session.exec(
                 text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
@@ -1664,14 +1732,24 @@ def _record_admin_audit_event(
     session: Session,
     *,
     actor: str | None,
+    tenant: str | None = None,
     action: str,
     target_type: str,
     target_id: str | None = None,
     detail: str | None = None,
 ) -> None:
+    tenant_value = str(tenant or "").strip()
+    if not tenant_value:
+        actor_username = str(actor or "").strip()
+        if actor_username:
+            actor_row = session.get(User, actor_username)
+            if actor_row:
+                tenant_value = normalize_team(getattr(actor_row, "team", None))
+    normalized_tenant = normalize_tenant(tenant_value, default=GLOBAL_TENANT)
     event = AdminAuditEvent(
         id=str(uuid4()),
         actor=(str(actor or "").strip() or "unknown")[:128],
+        tenant=normalized_tenant,
         action=(str(action or "").strip() or "unknown")[:128],
         target_type=(str(target_type or "").strip() or "unknown")[:64],
         target_id=(str(target_id or "").strip())[:128],
@@ -2571,6 +2649,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
     if existing:
         existing.name = task.filename
         existing.filename = task.filename
+        existing.tenant = normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT)
         existing.source_pvc = task.source_pvc
         existing.checksum = task.checksum
         existing.size_bytes = task.size_bytes
@@ -2581,6 +2660,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         id=task.image_id,
         name=task.filename,
         filename=task.filename,
+        tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
         source_pvc=task.source_pvc,
         checksum=task.checksum,
         size_bytes=task.size_bytes,
@@ -3425,6 +3505,7 @@ def _admin_audit_event_out(record: AdminAuditEvent) -> AdminAuditEventOut:
     return AdminAuditEventOut(
         id=record.id,
         actor=record.actor,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         action=record.action,
         target_type=record.target_type,
         target_id=record.target_id,
@@ -3452,9 +3533,14 @@ def _team_quota_out(record: TeamQuota) -> TeamQuotaOut:
 @router.get(
     "/quota-namespaces",
     response_model=list[str],
-    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+    dependencies=[Depends(require_permission(Permission.USERS_READ))],
 )
-def list_quota_namespaces(session: Session = Depends(get_session)) -> list[str]:
+def list_quota_namespaces(
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[str]:
+    if not is_platform_admin(actor):
+        return [normalize_namespace(tenant_namespace_for_team(actor.team))]
     available: set[str] = set()
     configured = normalize_namespace(settings.kube_namespace)
     if configured:
@@ -3476,9 +3562,11 @@ def list_quota_namespaces(session: Session = Depends(get_session)) -> list[str]:
 @router.get(
     "/quota-teams",
     response_model=list[str],
-    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+    dependencies=[Depends(require_permission(Permission.USERS_READ))],
 )
-def list_quota_teams(session: Session = Depends(get_session)) -> list[str]:
+def list_quota_teams(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[str]:
+    if not is_platform_admin(actor):
+        return [actor_tenant(actor)]
     available: set[str] = {normalize_team("default")}
     user_rows = session.exec(select(User.team)).all()
     for row in user_rows:
@@ -3507,11 +3595,16 @@ def add_user(
         role = normalize_requested_role(payload.role, payload.is_admin)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    team = normalize_team(payload.team)
+    if not is_platform_admin(actor):
+        team = actor_tenant(actor)
+        if role in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
         role=role,
-        team=normalize_team(payload.team),
+        team=team,
         is_admin=can_access_admin(role),
         force_password_change=False,
     )
@@ -3519,6 +3612,7 @@ def add_user(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=team,
         action="create",
         target_type="user",
         target_id=user.username,
@@ -3530,8 +3624,11 @@ def add_user(
 
 
 @router.get("/users", response_model=list[UserOut], dependencies=[Depends(require_permission(Permission.USERS_READ))])
-def list_users(session: Session = Depends(get_session)) -> list[UserOut]:
-    users = session.exec(select(User)).all()
+def list_users(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[UserOut]:
+    stmt = select(User)
+    if not is_platform_admin(actor):
+        stmt = stmt.where(User.team == actor_tenant(actor))
+    users = session.exec(stmt).all()
     mutated = False
     for user in users:
         if ensure_user_role_fields(user):
@@ -3561,6 +3658,11 @@ def update_user(
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+    if not is_platform_admin(actor):
+        if normalize_team(user.team) != actor_tenant(actor):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+        if role_for_user(user) in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     new_username = payload.username or username
     if payload.username is not None and (len(payload.username) < 3 or len(payload.username) > 64):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid username length")
@@ -3582,15 +3684,21 @@ def update_user(
             role = normalize_requested_role(payload.role, payload.is_admin)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        if not is_platform_admin(actor) and role in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
         user.role = role
         user.is_admin = can_access_admin(role)
     if payload.team is not None:
-        user.team = normalize_team(payload.team)
+        next_team = normalize_team(payload.team)
+        if not is_platform_admin(actor) and next_team != actor_tenant(actor):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient team assignment scope")
+        user.team = next_team
     user.username = new_username
     session.add(user)
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=normalize_team(getattr(user, "team", None)),
         action="update",
         target_type="user",
         target_id=user.username,
@@ -3614,12 +3722,18 @@ def remove_user(
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+    if not is_platform_admin(actor):
+        if normalize_team(user.team) != actor_tenant(actor):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+        if role_for_user(user) in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     if role_for_user(user) == Role.PLATFORM_ADMIN and username == settings.admin_default_username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot delete default admin")
     revoke_tokens(session, username)
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=normalize_team(getattr(user, "team", None)),
         action="delete",
         target_type="user",
         target_id=username,
@@ -3631,10 +3745,15 @@ def remove_user(
 @router.get(
     "/team-quotas",
     response_model=list[TeamQuotaOut],
-    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+    dependencies=[Depends(require_permission(Permission.USERS_READ))],
 )
-def list_team_quotas(session: Session = Depends(get_session)) -> list[TeamQuotaOut]:
-    rows = session.exec(select(TeamQuota)).all()
+def list_team_quotas(
+    session: Session = Depends(get_session), actor: User = Depends(require_user)
+) -> list[TeamQuotaOut]:
+    stmt = select(TeamQuota)
+    if not is_platform_admin(actor):
+        stmt = stmt.where(TeamQuota.team == actor_tenant(actor))
+    rows = session.exec(stmt).all()
     rows.sort(key=lambda row: (normalize_namespace(row.namespace), normalize_team(row.team)))
     return [_team_quota_out(row) for row in rows]
 
@@ -3643,7 +3762,7 @@ def list_team_quotas(session: Session = Depends(get_session)) -> list[TeamQuotaO
     "/team-quotas",
     response_model=TeamQuotaOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+    dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
 )
 def create_team_quota(
     payload: TeamQuotaCreate,
@@ -3652,6 +3771,14 @@ def create_team_quota(
 ) -> TeamQuotaOut:
     team = normalize_team(payload.team)
     namespace = normalize_namespace(payload.namespace)
+    if not is_platform_admin(actor):
+        team = actor_tenant(actor)
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(team))
+        if namespace != expected_namespace:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"team quotas must target namespace {expected_namespace} for tenant {team}",
+            )
     existing = session.exec(
         select(TeamQuota).where(TeamQuota.team == team).where(TeamQuota.namespace == namespace)
     ).first()
@@ -3678,6 +3805,7 @@ def create_team_quota(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=team,
         action="create",
         target_type="team_quota",
         target_id=row.id,
@@ -3691,7 +3819,7 @@ def create_team_quota(
 @router.patch(
     "/team-quotas/{quota_id}",
     response_model=TeamQuotaOut,
-    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+    dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
 )
 def update_team_quota(
     quota_id: str,
@@ -3702,11 +3830,21 @@ def update_team_quota(
     row = session.get(TeamQuota, quota_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+    if not is_platform_admin(actor) and normalize_team(row.team) != actor_tenant(actor):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
 
     team = normalize_team(payload.team) if payload.team is not None else normalize_team(row.team)
     namespace = (
         normalize_namespace(payload.namespace) if payload.namespace is not None else normalize_namespace(row.namespace)
     )
+    if not is_platform_admin(actor):
+        team = actor_tenant(actor)
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(team))
+        if namespace != expected_namespace:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"team quotas must target namespace {expected_namespace} for tenant {team}",
+            )
     conflict = session.exec(
         select(TeamQuota)
         .where(TeamQuota.team == team)
@@ -3754,6 +3892,7 @@ def update_team_quota(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=normalize_team(row.team),
         action="update",
         target_type="team_quota",
         target_id=row.id,
@@ -3767,7 +3906,7 @@ def update_team_quota(
 @router.delete(
     "/team-quotas/{quota_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+    dependencies=[Depends(require_permission(Permission.USERS_WRITE))],
 )
 def delete_team_quota(
     quota_id: str,
@@ -3777,9 +3916,12 @@ def delete_team_quota(
     row = session.get(TeamQuota, quota_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+    if not is_platform_admin(actor) and normalize_team(row.team) != actor_tenant(actor):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=normalize_team(row.team),
         action="delete",
         target_type="team_quota",
         target_id=row.id,
@@ -3868,6 +4010,7 @@ def upload_image(
         id=task_id,
         original_filename=Path(file.filename).name,
         filename=filename,
+        tenant=resolve_resource_tenant(actor),
         size_bytes=size_bytes,
         status="finalizing",
         stage="finalizing",
@@ -3887,6 +4030,7 @@ def upload_image(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
         action="create",
         target_type="image_upload_task",
         target_id=task.id,
@@ -3957,6 +4101,7 @@ def start_direct_upload(
         id=str(uuid4()),
         original_filename=filename,
         filename=filename,
+        tenant=resolve_resource_tenant(actor),
         size_bytes=payload.size_bytes,
         status="uploading",
         stage="uploading",
@@ -3973,6 +4118,7 @@ def start_direct_upload(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
         action="create",
         target_type="image_upload_task",
         target_id=task.id,
@@ -4010,9 +4156,15 @@ def start_direct_upload(
     response_model=ImageUploadTaskStatus,
     dependencies=[Depends(require_permission(Permission.IMAGES_READ))],
 )
-def get_upload_task(task_id: str, session: Session = Depends(get_session)) -> ImageUploadTaskStatus:
+def get_upload_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageUploadTaskStatus:
     task = session.get(ImageUploadTask, task_id)
     if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
+    if not _tenant_scoped_record(task, actor, include_global=False):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
     try:
         task = _refresh_upload_task(task, session)
@@ -4041,6 +4193,7 @@ def import_image(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ImageCreateResponse:
+    resource_tenant = resolve_resource_tenant(actor)
     if not settings.kube_vm_storage_class:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -4068,7 +4221,9 @@ def import_image(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"converted image missing on storage: {converted_name}",
             )
-    existing = session.exec(select(Image).where(Image.filename == dest_path.name)).first()
+    existing = session.exec(
+        select(Image).where(Image.filename == dest_path.name).where(Image.tenant == resource_tenant)
+    ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="image already registered")
 
@@ -4098,6 +4253,7 @@ def import_image(
         id=image_id,
         name=payload.name or dest_path.name,
         filename=dest_path.name,
+        tenant=resource_tenant,
         source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
@@ -4107,6 +4263,7 @@ def import_image(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=resource_tenant,
         action="create",
         target_type="image",
         target_id=record.id,
@@ -4117,6 +4274,7 @@ def import_image(
         id=record.id,
         name=record.name,
         filename=record.filename,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -4126,29 +4284,36 @@ def import_image(
 @router.get(
     "/images", response_model=list[ImageMeta], dependencies=[Depends(require_permission(Permission.IMAGES_READ))]
 )
-def list_images(session: Session = Depends(get_session)) -> list[ImageMeta]:
+def list_images(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[ImageMeta]:
     pvc_files = {item["name"]: item for item in _list_pvc_files()}
     existing_records = session.exec(select(Image)).all()
-    for fname, info in pvc_files.items():
-        if any(r.filename == fname for r in existing_records):
-            continue
-        record = Image(
-            id=str(uuid4()),
-            name=fname,
-            filename=fname,
-            source_pvc=None,
-            checksum="",
-            size_bytes=info.get("size", 0),
-            created_at=utc_now(),
-        )
-        session.add(record)
-        existing_records.append(record)
-    session.commit()
-    images = existing_records
+    if is_platform_admin(actor):
+        for fname, info in pvc_files.items():
+            if any(
+                r.filename == fname
+                and normalize_tenant(getattr(r, "tenant", None), default=GLOBAL_TENANT) == GLOBAL_TENANT
+                for r in existing_records
+            ):
+                continue
+            record = Image(
+                id=str(uuid4()),
+                name=fname,
+                filename=fname,
+                tenant=GLOBAL_TENANT,
+                source_pvc=None,
+                checksum="",
+                size_bytes=info.get("size", 0),
+                created_at=utc_now(),
+            )
+            session.add(record)
+            existing_records.append(record)
+        session.commit()
+    images = [record for record in existing_records if _tenant_scoped_record(record, actor, include_global=True)]
     return [
         ImageMeta(
             id=record.id,
             name=record.name,
+            tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
             checksum=record.checksum,
             size_bytes=record.size_bytes,
             created_at=record.created_at,
@@ -4168,8 +4333,9 @@ def delete_image(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(Image, image_id)
-    if not record:
+    if not record or not _tenant_scoped_record(record, actor, include_global=True):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     in_use_by_templates = session.exec(select(Template).where(Template.image_id == image_id)).all()
     if in_use_by_templates:
         names = [str(template.name or template.id) for template in in_use_by_templates[:3]]
@@ -4222,6 +4388,7 @@ def delete_image(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=managed_tenant,
         action="delete",
         target_type="image",
         target_id=record.id,
@@ -4243,8 +4410,9 @@ def rename_image(
     actor: User = Depends(require_user),
 ) -> ImageMeta:
     record = session.get(Image, image_id)
-    if not record:
+    if not record or not _tenant_scoped_record(record, actor, include_global=True):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     new_name = payload.name or record.name
     new_filename = payload.filename or record.filename
     if Path(new_filename).suffix.lower() not in ALLOWED_SUFFIXES:
@@ -4283,6 +4451,7 @@ def rename_image(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=managed_tenant,
         action="update",
         target_type="image",
         target_id=record.id,
@@ -4293,6 +4462,7 @@ def rename_image(
     return ImageMeta(
         id=record.id,
         name=record.name,
+        tenant=managed_tenant,
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -4307,6 +4477,7 @@ def _template_to_model(record: Template) -> VMTemplate:
     return VMTemplate(
         id=record.id,
         name=record.name,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         description=record.description,
         os_type=record.os_type,
         image_id=record.image_id,
@@ -4337,9 +4508,16 @@ def create_template(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> VMTemplate:
+    resource_tenant = resolve_resource_tenant(actor, payload.tenant)
     image = session.get(Image, payload.image_id)
-    if not image:
+    if not image or not _tenant_scoped_record(image, actor, include_global=True):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"template tenant {resource_tenant} cannot use image tenant {image_tenant}",
+        )
     if not image.source_pvc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -4355,6 +4533,7 @@ def create_template(
     record = Template(
         id=str(uuid4()),
         name=payload.name,
+        tenant=resource_tenant,
         description=payload.description or "",
         os_type=payload.os_type or "windows",
         image_id=payload.image_id,
@@ -4380,6 +4559,7 @@ def create_template(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=resource_tenant,
         action="create",
         target_type="template",
         target_id=record.id,
@@ -4395,8 +4575,12 @@ def create_template(
     response_model=list[VMTemplate],
     dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
 )
-def list_templates(session: Session = Depends(get_session)) -> list[VMTemplate]:
-    templates = session.exec(select(Template)).all()
+def list_templates(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[VMTemplate]:
+    stmt = select(Template)
+    scope = _tenant_scope_for_actor(actor, include_global=True)
+    if scope is not None:
+        stmt = stmt.where(Template.tenant.in_(scope))
+    templates = session.exec(stmt).all()
     return [_template_to_model(record) for record in templates]
 
 
@@ -4412,8 +4596,12 @@ def update_template(
     actor: User = Depends(require_user),
 ) -> VMTemplate:
     record = session.get(Template, template_id)
-    if not record:
+    if not record or not _tenant_scoped_record(record, actor, include_global=True):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    next_tenant = managed_tenant
+    if payload.tenant is not None:
+        next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
     if payload.name is not None:
         record.name = payload.name
     if payload.description is not None:
@@ -4422,14 +4610,21 @@ def update_template(
         record.os_type = payload.os_type
     if payload.image_id is not None:
         image = session.get(Image, payload.image_id)
-        if not image:
+        if not image or not _tenant_scoped_record(image, actor, include_global=True):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
         if not image.source_pvc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="image is not ready for clone-based launch; re-import or re-upload the image",
             )
+        image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+        if image_tenant not in {next_tenant, GLOBAL_TENANT}:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"template tenant {next_tenant} cannot use image tenant {image_tenant}",
+            )
         record.image_id = payload.image_id
+    record.tenant = next_tenant
     if payload.cpu_cores is not None:
         record.cpu_cores = payload.cpu_cores
     if payload.ram_mb is not None:
@@ -4467,6 +4662,7 @@ def update_template(
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=next_tenant,
         action="update",
         target_type="template",
         target_id=record.id,
@@ -4488,11 +4684,13 @@ def delete_template(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(Template, template_id)
-    if not record:
+    if not record or not _tenant_scoped_record(record, actor, include_global=True):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     _record_admin_audit_event(
         session,
         actor=actor.username,
+        tenant=managed_tenant,
         action="delete",
         target_type="template",
         target_id=record.id,
@@ -5156,10 +5354,13 @@ def list_admin_audit_events(
     actor: str | None = Query(default=None),
     action: str | None = Query(default=None),
     session: Session = Depends(get_session),
+    user: User = Depends(require_user),
 ) -> list[AdminAuditEventOut]:
     stmt = select(AdminAuditEvent)
     actor_filter = str(actor or "").strip()
     action_filter = str(action or "").strip()
+    if not is_platform_admin(user):
+        stmt = stmt.where(AdminAuditEvent.tenant == actor_tenant(user))
     if actor_filter:
         stmt = stmt.where(AdminAuditEvent.actor == actor_filter)
     if action_filter:

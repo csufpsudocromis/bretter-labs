@@ -219,15 +219,15 @@ fi
 
 should_run_crd_canary=0
 case "$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')" in
-  1 | true | yes | on)
+  1|true|yes|on)
     should_run_crd_canary=1
     ;;
-  0 | false | no | off)
+  0|false|no|off)
     should_run_crd_canary=0
     ;;
   auto)
     case "$(printf '%s' "$orchestration_backend" | tr '[:upper:]' '[:lower:]')" in
-      crd | dual) should_run_crd_canary=1 ;;
+      crd|dual) should_run_crd_canary=1 ;;
       *) should_run_crd_canary=0 ;;
     esac
     ;;

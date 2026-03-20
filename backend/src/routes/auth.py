@@ -62,6 +62,7 @@ _OIDC_ROLE_PRIORITY: dict[str, int] = {
     Role.IMAGE_MANAGER: 20,
     Role.TEMPLATE_MANAGER: 20,
     Role.LAB_OPERATOR: 30,
+    Role.TENANT_ADMIN: 80,
     Role.PLATFORM_ADMIN: 100,
 }
 

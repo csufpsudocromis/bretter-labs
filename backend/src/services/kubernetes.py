@@ -43,6 +43,7 @@ class PodRequest:
     ram_mb: int
     owner: str
     network_mode: str = "bridge"
+    namespace: str | None = None
     instance_disk_pvc: Optional[str] = None
     console_provider: str = "spice"
     spice_password: Optional[str] = None
@@ -57,6 +58,7 @@ class ContainerPodRequest:
     image_ref: str
     cpu_millicores: int
     memory_mb: int
+    namespace: str | None = None
     container_port: int = 80
     healthcheck_protocol: str = "tcp"
     healthcheck_path: str = "/"
@@ -105,6 +107,12 @@ class KubernetesService:
     def _networking_client(self):
         self._client()
         return self._networking
+
+    def _namespace(self, namespace: str | None = None) -> str:
+        resolved = str(namespace or "").strip()
+        if resolved:
+            return resolved
+        return str(settings.kube_namespace or "labs").strip() or "labs"
 
     def _safe_owner(self, owner: str) -> str:
         safe_owner = re.sub(r"[^a-z0-9-]+", "-", (owner or "").lower()).strip("-")
@@ -280,10 +288,11 @@ class KubernetesService:
 
     def _ensure_instance_disk_pvc(self, req: PodRequest) -> str:
         core = self._client()
+        namespace = self._namespace(req.namespace)
         if req.instance_disk_pvc:
             existing = core.read_namespaced_persistent_volume_claim(
                 name=req.instance_disk_pvc,
-                namespace=settings.kube_namespace,
+                namespace=namespace,
             )
             phase = (existing.status.phase or "").lower()
             if phase == "lost":
@@ -294,14 +303,14 @@ class KubernetesService:
 
         pvc_name = self._instance_disk_pvc_name(req.instance_id, req.owner)
         try:
-            existing = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+            existing = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=namespace)
             # A restart can race with PVC deletion. If we reuse a claim that is terminating,
             # the pod references a missing claim and remains Pending indefinitely.
             if existing.metadata and existing.metadata.deletion_timestamp:
                 deadline = time.time() + 90
                 while time.time() < deadline:
                     try:
-                        core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+                        core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=namespace)
                     except ApiException as check_exc:
                         if check_exc.status == 404:
                             break
@@ -318,9 +327,7 @@ class KubernetesService:
             if exc.status != 404:
                 raise
 
-        source = core.read_namespaced_persistent_volume_claim(
-            name=req.image_source_pvc, namespace=settings.kube_namespace
-        )
+        source = core.read_namespaced_persistent_volume_claim(name=req.image_source_pvc, namespace=namespace)
         source_request = None
         if source.spec and source.spec.resources and source.spec.resources.requests:
             source_request = source.spec.resources.requests.get("storage")
@@ -343,15 +350,20 @@ class KubernetesService:
                 ),
             ),
         )
-        core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
+        core.create_namespaced_persistent_volume_claim(namespace=namespace, body=body)
         return pvc_name
 
-    def reserve_warm_pool_pvc(self, template_id: str, instance_id: str, owner: str) -> Optional[str]:
+    def reserve_warm_pool_pvc(
+        self,
+        template_id: str,
+        instance_id: str,
+        owner: str,
+        namespace: str | None = None,
+    ) -> Optional[str]:
         core = self._client()
+        ns = self._namespace(namespace)
         selector = f"blabs-pool=true,template-id={template_id},pool-state=ready"
-        items = core.list_namespaced_persistent_volume_claim(
-            namespace=settings.kube_namespace, label_selector=selector
-        ).items
+        items = core.list_namespaced_persistent_volume_claim(namespace=ns, label_selector=selector).items
         for pvc in items:
             if (pvc.status.phase or "").lower() != "bound":
                 continue
@@ -364,7 +376,7 @@ class KubernetesService:
             try:
                 core.patch_namespaced_persistent_volume_claim(
                     name=pvc.metadata.name,
-                    namespace=settings.kube_namespace,
+                    namespace=ns,
                     body={"metadata": {"labels": labels}},
                 )
                 return pvc.metadata.name
@@ -451,8 +463,15 @@ class KubernetesService:
                 if exc.status != 409:
                     raise
 
-    def create_service_for_pod(self, pod_name: str, service_name: str, service_type: str = "NodePort") -> int | None:
+    def create_service_for_pod(
+        self,
+        pod_name: str,
+        service_name: str,
+        service_type: str = "NodePort",
+        namespace: str | None = None,
+    ) -> int | None:
         core = self._client()
+        ns = self._namespace(namespace)
         normalized_service_type = "ClusterIP" if str(service_type).lower() == "clusterip" else "NodePort"
         external_traffic_policy = self._vm_console_external_traffic_policy()
         spec_kwargs: dict[str, object] = {
@@ -467,7 +486,7 @@ class KubernetesService:
             spec=client.V1ServiceSpec(**spec_kwargs),
         )
         try:
-            svc = core.create_namespaced_service(namespace=settings.kube_namespace, body=body)
+            svc = core.create_namespaced_service(namespace=ns, body=body)
             if normalized_service_type == "NodePort":
                 return svc.spec.ports[0].node_port
             return None
@@ -476,7 +495,7 @@ class KubernetesService:
                 logger.error("Failed to create service %s: %s", service_name, exc)
                 raise
             # If already exists, fetch existing
-            existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            existing = core.read_namespaced_service(name=service_name, namespace=ns)
             existing_spec = existing.spec or client.V1ServiceSpec()
             desired_patch: dict[str, object] = {"selector": {"app": pod_name}, "type": normalized_service_type}
             needs_patch = str(existing_spec.type or "") != normalized_service_type
@@ -485,10 +504,8 @@ class KubernetesService:
                 if str(existing_spec.external_traffic_policy or "") != external_traffic_policy:
                     needs_patch = True
             if needs_patch:
-                core.patch_namespaced_service(
-                    name=service_name, namespace=settings.kube_namespace, body={"spec": desired_patch}
-                )
-                existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+                core.patch_namespaced_service(name=service_name, namespace=ns, body={"spec": desired_patch})
+                existing = core.read_namespaced_service(name=service_name, namespace=ns)
             if normalized_service_type == "NodePort":
                 return existing.spec.ports[0].node_port
             return None
@@ -499,8 +516,10 @@ class KubernetesService:
         owner: str,
         container_port: int,
         service_type: str = "NodePort",
+        namespace: str | None = None,
     ) -> int | None:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._container_pod_name(instance_id, owner)
         service_name = self._container_service_name(instance_id)
         tcp_port = max(1, min(65535, int(container_port or 80)))
@@ -527,7 +546,7 @@ class KubernetesService:
             ),
         )
         try:
-            svc = core.create_namespaced_service(namespace=settings.kube_namespace, body=body)
+            svc = core.create_namespaced_service(namespace=ns, body=body)
             if normalized_service_type == "ClusterIP":
                 return None
             return svc.spec.ports[0].node_port
@@ -535,7 +554,7 @@ class KubernetesService:
             if exc.status != 409:
                 logger.error("Failed to create container service %s: %s", service_name, exc)
                 raise
-            existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            existing = core.read_namespaced_service(name=service_name, namespace=ns)
             existing_spec = existing.spec or client.V1ServiceSpec()
             existing_type = str(existing_spec.type or "NodePort")
             existing_port = existing_spec.ports[0].port if existing_spec.ports else tcp_port
@@ -547,13 +566,19 @@ class KubernetesService:
                         "ports": [{"name": "http", "port": tcp_port, "targetPort": tcp_port, "protocol": "TCP"}],
                     }
                 }
-                core.patch_namespaced_service(name=service_name, namespace=settings.kube_namespace, body=patch)
-                existing = core.read_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+                core.patch_namespaced_service(name=service_name, namespace=ns, body=patch)
+                existing = core.read_namespaced_service(name=service_name, namespace=ns)
             if normalized_service_type == "ClusterIP":
                 return None
             return existing.spec.ports[0].node_port
 
-    def ensure_container_ingress(self, instance_id: str, service_name: str, service_port: int) -> str | None:
+    def ensure_container_ingress(
+        self,
+        instance_id: str,
+        service_name: str,
+        service_port: int,
+        namespace: str | None = None,
+    ) -> str | None:
         if not settings.container_ingress_enabled:
             return None
         base_domain = (settings.container_ingress_base_domain or "").strip()
@@ -561,6 +586,7 @@ class KubernetesService:
             return None
 
         networking = self._networking_client()
+        ns = self._namespace(namespace)
         ingress_name = self._container_ingress_name(instance_id)
         host = f"ct-{instance_id[:8]}.{base_domain}"
         annotations: dict[str, str] = {}
@@ -605,45 +631,47 @@ class KubernetesService:
         )
         body = client.V1Ingress(api_version="networking.k8s.io/v1", kind="Ingress", metadata=metadata, spec=spec)
         try:
-            networking.create_namespaced_ingress(namespace=settings.kube_namespace, body=body)
+            networking.create_namespaced_ingress(namespace=ns, body=body)
         except ApiException as exc:
             if exc.status != 409:
                 logger.warning("Failed to create container ingress %s: %s", ingress_name, exc)
                 return None
             try:
-                networking.patch_namespaced_ingress(name=ingress_name, namespace=settings.kube_namespace, body=body)
+                networking.patch_namespaced_ingress(name=ingress_name, namespace=ns, body=body)
             except ApiException as patch_exc:
                 logger.warning("Failed to patch container ingress %s: %s", ingress_name, patch_exc)
                 return None
         return host
 
-    def delete_container_ingress(self, instance_id: str) -> None:
+    def delete_container_ingress(self, instance_id: str, namespace: str | None = None) -> None:
         networking = self._networking_client()
+        ns = self._namespace(namespace)
         ingress_name = self._container_ingress_name(instance_id)
         try:
-            networking.delete_namespaced_ingress(name=ingress_name, namespace=settings.kube_namespace)
+            networking.delete_namespaced_ingress(name=ingress_name, namespace=ns)
         except ApiException as exc:
             if exc.status != 404:
                 logger.error("Failed to delete container ingress %s: %s", ingress_name, exc)
                 raise
 
-    def delete_container_service(self, instance_id: str) -> None:
+    def delete_container_service(self, instance_id: str, namespace: str | None = None) -> None:
         core = self._client()
         networking = self._networking_client()
+        ns = self._namespace(namespace)
         service_name = self._container_service_name(instance_id)
         netpol_name = self._container_netpol_name(instance_id)
         try:
-            self.delete_container_ingress(instance_id)
+            self.delete_container_ingress(instance_id, namespace=ns)
         except ApiException:
             pass
         try:
-            networking.delete_namespaced_network_policy(name=netpol_name, namespace=settings.kube_namespace)
+            networking.delete_namespaced_network_policy(name=netpol_name, namespace=ns)
         except ApiException as exc:
             if exc.status != 404:
                 logger.error("Failed to delete container network policy %s: %s", netpol_name, exc)
                 raise
         try:
-            core.delete_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            core.delete_namespaced_service(name=service_name, namespace=ns)
         except ApiException as exc:
             if exc.status != 404:
                 logger.error("Failed to delete container service %s: %s", service_name, exc)
@@ -767,7 +795,8 @@ class KubernetesService:
     def create_pod(self, req: PodRequest) -> PodStatus:
         core = self._client()
         pod_name = self._pod_name(req)
-        self.ensure_namespace(settings.kube_namespace)
+        namespace = self._namespace(req.namespace)
+        self.ensure_namespace(namespace)
         vm_network_mode = normalize_vm_network_mode(req.network_mode)
         console_provider = normalize_vm_console_provider(req.console_provider)
         instance_disk_pvc = self._ensure_instance_disk_pvc(req)
@@ -1009,9 +1038,9 @@ class KubernetesService:
         spec = client.V1PodSpec(**spec_kwargs)
         body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=spec)
         try:
-            core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
+            core.create_namespaced_pod(namespace=namespace, body=body)
             if vm_network_mode != "unrestricted":
-                self.apply_network_policy(pod_name, mode=vm_network_mode)
+                self.apply_network_policy(pod_name, mode=vm_network_mode, namespace=namespace)
             return PodStatus(
                 instance_id=req.instance_id,
                 phase="Pending",
@@ -1025,7 +1054,8 @@ class KubernetesService:
 
     def create_container_pod(self, req: ContainerPodRequest) -> PodStatus:
         core = self._client()
-        self.ensure_namespace(settings.kube_namespace)
+        namespace = self._namespace(req.namespace)
+        self.ensure_namespace(namespace)
         pod_name = self._container_pod_name(req.instance_id, req.owner)
 
         metadata = client.V1ObjectMeta(
@@ -1203,18 +1233,25 @@ class KubernetesService:
         spec = client.V1PodSpec(**spec_kwargs)
         body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=spec)
         try:
-            core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
-            self.apply_container_network_policy(req.instance_id, pod_name, tcp_port, mode=req.network_mode)
+            core.create_namespaced_pod(namespace=namespace, body=body)
+            self.apply_container_network_policy(
+                req.instance_id,
+                pod_name,
+                tcp_port,
+                mode=req.network_mode,
+                namespace=namespace,
+            )
             return PodStatus(instance_id=req.instance_id, phase="Pending", reason="Pending")
         except ApiException as exc:
             logger.error("Failed to create container pod: %s", exc)
             raise
 
-    def stop_pod(self, instance_id: str, owner: str) -> PodStatus:
+    def stop_pod(self, instance_id: str, owner: str, namespace: str | None = None) -> PodStatus:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._find_pod_name(instance_id, owner)
         try:
-            pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+            pod = core.read_namespaced_pod(name=pod_name, namespace=ns)
             phase = (pod.status.phase or "").lower()
             if phase in {"succeeded", "failed"}:
                 return PodStatus(instance_id=instance_id, phase=pod.status.phase or "Succeeded")
@@ -1228,7 +1265,7 @@ class KubernetesService:
             stream(
                 core.connect_get_namespaced_pod_exec,
                 name=pod_name,
-                namespace=settings.kube_namespace,
+                namespace=ns,
                 command=["/bin/sh", "-c", "kill -TERM 1 || true"],
                 stderr=True,
                 stdin=False,
@@ -1240,21 +1277,28 @@ class KubernetesService:
                 logger.warning("Failed to send stop signal to %s: %s", pod_name, exc)
         return PodStatus(instance_id=instance_id, phase="Succeeded")
 
-    def delete_pod(self, instance_id: str, owner: str, disk_pvc: Optional[str] = None) -> None:
+    def delete_pod(
+        self,
+        instance_id: str,
+        owner: str,
+        disk_pvc: Optional[str] = None,
+        namespace: str | None = None,
+    ) -> None:
         core = self._client()
         networking = self._networking_client()
+        ns = self._namespace(namespace)
         pod_name = self._find_pod_name(instance_id, owner)
         pvc_name = disk_pvc or self._instance_disk_pvc_name(instance_id, owner)
         service_name = self._instance_service_name(instance_id)
         netpol_name = self._instance_netpol_name(instance_id, owner)
         try:
-            core.delete_namespaced_service(name=service_name, namespace=settings.kube_namespace)
+            core.delete_namespaced_service(name=service_name, namespace=ns)
         except ApiException as exc:
             if exc.status != 404:
                 logger.error("Failed to delete service %s: %s", service_name, exc)
                 raise
         try:
-            networking.delete_namespaced_network_policy(name=netpol_name, namespace=settings.kube_namespace)
+            networking.delete_namespaced_network_policy(name=netpol_name, namespace=ns)
         except ApiException as exc:
             if exc.status != 404:
                 logger.error("Failed to delete network policy %s: %s", netpol_name, exc)
@@ -1262,7 +1306,7 @@ class KubernetesService:
         try:
             core.delete_namespaced_pod(
                 name=pod_name,
-                namespace=settings.kube_namespace,
+                namespace=ns,
                 grace_period_seconds=0,
                 propagation_policy="Foreground",
             )
@@ -1273,18 +1317,19 @@ class KubernetesService:
                 logger.error("Failed to delete pod %s: %s", pod_name, exc)
                 raise
         try:
-            core.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=settings.kube_namespace)
+            core.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=ns)
         except ApiException as exc:
             if exc.status == 404:
                 return
             logger.error("Failed to delete instance PVC %s: %s", pvc_name, exc)
             raise
 
-    def stop_container_pod(self, instance_id: str, owner: str) -> PodStatus:
+    def stop_container_pod(self, instance_id: str, owner: str, namespace: str | None = None) -> PodStatus:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._find_container_pod_name(instance_id, owner)
         try:
-            core.delete_namespaced_pod(name=pod_name, namespace=settings.kube_namespace, grace_period_seconds=10)
+            core.delete_namespaced_pod(name=pod_name, namespace=ns, grace_period_seconds=10)
         except ApiException as exc:
             if exc.status == 404:
                 return PodStatus(instance_id=instance_id, phase="Succeeded")
@@ -1292,13 +1337,14 @@ class KubernetesService:
             raise
         return PodStatus(instance_id=instance_id, phase="Succeeded")
 
-    def delete_container_pod(self, instance_id: str, owner: str) -> None:
+    def delete_container_pod(self, instance_id: str, owner: str, namespace: str | None = None) -> None:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._find_container_pod_name(instance_id, owner)
         try:
             core.delete_namespaced_pod(
                 name=pod_name,
-                namespace=settings.kube_namespace,
+                namespace=ns,
                 grace_period_seconds=0,
                 propagation_policy="Foreground",
             )
@@ -1307,11 +1353,12 @@ class KubernetesService:
                 logger.error("Failed to delete container pod %s: %s", pod_name, exc)
                 raise
 
-    def get_container_status(self, instance_id: str, owner: str) -> PodStatus:
+    def get_container_status(self, instance_id: str, owner: str, namespace: str | None = None) -> PodStatus:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._find_container_pod_name(instance_id, owner)
         try:
-            pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+            pod = core.read_namespaced_pod(name=pod_name, namespace=ns)
             phase = pod.status.phase or "Unknown"
             node = pod.spec.node_name
             message = pod.status.message
@@ -1347,12 +1394,19 @@ class KubernetesService:
             logger.error("Failed to read container pod %s: %s", pod_name, exc)
             raise
 
-    def get_container_launch_diagnostics(self, instance_id: str, owner: str, max_items: int = 8) -> list[str]:
+    def get_container_launch_diagnostics(
+        self,
+        instance_id: str,
+        owner: str,
+        max_items: int = 8,
+        namespace: str | None = None,
+    ) -> list[str]:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._find_container_pod_name(instance_id, owner)
         details: list[str] = []
         try:
-            pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+            pod = core.read_namespaced_pod(name=pod_name, namespace=ns)
         except ApiException as exc:
             if exc.status == 404:
                 return ["Pod not found yet."]
@@ -1383,7 +1437,7 @@ class KubernetesService:
 
         try:
             events = core.list_namespaced_event(
-                namespace=settings.kube_namespace,
+                namespace=ns,
                 field_selector=f"involvedObject.kind=Pod,involvedObject.name={pod_name}",
             ).items
         except ApiException:
@@ -1468,11 +1522,12 @@ exit "$rc"
             return "clean", "No HIGH/CRITICAL vulnerabilities detected"
         return "vulnerable", f"HIGH={high}, CRITICAL={critical}"
 
-    def get_status(self, instance_id: str, owner: str) -> PodStatus:
+    def get_status(self, instance_id: str, owner: str, namespace: str | None = None) -> PodStatus:
         core = self._client()
+        ns = self._namespace(namespace)
         pod_name = self._find_pod_name(instance_id, owner)
         try:
-            pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+            pod = core.read_namespaced_pod(name=pod_name, namespace=ns)
             phase = pod.status.phase or "Unknown"
             node = pod.spec.node_name
             message = pod.status.message
@@ -1509,17 +1564,18 @@ exit "$rc"
             logger.error("Failed to read pod %s: %s", pod_name, exc)
             raise
 
-    def apply_network_policy(self, pod_name: str, mode: str = "default") -> None:
+    def apply_network_policy(self, pod_name: str, mode: str = "default", namespace: str | None = None) -> None:
         networking = self._networking_client()
-        policy = self.desired_network_policy(pod_name, settings.kube_namespace, mode=mode)
+        ns = self._namespace(namespace)
+        policy = self.desired_network_policy(pod_name, ns, mode=mode)
         try:
-            networking.create_namespaced_network_policy(namespace=settings.kube_namespace, body=policy)
+            networking.create_namespaced_network_policy(namespace=ns, body=policy)
         except ApiException as exc:
             if exc.status == 409:
                 try:
                     networking.patch_namespaced_network_policy(
                         name=policy.metadata.name,
-                        namespace=settings.kube_namespace,
+                        namespace=ns,
                         body={"spec": policy.spec},
                     )
                 except ApiException as patch_exc:
@@ -1587,14 +1643,20 @@ exit "$rc"
         return peers or None
 
     def apply_container_network_policy(
-        self, instance_id: str, pod_name: str, app_port: int, mode: str = "bridge"
+        self,
+        instance_id: str,
+        pod_name: str,
+        app_port: int,
+        mode: str = "bridge",
+        namespace: str | None = None,
     ) -> None:
         networking = self._networking_client()
+        ns = self._namespace(namespace)
         normalized_mode = str(mode or "bridge").strip().lower()
         policy_name = self._container_netpol_name(instance_id)
         if normalized_mode in {"unrestricted", "host"}:
             try:
-                networking.delete_namespaced_network_policy(name=policy_name, namespace=settings.kube_namespace)
+                networking.delete_namespaced_network_policy(name=policy_name, namespace=ns)
             except ApiException as exc:
                 if exc.status != 404:
                     logger.error("Failed to delete container network policy for %s: %s", pod_name, exc)
@@ -1603,18 +1665,18 @@ exit "$rc"
         policy = self.desired_container_network_policy(
             instance_id,
             pod_name,
-            settings.kube_namespace,
+            ns,
             app_port,
             mode=normalized_mode,
         )
         try:
-            networking.create_namespaced_network_policy(namespace=settings.kube_namespace, body=policy)
+            networking.create_namespaced_network_policy(namespace=ns, body=policy)
         except ApiException as exc:
             if exc.status == 409:
                 try:
                     networking.patch_namespaced_network_policy(
                         name=policy.metadata.name,
-                        namespace=settings.kube_namespace,
+                        namespace=ns,
                         body={"spec": policy.spec},
                     )
                 except ApiException as patch_exc:
@@ -1671,29 +1733,41 @@ exit "$rc"
 
     def _cleanup_orphan_container_services(self, session: Session) -> None:
         core = self._client()
-        active_ids = session.exec(
-            select(ContainerInstance.id).where(ContainerInstance.status.in_(["pending", "running"]))
+        active_rows = session.exec(
+            select(ContainerInstance).where(ContainerInstance.status.in_(["pending", "running"]))
         ).all()
-        active_service_names = {self._container_service_name(instance_id) for instance_id in active_ids}
-        try:
-            services = core.list_namespaced_service(namespace=settings.kube_namespace).items
-        except Exception:
-            logger.warning("Failed to list services during orphan ctsvc cleanup", exc_info=True)
-            return
-        for svc in services:
-            name = str(getattr(getattr(svc, "metadata", None), "name", "") or "")
-            if not name.startswith("ctsvc-"):
-                continue
-            if name in active_service_names:
-                continue
+        active_by_namespace: dict[str, set[str]] = {}
+        for row in active_rows:
+            ns = self._namespace(getattr(row, "namespace", None))
+            active_by_namespace.setdefault(ns, set()).add(self._container_service_name(row.id))
+        if not active_by_namespace:
+            active_by_namespace[self._namespace()] = set()
+        for namespace, active_service_names in active_by_namespace.items():
             try:
-                core.delete_namespaced_service(name=name, namespace=settings.kube_namespace)
-                logger.info("Deleted orphaned container service %s", name)
-            except ApiException as exc:
-                if exc.status != 404:
-                    logger.warning("Failed deleting orphaned container service %s: %s", name, exc)
+                services = core.list_namespaced_service(namespace=namespace).items
             except Exception:
-                logger.warning("Failed deleting orphaned container service %s", name, exc_info=True)
+                logger.warning(
+                    "Failed to list services during orphan ctsvc cleanup in %s",
+                    namespace,
+                    exc_info=True,
+                )
+                continue
+            for svc in services:
+                name = str(getattr(getattr(svc, "metadata", None), "name", "") or "")
+                if not name.startswith("ctsvc-"):
+                    continue
+                if name in active_service_names:
+                    continue
+                try:
+                    core.delete_namespaced_service(name=name, namespace=namespace)
+                    logger.info("Deleted orphaned container service %s in %s", name, namespace)
+                except ApiException as exc:
+                    if exc.status != 404:
+                        logger.warning("Failed deleting orphaned container service %s in %s: %s", name, namespace, exc)
+                except Exception:
+                    logger.warning(
+                        "Failed deleting orphaned container service %s in %s", name, namespace, exc_info=True
+                    )
 
     def reaper_tick(self, session: Session) -> None:
         config_row = session.get(Config, 1) or Config()
@@ -1725,14 +1799,20 @@ exit "$rc"
                 stale_container_instances.append(inst)
         for inst in stale_instances:
             try:
-                self.delete_pod(inst.id, inst.owner, disk_pvc=inst.disk_pvc)
+                self.delete_pod(
+                    inst.id,
+                    inst.owner,
+                    disk_pvc=inst.disk_pvc,
+                    namespace=str(getattr(inst, "namespace", "") or settings.kube_namespace),
+                )
             except Exception:
                 logger.warning("Failed to delete pod for instance %s during reaper", inst.id)
             session.delete(inst)
         for inst in stale_container_instances:
             try:
-                self.delete_container_pod(inst.id, inst.owner)
-                self.delete_container_service(inst.id)
+                ns = str(getattr(inst, "namespace", "") or settings.kube_namespace)
+                self.delete_container_pod(inst.id, inst.owner, namespace=ns)
+                self.delete_container_service(inst.id, namespace=ns)
             except Exception:
                 logger.warning("Failed to delete container workload %s during reaper", inst.id, exc_info=True)
             session.delete(inst)

@@ -61,16 +61,21 @@ def _active_team_usage(
     session: Session,
     *,
     team: str,
+    namespace: str | None = None,
     exclude_vm_instance_id: str | None = None,
     exclude_container_instance_id: str | None = None,
 ) -> tuple[int, int, int, int]:
+    namespace_name = normalize_namespace(namespace)
     usernames = session.exec(select(User.username).where(User.team == team)).all()
     if not usernames:
         return 0, 0, 0, 0
     username_list = list(usernames)
 
     vm_rows = session.exec(
-        select(Instance).where(Instance.owner.in_(username_list)).where(Instance.status.in_(ACTIVE_STATUSES))
+        select(Instance)
+        .where(Instance.owner.in_(username_list))
+        .where(Instance.status.in_(ACTIVE_STATUSES))
+        .where(Instance.namespace == namespace_name)
     ).all()
     if exclude_vm_instance_id:
         vm_rows = [row for row in vm_rows if row.id != exclude_vm_instance_id]
@@ -90,6 +95,7 @@ def _active_team_usage(
         select(ContainerInstance)
         .where(ContainerInstance.owner.in_(username_list))
         .where(ContainerInstance.status.in_(ACTIVE_STATUSES))
+        .where(ContainerInstance.namespace == namespace_name)
     ).all()
     if exclude_container_instance_id:
         container_rows = [row for row in container_rows if row.id != exclude_container_instance_id]
@@ -178,6 +184,7 @@ def enforce_team_quota(
     active_labs, used_cpu_m, used_mem_mb, used_storage_gib = _active_team_usage(
         session,
         team=team_name,
+        namespace=namespace_name,
         exclude_vm_instance_id=exclude_vm_instance_id,
         exclude_container_instance_id=exclude_container_instance_id,
     )

@@ -5,6 +5,7 @@ Last reviewed: March 20, 2026.
 ## Goal
 
 Use per-team namespaces with explicit quota and network-policy boundaries instead of shared runtime sprawl.
+Do not treat label-only isolation in a shared namespace as a strong boundary.
 
 ## Mode settings
 
@@ -17,6 +18,23 @@ Production baseline defaults:
 
 - `TEAM_NAMESPACE_MODE=per_team`
 - `TEAM_NAMESPACE_PREFIX=labs-team-`
+
+Production guardrails and backend startup validation require `TEAM_NAMESPACE_MODE=per_team`.
+
+## Enforcement model
+
+Isolation is enforced at multiple layers:
+
+- Namespace boundary: each team runs labs in its own namespace (`TEAM_NAMESPACE_PREFIX + <team-slug>`).
+- API tenant scope: tenant admins can only manage resources in their own tenant; platform admins can manage all tenants.
+- Resource visibility: non-platform users/admins can only see tenant-scoped resources plus global shared resources.
+- Quota accounting: active VM/container usage is counted per-tenant namespace for quota enforcement.
+- Network policy: default-deny and same-namespace-only rules prevent cross-tenant east-west traffic by default.
+
+Tenant roles:
+
+- `platform_admin`: global scope across all tenants.
+- `tenant_admin`: admin scope limited to own tenant namespace/resources.
 
 ## Bootstrap a tenant namespace
 

@@ -75,6 +75,13 @@ def _validate_startup_config() -> None:
         if not str(getattr(settings, "labimageimport_crd_plural", "") or "").strip():
             raise RuntimeError("BLABS_LABIMAGEIMPORT_CRD_PLURAL must be set when image import backend is dual/crd.")
 
+    team_namespace_mode = str(getattr(settings, "team_namespace_mode", "shared") or "shared").strip().lower()
+    if team_namespace_mode not in {"shared", "per_team"}:
+        raise RuntimeError("BLABS_TEAM_NAMESPACE_MODE must be one of: shared, per_team.")
+    if team_namespace_mode == "per_team":
+        if not str(getattr(settings, "team_namespace_prefix", "") or "").strip():
+            raise RuntimeError("BLABS_TEAM_NAMESPACE_PREFIX must be set when BLABS_TEAM_NAMESPACE_MODE=per_team.")
+
     if not bool(getattr(settings, "production_profile", False)):
         return
 
@@ -97,6 +104,8 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_CONTAINER_SIGNATURE_KEY_REF must be set when BLABS_PRODUCTION_PROFILE=true.")
     if not bool(getattr(settings, "cors_enterprise_profile", False)):
         errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
+    if team_namespace_mode != "per_team":
+        errors.append("BLABS_TEAM_NAMESPACE_MODE must be per_team when BLABS_PRODUCTION_PROFILE=true.")
     if not _configured_cors_origins():
         errors.append("BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_PRODUCTION_PROFILE=true.")
     cors_origins_raw = str(getattr(settings, "cors_allowed_origins", "") or "").strip().lower()

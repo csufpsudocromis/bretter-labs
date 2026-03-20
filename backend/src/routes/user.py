@@ -37,6 +37,7 @@ from ..services.labinstance_crd import (
 from ..services.kubernetes import PodRequest, PodStatus, kube
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
+from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
 from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
 from ..time_utils import utc_now
 
@@ -282,12 +283,25 @@ def _attach_vm_connect_session_cookie(response: Response, request: Request, inst
     )
 
 
-def _vm_service_host(instance_id: str) -> str:
-    return f"svc-{instance_id[:8]}.{settings.kube_namespace}.svc.cluster.local"
+def _vm_runtime_namespace(user: User) -> str:
+    return tenant_namespace_for_user(user)
 
 
-def _vm_rdp_ready_status(instance_id: str) -> tuple[bool, str]:
-    upstream_host = _vm_service_host(instance_id)
+def _instance_namespace(record: Instance, user: User | None = None) -> str:
+    explicit = str(getattr(record, "namespace", "") or "").strip()
+    if explicit:
+        return explicit
+    if user is not None:
+        return _vm_runtime_namespace(user)
+    return str(settings.kube_namespace or "labs").strip() or "labs"
+
+
+def _vm_service_host(instance_id: str, namespace: str) -> str:
+    return f"svc-{instance_id[:8]}.{namespace}.svc.cluster.local"
+
+
+def _vm_rdp_ready_status(instance_id: str, namespace: str) -> tuple[bool, str]:
+    upstream_host = _vm_service_host(instance_id, namespace)
     for scheme in _vm_http_schemes():
         upstream_url = f"{scheme}://{upstream_host}:6080/rdp-ready"
         verify_tls = scheme != "https"
@@ -474,8 +488,15 @@ def _tls_client_context() -> ssl.SSLContext:
 def list_available_templates(
     user: User = Depends(require_user), session: Session = Depends(get_session)
 ) -> list[VMTemplate]:
-    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
-    templates = session.exec(select(Template).where(Template.enabled == True)).all()  # noqa: E712
+    runtime_namespace = _vm_runtime_namespace(user)
+    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
+    tenant_scope = {
+        normalize_tenant(getattr(user, "team", None), default="default"),
+        GLOBAL_TENANT,
+    }
+    templates = session.exec(
+        select(Template).where(Template.enabled == True).where(Template.tenant.in_(tenant_scope))  # noqa: E712
+    ).all()
     return [
         VMTemplate(
             id=record.id,
@@ -522,12 +543,13 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             session.add(record)
             changed = True
         tmpl = templates.get(record.template_id)
+        record_namespace = _instance_namespace(record, user)
         console_provider = normalize_vm_console_provider(
             getattr(tmpl, "console_provider", _console_provider_from_url(record.console_url))
         )
         pod_status: PodStatus | None = None
         try:
-            pod_status = kube.get_status(record.id, record.owner)
+            pod_status = kube.get_status(record.id, record.owner, namespace=record_namespace)
             mapped = _phase_to_instance_status(pod_status.phase)
         except ApiException as exc:
             if exc.status == 404:
@@ -536,7 +558,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
                 raise
         stage, detail = _status_feedback(mapped, pod_status)
         if mapped == "running" and console_provider == "guacamole_rdp":
-            rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id)
+            rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id, record_namespace)
             if not rdp_ready:
                 stage = "starting"
                 detail = rdp_detail
@@ -551,7 +573,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             cutoff = utc_now() - timedelta(minutes=tmpl.auto_delete_minutes)
             if record.last_active_at < cutoff:
                 try:
-                    kube.delete_pod(record.id, record.owner, disk_pvc=record.disk_pvc)
+                    kube.delete_pod(record.id, record.owner, disk_pvc=record.disk_pvc, namespace=record_namespace)
                 except Exception:
                     pass
                 to_delete.append(record)
@@ -572,6 +594,10 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
                 id=record.id,
                 template_id=record.template_id,
                 owner=record.owner,
+                tenant=normalize_tenant(
+                    getattr(record, "tenant", None), default=normalize_tenant(user.team, default="default")
+                ),
+                namespace=_instance_namespace(record, user),
                 status=record.status,
                 status_stage=stage,
                 status_detail=detail,
@@ -612,14 +638,15 @@ def issue_vm_connect_token(
         1,
         int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
     )
-    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
+    instance_namespace = _instance_namespace(record, user)
+    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
     if idle_cap is not None:
         idle_minutes = min(idle_minutes, idle_cap)
     console_provider = normalize_vm_console_provider(
         getattr(template, "console_provider", _console_provider_from_url(record.console_url))
     )
     if console_provider == "guacamole_rdp":
-        rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id)
+        rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id, instance_namespace)
         if not rdp_ready:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=rdp_detail)
     spice_password = ""
@@ -723,6 +750,7 @@ async def proxy_vm_console(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
+    instance_namespace = _instance_namespace(record, user)
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
@@ -737,7 +765,7 @@ async def proxy_vm_console(
                 or settings.idle_timeout_minutes
             ),
         )
-        idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), settings.kube_namespace)
+        idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
         if idle_cap is not None:
             idle_minutes = min(idle_minutes, idle_cap)
         console_provider = normalize_vm_console_provider(
@@ -757,7 +785,7 @@ async def proxy_vm_console(
             _attach_vm_connect_session_cookie(response, request, instance_id, issued_connect_session)
         return response
 
-    upstream_host = _vm_service_host(instance_id)
+    upstream_host = _vm_service_host(instance_id, instance_namespace)
     upstream_path = f"/{normalized_path}"
     query_items = [
         (key, value) for key, value in request.query_params.multi_items() if key not in {"vt", "connect_token"}
@@ -863,6 +891,7 @@ async def proxy_vm_console_ws(
     if record.status not in {"pending", "running"}:
         await websocket.close(code=4409, reason="instance is not running")
         return
+    instance_namespace = _instance_namespace(record, user)
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
@@ -872,7 +901,7 @@ async def proxy_vm_console_ws(
     selected_subprotocol = protocols[0] if protocols else None
     await websocket.accept(subprotocol=selected_subprotocol)
 
-    upstream_host = _vm_service_host(instance_id)
+    upstream_host = _vm_service_host(instance_id, instance_namespace)
     upstream_path = "/" + proxy_path.lstrip("/")
     query_items = [
         (key, value) for key, value in websocket.query_params.multi_items() if key not in {"cs", "ct", "connect_token"}
@@ -1032,12 +1061,20 @@ def sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
 def start_vm(
     template_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
 ) -> VMInstance:
+    runtime_namespace = _vm_runtime_namespace(user)
+    user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(Template, template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
+    if template_tenant not in {user_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {template_tenant, GLOBAL_TENANT}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image tenant scope is invalid")
     _require_clone_ready(image)
     if not lock_user_launch_slot(session, user.username):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
@@ -1087,7 +1124,7 @@ def start_vm(
     idle_minutes = enforce_team_quota_or_raise(
         session,
         team=getattr(user, "team", None),
-        namespace=settings.kube_namespace,
+        namespace=runtime_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
         requested_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
@@ -1107,7 +1144,9 @@ def start_vm(
     disk_pvc: str | None = None
     if use_legacy_orchestration:
         try:
-            warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, instance_id, user.username)
+            warm_pool_pvc = kube.reserve_warm_pool_pvc(
+                template.id, instance_id, user.username, namespace=runtime_namespace
+            )
         except Exception:
             warm_pool_pvc = None
         pod_request = PodRequest(
@@ -1125,6 +1164,7 @@ def start_vm(
             spice_password=(spice_password or None),
             rdp_default_username=rdp_default_username,
             rdp_default_password=rdp_default_password,
+            namespace=runtime_namespace,
         )
         try:
             pod_status = kube.create_pod(pod_request)
@@ -1133,7 +1173,7 @@ def start_vm(
                 try:
                     kube._client().delete_namespaced_persistent_volume_claim(
                         name=warm_pool_pvc,
-                        namespace=settings.kube_namespace,
+                        namespace=runtime_namespace,
                     )
                 except Exception:
                     pass
@@ -1142,7 +1182,10 @@ def start_vm(
         # Keep VM console service internal; browser access goes through authenticated backend proxy.
         service_name = f"svc-{instance_id[:8]}"
         kube.create_service_for_pod(
-            pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
+            pod_name=kube._pod_name(pod_request),
+            service_name=service_name,
+            service_type="ClusterIP",
+            namespace=runtime_namespace,
         )
 
     console_url = _vm_console_connect_url(
@@ -1157,6 +1200,8 @@ def start_vm(
         id=instance_id,
         template_id=template.id,
         owner=user.username,
+        tenant=user_tenant,
+        namespace=runtime_namespace,
         status="pending",
         disk_pvc=disk_pvc,
         started_at=utc_now(),
@@ -1174,6 +1219,7 @@ def start_vm(
                 owner=instance.owner,
                 template=template,
                 image=image,
+                namespace=runtime_namespace,
                 desired_state="running",
                 status_phase="Pending",
                 status_message="Queued for operator reconciliation.",
@@ -1196,6 +1242,8 @@ def start_vm(
         id=instance.id,
         template_id=instance.template_id,
         owner=instance.owner,
+        tenant=normalize_tenant(getattr(instance, "tenant", None), default=user_tenant),
+        namespace=str(getattr(instance, "namespace", "") or runtime_namespace),
         status=instance.status,
         status_stage=stage,
         status_detail=detail,
@@ -1212,13 +1260,14 @@ def stop_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    instance_namespace = _instance_namespace(record, user)
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
-        kube.stop_pod(instance_id, record.owner)
+        kube.stop_pod(instance_id, record.owner, namespace=instance_namespace)
     if write_crd_shadow:
         try:
-            patch_vm_labinstance_desired_state(instance_id, "stopped")
+            patch_vm_labinstance_desired_state(instance_id, "stopped", namespace=instance_namespace)
         except Exception as exc:
             if use_legacy_orchestration:
                 logger.warning(
@@ -1242,6 +1291,10 @@ def stop_vm(
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
+        tenant=normalize_tenant(
+            getattr(record, "tenant", None), default=normalize_tenant(user.team, default="default")
+        ),
+        namespace=instance_namespace,
         status=record.status,
         status_stage=stage,
         status_detail=detail,
@@ -1258,12 +1311,20 @@ def restart_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    runtime_namespace = _instance_namespace(record, user)
     template = session.get(Template, record.template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
+    user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
+    if template_tenant not in {user_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {template_tenant, GLOBAL_TENANT}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image tenant scope is invalid")
     _require_clone_ready(image)
     template_limit = max(0, int(getattr(template, "max_active_instances", 2) or 0))
     if template_limit:
@@ -1287,7 +1348,7 @@ def restart_vm(
     idle_minutes = enforce_team_quota_or_raise(
         session,
         team=getattr(user, "team", None),
-        namespace=settings.kube_namespace,
+        namespace=runtime_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
         requested_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
@@ -1308,13 +1369,15 @@ def restart_vm(
     if use_legacy_orchestration:
         # Ensure any old pod with the same name is removed before re-create.
         try:
-            kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc)
+            kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc, namespace=runtime_namespace)
         except ApiException as exc:
             if exc.status != 404:
                 raise
 
         try:
-            warm_pool_pvc = kube.reserve_warm_pool_pvc(template.id, record.id, user.username)
+            warm_pool_pvc = kube.reserve_warm_pool_pvc(
+                template.id, record.id, user.username, namespace=runtime_namespace
+            )
         except Exception:
             warm_pool_pvc = None
         pod_request = PodRequest(
@@ -1332,6 +1395,7 @@ def restart_vm(
             spice_password=(spice_password or None),
             rdp_default_username=rdp_default_username,
             rdp_default_password=rdp_default_password,
+            namespace=runtime_namespace,
         )
         try:
             pod_status = kube.create_pod(pod_request)
@@ -1340,7 +1404,7 @@ def restart_vm(
                 try:
                     kube._client().delete_namespaced_persistent_volume_claim(
                         name=warm_pool_pvc,
-                        namespace=settings.kube_namespace,
+                        namespace=runtime_namespace,
                     )
                 except Exception:
                     pass
@@ -1348,7 +1412,10 @@ def restart_vm(
         disk_pvc = pod_status.disk_pvc
         service_name = f"svc-{instance_id[:8]}"
         kube.create_service_for_pod(
-            pod_name=kube._pod_name(pod_request), service_name=service_name, service_type="ClusterIP"
+            pod_name=kube._pod_name(pod_request),
+            service_name=service_name,
+            service_type="ClusterIP",
+            namespace=runtime_namespace,
         )
     console_url = _vm_console_connect_url(
         instance_id=record.id,
@@ -1359,6 +1426,8 @@ def restart_vm(
     )
 
     record.status = "pending"
+    record.tenant = user_tenant
+    record.namespace = runtime_namespace
     record.disk_pvc = disk_pvc
     record.started_at = utc_now()
     record.last_active_at = utc_now()
@@ -1373,6 +1442,7 @@ def restart_vm(
                 owner=record.owner,
                 template=template,
                 image=image,
+                namespace=runtime_namespace,
                 desired_state="running",
                 status_phase="Pending",
                 status_message="Queued for operator reconciliation.",
@@ -1392,6 +1462,8 @@ def restart_vm(
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=user_tenant),
+        namespace=runtime_namespace,
         status=record.status,
         status_stage=stage,
         status_detail=detail,
@@ -1406,11 +1478,12 @@ def delete_vm(instance_id: str, user: User = Depends(require_user), session: Ses
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    instance_namespace = _instance_namespace(record, user)
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
         try:
-            kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc)
+            kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc, namespace=instance_namespace)
         except ApiException as exc:
             # VM teardown can race with Kubernetes garbage collection.
             # Treat not-found/conflict during delete as best-effort success.
@@ -1424,10 +1497,10 @@ def delete_vm(instance_id: str, user: User = Depends(require_user), session: Ses
             )
     if write_crd_shadow:
         if use_legacy_orchestration:
-            delete_vm_labinstance_best_effort(instance_id)
+            delete_vm_labinstance_best_effort(instance_id, namespace=instance_namespace)
         else:
             try:
-                delete_vm_labinstance(instance_id, missing_ok=True)
+                delete_vm_labinstance(instance_id, namespace=instance_namespace, missing_ok=True)
             except Exception as exc:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

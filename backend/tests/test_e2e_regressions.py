@@ -695,7 +695,10 @@ def test_vm_connect_token_uses_vnc_console_for_guacamole_templates(login_user: T
 
 def test_vm_connect_token_uses_rdp_console_for_guacamole_rdp_templates(login_user: TestClient, monkeypatch):
     _seed_vm_template(console_provider="guacamole_rdp")
-    monkeypatch.setattr("src.routes.user._vm_rdp_ready_status", lambda _instance_id: (True, "VM is running."))
+    monkeypatch.setattr(
+        "src.routes.user._vm_rdp_ready_status",
+        lambda _instance_id, _namespace=None: (True, "VM is running."),
+    )
 
     started = login_user.post("/user/templates/tmpl-vm-1/start")
     assert started.status_code == 201, started.text
@@ -714,7 +717,7 @@ def test_vm_connect_token_blocks_until_rdp_ready_for_guacamole_rdp_templates(log
 
     monkeypatch.setattr(
         "src.routes.user._vm_rdp_ready_status",
-        lambda _instance_id: (False, "VM process started; waiting for RDP service."),
+        lambda _instance_id, _namespace=None: (False, "VM process started; waiting for RDP service."),
     )
 
     started = login_user.post("/user/templates/tmpl-vm-1/start")
@@ -731,11 +734,11 @@ def test_vm_list_marks_guacamole_rdp_instances_starting_until_rdp_ready(login_us
 
     monkeypatch.setattr(
         "src.routes.user._vm_rdp_ready_status",
-        lambda _instance_id: (False, "VM process started; waiting for RDP service."),
+        lambda _instance_id, _namespace=None: (False, "VM process started; waiting for RDP service."),
     )
     monkeypatch.setattr(
         "src.routes.user.kube.get_status",
-        lambda instance_id, _owner: PodStatus(instance_id=instance_id, phase="Running", ready=True),
+        lambda instance_id, _owner, **_kwargs: PodStatus(instance_id=instance_id, phase="Running", ready=True),
     )
 
     started = login_user.post("/user/templates/tmpl-vm-1/start")

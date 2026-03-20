@@ -3,11 +3,12 @@ import re
 from pathlib import Path
 
 import pytest
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
 from src.main import app
-from src.migrations import assert_schema_ready, run_db_migrations
+from src.migrations import _alembic_config, assert_schema_ready, run_db_migrations
 
 
 def test_openapi_operation_ids_are_unique() -> None:
@@ -81,6 +82,7 @@ def test_alembic_does_not_stamp_legacy_baseline_for_newer_partial_tables(tmp_pat
         )
 
     run_db_migrations(engine=engine, database_url=database_url)
+    expected_heads = set(ScriptDirectory.from_config(_alembic_config(database_url)).get_heads())
 
     with engine.connect() as conn:
         table_names = set(inspect(conn).get_table_names())
@@ -89,7 +91,7 @@ def test_alembic_does_not_stamp_legacy_baseline_for_newer_partial_tables(tmp_pat
     assert "template" in table_names
     assert "image" in table_names
     assert "adminauditevent" in table_names
-    assert str(applied_revision) == "0024"
+    assert str(applied_revision) in expected_heads
 
 
 def test_alembic_schema_guard_rejects_unexpected_expected_revision(tmp_path: Path) -> None:
