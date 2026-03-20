@@ -59,7 +59,7 @@ jobs:
 
       - name: Login to GHCR (PAT)
         if: ${{ env.GHCR_PAT != '' && env.GHCR_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ env.GHCR_USERNAME }}
@@ -67,7 +67,7 @@ jobs:
 
       - name: Login to GHCR (GITHUB_TOKEN fallback)
         if: ${{ !(env.GHCR_PAT != '' && env.GHCR_USERNAME != '') }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
