@@ -14,6 +14,11 @@ Use this runbook for production secret creation, validation, and rotation tasks.
   - Secret: `bretter-cosign-public-key` (default)
   - Key file: `cosign.pub` (for `CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub`)
   - Used by backend at runtime for container image signature verification
+- Kyverno signature registry credentials:
+  - Source secret (default): `ghcr-creds` in app namespace (`labs`)
+  - Synced secret (default): `ghcr-creds` in `kyverno` namespace
+  - Controlled by: `KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME`, `KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE`
+  - Used by Kyverno `verifyImages` to read signature metadata from private registries
 - Post-deploy authenticated check credentials:
   - Secret: `bretter-postdeploy-auth` (recommended)
   - Keys (default): `admin_username`, `admin_password`, `synthetic_username`, `synthetic_password`
@@ -52,6 +57,17 @@ Create signature verification key secret:
 ```bash
 kubectl -n labs create secret generic bretter-cosign-public-key \
   --from-file=cosign.pub=./cosign.pub \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+Ensure GHCR registry credentials exist (required for Kyverno signature verification against private GHCR repos):
+
+```bash
+kubectl -n labs create secret docker-registry ghcr-creds \
+  --docker-server=ghcr.io \
+  --docker-username='<ghcr-username>' \
+  --docker-password='<ghcr-token>' \
+  --docker-email='ops@local' \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
@@ -105,6 +121,8 @@ Secret payload presence:
 ```bash
 kubectl -n labs get secret bretter-runtime-secrets -o go-template='{{index .data "secrets_encryption_key"}}' | wc -c
 kubectl -n labs get secret bretter-cosign-public-key -o go-template='{{index .data "cosign.pub"}}' | wc -c
+kubectl -n labs get secret ghcr-creds -o go-template='{{index .data ".dockerconfigjson"}}' | wc -c
+kubectl -n kyverno get secret ghcr-creds -o go-template='{{index .data ".dockerconfigjson"}}' | wc -c
 kubectl -n labs get secret bretter-postdeploy-auth -o go-template='{{index .data "admin_password"}}' | wc -c
 kubectl -n labs get secret bretter-postdeploy-auth -o go-template='{{index .data "synthetic_password"}}' | wc -c
 kubectl -n labs get secret bretter-userflow-slo-api-auth -o go-template='{{index .data "password"}}' | wc -c

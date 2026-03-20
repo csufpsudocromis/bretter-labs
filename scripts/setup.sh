@@ -239,6 +239,8 @@ KYVERNO_RELEASE_NAME="${KYVERNO_RELEASE_NAME:-kyverno}"
 KYVERNO_CHART_VERSION="${KYVERNO_CHART_VERSION:-v3.7.1}"
 KYVERNO_SIGNATURE_SCOPE="${KYVERNO_SIGNATURE_SCOPE:-namespace_first_party}"
 KYVERNO_SIGNATURE_IMAGE_PATTERNS="${KYVERNO_SIGNATURE_IMAGE_PATTERNS:-ghcr.io/csufpsudocromis/*}"
+KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME="${KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME:-ghcr-creds}"
+KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE="${KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE:-$NAMESPACE}"
 ADMISSION_POLICY_TEMPLATE="${ADMISSION_POLICY_TEMPLATE:-$ROOT_DIR/deploy/policies/kyverno/clusterpolicies.yaml.tpl}"
 ALERTMANAGER_DEFAULT_RECEIVER_NAME="${ALERTMANAGER_DEFAULT_RECEIVER_NAME:-null-receiver}"
 ALERTMANAGER_ROUTE_GROUP_BY="${ALERTMANAGER_ROUTE_GROUP_BY:-alertname,namespace}"
@@ -1193,6 +1195,8 @@ validate_admission_policy_config() {
     *) fail "KYVERNO_SIGNATURE_SCOPE must be one of: enforced_label, namespace_first_party." ;;
   esac
   [ -n "$KYVERNO_SIGNATURE_IMAGE_PATTERNS" ] || fail "KYVERNO_SIGNATURE_IMAGE_PATTERNS cannot be empty when ENABLE_ADMISSION_POLICIES=1."
+  [ -n "$KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME" ] || fail "KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME cannot be empty when ENABLE_ADMISSION_POLICIES=1."
+  [ -n "$KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE" ] || fail "KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
   [ -n "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE cannot be empty when ENABLE_ADMISSION_POLICIES=1."
   [ -f "$ADMISSION_POLICY_TEMPLATE" ] || fail "ADMISSION_POLICY_TEMPLATE does not exist: $ADMISSION_POLICY_TEMPLATE"
 }
@@ -1968,9 +1972,34 @@ print(base64.b64decode(encoded).decode("utf-8"), end="")
 PY
 }
 
+sync_kyverno_registry_credentials_secret() {
+  local source_namespace="$KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE"
+  local secret_name="$KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME"
+  local encoded_dockerconfig tmp_file
+
+  [ -n "$secret_name" ] || return
+
+  encoded_dockerconfig="$(kubectl -n "$source_namespace" get secret "$secret_name" -o 'go-template={{ index .data ".dockerconfigjson" }}' 2>/dev/null || true)"
+  if [ -z "$encoded_dockerconfig" ]; then
+    fail "Kyverno image registry credentials require secret ${source_namespace}/${secret_name} with non-empty .dockerconfigjson."
+  fi
+
+  tmp_file="$(mktemp /tmp/kyverno-registry-creds.XXXXXX.json)"
+  if ! printf '%s' "$encoded_dockerconfig" | base64 -d >"$tmp_file" 2>/dev/null; then
+    rm -f "$tmp_file"
+    fail "Failed to decode .dockerconfigjson from secret ${source_namespace}/${secret_name}."
+  fi
+
+  kubectl -n "$KYVERNO_NAMESPACE" create secret generic "$secret_name" \
+    --type=kubernetes.io/dockerconfigjson \
+    --from-file=.dockerconfigjson="$tmp_file" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  rm -f "$tmp_file"
+}
+
 apply_admission_signature_verification_policy() {
   local key_file_name public_key public_key_indented validation_action
-  local rule_match_yaml image_pattern_yaml
+  local rule_match_yaml image_pattern_yaml registry_credentials_yaml
   if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -ne 1 ]; then
     log "Skipping Kyverno verifyImages policy (CONTAINER_SIGNATURE_VERIFICATION_ENABLED=0)."
     kubectl delete clusterpolicy bretter-verify-image-signatures --ignore-not-found >/dev/null 2>&1 || true
@@ -2036,6 +2065,17 @@ EOF
 )"
   fi
 
+  registry_credentials_yaml=""
+  if [ -n "$KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME" ]; then
+    sync_kyverno_registry_credentials_secret
+    registry_credentials_yaml="$(cat <<EOF
+          imageRegistryCredentials:
+            secrets:
+              - ${KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME}
+EOF
+)"
+  fi
+
   log "Applying Kyverno verifyImages policy (mode=${validation_action} scope=${KYVERNO_SIGNATURE_SCOPE} images=${KYVERNO_SIGNATURE_IMAGE_PATTERNS})."
   kubectl apply -f - <<EOF
 apiVersion: kyverno.io/v1
@@ -2051,6 +2091,7 @@ ${rule_match_yaml}
       verifyImages:
         - imageReferences:
 ${image_pattern_yaml}
+${registry_credentials_yaml}
           mutateDigest: false
           required: true
           verifyDigest: true

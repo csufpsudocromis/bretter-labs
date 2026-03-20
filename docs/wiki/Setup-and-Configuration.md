@@ -122,6 +122,8 @@ Monitoring/ops:
 - `KYVERNO_NAMESPACE`, `KYVERNO_RELEASE_NAME`, `KYVERNO_CHART_VERSION` (default `v3.7.1`)
 - `KYVERNO_SIGNATURE_SCOPE` (`namespace_first_party` recommended for production)
 - `KYVERNO_SIGNATURE_IMAGE_PATTERNS` (default `ghcr.io/csufpsudocromis/*`)
+- `KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME` (default `ghcr-creds`; synced into `KYVERNO_NAMESPACE` for `verifyImages` auth)
+- `KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE` (default app namespace; source for Kyverno registry-credential sync)
 - `MONITORING_CHART_VERSION` (default `v82.10.4`)
 - `ALERTMANAGER_DEFAULT_RECEIVER_NAME`
 - `ALERTMANAGER_ROUTE_GROUP_BY`, `ALERTMANAGER_ROUTE_GROUP_WAIT`, `ALERTMANAGER_ROUTE_GROUP_INTERVAL`, `ALERTMANAGER_ROUTE_REPEAT_INTERVAL`

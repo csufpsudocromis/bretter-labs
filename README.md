@@ -301,6 +301,8 @@ Proof artifact and operator docs:
 | `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` | empty | Optional setup input: file path to a cosign public key used to create/update `CONTAINER_SIGNATURE_KEY_SECRET_NAME` |
 | `KYVERNO_SIGNATURE_SCOPE` | `namespace_first_party` | Signature policy scope (`namespace_first_party` or `enforced_label`) |
 | `KYVERNO_SIGNATURE_IMAGE_PATTERNS` | `ghcr.io/csufpsudocromis/*` | Comma-separated image reference patterns covered by Kyverno `verifyImages` |
+| `KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME` | `ghcr-creds` | Docker config secret used by Kyverno `verifyImages` for registry auth (synced into Kyverno namespace during policy apply) |
+| `KYVERNO_SIGNATURE_REGISTRY_SECRET_SOURCE_NAMESPACE` | `NAMESPACE` | Source namespace for `KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME` before setup syncs it into `KYVERNO_NAMESPACE` |
 | `METRICS_SERVER_VERSION` | `v0.8.1` | Metrics-server release used to build default manifest URL |
 | `METRICS_SERVER_INSECURE_TLS` | `0` | Dev-only opt-in for `--kubelet-insecure-tls` on metrics-server |
 | `ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL` | `1` | Auto-approve valid pending `kubernetes.io/kubelet-serving` CSRs |
