@@ -26,7 +26,7 @@ jobs:
       GHCR_PAT: ${{ secrets.GHCR_PAT }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -55,11 +55,11 @@ jobs:
           echo "image_namespace=${namespace_input}" >>"${GITHUB_OUTPUT}"
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Login to GHCR (PAT)
         if: ${{ env.GHCR_PAT != '' && env.GHCR_USERNAME != '' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ env.GHCR_USERNAME }}
@@ -67,7 +67,7 @@ jobs:
 
       - name: Login to GHCR (GITHUB_TOKEN fallback)
         if: ${{ !(env.GHCR_PAT != '' && env.GHCR_USERNAME != '') }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -75,7 +75,7 @@ jobs:
 
       - name: Build and push backend image
         id: backend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: backend/Dockerfile
@@ -90,7 +90,7 @@ jobs:
 
       - name: Build and push frontend image
         id: frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: frontend-vite/Dockerfile
@@ -105,7 +105,7 @@ jobs:
 
       - name: Build and push runner image
         id: runner
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: runner
           file: runner/Dockerfile

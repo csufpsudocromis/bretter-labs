@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install shellcheck and shfmt
         run: |
@@ -36,7 +36,7 @@ jobs:
           docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < runner/Dockerfile
 
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@v0.24.0
+        uses: aquasecurity/trivy-action@0.35.0
         with:
           scan-type: fs
           scan-ref: .
@@ -58,7 +58,7 @@ jobs:
           helm template bretter-labs ./deploy/helm -f deploy/helm/values.yaml -f deploy/helm/values-production.yaml >/tmp/helm-values-production.yaml
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -89,7 +89,7 @@ jobs:
         run: ./scripts/ci_guardrails.sh
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
