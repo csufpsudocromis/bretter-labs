@@ -14,6 +14,7 @@ Users launch labs with staged status feedback and connect in the browser.
 - [What You Get](#what-you-get)
 - [Supported VM Image Types](#supported-vm-image-types)
 - [Architecture](#architecture)
+- [Operator/CRD Migration](#operatorcrd-migration)
 - [Quick Start](#quick-start)
 - [Production Checks at a Glance](#production-checks-at-a-glance)
 - [Key Setup Variables](#key-setup-variables)
@@ -126,6 +127,15 @@ High-level flow:
 2. User starts a VM or container lab.
 3. Backend provisions per-instance Kubernetes resources.
 4. User connects from browser through the platform connect flow.
+
+## Operator/CRD Migration
+
+The platform is moving from backend-imperative orchestration toward Kubernetes-native reconciliation.
+
+- Migration blueprint: [docs/operator-crd-migration-plan.md](docs/operator-crd-migration-plan.md)
+- Initial CRD definitions: [deploy/crds/](deploy/crds/)
+
+Current status: `v1alpha1` CRDs are checked in for phased rollout (`LabInstance`, `LabImageImport`), with staged cutover documented in the migration plan.
 
 ## Quick Start
 
@@ -492,6 +502,7 @@ See [SECURITY.md](SECURITY.md) for supported versions and vulnerability reportin
 - GitHub wiki: https://github.com/csufpsudocromis/bretter-labs/wiki
 - Repository wiki source pages: [docs/wiki/](docs/wiki/)
 - Architecture deep dive: [docs/architecture.md](docs/architecture.md)
+- Operator/CRD migration blueprint: [docs/operator-crd-migration-plan.md](docs/operator-crd-migration-plan.md)
 - Upgrade procedure: [docs/upgrade-path.md](docs/upgrade-path.md)
 
 ## Project Structure

@@ -1,6 +1,6 @@
 # Production Architecture
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 Use this page as the production target state for Bretter Labs deployments.
 
@@ -87,3 +87,4 @@ Database:
 - [Security and Auth](Security-and-Auth)
 - [Operations Runbook](Operations-Runbook)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
+- [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)

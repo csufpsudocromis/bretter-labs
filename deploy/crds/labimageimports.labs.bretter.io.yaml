@@ -1,0 +1,120 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: labimageimports.labs.bretter.io
+spec:
+  group: labs.bretter.io
+  scope: Namespaced
+  names:
+    plural: labimageimports
+    singular: labimageimport
+    kind: LabImageImport
+    shortNames:
+      - labiimp
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - requestedBy
+                - source
+                - target
+              properties:
+                requestedBy:
+                  type: string
+                  minLength: 1
+                source:
+                  type: object
+                  required:
+                    - filename
+                  properties:
+                    filename:
+                      type: string
+                      minLength: 1
+                    pvc:
+                      type: string
+                target:
+                  type: object
+                  required:
+                    - imageId
+                  properties:
+                    imageId:
+                      type: string
+                      minLength: 1
+                transform:
+                  type: object
+                  properties:
+                    format:
+                      type: string
+                      enum:
+                        - raw
+                        - qcow2
+                retries:
+                  type: object
+                  properties:
+                    maxAttempts:
+                      type: integer
+                      minimum: 0
+            status:
+              type: object
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                phase:
+                  type: string
+                progress:
+                  type: object
+                  properties:
+                    percent:
+                      type: integer
+                      minimum: 0
+                      maximum: 100
+                    detail:
+                      type: string
+                artifacts:
+                  type: object
+                  properties:
+                    checksum:
+                      type: string
+                    sourcePvc:
+                      type: string
+                    canonicalFilename:
+                      type: string
+                lastError:
+                  type: object
+                  properties:
+                    code:
+                      type: string
+                    message:
+                      type: string
+      additionalPrinterColumns:
+        - name: RequestedBy
+          type: string
+          jsonPath: .spec.requestedBy
+        - name: ImageID
+          type: string
+          jsonPath: .spec.target.imageId
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Progress
+          type: integer
+          jsonPath: .status.progress.percent
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

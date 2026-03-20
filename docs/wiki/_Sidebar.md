@@ -3,6 +3,7 @@
 - [Home](Home)
 - [Setup and Configuration](Setup-and-Configuration)
 - [Production Architecture](Production-Architecture)
+- [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Production Readiness Checklist](Production-Readiness-Checklist)

@@ -2,7 +2,7 @@
 
 This page tracks where to collaborate in public and what is planned next.
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 ## Collaboration Channels
 
@@ -41,3 +41,15 @@ Track release-critical work with labels + milestones.
   - Changelog section
   - Upgrade notes
   - Rollback notes when relevant
+
+## Platform Engineering Milestones
+
+- Operator/CRD architecture migration plan (canonical):
+  - [Operator CRD migration blueprint](../operator-crd-migration-plan.md)
+- Initial migration artifacts in-repo:
+  - `deploy/crds/labinstances.labs.bretter.io.yaml`
+  - `deploy/crds/labimageimports.labs.bretter.io.yaml`
+- Near-term implementation order:
+  1. `LabInstance` shadow mode and status parity checks
+  2. VM lifecycle cutover with backend fallback flag
+  3. `LabImageImport` cutover for upload/finalize workflow

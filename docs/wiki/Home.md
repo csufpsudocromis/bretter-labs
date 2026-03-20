@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 ## Audience paths
 
@@ -18,11 +18,13 @@ Last reviewed: March 19, 2026.
 - Console/RDP operations: [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - Security: [Security and Auth](Security-and-Auth) + [LDAP Authentication](LDAP-Authentication) + [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - GitHub/release ops: [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
+- Platform engineering: [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
 
 ## Core pages
 
 - [Architecture](../architecture.md)
 - [Production Architecture](Production-Architecture)
+- [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
 - [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - [Production Helm Values Reference](Production-Helm-Values-Reference)
 - [Production Readiness Checklist](Production-Readiness-Checklist)
