@@ -12,6 +12,7 @@ Last reviewed: March 20, 2026.
 
 - Admin setup: [Setup and Configuration](Setup-and-Configuration)
 - Operations/SRE: [Operations Runbook](Operations-Runbook)
+- Restore/DR ops: [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - Secrets/Ops: [Secret Operations Runbook](Secret-Operations-Runbook)
 - Troubleshooting: [Error Catalog](Error-Catalog) + [Operations Runbook](Operations-Runbook)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive) + [Template Best Practices](Template-Best-Practices)
@@ -21,6 +22,8 @@ Last reviewed: March 20, 2026.
 - Platform engineering: [Operator/CRD Migration Plan](Operator-CRD-Migration-Plan)
 - Operator incidents: [Operator Incident Runbook](Operator-Incident-Runbook)
 - CRD evolution: [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)
+- API contract checks: [API Contract and Drift Guardrails](API-Contract-and-Drift-Guardrails)
+- Tenant isolation: [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
 
 ## Core pages
 
@@ -34,8 +37,10 @@ Last reviewed: March 20, 2026.
 - [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
+- [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
+- [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
@@ -50,6 +55,7 @@ Last reviewed: March 20, 2026.
 - [Community and Roadmap](Community-and-Roadmap)
 - [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
 - [Pentest Plan and Checklist](Pentest-Plan-and-Checklist)
+- [API Contract and Drift Guardrails](API-Contract-and-Drift-Guardrails)
 - [Setup and Configuration](Setup-and-Configuration)
 
 ## Production checks at a glance
@@ -88,6 +94,9 @@ Reference pages:
 - Automatic production go-live proof in `postdeploy` when `PRODUCTION_PROFILE=1`
 - Post-deploy admin API smoke validation job (`bretter-post-deploy-admin-api-smoke`)
 - Recurring GHCR access and user-flow SLO probe CronJobs with Prometheus alert rules
+- Dedicated LabImageImport controller with leader-election and metrics endpoints
+- OpenAPI snapshot + frontend API type drift checks in CI guardrails
+- Tenant namespace bootstrap script for per-team quota/policy scaffolding
 
 ## Architecture diagram
 

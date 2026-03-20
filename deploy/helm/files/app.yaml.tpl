@@ -502,6 +502,10 @@ spec:
               value: "__LABIMAGEIMPORT_CRD_PLURAL__"
             - name: BLABS_LABIMAGEIMPORT_CRD_FINALIZER
               value: "__LABIMAGEIMPORT_CRD_FINALIZER__"
+            - name: BLABS_TEAM_NAMESPACE_MODE
+              value: "__TEAM_NAMESPACE_MODE__"
+            - name: BLABS_TEAM_NAMESPACE_PREFIX
+              value: "__TEAM_NAMESPACE_PREFIX__"
             - name: BLABS_BACKEND_IMAGE
               value: "__BACKEND_IMAGE__"
             - name: BLABS_BACKEND_ADMIN_IMAGE
@@ -647,6 +651,153 @@ spec:
     - port: 8000
       targetPort: 8000
 __BACKEND_SERVICE_NODEPORT_LINE__
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bretter-labimageimport-controller
+  namespace: __NAMESPACE__
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 0
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bretter-labimageimport-controller
+  template:
+    metadata:
+      labels:
+        app: bretter-labimageimport-controller
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: bretter-backend
+      imagePullSecrets:
+        - name: ghcr-creds
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: controller
+          image: __BACKEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - backend.src.tools.labimageimport_controller
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: metrics
+              containerPort: __LABIMAGEIMPORT_CONTROLLER_METRICS_PORT__
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 512Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 2Gi
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          env:
+            - name: BLABS_KUBE_NAMESPACE
+              value: __NAMESPACE__
+            - name: BLABS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: BLABS_DATABASE_URL
+            - name: BLABS_KUBE_IMAGE_PVC
+              value: golden-images
+            - name: BLABS_RUNNER_IMAGE
+              value: __RUNNER_IMAGE__
+            - name: BLABS_IMAGE_PULL_SECRET
+              value: ghcr-creds
+            - name: BLABS_IMAGE_IMPORT_BACKEND
+              value: "__IMAGE_IMPORT_BACKEND__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_GROUP
+              value: "__LABIMAGEIMPORT_CRD_GROUP__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_VERSION
+              value: "__LABIMAGEIMPORT_CRD_VERSION__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_PLURAL
+              value: "__LABIMAGEIMPORT_CRD_PLURAL__"
+            - name: BLABS_LABIMAGEIMPORT_CRD_FINALIZER
+              value: "__LABIMAGEIMPORT_CRD_FINALIZER__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_ENABLED
+              value: "__LABIMAGEIMPORT_CONTROLLER_ENABLED__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED
+              value: "__LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_LEASE_NAME
+              value: "__LABIMAGEIMPORT_CONTROLLER_LEASE_NAME__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS
+              value: "__LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS
+              value: "__LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS
+              value: "__LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_METRICS_BIND
+              value: "__LABIMAGEIMPORT_CONTROLLER_METRICS_BIND__"
+            - name: BLABS_LABIMAGEIMPORT_CONTROLLER_METRICS_PORT
+              value: "__LABIMAGEIMPORT_CONTROLLER_METRICS_PORT__"
+          volumeMounts:
+            - name: images
+              mountPath: /mnt/lab-images
+      volumes:
+        - name: images
+          persistentVolumeClaim:
+            claimName: golden-images
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bretter-labimageimport-controller
+  namespace: __NAMESPACE__
+spec:
+  type: ClusterIP
+  selector:
+    app: bretter-labimageimport-controller
+  ports:
+    - name: metrics
+      port: __LABIMAGEIMPORT_CONTROLLER_METRICS_PORT__
+      targetPort: metrics
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -822,6 +973,29 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: bretter-labimageimport-controller-allow-ingress
+  namespace: __NAMESPACE__
+spec:
+  podSelector:
+    matchLabels:
+      app: bretter-labimageimport-controller
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: __NAMESPACE__
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: __LABIMAGEIMPORT_CONTROLLER_METRICS_PORT__
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: bretter-frontend-restrict-egress
   namespace: __NAMESPACE__
 spec:
@@ -939,3 +1113,14 @@ spec:
   selector:
     matchLabels:
       app: bretter-labinstance-controller
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: bretter-labimageimport-controller
+  namespace: __NAMESPACE__
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: bretter-labimageimport-controller

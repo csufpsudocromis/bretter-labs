@@ -15,6 +15,8 @@ CRD_CANARY_TEMPLATE_ID="${CRD_CANARY_TEMPLATE_ID:-}"
 CRD_CANARY_WAIT_SECONDS="${CRD_CANARY_WAIT_SECONDS:-300}"
 CRD_CANARY_RUNNING_SLO_SECONDS="${CRD_CANARY_RUNNING_SLO_SECONDS:-180}"
 CRD_CANARY_DELETE_WAIT_SECONDS="${CRD_CANARY_DELETE_WAIT_SECONDS:-180}"
+RUN_RESTORE_DRILL="${RUN_RESTORE_DRILL:-0}"
+RESTORE_DRILL_KEEP_DB="${RESTORE_DRILL_KEEP_DB:-0}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="${REPORT_DIR}/production-go-live-${timestamp}.txt"
@@ -306,6 +308,24 @@ else
 fi
 
 log "CORS origins seen in backend env: ${cors_allowed_origins:-<none>}"
+
+case "$(printf '%s' "$RUN_RESTORE_DRILL" | tr '[:upper:]' '[:lower:]')" in
+  1 | true | yes | on)
+    run_check "postgres restore drill" \
+      env \
+      NAMESPACE="$NAMESPACE" \
+      KEEP_RESTORE_DB="$RESTORE_DRILL_KEEP_DB" \
+      REPORT_DIR="${REPORT_DIR}/restore-drill" \
+      "$ROOT_DIR/scripts/restore_drill_postgres.sh"
+    ;;
+  0 | false | no | off)
+    log "Postgres restore drill skipped (RUN_RESTORE_DRILL=${RUN_RESTORE_DRILL})."
+    ;;
+  *)
+    fail_check "RUN_RESTORE_DRILL must be one of: 0, 1, true, false."
+    ;;
+esac
+
 if [ "$fail_count" -eq 0 ]; then
   log "Production go-live proof passed."
 else

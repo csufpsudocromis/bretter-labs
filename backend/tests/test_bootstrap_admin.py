@@ -81,3 +81,26 @@ def test_startup_validation_requires_signature_key_ref_in_production(monkeypatch
     monkeypatch.setattr(main_module.settings, "container_signature_key_ref", "")
     with pytest.raises(RuntimeError, match="BLABS_CONTAINER_SIGNATURE_KEY_REF must be set"):
         main_module._validate_startup_config()
+
+
+def test_startup_validation_rejects_invalid_image_import_backend(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "admin_default_username", "admin")
+    monkeypatch.setattr(main_module.settings, "admin_default_password", "")
+    monkeypatch.setattr(main_module.settings, "production_profile", False)
+    monkeypatch.setattr(main_module.settings, "orchestration_backend", "db")
+    monkeypatch.setattr(main_module.settings, "image_import_backend", "invalid")
+    with pytest.raises(RuntimeError, match="BLABS_IMAGE_IMPORT_BACKEND must be one of: db, dual, crd"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_requires_labimageimport_crd_fields_when_enabled(monkeypatch):
+    monkeypatch.setattr(main_module.settings, "admin_default_username", "admin")
+    monkeypatch.setattr(main_module.settings, "admin_default_password", "")
+    monkeypatch.setattr(main_module.settings, "production_profile", False)
+    monkeypatch.setattr(main_module.settings, "orchestration_backend", "db")
+    monkeypatch.setattr(main_module.settings, "image_import_backend", "crd")
+    monkeypatch.setattr(main_module.settings, "labimageimport_crd_group", "")
+    monkeypatch.setattr(main_module.settings, "labimageimport_crd_version", "v1alpha1")
+    monkeypatch.setattr(main_module.settings, "labimageimport_crd_plural", "labimageimports")
+    with pytest.raises(RuntimeError, match="BLABS_LABIMAGEIMPORT_CRD_GROUP must be set"):
+        main_module._validate_startup_config()

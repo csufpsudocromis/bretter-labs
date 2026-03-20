@@ -21,7 +21,13 @@ appTemplateValues:
   CORS_ALLOWED_ORIGINS: "https://<ui-origin-host>:30073"
   TLS_SECRET_NAME: "<tls-secret-name>"
   ORCHESTRATION_BACKEND: "db"
-  IMAGE_IMPORT_BACKEND: "db"
+  IMAGE_IMPORT_BACKEND: "crd"
+  LABIMAGEIMPORT_CONTROLLER_ENABLED: "1"
+  LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED: "1"
+  LABIMAGEIMPORT_CONTROLLER_LEASE_NAME: bretter-labimageimport-controller-leader
+  LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS: "10"
+  TEAM_NAMESPACE_MODE: per_team
+  TEAM_NAMESPACE_PREFIX: "labs-team-"
   REQUIRE_SCHEMA_READY: "1"
   EXPECTED_ALEMBIC_REVISION: ""
   # Keep empty in committed values files. Inject key material via runtime Kubernetes Secret.

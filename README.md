@@ -211,8 +211,11 @@ PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 Proof artifact and operator docs:
 
 - Go-live proof script: [scripts/production_go_live_proof.sh](scripts/production_go_live_proof.sh)
+- Postgres restore drill: [scripts/restore_drill_postgres.sh](scripts/restore_drill_postgres.sh)
 - CRD canary script: [scripts/crd_canary_labinstance.sh](scripts/crd_canary_labinstance.sh)
+- LabImageImport controller smoke: [scripts/smoke_labimageimport_controller.sh](scripts/smoke_labimageimport_controller.sh)
 - Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
+- Userflow smoke workflow: [.github/workflows/deploy-userflow-smoke.yml](.github/workflows/deploy-userflow-smoke.yml)
 - Default report dir: [artifacts/go-live/](artifacts/go-live/)
 - Production values reference: [docs/wiki/Production-Helm-Values-Reference.md](docs/wiki/Production-Helm-Values-Reference.md)
 - Secret operations: [docs/wiki/Secret-Operations-Runbook.md](docs/wiki/Secret-Operations-Runbook.md)
@@ -231,7 +234,14 @@ Proof artifact and operator docs:
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `PRODUCTION_PROFILE` | `0` | Enables backend startup hardening checks (set `1` for production) |
 | `ORCHESTRATION_BACKEND` | `db` | VM orchestration mode: `db` (legacy), `dual` (legacy + LabInstance CRD shadow write), `crd` (LabInstance CRD-first) |
-| `IMAGE_IMPORT_BACKEND` | `db` | Image import tracking mode: `db`, `dual` (DB + LabImageImport shadow), `crd` |
+| `IMAGE_IMPORT_BACKEND` | `crd` | Image import tracking mode: `db`, `dual` (DB + LabImageImport shadow), `crd` |
+| `LABIMAGEIMPORT_CONTROLLER_ENABLED` | `1` | Enable dedicated LabImageImport reconcile controller when image-import backend is `dual`/`crd` |
+| `LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED` | `1` | Enable lease-based HA leader election for image-import controller |
+| `LABIMAGEIMPORT_CONTROLLER_LEASE_NAME` | `bretter-labimageimport-controller-leader` | Coordination lease name used by image-import controller |
+| `LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS` | `10` | Reconcile interval for upload-task watchdog controller loop |
+| `LABIMAGEIMPORT_CONTROLLER_METRICS_PORT` | `9410` | Metrics/liveness/readiness port for image-import controller |
+| `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`) for tenant isolation planning |
+| `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
@@ -294,9 +304,12 @@ Proof artifact and operator docs:
 | `USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT` | `25` | Upload finalize failure-rate threshold for SLO breach |
 | `USERFLOW_SLO_RDP_STUCK_MINUTES` | `12` | Age threshold before RDP-starting instances are considered stuck |
 | `USERFLOW_SLO_RDP_STUCK_MAX` | `2` | Max allowed stuck RDP instances before SLO breach |
+| `USERFLOW_SLO_RDP_FAILURE_RATE_PCT` | `25` | RDP readiness probe failure-rate threshold used by burn-rate alerts |
 | `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
 | `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
 | `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |
+| `RUN_RESTORE_DRILL` | `0` | Optional: run PostgreSQL restore drill as part of go-live proof |
+| `RESTORE_DRILL_KEEP_DB` | `0` | Optional: keep restored drill database for manual inspection |
 
 Metrics-server TLS guidance:
 
@@ -461,6 +474,13 @@ Deploy-time proof:
 
 - `SETUP_PHASES=deploy,postdeploy PRODUCTION_PROFILE=1 ./scripts/setup.sh` runs the same proof automatically unless `RUN_PRODUCTION_GO_LIVE_PROOF=0`.
 - `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1` additionally verifies authenticated `/admin/*` read-path health.
+- `RUN_RESTORE_DRILL=1` optionally includes a PostgreSQL logical restore drill in go-live proof output.
+
+API contract guardrails:
+
+- Regenerate backend snapshot: `python3 scripts/export_openapi_schema.py`
+- Regenerate frontend API types: `npm --prefix frontend-vite run generate:api-types`
+- Drift check: `python3 scripts/check_openapi_drift.py`
 
 ## Operations
 
@@ -479,6 +499,20 @@ Rollback (one command):
 NAMESPACE=labs ./scripts/rollback_release.sh
 # optional explicit target:
 # TARGET_REVISION=12 NAMESPACE=labs ./scripts/rollback_release.sh
+```
+
+Restore drill:
+
+```bash
+NAMESPACE=labs ./scripts/restore_drill_postgres.sh
+# or include in go-live proof:
+# NAMESPACE=labs RUN_RESTORE_DRILL=1 ./scripts/production_go_live_proof.sh
+```
+
+Tenant namespace scaffold:
+
+```bash
+TEAM=physics TEAM_NAMESPACE_PREFIX=labs-team- ./scripts/bootstrap_team_namespace.sh
 ```
 
 Common issues:
@@ -539,6 +573,9 @@ Token hygiene:
 - Operator/CRD migration blueprint: [docs/operator-crd-migration-plan.md](docs/operator-crd-migration-plan.md)
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - Operator CRD versioning plan: [docs/wiki/Operator-CRD-Versioning-Plan.md](docs/wiki/Operator-CRD-Versioning-Plan.md)
+- Tenant isolation runbook: [docs/wiki/Tenant-Isolation-and-Namespaces.md](docs/wiki/Tenant-Isolation-and-Namespaces.md)
+- Restore drill SOP: [docs/wiki/Restore-Drill-and-Backup-SOP.md](docs/wiki/Restore-Drill-and-Backup-SOP.md)
+- API contract guardrails: [docs/wiki/API-Contract-and-Drift-Guardrails.md](docs/wiki/API-Contract-and-Drift-Guardrails.md)
 - Upgrade procedure: [docs/upgrade-path.md](docs/upgrade-path.md)
 
 ## Project Structure

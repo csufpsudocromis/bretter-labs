@@ -1,6 +1,6 @@
 # Production Helm Values Reference
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 Canonical file:
 
@@ -27,8 +27,12 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.TLS_SECRET_NAME`
 - `appTemplateValues.RUNTIME_SECRETS_SECRET_NAME`
 - `appTemplateValues.RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`
+- `appTemplateValues.IMAGE_IMPORT_BACKEND` should remain `crd` for controller-first image import reconciliation
+- `appTemplateValues.LABIMAGEIMPORT_CONTROLLER_ENABLED` should remain `"1"` in production profile
 - `appTemplateValues.CONTAINER_SIGNATURE_KEY_REF`
 - `appTemplateValues.CONTAINER_SIGNATURE_KEY_SECRET_NAME`
+- `appTemplateValues.TEAM_NAMESPACE_MODE` (`per_team` recommended for stronger tenant isolation)
+- `appTemplateValues.TEAM_NAMESPACE_PREFIX` (team namespace naming convention)
 - `appTemplateValues.BACKEND_REPLICAS`
 - `appTemplateValues.FRONTEND_REPLICAS`
 - `appTemplateValues.PUBLIC_SCHEME`
@@ -62,6 +66,7 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 6. Run rollout status + post-deploy checks (API health, admin API smoke, synthetic check).
 7. Run `scripts/deploy_preflight.sh` to validate secrets and per-node image pullability.
 8. Archive go-live proof output.
+9. Optional: include restore drill via `RUN_RESTORE_DRILL=1`.
 
 Example:
 

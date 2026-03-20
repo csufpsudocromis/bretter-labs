@@ -58,7 +58,12 @@ Use this checklist before first production deployment and for each release.
   - `NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh`
 - Run post-deploy API health, admin API smoke, and synthetic checks.
 - Verify recurring probe CronJobs are healthy (`bretter-ghcr-access-check`, `bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
-- Verify backup/restore path for Postgres before go-live.
+- Verify backup/restore path for Postgres before go-live:
+  - `NAMESPACE=labs ./scripts/restore_drill_postgres.sh`
+  - or `NAMESPACE=labs RUN_RESTORE_DRILL=1 ./scripts/production_go_live_proof.sh`
+- Verify OpenAPI and frontend API type artifacts are up to date:
+  - `python3 scripts/check_openapi_drift.py`
+  - `npm --prefix frontend-vite run generate:api-types` (no diff expected)
 - Confirm rollback plan is documented and executable (`scripts/rollback_release.sh`).
 
 ## Related pages

@@ -83,7 +83,7 @@ BACKEND_NODEPORT_ENABLED="${BACKEND_NODEPORT_ENABLED:-0}"
 BACKEND_NODEPORT="${BACKEND_NODEPORT:-30080}"
 PRODUCTION_PROFILE="${PRODUCTION_PROFILE:-0}"
 ORCHESTRATION_BACKEND="${ORCHESTRATION_BACKEND:-db}"
-IMAGE_IMPORT_BACKEND="${IMAGE_IMPORT_BACKEND:-db}"
+IMAGE_IMPORT_BACKEND="${IMAGE_IMPORT_BACKEND:-crd}"
 LABINSTANCE_CRD_GROUP="${LABINSTANCE_CRD_GROUP:-labs.bretter.io}"
 LABINSTANCE_CRD_VERSION="${LABINSTANCE_CRD_VERSION:-v1alpha1}"
 LABINSTANCE_CRD_PLURAL="${LABINSTANCE_CRD_PLURAL:-labinstances}"
@@ -92,6 +92,16 @@ LABIMAGEIMPORT_CRD_GROUP="${LABIMAGEIMPORT_CRD_GROUP:-labs.bretter.io}"
 LABIMAGEIMPORT_CRD_VERSION="${LABIMAGEIMPORT_CRD_VERSION:-v1alpha1}"
 LABIMAGEIMPORT_CRD_PLURAL="${LABIMAGEIMPORT_CRD_PLURAL:-labimageimports}"
 LABIMAGEIMPORT_CRD_FINALIZER="${LABIMAGEIMPORT_CRD_FINALIZER:-labs.bretter.io/imageimport-finalizer}"
+LABIMAGEIMPORT_CONTROLLER_ENABLED="${LABIMAGEIMPORT_CONTROLLER_ENABLED:-1}"
+LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED="${LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED:-1}"
+LABIMAGEIMPORT_CONTROLLER_LEASE_NAME="${LABIMAGEIMPORT_CONTROLLER_LEASE_NAME:-bretter-labimageimport-controller-leader}"
+LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS="${LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS:-30}"
+LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS="${LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS:-5}"
+LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS="${LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS:-10}"
+LABIMAGEIMPORT_CONTROLLER_METRICS_BIND="${LABIMAGEIMPORT_CONTROLLER_METRICS_BIND:-0.0.0.0}"
+LABIMAGEIMPORT_CONTROLLER_METRICS_PORT="${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT:-9410}"
+TEAM_NAMESPACE_MODE="${TEAM_NAMESPACE_MODE:-shared}"
+TEAM_NAMESPACE_PREFIX="${TEAM_NAMESPACE_PREFIX:-labs-team-}"
 REQUIRE_SCHEMA_READY="${REQUIRE_SCHEMA_READY:-1}"
 EXPECTED_ALEMBIC_REVISION="${EXPECTED_ALEMBIC_REVISION:-}"
 CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
@@ -176,6 +186,7 @@ USERFLOW_SLO_LOOKBACK_MINUTES="${USERFLOW_SLO_LOOKBACK_MINUTES:-30}"
 USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT="${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT:-25}"
 USERFLOW_SLO_RDP_STUCK_MINUTES="${USERFLOW_SLO_RDP_STUCK_MINUTES:-12}"
 USERFLOW_SLO_RDP_STUCK_MAX="${USERFLOW_SLO_RDP_STUCK_MAX:-2}"
+USERFLOW_SLO_RDP_FAILURE_RATE_PCT="${USERFLOW_SLO_RDP_FAILURE_RATE_PCT:-25}"
 USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT="${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT:-25}"
 ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL="${ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL:-1}"
 KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE="${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE:-*/5 * * * *}"
@@ -592,6 +603,69 @@ validate_vm_network_config() {
   esac
 }
 
+validate_orchestration_backend_config() {
+  case "$ORCHESTRATION_BACKEND" in
+    db | dual | crd) ;;
+    *) fail "ORCHESTRATION_BACKEND must be one of: db, dual, crd." ;;
+  esac
+  case "$IMAGE_IMPORT_BACKEND" in
+    db | dual | crd) ;;
+    *) fail "IMAGE_IMPORT_BACKEND must be one of: db, dual, crd." ;;
+  esac
+
+  if [ "$ORCHESTRATION_BACKEND" != "db" ]; then
+    [ -n "$LABINSTANCE_CRD_GROUP" ] || fail "LABINSTANCE_CRD_GROUP cannot be empty when ORCHESTRATION_BACKEND=${ORCHESTRATION_BACKEND}."
+    [ -n "$LABINSTANCE_CRD_VERSION" ] || fail "LABINSTANCE_CRD_VERSION cannot be empty when ORCHESTRATION_BACKEND=${ORCHESTRATION_BACKEND}."
+    [ -n "$LABINSTANCE_CRD_PLURAL" ] || fail "LABINSTANCE_CRD_PLURAL cannot be empty when ORCHESTRATION_BACKEND=${ORCHESTRATION_BACKEND}."
+    [ -n "$LABINSTANCE_CRD_FINALIZER" ] || fail "LABINSTANCE_CRD_FINALIZER cannot be empty when ORCHESTRATION_BACKEND=${ORCHESTRATION_BACKEND}."
+  fi
+
+  if [ "$IMAGE_IMPORT_BACKEND" != "db" ]; then
+    [ -n "$LABIMAGEIMPORT_CRD_GROUP" ] || fail "LABIMAGEIMPORT_CRD_GROUP cannot be empty when IMAGE_IMPORT_BACKEND=${IMAGE_IMPORT_BACKEND}."
+    [ -n "$LABIMAGEIMPORT_CRD_VERSION" ] || fail "LABIMAGEIMPORT_CRD_VERSION cannot be empty when IMAGE_IMPORT_BACKEND=${IMAGE_IMPORT_BACKEND}."
+    [ -n "$LABIMAGEIMPORT_CRD_PLURAL" ] || fail "LABIMAGEIMPORT_CRD_PLURAL cannot be empty when IMAGE_IMPORT_BACKEND=${IMAGE_IMPORT_BACKEND}."
+    [ -n "$LABIMAGEIMPORT_CRD_FINALIZER" ] || fail "LABIMAGEIMPORT_CRD_FINALIZER cannot be empty when IMAGE_IMPORT_BACKEND=${IMAGE_IMPORT_BACKEND}."
+    case "$LABIMAGEIMPORT_CONTROLLER_ENABLED" in
+      0 | 1) ;;
+      *) fail "LABIMAGEIMPORT_CONTROLLER_ENABLED must be either 0 or 1." ;;
+    esac
+    case "$LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED" in
+      0 | 1) ;;
+      *) fail "LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED must be either 0 or 1." ;;
+    esac
+    if [ "$LABIMAGEIMPORT_CONTROLLER_ENABLED" -ne 1 ]; then
+      fail "LABIMAGEIMPORT_CONTROLLER_ENABLED must be 1 when IMAGE_IMPORT_BACKEND is dual/crd."
+    fi
+    [ -n "$LABIMAGEIMPORT_CONTROLLER_LEASE_NAME" ] || fail "LABIMAGEIMPORT_CONTROLLER_LEASE_NAME cannot be empty."
+    if ! is_uint "$LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS" || [ "$LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS" -lt 15 ]; then
+      fail "LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS must be an integer >= 15."
+    fi
+    if ! is_uint "$LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS" || [ "$LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS" -lt 2 ]; then
+      fail "LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS must be an integer >= 2."
+    fi
+    if ! is_uint "$LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS" || [ "$LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS" -lt 3 ]; then
+      fail "LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS must be an integer >= 3."
+    fi
+    if ! is_uint "$LABIMAGEIMPORT_CONTROLLER_METRICS_PORT" || [ "$LABIMAGEIMPORT_CONTROLLER_METRICS_PORT" -lt 1 ] || [ "$LABIMAGEIMPORT_CONTROLLER_METRICS_PORT" -gt 65535 ]; then
+      fail "LABIMAGEIMPORT_CONTROLLER_METRICS_PORT must be a valid port in 1-65535."
+    fi
+    [ -n "$LABIMAGEIMPORT_CONTROLLER_METRICS_BIND" ] || fail "LABIMAGEIMPORT_CONTROLLER_METRICS_BIND cannot be empty."
+  fi
+
+  case "$TEAM_NAMESPACE_MODE" in
+    shared | per_team) ;;
+    *) fail "TEAM_NAMESPACE_MODE must be either shared or per_team." ;;
+  esac
+  if [ "$TEAM_NAMESPACE_MODE" = "per_team" ]; then
+    if [ -z "$TEAM_NAMESPACE_PREFIX" ]; then
+      fail "TEAM_NAMESPACE_PREFIX cannot be empty when TEAM_NAMESPACE_MODE=per_team."
+    fi
+    if [[ ! "$TEAM_NAMESPACE_PREFIX" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?-$ ]]; then
+      fail "TEAM_NAMESPACE_PREFIX must be a DNS label prefix ending with '-' (example: labs-team-)."
+    fi
+  fi
+}
+
 validate_container_runtime_config() {
   case "$CONTAINER_INGRESS_ENABLED" in
     0 | 1) ;;
@@ -890,6 +964,9 @@ validate_monitoring_config() {
     fi
     if [ "$USERFLOW_SLO_RDP_STUCK_MAX" -lt 0 ]; then
       fail "USERFLOW_SLO_RDP_STUCK_MAX must be an integer >= 0."
+    fi
+    if ! is_uint "$USERFLOW_SLO_RDP_FAILURE_RATE_PCT" || [ "$USERFLOW_SLO_RDP_FAILURE_RATE_PCT" -gt 100 ]; then
+      fail "USERFLOW_SLO_RDP_FAILURE_RATE_PCT must be an integer between 0 and 100."
     fi
   fi
   if [ -z "$HELM_VERSION" ]; then
@@ -1603,6 +1680,103 @@ apply_admission_policies() {
   namespace_escaped="$(escape_sed_replacement "$NAMESPACE")"
   log "Applying Kyverno admission policies from ${ADMISSION_POLICY_TEMPLATE}..."
   sed -e "s/__NAMESPACE__/${namespace_escaped}/g" "$ADMISSION_POLICY_TEMPLATE" | kubectl apply -f -
+  apply_admission_signature_verification_policy
+}
+
+secret_data_plaintext() {
+  local namespace="$1"
+  local secret_name="$2"
+  local data_key="$3"
+  python3 - "$namespace" "$secret_name" "$data_key" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+
+namespace = str(sys.argv[1]).strip()
+secret_name = str(sys.argv[2]).strip()
+data_key = str(sys.argv[3]).strip()
+if not namespace or not secret_name or not data_key:
+    raise SystemExit(1)
+
+try:
+    raw = subprocess.check_output(
+        ["kubectl", "-n", namespace, "get", "secret", secret_name, "-o", "json"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+except Exception:
+    raise SystemExit(1)
+
+payload = json.loads(raw)
+encoded = str(((payload or {}).get("data") or {}).get(data_key, "")).strip()
+if not encoded:
+    raise SystemExit(1)
+print(base64.b64decode(encoded).decode("utf-8"), end="")
+PY
+}
+
+apply_admission_signature_verification_policy() {
+  local key_file_name public_key public_key_indented validation_action
+  if [ "$CONTAINER_SIGNATURE_VERIFICATION_ENABLED" -ne 1 ]; then
+    log "Skipping Kyverno verifyImages policy (CONTAINER_SIGNATURE_VERIFICATION_ENABLED=0)."
+    kubectl delete clusterpolicy bretter-verify-image-signatures --ignore-not-found >/dev/null 2>&1 || true
+    return
+  fi
+  if [[ "$CONTAINER_SIGNATURE_KEY_REF" != /etc/bretter-signing/* ]]; then
+    log "Skipping Kyverno verifyImages policy (unsupported CONTAINER_SIGNATURE_KEY_REF=${CONTAINER_SIGNATURE_KEY_REF})."
+    kubectl delete clusterpolicy bretter-verify-image-signatures --ignore-not-found >/dev/null 2>&1 || true
+    return
+  fi
+
+  key_file_name="$(basename "$CONTAINER_SIGNATURE_KEY_REF")"
+  if [ -z "$key_file_name" ] || [ "$key_file_name" = "." ] || [ "$key_file_name" = "/" ]; then
+    fail "Unable to derive signature key filename for Kyverno verifyImages from CONTAINER_SIGNATURE_KEY_REF=$CONTAINER_SIGNATURE_KEY_REF"
+  fi
+
+  public_key="$(secret_data_plaintext "$NAMESPACE" "$CONTAINER_SIGNATURE_KEY_SECRET_NAME" "$key_file_name" || true)"
+  if [ -z "$public_key" ]; then
+    fail "Kyverno verifyImages policy requires secret ${CONTAINER_SIGNATURE_KEY_SECRET_NAME}/${key_file_name} with non-empty key data."
+  fi
+  public_key_indented="$(printf '%s\n' "$public_key" | sed 's/^/                      /')"
+  validation_action="Audit"
+  if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+    validation_action="Enforce"
+  fi
+
+  log "Applying Kyverno verifyImages policy for enforced Bretter workloads (mode=${validation_action})."
+  kubectl apply -f - <<EOF
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: bretter-verify-image-signatures
+spec:
+  validationFailureAction: ${validation_action}
+  background: true
+  rules:
+    - name: verify-image-signatures-on-enforced-workloads
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaces:
+                - ${NAMESPACE}
+              selector:
+                matchLabels:
+                  security.bretter-labs.io/enforce-admission: "true"
+      verifyImages:
+        - imageReferences:
+            - "*"
+          mutateDigest: false
+          required: true
+          verifyDigest: true
+          attestors:
+            - entries:
+                - keys:
+                    publicKeys: |
+${public_key_indented}
+EOF
 }
 
 apply_monitoring_alert_rules() {
@@ -1832,30 +2006,132 @@ spec:
             severity: critical
           annotations:
             summary: GHCR access health checks are failing.
-        - alert: BretterVmLaunchSloBreached
+        - alert: BretterVmLaunchSloBurnRateFast
           expr: |
-            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[30m]) > 0
-          for: 10m
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: VM launch SLO burn-rate is above ${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% over 15m.
+        - alert: BretterVmLaunchSloBurnRateSlow
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}
+          for: 15m
           labels:
             severity: warning
           annotations:
-            summary: VM launch SLO probe is failing (launch failure-rate threshold breached).
-        - alert: BretterRdpReadinessSloBreached
+            summary: VM launch SLO burn-rate is above ${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% over 1h.
+        - alert: BretterRdpReadinessSloBurnRateFast
           expr: |
-            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[30m]) > 0
-          for: 10m
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: RDP readiness SLO burn-rate is above ${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% over 15m.
+        - alert: BretterRdpReadinessSloBurnRateSlow
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}
+          for: 15m
           labels:
             severity: warning
           annotations:
-            summary: RDP readiness SLO probe is failing (stuck RDP instances above threshold).
-        - alert: BretterUploadFinalizeSloBreached
+            summary: RDP readiness SLO burn-rate is above ${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% over 1h.
+        - alert: BretterUploadFinalizeSloBurnRateFast
           expr: |
-            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[30m]) > 0
-          for: 10m
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Upload finalize SLO burn-rate is above ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% over 15m.
+        - alert: BretterUploadFinalizeSloBurnRateSlow
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}
+          for: 15m
           labels:
             severity: warning
           annotations:
-            summary: Upload finalize SLO probe is failing (finalize failure-rate threshold breached).
+            summary: Upload finalize SLO burn-rate is above ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% over 1h.
 EOF
 }
 
@@ -2140,6 +2416,11 @@ render_helm_values_override() {
   local orchestration_backend image_import_backend
   local labinstance_crd_group labinstance_crd_version labinstance_crd_plural labinstance_crd_finalizer
   local labimageimport_crd_group labimageimport_crd_version labimageimport_crd_plural labimageimport_crd_finalizer
+  local labimageimport_controller_enabled labimageimport_controller_leader_election_enabled
+  local labimageimport_controller_lease_name labimageimport_controller_lease_duration_seconds
+  local labimageimport_controller_retry_period_seconds labimageimport_controller_poll_seconds
+  local labimageimport_controller_metrics_bind labimageimport_controller_metrics_port
+  local team_namespace_mode team_namespace_prefix
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local backend_service_type backend_service_nodeport_line
@@ -2175,6 +2456,16 @@ render_helm_values_override() {
   labimageimport_crd_version="$(yaml_escape "$LABIMAGEIMPORT_CRD_VERSION")"
   labimageimport_crd_plural="$(yaml_escape "$LABIMAGEIMPORT_CRD_PLURAL")"
   labimageimport_crd_finalizer="$(yaml_escape "$LABIMAGEIMPORT_CRD_FINALIZER")"
+  labimageimport_controller_enabled="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_ENABLED")"
+  labimageimport_controller_leader_election_enabled="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED")"
+  labimageimport_controller_lease_name="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_LEASE_NAME")"
+  labimageimport_controller_lease_duration_seconds="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS")"
+  labimageimport_controller_retry_period_seconds="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS")"
+  labimageimport_controller_poll_seconds="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS")"
+  labimageimport_controller_metrics_bind="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_METRICS_BIND")"
+  labimageimport_controller_metrics_port="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_METRICS_PORT")"
+  team_namespace_mode="$(yaml_escape "$TEAM_NAMESPACE_MODE")"
+  team_namespace_prefix="$(yaml_escape "$TEAM_NAMESPACE_PREFIX")"
   public_scheme="$(yaml_escape "$PUBLIC_SCHEME")"
   tls_secret_name="$(yaml_escape "$TLS_SECRET_NAME")"
   windows_machine_type="$(yaml_escape "$WINDOWS_MACHINE_TYPE")"
@@ -2257,6 +2548,16 @@ appTemplateValues:
   LABIMAGEIMPORT_CRD_VERSION: "${labimageimport_crd_version}"
   LABIMAGEIMPORT_CRD_PLURAL: "${labimageimport_crd_plural}"
   LABIMAGEIMPORT_CRD_FINALIZER: "${labimageimport_crd_finalizer}"
+  LABIMAGEIMPORT_CONTROLLER_ENABLED: "${labimageimport_controller_enabled}"
+  LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED: "${labimageimport_controller_leader_election_enabled}"
+  LABIMAGEIMPORT_CONTROLLER_LEASE_NAME: "${labimageimport_controller_lease_name}"
+  LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS: "${labimageimport_controller_lease_duration_seconds}"
+  LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS: "${labimageimport_controller_retry_period_seconds}"
+  LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS: "${labimageimport_controller_poll_seconds}"
+  LABIMAGEIMPORT_CONTROLLER_METRICS_BIND: "${labimageimport_controller_metrics_bind}"
+  LABIMAGEIMPORT_CONTROLLER_METRICS_PORT: "${labimageimport_controller_metrics_port}"
+  TEAM_NAMESPACE_MODE: "${team_namespace_mode}"
+  TEAM_NAMESPACE_PREFIX: "${team_namespace_prefix}"
   PUBLIC_SCHEME: "${public_scheme}"
   TLS_SECRET_NAME: "${tls_secret_name}"
   ADMIN_BOOTSTRAP_PASSWORD: "${admin_bootstrap_password}"
@@ -4414,6 +4715,8 @@ log_runtime_configuration() {
   log "Using VM storage class: $VM_STORAGE_CLASS"
   log "Backend images (runtime/admin jobs): ${BACKEND_IMAGE} / ${BACKEND_ADMIN_IMAGE}"
   log "Orchestration backends (vm/image): ${ORCHESTRATION_BACKEND} / ${IMAGE_IMPORT_BACKEND}"
+  log "LabImageImport controller enabled: ${LABIMAGEIMPORT_CONTROLLER_ENABLED} (poll=${LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS}s metrics=${LABIMAGEIMPORT_CONTROLLER_METRICS_BIND}:${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT} leader-election=${LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED})"
+  log "Team namespace mode: ${TEAM_NAMESPACE_MODE} (prefix=${TEAM_NAMESPACE_PREFIX})"
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"
@@ -4441,7 +4744,7 @@ log_runtime_configuration() {
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION})"
   log "GHCR access health check enabled: $ENABLE_GHCR_ACCESS_HEALTHCHECK (schedule: ${GHCR_ACCESS_HEALTHCHECK_SCHEDULE} timeout: ${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}s secret: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET})"
-  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m)"
+  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-fail>${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m)"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
   log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
@@ -4555,6 +4858,7 @@ main() {
   validate_autocleanup_config
   validate_storage_guard_config
   validate_vm_network_config
+  validate_orchestration_backend_config
   validate_container_runtime_config
   validate_schema_gate_config
   validate_auth_and_cors_config

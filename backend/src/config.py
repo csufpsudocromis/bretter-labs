@@ -48,11 +48,21 @@ class Settings(BaseSettings):
     labinstance_controller_stuck_seconds: int = 600
     labinstance_controller_metrics_bind: str = "0.0.0.0"
     labinstance_controller_metrics_port: int = 9408
-    image_import_backend: str = "db"  # db|dual|crd
+    image_import_backend: str = "crd"  # db|dual|crd
     labimageimport_crd_group: str = "labs.bretter.io"
     labimageimport_crd_version: str = "v1alpha1"
     labimageimport_crd_plural: str = "labimageimports"
     labimageimport_crd_finalizer: str = "labs.bretter.io/imageimport-finalizer"
+    labimageimport_controller_enabled: bool = True
+    labimageimport_controller_leader_election_enabled: bool = True
+    labimageimport_controller_lease_name: str = "bretter-labimageimport-controller-leader"
+    labimageimport_controller_lease_duration_seconds: int = 30
+    labimageimport_controller_retry_period_seconds: int = 5
+    labimageimport_controller_poll_seconds: int = 10
+    labimageimport_controller_metrics_bind: str = "0.0.0.0"
+    labimageimport_controller_metrics_port: int = 9410
+    team_namespace_mode: str = "shared"  # shared|per_team
+    team_namespace_prefix: str = "labs-team-"
     # Default Windows to UEFI/q35; can be overridden per environment.
     windows_efi_enabled: bool = True
     windows_machine_type: str = "q35"

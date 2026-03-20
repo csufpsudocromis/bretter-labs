@@ -9,6 +9,7 @@ Validate production profile values before deployment:
 ```bash
 python3 scripts/check_release_discipline.py
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+python3 scripts/check_openapi_drift.py
 ```
 
 If you use environment overlays, include them in validation order:
@@ -133,6 +134,24 @@ If image-based runner changes were deployed, verify node placement and runner st
 kubectl -n labs get pods -o wide | rg 'vm-|virt-launcher|ct-'
 ```
 
+## Deploy/user-flow smoke pipeline
+
+GitHub workflow:
+
+- `.github/workflows/deploy-userflow-smoke.yml`
+
+Coverage:
+
+- API login/RBAC/OIDC smoke regressions
+- Kind-based LabInstance controller smoke
+- Kind-based LabImageImport controller smoke
+
+Manual trigger in GitHub Actions:
+
+1. Open **Actions**.
+2. Select **Deploy Userflow Smoke**.
+3. Click **Run workflow**.
+
 ## Post-deploy synthetic validation (manual)
 
 1. Login on a fresh browser profile.
@@ -150,6 +169,18 @@ Generate and archive a single report covering rollout, production env checks, ru
 
 ```bash
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
+
+Optional restore drill as part of go-live:
+
+```bash
+NAMESPACE=labs RUN_RESTORE_DRILL=1 ./scripts/production_go_live_proof.sh
+```
+
+Standalone restore drill:
+
+```bash
+NAMESPACE=labs ./scripts/restore_drill_postgres.sh
 ```
 
 ## Rollback command
@@ -202,6 +233,22 @@ Admin UI checks:
 - Quota changes should apply to both VM and container starts.
 - When hit, users should receive quota detail (HTTP 429) or queued reason.
 - `/admin/audit-events` should show recent admin mutations for templates/images/quotas/settings.
+
+## Tenant namespace bootstrap
+
+Bootstrap per-team namespace guardrails:
+
+```bash
+TEAM=physics TEAM_NAMESPACE_PREFIX=labs-team- ./scripts/bootstrap_team_namespace.sh
+```
+
+Verify:
+
+```bash
+kubectl get ns labs-team-physics --show-labels
+kubectl -n labs-team-physics get resourcequota bretter-tenant-quota
+kubectl -n labs-team-physics get networkpolicy
+```
 
 ## Common incidents and triage
 

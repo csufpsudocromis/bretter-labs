@@ -56,6 +56,18 @@ run_failure "reject mutable latest image references by default" \
 run_success "allow mutable image references only with explicit override" \
   env SETUP_DRY_RUN=1 ALLOW_MUTABLE_IMAGE_TAGS=1 BACKEND_IMAGE="ghcr.io/csufpsudocromis/bretter-backend:latest" "$SETUP_SCRIPT"
 
+run_failure "reject invalid image import backend mode" \
+  env SETUP_DRY_RUN=1 IMAGE_IMPORT_BACKEND=invalid "$SETUP_SCRIPT"
+
+run_failure "reject crd image-import backend without labimageimport controller" \
+  env SETUP_DRY_RUN=1 IMAGE_IMPORT_BACKEND=crd LABIMAGEIMPORT_CONTROLLER_ENABLED=0 "$SETUP_SCRIPT"
+
+run_failure "reject invalid team namespace mode" \
+  env SETUP_DRY_RUN=1 TEAM_NAMESPACE_MODE=invalid "$SETUP_SCRIPT"
+
+run_failure "reject invalid team namespace prefix in per_team mode" \
+  env SETUP_DRY_RUN=1 TEAM_NAMESPACE_MODE=per_team TEAM_NAMESPACE_PREFIX=invalid-prefix "$SETUP_SCRIPT"
+
 run_failure "reject invalid admission policy toggle" \
   env SETUP_DRY_RUN=1 ENABLE_ADMISSION_POLICIES=2 "$SETUP_SCRIPT"
 

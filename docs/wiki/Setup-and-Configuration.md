@@ -28,6 +28,7 @@ Core:
 - `PUBLIC_SCHEME` (`https` recommended)
 - `PRODUCTION_PROFILE` (`1` recommended for production)
 - `ORCHESTRATION_BACKEND` (`db`/`dual`/`crd`; default `db`)
+- `IMAGE_IMPORT_BACKEND` (`db`/`dual`/`crd`; default `crd`)
 - `REQUIRE_SCHEMA_READY` (default `1`; fail startup if DB schema/head is not ready)
 - `EXPECTED_ALEMBIC_REVISION` (optional explicit expected Alembic revision)
 - `TLS_ENABLED`, `TLS_SECRET_NAME`
@@ -35,6 +36,20 @@ Core:
 - `LABINSTANCE_CRD_VERSION` (default `v1alpha1`)
 - `LABINSTANCE_CRD_PLURAL` (default `labinstances`)
 - `LABINSTANCE_CRD_FINALIZER` (default `labs.bretter.io/finalizer`)
+- `LABIMAGEIMPORT_CRD_GROUP` (default `labs.bretter.io`)
+- `LABIMAGEIMPORT_CRD_VERSION` (default `v1alpha1`)
+- `LABIMAGEIMPORT_CRD_PLURAL` (default `labimageimports`)
+- `LABIMAGEIMPORT_CRD_FINALIZER` (default `labs.bretter.io/imageimport-finalizer`)
+- `LABIMAGEIMPORT_CONTROLLER_ENABLED` (default `1` for `IMAGE_IMPORT_BACKEND=dual|crd`)
+- `LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED` (default `1`)
+- `LABIMAGEIMPORT_CONTROLLER_LEASE_NAME` (default `bretter-labimageimport-controller-leader`)
+- `LABIMAGEIMPORT_CONTROLLER_LEASE_DURATION_SECONDS` (default `30`)
+- `LABIMAGEIMPORT_CONTROLLER_RETRY_PERIOD_SECONDS` (default `5`)
+- `LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS` (default `10`)
+- `LABIMAGEIMPORT_CONTROLLER_METRICS_BIND` (default `0.0.0.0`)
+- `LABIMAGEIMPORT_CONTROLLER_METRICS_PORT` (default `9410`)
+- `TEAM_NAMESPACE_MODE` (`shared`/`per_team`; production default `per_team`)
+- `TEAM_NAMESPACE_PREFIX` (default `labs-team-` in per-team mode)
 
 Storage:
 
@@ -128,10 +143,13 @@ Monitoring/ops:
 - `USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT`
 - `USERFLOW_SLO_RDP_STUCK_MINUTES`
 - `USERFLOW_SLO_RDP_STUCK_MAX`
+- `USERFLOW_SLO_RDP_FAILURE_RATE_PCT`
 - `USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT`
 - `RUN_PRODUCTION_GO_LIVE_PROOF` (defaults to `PRODUCTION_PROFILE`)
 - `PRODUCTION_GO_LIVE_REPORT_DIR`
 - `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS`
+- `RUN_RESTORE_DRILL` (optional go-live proof extension)
+- `RESTORE_DRILL_KEEP_DB` (optional keep restored drill DB)
 
 External secrets (optional):
 
@@ -195,6 +213,12 @@ ENABLE_MONITORING=1 \
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).
 - Post-deploy admin API smoke validation now runs by default (`RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1`) using authenticated `/admin/*` read paths.
 - Setup deploy phase now installs recurring GHCR access checks (`bretter-ghcr-access-check`) and user-flow SLO probe CronJobs (`bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
+- User-flow SLO alerting now evaluates burn-rate (failure ratio) for VM launch, RDP readiness, and upload finalize probes.
+- `IMAGE_IMPORT_BACKEND=dual|crd` requires the dedicated LabImageImport controller (`scripts/smoke_labimageimport_controller.sh` validates startup/metrics behavior).
+- Admission policy apply now includes Kyverno `verifyImages` signature checks when `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (Audit in non-production, Enforce in production).
+- API contract drift is guarded by checked-in OpenAPI snapshot + generated frontend types (`scripts/check_openapi_drift.py` + `npm --prefix frontend-vite run generate:api-types`).
+- Use `scripts/bootstrap_team_namespace.sh` to scaffold per-team namespaces with quota and default network policies.
+- Use `scripts/restore_drill_postgres.sh` to validate PostgreSQL logical restore, optionally from `scripts/production_go_live_proof.sh` via `RUN_RESTORE_DRILL=1`.
 - For image publish workflows, set repo Actions secrets `GHCR_USERNAME` and `GHCR_PAT` (`write:packages`) when publishing to pre-existing private GHCR packages; workflow falls back to `GITHUB_TOKEN` when those secrets are absent.
 - Admin container image registration uses direct OCI image references; if signature verification returns `no signatures found`, registration continues with warning-only policy messaging.
 - If setup generated a new bootstrap admin secret and `SYNTHETIC_CHECK_PASSWORD` is not set, setup auto-disables the authenticated synthetic check to avoid login failures against existing admin credentials.
@@ -215,6 +239,9 @@ ENABLE_MONITORING=1 \
 - [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Scaling and Quotas](Scaling-and-Quotas)
+- [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
+- [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
+- [API Contract and Drift Guardrails](API-Contract-and-Drift-Guardrails)
 - [Security and Auth](Security-and-Auth)
 - [LDAP Authentication](LDAP-Authentication)
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)

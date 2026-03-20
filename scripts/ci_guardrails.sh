@@ -18,6 +18,7 @@ else
 fi
 "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/lint_crd_schema.py"
+"$PYTHON_BIN" "$ROOT_DIR/scripts/check_openapi_drift.py"
 if ! command -v kubectl >/dev/null 2>&1; then
   echo "ERROR: kubectl is required for CRD rendering checks." >&2
   exit 1
@@ -43,6 +44,8 @@ fi
   scripts/check_release_discipline.py \
   scripts/check_no_plaintext_tokens.py \
   scripts/lint_crd_schema.py \
+  scripts/check_openapi_drift.py \
+  scripts/export_openapi_schema.py \
   scripts/backfill_labinstances_from_db.py \
   scripts/bump_version.py \
   scripts/validate_production_profile.py \
