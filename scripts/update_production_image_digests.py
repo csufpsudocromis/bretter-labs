@@ -5,13 +5,13 @@ import argparse
 import re
 from pathlib import Path
 
-DIGEST_REF_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+TAGGED_DIGEST_REF_RE = re.compile(r"^[^@\s]+:v?[0-9]+(\.[0-9]+){2}([-.+][0-9A-Za-z.-]+)?@sha256:[0-9a-f]{64}$")
 
 
 def _validate_digest_ref(name: str, value: str) -> str:
     ref = str(value or "").strip()
-    if not DIGEST_REF_RE.match(ref):
-        raise ValueError(f"{name} must be a digest-pinned image ref (<repo>@sha256:...) (found {value!r})")
+    if not TAGGED_DIGEST_REF_RE.match(ref):
+        raise ValueError(f"{name} must be a release-tagged digest ref (<repo>:vX.Y.Z@sha256:...) (found {value!r})")
     return ref
 
 

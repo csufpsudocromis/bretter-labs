@@ -46,6 +46,7 @@ fi
   scripts/lint_crd_schema.py \
   scripts/check_openapi_drift.py \
   scripts/export_openapi_schema.py \
+  scripts/post_deploy_synthetic_check.py \
   scripts/backfill_labinstances_from_db.py \
   scripts/bump_version.py \
   scripts/validate_production_profile.py \

@@ -1,6 +1,6 @@
 # GitHub Release and Packages Operations
 
-Last reviewed: March 19, 2026.
+Last reviewed: March 20, 2026.
 
 This page is the operator runbook for repository metadata, releases, CI guardrails, and GHCR package publishing.
 
@@ -45,6 +45,13 @@ Workflow:
 
 - `.github/workflows/publish-and-pin-images.yml`
 
+Pipeline gates:
+
+1. publish images with SBOM/provenance
+2. scan published refs with Trivy (HIGH/CRITICAL)
+3. keyless sign and verify with Cosign
+4. promote digests into `deploy/helm/values-production.yaml` (only after gates pass)
+
 Inputs:
 
 - `version`
@@ -77,7 +84,8 @@ The publish workflow can optionally update:
 
 - `deploy/helm/values-production.yaml`
 
-When `commit_digest_update=true`, workflow writes new image digests and pushes a commit.
+When `commit_digest_update=true`, workflow writes release-tagged digest refs
+(`ghcr.io/<ns>/<image>:vX.Y.Z@sha256:...`) and pushes a commit.
 
 ## CI guardrails expectations
 

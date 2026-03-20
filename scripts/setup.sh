@@ -142,6 +142,14 @@ POSTGRES_DATA_HOSTPATH="${POSTGRES_DATA_HOSTPATH:-/var/lib/bretter-labs/postgres
 POSTGRES_USER="${POSTGRES_USER:-bretter}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-bretterpass}"
 POSTGRES_DB="${POSTGRES_DB:-bretterlabs}"
+ENABLE_POSTGRES_BACKUP_AUTOMATION="${ENABLE_POSTGRES_BACKUP_AUTOMATION:-1}"
+POSTGRES_BACKUP_SCHEDULE="${POSTGRES_BACKUP_SCHEDULE:-17 3 * * *}"
+POSTGRES_BACKUP_RETENTION_DAYS="${POSTGRES_BACKUP_RETENTION_DAYS:-7}"
+POSTGRES_BACKUP_PVC_NAME="${POSTGRES_BACKUP_PVC_NAME:-bretter-postgres-backups}"
+POSTGRES_BACKUP_PVC_SIZE="${POSTGRES_BACKUP_PVC_SIZE:-20Gi}"
+POSTGRES_BACKUP_STORAGE_CLASS="${POSTGRES_BACKUP_STORAGE_CLASS:-}"
+POSTGRES_BACKUP_MOUNT_PATH="${POSTGRES_BACKUP_MOUNT_PATH:-/backups}"
+POSTGRES_BACKUP_IMAGE="${POSTGRES_BACKUP_IMAGE:-postgres:16.4}"
 USE_EXTERNAL_SECRETS="${USE_EXTERNAL_SECRETS:-0}"
 INSTALL_EXTERNAL_SECRETS_OPERATOR="${INSTALL_EXTERNAL_SECRETS_OPERATOR:-1}"
 EXTERNAL_SECRETS_NAMESPACE="${EXTERNAL_SECRETS_NAMESPACE:-external-secrets}"
@@ -188,6 +196,16 @@ USERFLOW_SLO_RDP_STUCK_MINUTES="${USERFLOW_SLO_RDP_STUCK_MINUTES:-12}"
 USERFLOW_SLO_RDP_STUCK_MAX="${USERFLOW_SLO_RDP_STUCK_MAX:-2}"
 USERFLOW_SLO_RDP_FAILURE_RATE_PCT="${USERFLOW_SLO_RDP_FAILURE_RATE_PCT:-25}"
 USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT="${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT:-25}"
+USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES="${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES:-30}"
+USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT="${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT:-20}"
+ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE="${ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE:-0}"
+USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS="${USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS:-20}"
+USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT="${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT:-25}"
+USERFLOW_SLO_RDP_CONNECT_REQUIRE_INSTANCE="${USERFLOW_SLO_RDP_CONNECT_REQUIRE_INSTANCE:-0}"
+USERFLOW_SLO_API_BASE="${USERFLOW_SLO_API_BASE:-}"
+USERFLOW_SLO_API_VERIFY_TLS="${USERFLOW_SLO_API_VERIFY_TLS:-}"
+USERFLOW_SLO_API_USERNAME="${USERFLOW_SLO_API_USERNAME:-admin}"
+USERFLOW_SLO_API_PASSWORD="${USERFLOW_SLO_API_PASSWORD:-}"
 ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL="${ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL:-1}"
 KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE="${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE:-*/5 * * * *}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
@@ -320,6 +338,10 @@ is_uint() {
   [[ "$1" =~ ^[0-9]+$ ]]
 }
 
+is_number() {
+  [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+}
+
 looks_placeholder_value() {
   local value lowered
   value="${1:-}"
@@ -370,6 +392,10 @@ is_mutable_image_reference() {
 
 is_digest_image_reference() {
   [[ "$1" == *@sha256:* ]]
+}
+
+is_release_tagged_digest_reference() {
+  [[ "$1" =~ ^[^@[:space:]]+:v?[0-9]+(\.[0-9]+){2}([-.+][0-9A-Za-z.-]+)?@sha256:[0-9a-f]{64}$ ]]
 }
 
 is_local_image_reference() {
@@ -531,19 +557,19 @@ validate_image_reference_policy() {
   fi
 
   if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
-    local non_digest_refs=()
+    local non_release_digest_refs=()
     local local_refs=()
     for image_var in BACKEND_IMAGE BACKEND_ADMIN_IMAGE FRONTEND_IMAGE RUNNER_IMAGE; do
       image_ref="${!image_var}"
-      if ! is_digest_image_reference "$image_ref"; then
-        non_digest_refs+=("${image_var}=${image_ref}")
+      if ! is_release_tagged_digest_reference "$image_ref"; then
+        non_release_digest_refs+=("${image_var}=${image_ref}")
       fi
       if is_local_image_reference "$image_ref"; then
         local_refs+=("${image_var}=${image_ref}")
       fi
     done
-    if [ "${#non_digest_refs[@]}" -gt 0 ]; then
-      fail "PRODUCTION_PROFILE=1 requires digest-pinned images (@sha256): ${non_digest_refs[*]}"
+    if [ "${#non_release_digest_refs[@]}" -gt 0 ]; then
+      fail "PRODUCTION_PROFILE=1 requires release-tagged digest image refs (<repo>:vX.Y.Z@sha256:...): ${non_release_digest_refs[*]}"
     fi
     if [ "${#local_refs[@]}" -gt 0 ]; then
       fail "PRODUCTION_PROFILE=1 rejects local/dev image references (localhost/local-*): ${local_refs[*]}"
@@ -839,9 +865,27 @@ validate_postgres_config() {
     0 | 1) ;;
     *) fail "USE_EXTERNAL_SECRETS must be either 0 or 1." ;;
   esac
+  case "$ENABLE_POSTGRES_BACKUP_AUTOMATION" in
+    0 | 1) ;;
+    *) fail "ENABLE_POSTGRES_BACKUP_AUTOMATION must be either 0 or 1." ;;
+  esac
   [ -n "$POSTGRES_USER" ] || fail "POSTGRES_USER cannot be empty."
   [ -n "$POSTGRES_PASSWORD" ] || fail "POSTGRES_PASSWORD cannot be empty."
   [ -n "$POSTGRES_DB" ] || fail "POSTGRES_DB cannot be empty."
+  if [ "$ENABLE_POSTGRES_BACKUP_AUTOMATION" -eq 1 ]; then
+    [ -n "$POSTGRES_BACKUP_SCHEDULE" ] || fail "POSTGRES_BACKUP_SCHEDULE cannot be empty when backup automation is enabled."
+    if ! is_uint "$POSTGRES_BACKUP_RETENTION_DAYS" || [ "$POSTGRES_BACKUP_RETENTION_DAYS" -lt 1 ]; then
+      fail "POSTGRES_BACKUP_RETENTION_DAYS must be an integer >= 1."
+    fi
+    [ -n "$POSTGRES_BACKUP_PVC_NAME" ] || fail "POSTGRES_BACKUP_PVC_NAME cannot be empty when backup automation is enabled."
+    if [[ ! "$POSTGRES_BACKUP_PVC_SIZE" =~ ^[0-9]+(Mi|Gi|Ti)$ ]]; then
+      fail "POSTGRES_BACKUP_PVC_SIZE must be a Kubernetes storage quantity (for example 20Gi)."
+    fi
+    if [[ "$POSTGRES_BACKUP_MOUNT_PATH" != /* ]]; then
+      fail "POSTGRES_BACKUP_MOUNT_PATH must be an absolute path."
+    fi
+    [ -n "$POSTGRES_BACKUP_IMAGE" ] || fail "POSTGRES_BACKUP_IMAGE cannot be empty when backup automation is enabled."
+  fi
 }
 
 validate_external_secrets_config() {
@@ -967,6 +1011,40 @@ validate_monitoring_config() {
     fi
     if ! is_uint "$USERFLOW_SLO_RDP_FAILURE_RATE_PCT" || [ "$USERFLOW_SLO_RDP_FAILURE_RATE_PCT" -gt 100 ]; then
       fail "USERFLOW_SLO_RDP_FAILURE_RATE_PCT must be an integer between 0 and 100."
+    fi
+    if ! is_uint "$USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES" || [ "$USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES" -lt 5 ]; then
+      fail "USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES must be an integer >= 5."
+    fi
+    if ! is_uint "$USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT" || [ "$USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT" -gt 100 ]; then
+      fail "USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT must be an integer between 0 and 100."
+    fi
+    case "$ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE" in
+      0 | 1) ;;
+      *) fail "ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE must be either 0 or 1." ;;
+    esac
+    if ! is_number "$USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS"; then
+      fail "USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS must be a positive number."
+    fi
+    if [[ "$USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS" =~ ^0([.]0+)?$ ]]; then
+      fail "USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS must be greater than 0."
+    fi
+    if ! is_uint "$USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT" || [ "$USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT" -gt 100 ]; then
+      fail "USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT must be an integer between 0 and 100."
+    fi
+    case "$USERFLOW_SLO_RDP_CONNECT_REQUIRE_INSTANCE" in
+      0 | 1) ;;
+      *) fail "USERFLOW_SLO_RDP_CONNECT_REQUIRE_INSTANCE must be either 0 or 1." ;;
+    esac
+    case "$USERFLOW_SLO_API_VERIFY_TLS" in
+      "" | 0 | 1) ;;
+      *) fail "USERFLOW_SLO_API_VERIFY_TLS must be 0, 1, or empty (auto)." ;;
+    esac
+    if [ -n "$USERFLOW_SLO_API_BASE" ] && [[ "$USERFLOW_SLO_API_BASE" != http://* ]] && [[ "$USERFLOW_SLO_API_BASE" != https://* ]]; then
+      fail "USERFLOW_SLO_API_BASE must start with http:// or https:// when set."
+    fi
+    if [ "$ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE" -eq 1 ]; then
+      [ -n "$USERFLOW_SLO_API_USERNAME" ] || fail "USERFLOW_SLO_API_USERNAME is required when RDP connect latency probe is enabled."
+      [ -n "$USERFLOW_SLO_API_PASSWORD" ] || fail "USERFLOW_SLO_API_PASSWORD is required when RDP connect latency probe is enabled."
     fi
   fi
   if [ -z "$HELM_VERSION" ]; then
@@ -2006,6 +2084,34 @@ spec:
             severity: critical
           annotations:
             summary: GHCR access health checks are failing.
+        - alert: BretterLabInstanceControllerUnavailable
+          expr: |
+            (
+              max(kube_deployment_spec_replicas{namespace="${NAMESPACE}",deployment="bretter-labinstance-controller"}) > 0
+            )
+            and
+            (
+              max(kube_deployment_status_replicas_available{namespace="${NAMESPACE}",deployment="bretter-labinstance-controller"}) < 1
+            )
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: LabInstance controller has no available replicas.
+        - alert: BretterLabImageImportControllerUnavailable
+          expr: |
+            (
+              max(kube_deployment_spec_replicas{namespace="${NAMESPACE}",deployment="bretter-labimageimport-controller"}) > 0
+            )
+            and
+            (
+              max(kube_deployment_status_replicas_available{namespace="${NAMESPACE}",deployment="bretter-labimageimport-controller"}) < 1
+            )
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: LabImageImport controller has no available replicas.
         - alert: BretterVmLaunchSloBurnRateFast
           expr: |
             (
@@ -2132,6 +2238,90 @@ spec:
             severity: warning
           annotations:
             summary: Upload finalize SLO burn-rate is above ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% over 1h.
+        - alert: BretterImageImportQueueAgeSloBurnRateFast
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Image import queue-age SLO burn-rate is above ${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}% over 15m.
+        - alert: BretterImageImportQueueAgeSloBurnRateSlow
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Image import queue-age SLO burn-rate is above ${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}% over 1h.
+        - alert: BretterRdpConnectLatencySloBurnRateFast
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: RDP connect-latency SLO burn-rate is above ${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}% over 15m.
+        - alert: BretterRdpConnectLatencySloBurnRateSlow
+          expr: |
+            (
+              100 * (
+                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
+                /
+                clamp_min(
+                  (
+                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
+                    +
+                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
+                  ),
+                  1
+                )
+              )
+            ) > ${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: RDP connect-latency SLO burn-rate is above ${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}% over 1h.
 EOF
 }
 
@@ -2979,6 +3169,103 @@ ensure_postgres_secret() {
     --dry-run=client -o yaml | kubectl apply -f -
 }
 
+apply_postgres_backup_automation() {
+  local storage_class_line postgres_host
+  if [ "$ENABLE_POSTGRES_BACKUP_AUTOMATION" -ne 1 ]; then
+    log "Skipping postgres backup automation (ENABLE_POSTGRES_BACKUP_AUTOMATION=0)."
+    kubectl -n "$NAMESPACE" delete cronjob bretter-postgres-backup --ignore-not-found=true >/dev/null 2>&1 || true
+    return
+  fi
+
+  storage_class_line=""
+  if [ -n "$POSTGRES_BACKUP_STORAGE_CLASS" ]; then
+    storage_class_line="  storageClassName: ${POSTGRES_BACKUP_STORAGE_CLASS}"
+  fi
+  postgres_host="bretter-postgres.${NAMESPACE}.svc.cluster.local"
+
+  log "Applying postgres backup PVC/CronJob (schedule: ${POSTGRES_BACKUP_SCHEDULE}, retention: ${POSTGRES_BACKUP_RETENTION_DAYS}d)."
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ${POSTGRES_BACKUP_PVC_NAME}
+  namespace: ${NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce
+${storage_class_line}
+  resources:
+    requests:
+      storage: ${POSTGRES_BACKUP_PVC_SIZE}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-postgres-backup
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${POSTGRES_BACKUP_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 86400
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: postgres-backup
+              image: ${POSTGRES_BACKUP_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: POSTGRES_HOST
+                  value: "${postgres_host}"
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: POSTGRES_USER
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: POSTGRES_PASSWORD
+                - name: POSTGRES_DB
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: POSTGRES_DB
+                - name: BACKUP_MOUNT_PATH
+                  value: "${POSTGRES_BACKUP_MOUNT_PATH}"
+                - name: BACKUP_RETENTION_DAYS
+                  value: "${POSTGRES_BACKUP_RETENTION_DAYS}"
+              command:
+                - /bin/sh
+                - -lc
+                - |
+                  set -eu
+                  mkdir -p "\$BACKUP_MOUNT_PATH"
+                  timestamp="\$(date -u +%Y%m%dT%H%M%SZ)"
+                  outfile="\${BACKUP_MOUNT_PATH%/}/\${POSTGRES_DB}-\${timestamp}.dump"
+                  PGPASSWORD="\$POSTGRES_PASSWORD" pg_dump \
+                    -h "\$POSTGRES_HOST" \
+                    -U "\$POSTGRES_USER" \
+                    -d "\$POSTGRES_DB" \
+                    -Fc \
+                    -f "\$outfile"
+                  find "\$BACKUP_MOUNT_PATH" -type f -name '*.dump' -mtime +"\$BACKUP_RETENTION_DAYS" -delete || true
+                  echo "backup_complete path=\$outfile"
+              volumeMounts:
+                - name: backups
+                  mountPath: ${POSTGRES_BACKUP_MOUNT_PATH}
+          volumes:
+            - name: backups
+              persistentVolumeClaim:
+                claimName: ${POSTGRES_BACKUP_PVC_NAME}
+EOF
+}
+
 generate_runtime_secrets_encryption_key() {
   local generated
   generated="$(head -c 32 /dev/urandom | base64 | tr -d '\n=' | tr '/+' '_-')"
@@ -3739,14 +4026,20 @@ EOF
 }
 
 apply_userflow_slo_probes() {
+  local probe_command slo_api_base slo_api_verify_tls
   if [ "$ENABLE_USERFLOW_SLO_PROBES" -ne 1 ]; then
     log "Skipping user-flow SLO probes (ENABLE_USERFLOW_SLO_PROBES=0)."
-    kubectl -n "$NAMESPACE" delete cronjob bretter-slo-vm-launch bretter-slo-rdp-readiness bretter-slo-upload-finalize --ignore-not-found=true >/dev/null 2>&1 || true
+    kubectl -n "$NAMESPACE" delete cronjob \
+      bretter-slo-vm-launch \
+      bretter-slo-rdp-readiness \
+      bretter-slo-upload-finalize \
+      bretter-slo-image-import-queue-age \
+      bretter-slo-rdp-connect-latency \
+      --ignore-not-found=true >/dev/null 2>&1 || true
     return
   fi
 
   log "Applying user-flow SLO probe CronJobs (schedule: $USERFLOW_SLO_PROBE_SCHEDULE)"
-  local probe_command
   probe_command="set -euo pipefail; python3 /app/backend/src/tools/userflow_slo_probe.py"
   kubectl -n "$NAMESPACE" apply -f - <<EOF
 apiVersion: batch/v1
@@ -3879,6 +4172,118 @@ spec:
                   value: "${USERFLOW_SLO_RDP_STUCK_MAX}"
                 - name: UPLOAD_FINALIZE_FAILURE_RATE_PCT
                   value: "${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}"
+              command:
+                - /bin/bash
+                - -lc
+                - "${probe_command}"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-slo-image-import-queue-age
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1200
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: slo-image-import-queue-age
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: BLABS_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: BLABS_DATABASE_URL
+                - name: SLO_CHECK_TYPE
+                  value: image_import_queue_age
+                - name: IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES
+                  value: "${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES}"
+              command:
+                - /bin/bash
+                - -lc
+                - "${probe_command}"
+EOF
+
+  if [ "$ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE" -ne 1 ]; then
+    kubectl -n "$NAMESPACE" delete cronjob bretter-slo-rdp-connect-latency --ignore-not-found=true >/dev/null 2>&1 || true
+    return
+  fi
+
+  slo_api_base="$USERFLOW_SLO_API_BASE"
+  slo_api_verify_tls="$USERFLOW_SLO_API_VERIFY_TLS"
+  if [ -z "$slo_api_base" ]; then
+    slo_api_base="http://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+    if [ "$TLS_ENABLED" -eq 1 ]; then
+      slo_api_base="https://bretter-backend.${NAMESPACE}.svc.cluster.local:8000"
+      if [ -z "$slo_api_verify_tls" ]; then
+        slo_api_verify_tls="0"
+      fi
+    fi
+  fi
+  if [ -z "$slo_api_verify_tls" ]; then
+    slo_api_verify_tls="1"
+  fi
+
+  kubectl -n "$NAMESPACE" create secret generic bretter-userflow-slo-api-auth \
+    --from-literal=username="$USERFLOW_SLO_API_USERNAME" \
+    --from-literal=password="$USERFLOW_SLO_API_PASSWORD" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-slo-rdp-connect-latency
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 1200
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: slo-rdp-connect-latency
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: SLO_CHECK_TYPE
+                  value: rdp_connect_latency
+                - name: RDP_CONNECT_LATENCY_SECONDS
+                  value: "${USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS}"
+                - name: RDP_CONNECT_REQUIRE_INSTANCE
+                  value: "${USERFLOW_SLO_RDP_CONNECT_REQUIRE_INSTANCE}"
+                - name: SLO_API_BASE
+                  value: "${slo_api_base}"
+                - name: SLO_API_VERIFY_TLS
+                  value: "${slo_api_verify_tls}"
+                - name: SLO_API_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-userflow-slo-api-auth
+                      key: username
+                - name: SLO_API_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-userflow-slo-api-auth
+                      key: password
               command:
                 - /bin/bash
                 - -lc
@@ -4127,6 +4532,7 @@ apply_manifests() {
   ensure_pull_secret
   apply_vault_cluster_secret_store
   apply_external_secrets_bindings
+  apply_postgres_backup_automation
   apply_cleanup_automation
   apply_kubelet_serving_csr_autoapproval
 
@@ -4705,6 +5111,7 @@ log_runtime_configuration() {
   log "Using Helm release: $HELM_RELEASE_NAME (chart: $HELM_CHART_DIR)"
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
+  log "Postgres backup automation: $ENABLE_POSTGRES_BACKUP_AUTOMATION (schedule: ${POSTGRES_BACKUP_SCHEDULE} retention: ${POSTGRES_BACKUP_RETENTION_DAYS}d pvc: ${POSTGRES_BACKUP_PVC_NAME} size: ${POSTGRES_BACKUP_PVC_SIZE} storageClass: ${POSTGRES_BACKUP_STORAGE_CLASS:-default})"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "External Secrets enabled: $USE_EXTERNAL_SECRETS (store: $EXTERNAL_SECRETS_STORE_NAME)"
   if [ "$USE_EXTERNAL_SECRETS" -eq 1 ]; then
@@ -4744,7 +5151,7 @@ log_runtime_configuration() {
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION})"
   log "GHCR access health check enabled: $ENABLE_GHCR_ACCESS_HEALTHCHECK (schedule: ${GHCR_ACCESS_HEALTHCHECK_SCHEDULE} timeout: ${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}s secret: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET})"
-  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-fail>${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m)"
+  log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-fail>${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% queue-age-fail>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}% queue-age>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES}m rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m rdp-connect-probe=${ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE} rdp-connect-threshold=${USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS}s rdp-connect-fail>${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}%)"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
   log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"

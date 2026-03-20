@@ -11,7 +11,7 @@ SEMVER_RE = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+TAGGED_DIGEST_PIN_RE = re.compile(r"^[^@\s]+:v?[0-9]+(\.[0-9]+){2}([-.+][0-9A-Za-z.-]+)?@sha256:[0-9a-f]{64}$")
 ACTION_SHA_RE = re.compile(r"@[0-9a-f]{40}$")
 
 
@@ -144,9 +144,10 @@ def main() -> int:
         if not image_ref:
             errors.append(f"deploy/helm/values-production.yaml missing {key}.")
             continue
-        if not DIGEST_PIN_RE.match(image_ref):
+        if not TAGGED_DIGEST_PIN_RE.match(image_ref):
             errors.append(
-                "deploy/helm/values-production.yaml must pin production images by digest: " f"{key}={image_ref!r}"
+                "deploy/helm/values-production.yaml must pin production images with release tag + digest "
+                f"(<repo>:vX.Y.Z@sha256:...): {key}={image_ref!r}"
             )
         if _looks_local_image_ref(image_ref):
             errors.append(
@@ -276,11 +277,26 @@ def main() -> int:
             )
         if "--backend-admin-image" not in publish_workflow:
             errors.append(".github/workflows/publish-and-pin-images.yml must update BACKEND_ADMIN_IMAGE digest pins.")
-        if '--backend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-runtime@' not in (
-            publish_workflow
+        if (
+            '--backend-image "${{ needs.publish.outputs.backend_runtime_ref }}"' not in publish_workflow
+            and '--backend-image "${{ steps.refs.outputs.backend_runtime_ref }}"' not in publish_workflow
+            and '--backend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-runtime@'
+            not in (publish_workflow)
         ):
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must pin BACKEND_IMAGE from backend_runtime digest output."
+            )
+        if "aquasecurity/trivy-action" not in publish_workflow:
+            errors.append(".github/workflows/publish-and-pin-images.yml must scan published images with Trivy.")
+        if "cosign sign --yes" not in publish_workflow or "cosign verify" not in publish_workflow:
+            errors.append(".github/workflows/publish-and-pin-images.yml must sign and verify published images.")
+        if (
+            "scan:" not in publish_workflow
+            or "sign_verify:" not in publish_workflow
+            or "promote:" not in publish_workflow
+        ):
+            errors.append(
+                ".github/workflows/publish-and-pin-images.yml must gate promotion through scan/sign/promote jobs."
             )
         if "sbom: true" not in publish_workflow:
             errors.append(".github/workflows/publish-and-pin-images.yml must enable SBOM generation for image builds.")

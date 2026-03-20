@@ -139,12 +139,14 @@ kubectl -n labs get pods -o wide | rg 'vm-|virt-launcher|ct-'
 GitHub workflow:
 
 - `.github/workflows/deploy-userflow-smoke.yml`
+- `.github/workflows/post-deploy-synthetic.yml`
 
 Coverage:
 
 - API login/RBAC/OIDC smoke regressions
 - Kind-based LabInstance controller smoke
 - Kind-based LabImageImport controller smoke
+- Post-deploy API synthetic flow (login, VM launch, Guacamole RDP readiness/frame, teardown)
 
 Manual trigger in GitHub Actions:
 
@@ -183,6 +185,10 @@ Standalone restore drill:
 NAMESPACE=labs ./scripts/restore_drill_postgres.sh
 ```
 
+Nightly restore evidence workflow:
+
+- `.github/workflows/nightly-restore-drill.yml` (requires `KUBECONFIG_B64` repo secret)
+
 ## Rollback command
 
 Use the one-command rollback helper:
@@ -210,11 +216,13 @@ By default this script:
 - `bretter-slo-vm-launch`: fails when VM launch failure rate breaches configured threshold.
 - `bretter-slo-rdp-readiness`: fails when too many RDP instances remain stuck in starting states.
 - `bretter-slo-upload-finalize`: fails when upload-finalize failure rate breaches configured threshold.
+- `bretter-slo-image-import-queue-age`: fails when oldest in-progress image import exceeds configured max age.
+- `bretter-slo-rdp-connect-latency` (optional): authenticated RDP connect-token/page latency probe.
 
 Quick status:
 
 ```bash
-kubectl -n labs get cronjob bretter-ghcr-access-check bretter-slo-vm-launch bretter-slo-rdp-readiness bretter-slo-upload-finalize
+kubectl -n labs get cronjob bretter-ghcr-access-check bretter-slo-vm-launch bretter-slo-rdp-readiness bretter-slo-upload-finalize bretter-slo-image-import-queue-age bretter-slo-rdp-connect-latency
 kubectl -n labs get jobs --sort-by=.metadata.creationTimestamp | rg 'bretter-ghcr-access-check|bretter-slo-'
 ```
 

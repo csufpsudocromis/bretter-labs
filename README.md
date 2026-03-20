@@ -216,6 +216,8 @@ Proof artifact and operator docs:
 - LabImageImport controller smoke: [scripts/smoke_labimageimport_controller.sh](scripts/smoke_labimageimport_controller.sh)
 - Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
 - Userflow smoke workflow: [.github/workflows/deploy-userflow-smoke.yml](.github/workflows/deploy-userflow-smoke.yml)
+- Post-deploy synthetic workflow: [.github/workflows/post-deploy-synthetic.yml](.github/workflows/post-deploy-synthetic.yml)
+- Nightly restore drill workflow: [.github/workflows/nightly-restore-drill.yml](.github/workflows/nightly-restore-drill.yml)
 - Default report dir: [artifacts/go-live/](artifacts/go-live/)
 - Production values reference: [docs/wiki/Production-Helm-Values-Reference.md](docs/wiki/Production-Helm-Values-Reference.md)
 - Secret operations: [docs/wiki/Secret-Operations-Runbook.md](docs/wiki/Secret-Operations-Runbook.md)
@@ -290,6 +292,11 @@ Proof artifact and operator docs:
 | `RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK` | `1` | Run runner image startup smoke check during postdeploy |
 | `POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS` | `120` | Timeout budget for runner smoke pod readiness |
 | `POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY` | `IfNotPresent` | Pull policy used by runner smoke pod (`Always`/`IfNotPresent`/`Never`) |
+| `ENABLE_POSTGRES_BACKUP_AUTOMATION` | `1` | Create/maintain a PostgreSQL backup CronJob and backup PVC |
+| `POSTGRES_BACKUP_SCHEDULE` | `17 3 * * *` | Cron schedule for logical PostgreSQL backups |
+| `POSTGRES_BACKUP_RETENTION_DAYS` | `7` | Retention window (days) for backup dump files |
+| `POSTGRES_BACKUP_PVC_NAME` | `bretter-postgres-backups` | PVC name used by backup automation |
+| `POSTGRES_BACKUP_PVC_SIZE` | `20Gi` | Backup PVC requested size |
 | `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK` | `1` | Run authenticated admin API smoke suite during postdeploy |
 | `POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS` | `180` | Timeout budget for admin API smoke job |
 | `ADMIN_API_SMOKE_USERNAME` | `admin` | Admin username used by postdeploy admin smoke validation |
@@ -305,6 +312,15 @@ Proof artifact and operator docs:
 | `USERFLOW_SLO_RDP_STUCK_MINUTES` | `12` | Age threshold before RDP-starting instances are considered stuck |
 | `USERFLOW_SLO_RDP_STUCK_MAX` | `2` | Max allowed stuck RDP instances before SLO breach |
 | `USERFLOW_SLO_RDP_FAILURE_RATE_PCT` | `25` | RDP readiness probe failure-rate threshold used by burn-rate alerts |
+| `USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES` | `30` | Max age for oldest in-progress image import before queue-age probe fails |
+| `USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT` | `20` | Queue-age probe failure-rate threshold used by burn-rate alerts |
+| `ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE` | `0` | Enable authenticated RDP connect-latency probe CronJob |
+| `USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS` | `20` | RDP connect-latency SLO threshold in seconds |
+| `USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT` | `25` | RDP connect-latency probe failure-rate threshold used by burn-rate alerts |
+| `USERFLOW_SLO_API_BASE` | empty | Optional API base override for authenticated SLO probes (default internal backend service URL) |
+| `USERFLOW_SLO_API_VERIFY_TLS` | auto | Optional TLS verify override for authenticated SLO probes (`0`/`1`) |
+| `USERFLOW_SLO_API_USERNAME` | `admin` | Username used by authenticated RDP connect-latency probe |
+| `USERFLOW_SLO_API_PASSWORD` | empty | Password used by authenticated RDP connect-latency probe |
 | `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
 | `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
 | `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |
@@ -443,8 +459,9 @@ Publish images + auto-pin production digests:
 Release workflow hardening:
 
 - GitHub Actions are pinned to immutable commit SHAs.
+- Publish workflow gates promotion through `publish -> trivy scan -> cosign sign/verify -> digest promote`.
 - Published images include SBOM + provenance attestations.
-- Production digest auto-pin updates `BACKEND_IMAGE` from the runtime image digest and `BACKEND_ADMIN_IMAGE` from the admin image digest.
+- Production digest auto-pin writes release-tagged digest refs (`<repo>:vX.Y.Z@sha256:...`) for runtime/admin/frontend/runner images.
 
 For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
 

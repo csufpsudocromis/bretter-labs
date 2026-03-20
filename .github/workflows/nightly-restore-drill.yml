@@ -1,0 +1,47 @@
+name: Nightly Restore Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: "Kubernetes namespace to run restore drill in"
+        required: false
+        default: "labs"
+  schedule:
+    - cron: "42 9 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    env:
+      NAMESPACE: ${{ github.event.inputs.namespace || 'labs' }}
+      KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup kubeconfig
+        run: |
+          set -euo pipefail
+          [ -n "${KUBECONFIG_B64}" ] || { echo "KUBECONFIG_B64 secret is required." >&2; exit 1; }
+          mkdir -p "${HOME}/.kube"
+          printf '%s' "${KUBECONFIG_B64}" | base64 -d >"${HOME}/.kube/config"
+          chmod 600 "${HOME}/.kube/config"
+          kubectl version --client
+          kubectl -n "${NAMESPACE}" get deploy bretter-postgres >/dev/null
+
+      - name: Run postgres restore drill
+        run: |
+          set -euo pipefail
+          NAMESPACE="${NAMESPACE}" ./scripts/restore_drill_postgres.sh
+
+      - name: Upload restore-drill report
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: nightly-restore-drill-report
+          path: artifacts/restore-drill/
+          if-no-files-found: warn

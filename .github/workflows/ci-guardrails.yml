@@ -86,7 +86,7 @@ jobs:
           .venv/bin/python -c "import httpx; from fastapi.testclient import TestClient"
 
       - name: Check Python formatting
-        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py scripts/check_openapi_drift.py scripts/export_openapi_schema.py
+        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py scripts/check_openapi_drift.py scripts/export_openapi_schema.py scripts/post_deploy_synthetic_check.py
 
       - name: Run pip-audit
         run: |

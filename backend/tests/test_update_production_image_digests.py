@@ -15,10 +15,10 @@ def test_update_production_image_digests_rewrites_target_keys(tmp_path: Path) ->
         "\n".join(
             [
                 "appTemplateValues:",
-                "  BACKEND_IMAGE: ghcr.io/example/backend@sha256:" + ("1" * 64),
-                "  BACKEND_ADMIN_IMAGE: ghcr.io/example/backend-admin@sha256:" + ("4" * 64),
-                "  FRONTEND_IMAGE: ghcr.io/example/frontend@sha256:" + ("2" * 64),
-                "  RUNNER_IMAGE: ghcr.io/example/runner@sha256:" + ("3" * 64),
+                "  BACKEND_IMAGE: ghcr.io/example/backend:v1.2.3@sha256:" + ("1" * 64),
+                "  BACKEND_ADMIN_IMAGE: ghcr.io/example/backend-admin:v1.2.3@sha256:" + ("4" * 64),
+                "  FRONTEND_IMAGE: ghcr.io/example/frontend:v1.2.3@sha256:" + ("2" * 64),
+                "  RUNNER_IMAGE: ghcr.io/example/runner:v1.2.3@sha256:" + ("3" * 64),
             ]
         )
         + "\n",
@@ -31,22 +31,22 @@ def test_update_production_image_digests_rewrites_target_keys(tmp_path: Path) ->
         "--values-file",
         str(values),
         "--backend-image",
-        "ghcr.io/new/backend@sha256:" + ("a" * 64),
+        "ghcr.io/new/backend:v9.9.9@sha256:" + ("a" * 64),
         "--backend-admin-image",
-        "ghcr.io/new/backend-admin@sha256:" + ("d" * 64),
+        "ghcr.io/new/backend-admin:v9.9.9@sha256:" + ("d" * 64),
         "--frontend-image",
-        "ghcr.io/new/frontend@sha256:" + ("b" * 64),
+        "ghcr.io/new/frontend:v9.9.9@sha256:" + ("b" * 64),
         "--runner-image",
-        "ghcr.io/new/runner@sha256:" + ("c" * 64),
+        "ghcr.io/new/runner:v9.9.9@sha256:" + ("c" * 64),
     ]
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr or result.stdout
 
     updated = values.read_text(encoding="utf-8")
-    assert "BACKEND_IMAGE: ghcr.io/new/backend@sha256:" + ("a" * 64) in updated
-    assert "BACKEND_ADMIN_IMAGE: ghcr.io/new/backend-admin@sha256:" + ("d" * 64) in updated
-    assert "FRONTEND_IMAGE: ghcr.io/new/frontend@sha256:" + ("b" * 64) in updated
-    assert "RUNNER_IMAGE: ghcr.io/new/runner@sha256:" + ("c" * 64) in updated
+    assert "BACKEND_IMAGE: ghcr.io/new/backend:v9.9.9@sha256:" + ("a" * 64) in updated
+    assert "BACKEND_ADMIN_IMAGE: ghcr.io/new/backend-admin:v9.9.9@sha256:" + ("d" * 64) in updated
+    assert "FRONTEND_IMAGE: ghcr.io/new/frontend:v9.9.9@sha256:" + ("b" * 64) in updated
+    assert "RUNNER_IMAGE: ghcr.io/new/runner:v9.9.9@sha256:" + ("c" * 64) in updated
 
 
 def test_update_production_image_digests_rejects_non_digest_refs(tmp_path: Path) -> None:
@@ -55,10 +55,10 @@ def test_update_production_image_digests_rejects_non_digest_refs(tmp_path: Path)
         "\n".join(
             [
                 "appTemplateValues:",
-                "  BACKEND_IMAGE: ghcr.io/example/backend@sha256:" + ("1" * 64),
-                "  BACKEND_ADMIN_IMAGE: ghcr.io/example/backend-admin@sha256:" + ("4" * 64),
-                "  FRONTEND_IMAGE: ghcr.io/example/frontend@sha256:" + ("2" * 64),
-                "  RUNNER_IMAGE: ghcr.io/example/runner@sha256:" + ("3" * 64),
+                "  BACKEND_IMAGE: ghcr.io/example/backend:v1.2.3@sha256:" + ("1" * 64),
+                "  BACKEND_ADMIN_IMAGE: ghcr.io/example/backend-admin:v1.2.3@sha256:" + ("4" * 64),
+                "  FRONTEND_IMAGE: ghcr.io/example/frontend:v1.2.3@sha256:" + ("2" * 64),
+                "  RUNNER_IMAGE: ghcr.io/example/runner:v1.2.3@sha256:" + ("3" * 64),
             ]
         )
         + "\n",
@@ -72,11 +72,11 @@ def test_update_production_image_digests_rejects_non_digest_refs(tmp_path: Path)
         "--backend-image",
         "ghcr.io/new/backend:latest",
         "--backend-admin-image",
-        "ghcr.io/new/backend-admin@sha256:" + ("d" * 64),
+        "ghcr.io/new/backend-admin:v9.9.9@sha256:" + ("d" * 64),
         "--frontend-image",
-        "ghcr.io/new/frontend@sha256:" + ("b" * 64),
+        "ghcr.io/new/frontend:v9.9.9@sha256:" + ("b" * 64),
         "--runner-image",
-        "ghcr.io/new/runner@sha256:" + ("c" * 64),
+        "ghcr.io/new/runner:v9.9.9@sha256:" + ("c" * 64),
     ]
     result = subprocess.run(cmd, check=False, capture_output=True, text=True)
     assert result.returncode != 0

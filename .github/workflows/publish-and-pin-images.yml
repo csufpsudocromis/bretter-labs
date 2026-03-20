@@ -15,10 +15,10 @@ on:
         default: "true"
 
 permissions:
-  contents: write
+  contents: read
   packages: write
-  attestations: write
   id-token: write
+  attestations: write
 
 jobs:
   publish:
@@ -26,6 +26,13 @@ jobs:
     env:
       GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
       GHCR_PAT: ${{ secrets.GHCR_PAT }}
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      image_namespace: ${{ steps.meta.outputs.image_namespace }}
+      backend_admin_ref: ${{ steps.refs.outputs.backend_admin_ref }}
+      backend_runtime_ref: ${{ steps.refs.outputs.backend_runtime_ref }}
+      frontend_ref: ${{ steps.refs.outputs.frontend_ref }}
+      runner_ref: ${{ steps.refs.outputs.runner_ref }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -143,27 +150,137 @@ jobs:
           provenance: mode=max
           sbom: true
 
-      - name: Show published refs
+      - name: Build fully-qualified release-tag+digest refs
+        id: refs
         shell: bash
         run: |
           set -euo pipefail
-          echo "backend=ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend@${{ steps.backend.outputs.digest }}"
-          echo "backend_admin=ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-admin@${{ steps.backend.outputs.digest }}"
-          echo "backend_runtime=ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-runtime@${{ steps.backend_runtime.outputs.digest }}"
-          echo "frontend=ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-frontend@${{ steps.frontend.outputs.digest }}"
-          echo "runner=ghcr.io/${{ steps.meta.outputs.image_namespace }}/win-vm-runner@${{ steps.runner.outputs.digest }}"
+          version="${{ steps.meta.outputs.version }}"
+          ns="${{ steps.meta.outputs.image_namespace }}"
+          backend_admin_ref="ghcr.io/${ns}/bretter-backend:v${version}@${{ steps.backend.outputs.digest }}"
+          backend_runtime_ref="ghcr.io/${ns}/bretter-backend-runtime:v${version}@${{ steps.backend_runtime.outputs.digest }}"
+          frontend_ref="ghcr.io/${ns}/bretter-frontend:v${version}@${{ steps.frontend.outputs.digest }}"
+          runner_ref="ghcr.io/${ns}/win-vm-runner:v${version}@${{ steps.runner.outputs.digest }}"
+          echo "backend_admin_ref=${backend_admin_ref}" >>"${GITHUB_OUTPUT}"
+          echo "backend_runtime_ref=${backend_runtime_ref}" >>"${GITHUB_OUTPUT}"
+          echo "frontend_ref=${frontend_ref}" >>"${GITHUB_OUTPUT}"
+          echo "runner_ref=${runner_ref}" >>"${GITHUB_OUTPUT}"
+          cat <<REFS
+          ${backend_admin_ref}
+          ${backend_runtime_ref}
+          ${frontend_ref}
+          ${runner_ref}
+          REFS
+
+  scan:
+    runs-on: ubuntu-latest
+    needs: publish
+    steps:
+      - name: Scan backend admin image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ needs.publish.outputs.backend_admin_ref }}
+          scanners: vuln
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Scan backend runtime image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ needs.publish.outputs.backend_runtime_ref }}
+          scanners: vuln
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ needs.publish.outputs.frontend_ref }}
+          scanners: vuln
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+      - name: Scan runner image
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
+        with:
+          image-ref: ${{ needs.publish.outputs.runner_ref }}
+          scanners: vuln
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  sign_verify:
+    runs-on: ubuntu-latest
+    needs:
+      - publish
+      - scan
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    steps:
+      - name: Install cosign
+        uses: sigstore/cosign-installer@1aa8e0f2454b781fbf0fbf306a4c9533a0c57409 # v3.7.0
+
+      - name: Sign published images (keyless)
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=(
+            "${{ needs.publish.outputs.backend_admin_ref }}"
+            "${{ needs.publish.outputs.backend_runtime_ref }}"
+            "${{ needs.publish.outputs.frontend_ref }}"
+            "${{ needs.publish.outputs.runner_ref }}"
+          )
+          for ref in "${refs[@]}"; do
+            cosign sign --yes "${ref}"
+          done
+
+      - name: Verify image signatures
+        shell: bash
+        run: |
+          set -euo pipefail
+          refs=(
+            "${{ needs.publish.outputs.backend_admin_ref }}"
+            "${{ needs.publish.outputs.backend_runtime_ref }}"
+            "${{ needs.publish.outputs.frontend_ref }}"
+            "${{ needs.publish.outputs.runner_ref }}"
+          )
+          for ref in "${refs[@]}"; do
+            cosign verify \
+              --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+              --certificate-identity-regexp '^https://github.com/.+/.+/.github/workflows/.+@refs/heads/.+$' \
+              "${ref}" >/dev/null
+          done
+
+  promote:
+    runs-on: ubuntu-latest
+    needs:
+      - publish
+      - scan
+      - sign_verify
+    if: ${{ github.event.inputs.commit_digest_update != 'false' }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: Update production digest pins
-        if: ${{ github.event.inputs.commit_digest_update != 'false' }}
         shell: bash
         run: |
           set -euo pipefail
           python3 scripts/update_production_image_digests.py \
             --values-file deploy/helm/values-production.yaml \
-            --backend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-runtime@${{ steps.backend_runtime.outputs.digest }}" \
-            --backend-admin-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-admin@${{ steps.backend.outputs.digest }}" \
-            --frontend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-frontend@${{ steps.frontend.outputs.digest }}" \
-            --runner-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/win-vm-runner@${{ steps.runner.outputs.digest }}"
+            --backend-image "${{ needs.publish.outputs.backend_runtime_ref }}" \
+            --backend-admin-image "${{ needs.publish.outputs.backend_admin_ref }}" \
+            --frontend-image "${{ needs.publish.outputs.frontend_ref }}" \
+            --runner-image "${{ needs.publish.outputs.runner_ref }}"
 
           if git diff --quiet -- deploy/helm/values-production.yaml; then
             echo "No digest pin changes detected."
@@ -173,5 +290,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add deploy/helm/values-production.yaml
-          git commit -m "chore(release): pin production image digests for v${{ steps.meta.outputs.version }}"
+          git commit -m "chore(release): pin production image digests for v${{ needs.publish.outputs.version }}"
           git push

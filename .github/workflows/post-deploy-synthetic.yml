@@ -1,0 +1,73 @@
+name: Post-Deploy Synthetic Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_base:
+        description: "Base API URL (for example https://labs.example.com/api). Leave empty to use secret."
+        required: false
+      verify_tls:
+        description: "Verify TLS certificates (true/false)"
+        required: false
+        default: "true"
+      require_templates:
+        description: "Fail when VM/container templates are missing (true/false)"
+        required: false
+        default: "true"
+      require_rdp_template:
+        description: "Fail when no guacamole_rdp template is available (true/false)"
+        required: false
+        default: "true"
+      timeout_seconds:
+        description: "Total timeout budget in seconds"
+        required: false
+        default: "900"
+  schedule:
+    - cron: "19 10 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic:
+    runs-on: ubuntu-latest
+    env:
+      SYNTHETIC_API_BASE: ${{ github.event.inputs.api_base || secrets.SYNTHETIC_API_BASE }}
+      SYNTHETIC_USERNAME: ${{ secrets.SYNTHETIC_USERNAME }}
+      SYNTHETIC_PASSWORD: ${{ secrets.SYNTHETIC_PASSWORD }}
+      SYNTHETIC_VERIFY_TLS: ${{ github.event.inputs.verify_tls || 'true' }}
+      SYNTHETIC_REQUIRE_TEMPLATES: ${{ github.event.inputs.require_templates || 'true' }}
+      SYNTHETIC_REQUIRE_RDP_TEMPLATE: ${{ github.event.inputs.require_rdp_template || 'true' }}
+      SYNTHETIC_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '900' }}
+      SYNTHETIC_POLL_SECONDS: "3"
+      SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS: "180"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install requests
+        run: python -m pip install --upgrade pip requests
+
+      - name: Validate required secrets
+        run: |
+          set -euo pipefail
+          [ -n "${SYNTHETIC_API_BASE}" ] || { echo "SYNTHETIC_API_BASE is required (input or secret)." >&2; exit 1; }
+          [ -n "${SYNTHETIC_USERNAME}" ] || { echo "SYNTHETIC_USERNAME secret is required." >&2; exit 1; }
+          [ -n "${SYNTHETIC_PASSWORD}" ] || { echo "SYNTHETIC_PASSWORD secret is required." >&2; exit 1; }
+
+      - name: Run post-deploy synthetic check
+        run: |
+          set -euo pipefail
+          python scripts/post_deploy_synthetic_check.py | tee post-deploy-synthetic-report.txt
+
+      - name: Upload synthetic report
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: post-deploy-synthetic-report
+          path: post-deploy-synthetic-report.txt

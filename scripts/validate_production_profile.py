@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-DIGEST_PIN_RE = re.compile(r"^[^@\s]+@sha256:[0-9a-f]{64}$")
+TAGGED_DIGEST_PIN_RE = re.compile(r"^[^@\s]+:v?[0-9]+(\.[0-9]+){2}([-.+][0-9A-Za-z.-]+)?@sha256:[0-9a-f]{64}$")
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off", ""}
 
@@ -66,7 +66,7 @@ def _looks_placeholder(value: str) -> bool:
 
 
 def _is_digest_pinned(image_ref: str) -> bool:
-    return bool(DIGEST_PIN_RE.match(image_ref))
+    return bool(TAGGED_DIGEST_PIN_RE.match(image_ref))
 
 
 def _looks_local_image_ref(image_ref: str) -> bool:
@@ -129,7 +129,9 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             errors.append(f"{key} is required.")
             continue
         if not _is_digest_pinned(image_ref):
-            errors.append(f"{key} must be digest-pinned with @sha256 (found: {image_ref!r}).")
+            errors.append(
+                f"{key} must be release-tagged and digest-pinned (<repo>:vX.Y.Z@sha256:...) " f"(found: {image_ref!r})."
+            )
         if _looks_local_image_ref(image_ref):
             errors.append(f"{key} must not use local/dev image references in production (found: {image_ref!r}).")
 
