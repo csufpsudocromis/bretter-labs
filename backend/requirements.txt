@@ -1,4 +1,4 @@
-fastapi==0.121.3
+fastapi==0.135.1
 uvicorn[standard]==0.38.0
 sqlmodel==0.0.27
 SQLAlchemy==2.0.44
