@@ -3,7 +3,7 @@ uvicorn[standard]==0.38.0
 sqlmodel==0.0.27
 SQLAlchemy==2.0.44
 pydantic==2.12.4
-pydantic-settings==2.12.0
+pydantic-settings==2.13.1
 python-dotenv==1.2.1
 python-multipart==0.0.22
 passlib[bcrypt]==1.7.4
