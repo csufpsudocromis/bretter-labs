@@ -483,6 +483,7 @@ Release guardrail check:
 ```bash
 python3 scripts/check_release_discipline.py
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+./scripts/audit_tenant_isolation.sh
 # when using a site overlay:
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml -f deploy/helm/values-prod-site.yaml
 ./scripts/ci_guardrails.sh
@@ -491,6 +492,12 @@ python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-pr
 Publish images + auto-pin production digests:
 
 ```bash
+# Automatic on merge to main:
+# - .github/workflows/publish-and-pin-images.yml
+# - uses VERSION + short commit SHA (for example 0.3.1-a1b2c3d4e5f6)
+# - builds/pushes/signs/scans images
+# - commits digest pins back into deploy/helm/values-production.yaml
+#
 # GitHub Actions workflow dispatch:
 # .github/workflows/publish-and-pin-images.yml
 # Inputs:
@@ -535,6 +542,7 @@ Deploy-time proof:
 - `SETUP_PHASES=deploy,postdeploy PRODUCTION_PROFILE=1 ./scripts/setup.sh` runs the same proof automatically unless `RUN_PRODUCTION_GO_LIVE_PROOF=0`.
 - `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1` additionally verifies authenticated `/admin/*` read-path health.
 - `RUN_RESTORE_DRILL=1` optionally includes a PostgreSQL logical restore drill in go-live proof output.
+- CI includes an explicit PostgreSQL Alembic migration gate via `scripts/check_alembic_postgres.sh`.
 
 API contract guardrails:
 

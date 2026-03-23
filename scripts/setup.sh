@@ -2368,6 +2368,34 @@ spec:
             severity: critical
           annotations:
             summary: GHCR access health checks are failing.
+        - alert: BretterBackendUnavailable
+          expr: |
+            (
+              max(kube_deployment_spec_replicas{namespace="${NAMESPACE}",deployment="bretter-backend"}) > 0
+            )
+            and
+            (
+              max(kube_deployment_status_replicas_available{namespace="${NAMESPACE}",deployment="bretter-backend"}) < 1
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Backend deployment has no available replicas.
+        - alert: BretterFrontendUnavailable
+          expr: |
+            (
+              max(kube_deployment_spec_replicas{namespace="${NAMESPACE}",deployment="bretter-frontend"}) > 0
+            )
+            and
+            (
+              max(kube_deployment_status_replicas_available{namespace="${NAMESPACE}",deployment="bretter-frontend"}) < 1
+            )
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Frontend deployment has no available replicas.
         - alert: BretterLabInstanceControllerUnavailable
           expr: |
             (

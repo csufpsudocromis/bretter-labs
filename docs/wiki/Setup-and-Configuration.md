@@ -258,6 +258,12 @@ ENABLE_MONITORING=1 \
 - User-flow SLO alerting now evaluates burn-rate (failure ratio) for VM launch, RDP readiness, and upload finalize probes.
 - `IMAGE_IMPORT_BACKEND=dual|crd` requires the dedicated LabImageImport controller (`scripts/smoke_labimageimport_controller.sh` validates startup/metrics behavior).
 - Admission policy apply now includes Kyverno `verifyImages` signature checks when `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` (Audit in non-production, Enforce in production).
+- For non-production unsigned/local-image testing, use a scoped Kyverno exception instead of relaxing global policy:
+  `NAMESPACE=labs MODE=apply ./scripts/apply_dev_signature_exception.sh`
+  and label only intended pods with `security.bretter-labs.io/allow-unsigned-dev=true`.
+- Remove that exception after testing:
+  `NAMESPACE=labs MODE=delete ./scripts/apply_dev_signature_exception.sh`
+- CI includes an explicit PostgreSQL Alembic gate (`scripts/check_alembic_postgres.sh`) to catch dialect-specific migration failures before deploy.
 - API contract drift is guarded by checked-in OpenAPI snapshot + generated frontend types (`scripts/check_openapi_drift.py` + `npm --prefix frontend-vite run generate:api-types`).
 - Use `scripts/bootstrap_team_namespace.sh` to scaffold per-team namespaces with quota and default network policies.
 - Use `scripts/restore_drill_postgres.sh` to validate PostgreSQL logical restore, optionally from `scripts/production_go_live_proof.sh` via `RUN_RESTORE_DRILL=1`.

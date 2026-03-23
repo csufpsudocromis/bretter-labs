@@ -103,8 +103,12 @@ Reference pages:
 - Secret-backed postdeploy auth checks and RDP connect-latency probe credentials
 - Optional encrypted off-cluster backup replication CronJob (`bretter-postgres-backup-replication`)
 - Release-branch smoke gates for post-deploy synthetic, restore drill, and Playwright Guacamole RDP browser checks
+- Main-branch userflow smoke gate (`deploy-userflow-smoke.yml`) on push/PR to `main`
+- Merge-time image promotion and digest auto-pin workflow on `main` (`publish-and-pin-images.yml`)
 - Dedicated LabImageImport controller with leader-election and metrics endpoints
 - OpenAPI snapshot + frontend API type drift checks in CI guardrails
+- Explicit PostgreSQL Alembic migration gate in CI (`scripts/check_alembic_postgres.sh`)
+- Tenant isolation audit gate for values/RBAC/network policy posture (`scripts/audit_tenant_isolation.sh`)
 - Tenant namespace bootstrap script for per-team quota/policy scaffolding
 - Multi-cluster runtime dispatch with placement policy explain/telemetry and replication queue processing
 

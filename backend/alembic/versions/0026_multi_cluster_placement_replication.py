@@ -71,10 +71,10 @@ def _ensure_cluster_table() -> None:
         sa.Column("region", sa.String(length=64), nullable=False, server_default=sa.text("'local'")),
         sa.Column("compliance_tags_csv", sa.Text(), nullable=False, server_default=sa.text("''")),
         sa.Column("capacity_weight", sa.Integer(), nullable=False, server_default=sa.text("100")),
-        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
-        sa.Column("schedule_enabled", sa.Boolean(), nullable=False, server_default=sa.text("1")),
-        sa.Column("runtime_enabled", sa.Boolean(), nullable=False, server_default=sa.text("0")),
-        sa.Column("is_local", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("schedule_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+        sa.Column("runtime_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+        sa.Column("is_local", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("kubeconfig", sa.Text(), nullable=False, server_default=sa.text("''")),
         sa.Column("notes", sa.Text(), nullable=False, server_default=sa.text("''")),
         sa.Column("health_status", sa.String(length=32), nullable=False, server_default=sa.text("'unknown'")),
@@ -100,7 +100,7 @@ def _ensure_team_placement_policy_table() -> None:
         sa.Column("id", sa.String(length=64), nullable=False),
         sa.Column("team", sa.String(length=64), nullable=False),
         sa.Column("preferred_cluster_id", sa.String(length=64), nullable=True),
-        sa.Column("hard_pin_cluster", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        sa.Column("hard_pin_cluster", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("required_regions_csv", sa.Text(), nullable=False, server_default=sa.text("''")),
         sa.Column("required_compliance_tags_csv", sa.Text(), nullable=False, server_default=sa.text("''")),
         sa.Column("allowed_cluster_ids_csv", sa.Text(), nullable=False, server_default=sa.text("''")),
@@ -173,7 +173,7 @@ def _ensure_local_cluster_row() -> None:
               health_status, health_message, created_at, updated_at
             ) VALUES (
               'local', 'Local Cluster', 'local', '', 100,
-              1, 1, 1, 1, '', 'Auto-managed local runtime cluster.',
+              true, true, true, true, '', 'Auto-managed local runtime cluster.',
               'unknown', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
             )
             """

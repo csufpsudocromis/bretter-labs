@@ -91,6 +91,7 @@ def main() -> int:
     publish_workflow_path = root / ".github" / "workflows" / "publish-and-pin-images.yml"
     post_deploy_synthetic_workflow_path = root / ".github" / "workflows" / "post-deploy-synthetic.yml"
     nightly_restore_workflow_path = root / ".github" / "workflows" / "nightly-restore-drill.yml"
+    deploy_userflow_workflow_path = root / ".github" / "workflows" / "deploy-userflow-smoke.yml"
     playwright_rdp_workflow_path = root / ".github" / "workflows" / "playwright-rdp-smoke.yml"
     digest_update_script_path = root / "scripts" / "update_production_image_digests.py"
     rollback_script_path = root / "scripts" / "rollback_release.sh"
@@ -323,6 +324,10 @@ def main() -> int:
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must publish images via docker/build-push-action."
             )
+        if "push:" not in publish_workflow or "main" not in publish_workflow:
+            errors.append(
+                ".github/workflows/publish-and-pin-images.yml must run on push to main for merge-time image promotion."
+            )
         if "update_production_image_digests.py" not in publish_workflow:
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must call scripts/update_production_image_digests.py."
@@ -376,6 +381,18 @@ def main() -> int:
 
     if not playwright_rdp_workflow_path.exists():
         errors.append(".github/workflows/playwright-rdp-smoke.yml is missing.")
+    if not deploy_userflow_workflow_path.exists():
+        errors.append(".github/workflows/deploy-userflow-smoke.yml is missing.")
+    else:
+        deploy_userflow_workflow = _read_text(deploy_userflow_workflow_path)
+        if "pull_request:" not in deploy_userflow_workflow or "main" not in deploy_userflow_workflow:
+            errors.append(
+                ".github/workflows/deploy-userflow-smoke.yml must run on pull_request to main for required user-flow smoke."
+            )
+        if "push:" not in deploy_userflow_workflow or "main" not in deploy_userflow_workflow:
+            errors.append(
+                ".github/workflows/deploy-userflow-smoke.yml must run on push to main for required user-flow smoke."
+            )
     if not playwright_config_path.exists():
         errors.append("frontend-vite/playwright.rdp.config.js is missing.")
     if not playwright_test_path.exists():

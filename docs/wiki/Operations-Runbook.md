@@ -9,6 +9,7 @@ Validate production profile values before deployment:
 ```bash
 python3 scripts/check_release_discipline.py
 python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
+./scripts/audit_tenant_isolation.sh
 python3 scripts/check_openapi_drift.py
 ```
 
@@ -140,6 +141,14 @@ For CI/static-only usage (skip cluster calls):
 SKIP_CLUSTER_CHECKS=1 ./scripts/deploy_preflight.sh
 ```
 
+Explicit PostgreSQL migration gate (recommended before production rollout and now required in CI):
+
+```bash
+ALEMBIC_POSTGRES_URL='postgresql+psycopg://postgres:postgres@127.0.0.1:5432/bretter_ci_gate' \
+ALEMBIC_POSTGRES_ADMIN_URL='postgresql+psycopg://postgres:postgres@127.0.0.1:5432/postgres' \
+./scripts/check_alembic_postgres.sh
+```
+
 If you need to bypass node image pull checks temporarily (dev-only):
 
 ```bash
@@ -177,6 +186,11 @@ Release-branch required checks:
   - `synthetic` job from post-deploy synthetic workflow
   - `restore-drill` job from nightly restore workflow
   - `rdp-smoke` job from Playwright RDP smoke workflow
+
+Main branch required smoke:
+
+- `.github/workflows/deploy-userflow-smoke.yml` now runs on `push` and `pull_request` to `main`.
+- Configure branch protection/rulesets to require the `userflow-smoke` job.
 
 Manual trigger in GitHub Actions:
 
@@ -312,6 +326,21 @@ kubectl -n labs-team-physics get networkpolicy
 ```
 
 ## Common incidents and triage
+
+### Dev-only unsigned image exception flow
+
+Use only for non-production troubleshooting of local/unsigned images:
+
+```bash
+NAMESPACE=labs MODE=apply ./scripts/apply_dev_signature_exception.sh
+```
+
+Only pods with label `security.bretter-labs.io/allow-unsigned-dev=true` are excepted from `bretter-verify-image-signatures`.
+Remove immediately after testing:
+
+```bash
+NAMESPACE=labs MODE=delete ./scripts/apply_dev_signature_exception.sh
+```
 
 ### CI guardrail run fails with missing `httpx`
 

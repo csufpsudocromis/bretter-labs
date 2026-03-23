@@ -1,6 +1,17 @@
 name: Publish Images And Pin Digests
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "VERSION"
+      - "backend/**"
+      - "frontend-vite/**"
+      - "runner/**"
+      - "deploy/helm/values-production.yaml"
+      - "scripts/update_production_image_digests.py"
+      - ".github/workflows/publish-and-pin-images.yml"
   workflow_dispatch:
     inputs:
       version:
@@ -20,8 +31,13 @@ permissions:
   id-token: write
   attestations: write
 
+concurrency:
+  group: publish-and-pin-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   publish:
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     env:
       GHCR_USERNAME: ${{ secrets.GHCR_USERNAME }}
@@ -46,7 +62,13 @@ jobs:
           set -euo pipefail
           version_input="${{ github.event.inputs.version }}"
           if [ -z "${version_input}" ]; then
-            version_input="$(tr -d '[:space:]' < VERSION)"
+            base_version="$(tr -d '[:space:]' < VERSION)"
+            if [ "${{ github.event_name }}" = "push" ]; then
+              short_sha="$(printf '%s' "${GITHUB_SHA}" | cut -c1-12)"
+              version_input="${base_version}-${short_sha}"
+            else
+              version_input="${base_version}"
+            fi
           fi
           if [[ ! "${version_input}" =~ ^[0-9]+(\.[0-9]+){2}([-.+][0-9A-Za-z.-]+)?$ ]]; then
             echo "invalid semantic version: ${version_input}" >&2

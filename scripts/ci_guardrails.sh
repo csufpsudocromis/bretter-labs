@@ -17,6 +17,7 @@ else
   "$PYTHON_BIN" "$ROOT_DIR/scripts/check_no_plaintext_tokens.py"
 fi
 "$PYTHON_BIN" "$ROOT_DIR/scripts/validate_production_profile.py" --strict -f "$ROOT_DIR/deploy/helm/values-production.yaml"
+"$ROOT_DIR/scripts/audit_tenant_isolation.sh"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/lint_crd_schema.py"
 "$PYTHON_BIN" "$ROOT_DIR/scripts/check_openapi_drift.py"
 if ! command -v kubectl >/dev/null 2>&1; then
@@ -56,3 +57,8 @@ PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 
 "$ROOT_DIR/scripts/smoke_setup.sh"
 "$ROOT_DIR/scripts/smoke_tls_login.sh"
+
+RUN_ALEMBIC_POSTGRES_GATE="${RUN_ALEMBIC_POSTGRES_GATE:-0}"
+if [ "$RUN_ALEMBIC_POSTGRES_GATE" = "1" ] || [ -n "${ALEMBIC_POSTGRES_URL:-}" ]; then
+  "$ROOT_DIR/scripts/check_alembic_postgres.sh"
+fi
