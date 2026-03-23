@@ -104,4 +104,8 @@ Platform admins can manage this in:
 
 - `/admin/settings/multi-cluster`
 
-The page includes cluster inventory, telemetry, placement policy editing, placement explain dry-run, and replication queue controls.
+The page includes:
+
+- Cluster inventory and telemetry, with `Probe` and non-local `Disable` actions.
+- Placement policy create/edit/delete plus placement explain dry-run.
+- Replication queue enqueue + process actions, and per-record status/detail updates (`queued`, `syncing`, `ready`, `error`).

@@ -530,7 +530,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get Concurrency Settings */
+        get: operations["get_concurrency_settings_admin_settings_concurrency_get"];
         put?: never;
         /** Update Concurrency */
         post: operations["update_concurrency_admin_settings_concurrency_post"];
@@ -547,7 +548,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Get Idle Timeout Settings */
+        get: operations["get_idle_timeout_settings_admin_settings_idle_timeout_get"];
         put?: never;
         /** Update Idle Timeout */
         post: operations["update_idle_timeout_admin_settings_idle_timeout_post"];
@@ -4612,6 +4614,37 @@ export interface operations {
             };
         };
     };
+    get_concurrency_settings_admin_settings_concurrency_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConcurrencySettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     update_concurrency_admin_settings_concurrency_post: {
         parameters: {
             query?: never;
@@ -4634,6 +4667,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConcurrencySettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_idle_timeout_settings_admin_settings_idle_timeout_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdleTimeoutSettings"];
                 };
             };
             /** @description Validation Error */

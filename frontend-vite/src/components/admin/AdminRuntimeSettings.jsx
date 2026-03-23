@@ -54,20 +54,45 @@ const checkMeta = (status) => {
 };
 
 const shellQuote = (value) => `'${String(value ?? "").replace(/'/g, `'"'"'`)}'`;
+const parsePositiveInt = (value, fallback, min, max) => {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+};
 
 const AdminRuntimeSettings = () => {
   const [data, setData] = useState(null);
+  const [concurrencyForm, setConcurrencyForm] = useState({
+    max_concurrent_vms: "50",
+    per_user_vm_limit: "2",
+  });
+  const [idleTimeoutForm, setIdleTimeoutForm] = useState({
+    idle_timeout_minutes: "30",
+  });
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [savingConcurrency, setSavingConcurrency] = useState(false);
+  const [savingIdleTimeout, setSavingIdleTimeout] = useState(false);
   const [showSensitive, setShowSensitive] = useState(false);
 
   const load = async () => {
     setLoading(true);
     setError("");
     try {
-      const res = await api.get("/admin/settings/runtime");
-      setData(res.data || {});
+      const [runtimeRes, concurrencyRes, idleRes] = await Promise.all([
+        api.get("/admin/settings/runtime"),
+        api.get("/admin/settings/concurrency"),
+        api.get("/admin/settings/idle-timeout"),
+      ]);
+      setData(runtimeRes.data || {});
+      setConcurrencyForm({
+        max_concurrent_vms: String(concurrencyRes.data?.max_concurrent_vms ?? "50"),
+        per_user_vm_limit: String(concurrencyRes.data?.per_user_vm_limit ?? "2"),
+      });
+      setIdleTimeoutForm({
+        idle_timeout_minutes: String(idleRes.data?.idle_timeout_minutes ?? "30"),
+      });
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to load runtime settings");
     } finally {
@@ -97,6 +122,48 @@ const AdminRuntimeSettings = () => {
     await copyText(lines.join("\n"), "Copied runtime values as shell exports.");
   };
 
+  const saveConcurrency = async () => {
+    setSavingConcurrency(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = {
+        max_concurrent_vms: parsePositiveInt(concurrencyForm.max_concurrent_vms, 50, 1, 5000),
+        per_user_vm_limit: parsePositiveInt(concurrencyForm.per_user_vm_limit, 2, 1, 100),
+      };
+      const res = await api.post("/admin/settings/concurrency", payload);
+      setConcurrencyForm({
+        max_concurrent_vms: String(res.data?.max_concurrent_vms ?? payload.max_concurrent_vms),
+        per_user_vm_limit: String(res.data?.per_user_vm_limit ?? payload.per_user_vm_limit),
+      });
+      setMessage("Global concurrency settings updated.");
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to update global concurrency settings");
+    } finally {
+      setSavingConcurrency(false);
+    }
+  };
+
+  const saveIdleTimeout = async () => {
+    setSavingIdleTimeout(true);
+    setError("");
+    setMessage("");
+    try {
+      const payload = {
+        idle_timeout_minutes: parsePositiveInt(idleTimeoutForm.idle_timeout_minutes, 30, 1, 1440),
+      };
+      const res = await api.post("/admin/settings/idle-timeout", payload);
+      setIdleTimeoutForm({
+        idle_timeout_minutes: String(res.data?.idle_timeout_minutes ?? payload.idle_timeout_minutes),
+      });
+      setMessage("Global idle timeout updated.");
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to update idle timeout");
+    } finally {
+      setSavingIdleTimeout(false);
+    }
+  };
+
   const renderValue = (key) => {
     const raw = data?.[key];
     if (typeof raw === "boolean") {
@@ -114,7 +181,7 @@ const AdminRuntimeSettings = () => {
   return (
     <div>
       <h2>Runtime Settings</h2>
-      <p className="muted small">Read-only backend runtime configuration with health and drift checks.</p>
+      <p className="muted small">Runtime configuration with health/drift checks and global capacity controls.</p>
 
       <div className="actions" style={{ marginBottom: "1rem", flexWrap: "wrap" }}>
         <button className="ghost" onClick={load} disabled={loading}>
@@ -139,6 +206,57 @@ const AdminRuntimeSettings = () => {
 
       {data && (
         <>
+          <div className="card" style={{ marginBottom: "1rem" }}>
+            <h3>Global Limits</h3>
+            <p className="muted small">
+              Controls for total active labs and session timeout defaults used by VM/container starts.
+            </p>
+            <div className="row" style={{ gap: "0.75rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                Max concurrent labs
+                <input
+                  type="number"
+                  min="1"
+                  max="5000"
+                  value={concurrencyForm.max_concurrent_vms}
+                  onChange={(e) => setConcurrencyForm((prev) => ({ ...prev, max_concurrent_vms: e.target.value }))}
+                />
+              </label>
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                Per-user active lab cap
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={concurrencyForm.per_user_vm_limit}
+                  onChange={(e) => setConcurrencyForm((prev) => ({ ...prev, per_user_vm_limit: e.target.value }))}
+                />
+              </label>
+              <div className="actions" style={{ alignItems: "end" }}>
+                <button className="ghost" onClick={saveConcurrency} disabled={savingConcurrency || loading}>
+                  {savingConcurrency ? "Saving..." : "Save Concurrency"}
+                </button>
+              </div>
+            </div>
+            <div className="row" style={{ gap: "0.75rem", flexWrap: "wrap", marginTop: "0.75rem" }}>
+              <label style={{ display: "grid", gap: "0.25rem" }}>
+                Default idle timeout (minutes)
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  value={idleTimeoutForm.idle_timeout_minutes}
+                  onChange={(e) => setIdleTimeoutForm((prev) => ({ ...prev, idle_timeout_minutes: e.target.value }))}
+                />
+              </label>
+              <div className="actions" style={{ alignItems: "end" }}>
+                <button className="ghost" onClick={saveIdleTimeout} disabled={savingIdleTimeout || loading}>
+                  {savingIdleTimeout ? "Saving..." : "Save Idle Timeout"}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <div className="card" style={{ marginBottom: "1rem" }}>
             <div className="tile-header">
               <h3>Runtime Health</h3>

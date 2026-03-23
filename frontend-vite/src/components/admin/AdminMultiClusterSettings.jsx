@@ -46,6 +46,8 @@ const defaultExplainForm = {
   template_cluster_id: "",
 };
 
+const replicationStatuses = ["queued", "syncing", "ready", "error"];
+
 const AdminMultiClusterSettings = () => {
   const [clusters, setClusters] = useState([]);
   const [telemetry, setTelemetry] = useState([]);
@@ -56,6 +58,8 @@ const AdminMultiClusterSettings = () => {
   const [replicationForm, setReplicationForm] = useState(defaultReplicationForm);
   const [explainForm, setExplainForm] = useState(defaultExplainForm);
   const [explainResult, setExplainResult] = useState(null);
+  const [replicationStatusDrafts, setReplicationStatusDrafts] = useState({});
+  const [replicationDetailDrafts, setReplicationDetailDrafts] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
@@ -169,6 +173,30 @@ const AdminMultiClusterSettings = () => {
     }
   };
 
+  const editPolicy = (policy) => {
+    setPolicyForm({
+      team: String(policy.team || "default"),
+      preferred_cluster_id: String(policy.preferred_cluster_id || ""),
+      hard_pin_cluster: Boolean(policy.hard_pin_cluster),
+      required_regions_csv: (policy.required_regions || []).join(","),
+      required_compliance_tags_csv: (policy.required_compliance_tags || []).join(","),
+      allowed_cluster_ids_csv: (policy.allowed_cluster_ids || []).join(","),
+    });
+    setMessage(`Loaded policy for team ${policy.team}.`);
+  };
+
+  const deletePolicy = async (team) => {
+    setError("");
+    setMessage("");
+    try {
+      await api.delete(`/admin/settings/placement-policies/${encodeURIComponent(team)}`);
+      setMessage(`Placement policy deleted for team ${team}.`);
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to delete placement policy.");
+    }
+  };
+
   const enqueueReplication = async () => {
     setError("");
     setMessage("");
@@ -184,6 +212,28 @@ const AdminMultiClusterSettings = () => {
       await load();
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to queue replication.");
+    }
+  };
+
+  const updateReplication = async (replicationId, statusValue, detailValue) => {
+    setError("");
+    setMessage("");
+    try {
+      const status = String(statusValue || "queued")
+        .trim()
+        .toLowerCase();
+      if (!replicationStatuses.includes(status)) {
+        setError("Invalid replication status.");
+        return;
+      }
+      await api.patch(`/admin/replication/artifacts/${encodeURIComponent(replicationId)}`, {
+        status,
+        detail: String(detailValue || "").trim(),
+      });
+      setMessage(`Replication ${replicationId.slice(0, 8)} updated to ${status}.`);
+      await load();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to update replication record.");
     }
   };
 
@@ -222,6 +272,7 @@ const AdminMultiClusterSettings = () => {
     <div>
       <h2>Multi-Cluster</h2>
       <p className="muted small">Manage clusters, placement policies, and replication jobs.</p>
+      <p className="muted small">Requires Platform Admin role.</p>
 
       <div className="actions" style={{ marginBottom: "1rem", flexWrap: "wrap" }}>
         <button className="ghost" onClick={load} disabled={loading}>
@@ -430,10 +481,34 @@ const AdminMultiClusterSettings = () => {
         <div className="actions" style={{ marginTop: "0.75rem" }}>
           <button onClick={savePolicy}>Save Policy</button>
         </div>
-        <div className="muted small" style={{ marginTop: "0.75rem" }}>
-          Existing policies:{" "}
-          {(policies || []).map((policy) => `${policy.team}(${policy.preferred_cluster_id || "none"})`).join(", ") ||
-            "none"}
+        <div className="tile-grid" style={{ marginTop: "0.75rem" }}>
+          {(policies || []).length === 0 && <div className="muted small">No placement policies yet.</div>}
+          {(policies || []).map((policy) => (
+            <div key={policy.id} className="tile template-tile">
+              <div className="tile-header">
+                <h4>{policy.team}</h4>
+                <span className="badge">{policy.preferred_cluster_id || "no preferred cluster"}</span>
+              </div>
+              <div className="muted small">Hard pin: {policy.hard_pin_cluster ? "yes" : "no"}</div>
+              <div className="muted small">
+                Required regions: {(policy.required_regions || []).join(", ") || "none"}
+              </div>
+              <div className="muted small">
+                Required compliance tags: {(policy.required_compliance_tags || []).join(", ") || "none"}
+              </div>
+              <div className="muted small">
+                Allowed clusters: {(policy.allowed_cluster_ids || []).join(", ") || "any"}
+              </div>
+              <div className="actions" style={{ marginTop: "0.5rem" }}>
+                <button className="ghost" onClick={() => editPolicy(policy)}>
+                  Edit
+                </button>
+                <button className="ghost" onClick={() => deletePolicy(policy.team)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 
@@ -537,6 +612,39 @@ const AdminMultiClusterSettings = () => {
                 {row.source_cluster_id} → {row.target_cluster_id}
               </div>
               <div className="muted small">{row.detail || ""}</div>
+              <div className="row" style={{ gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+                <select
+                  className="input"
+                  value={replicationStatusDrafts[row.id] ?? String(row.status || "queued").toLowerCase()}
+                  onChange={(e) =>
+                    setReplicationStatusDrafts((prev) => ({ ...prev, [row.id]: String(e.target.value || "queued") }))
+                  }
+                >
+                  {replicationStatuses.map((statusValue) => (
+                    <option key={statusValue} value={statusValue}>
+                      {statusValue}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="input"
+                  placeholder="status detail"
+                  value={replicationDetailDrafts[row.id] ?? String(row.detail || "")}
+                  onChange={(e) => setReplicationDetailDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                />
+                <button
+                  className="ghost"
+                  onClick={() =>
+                    updateReplication(
+                      row.id,
+                      replicationStatusDrafts[row.id] ?? String(row.status || "queued"),
+                      replicationDetailDrafts[row.id] ?? String(row.detail || "")
+                    )
+                  }
+                >
+                  Update
+                </button>
+              </div>
             </div>
           ))}
         </div>

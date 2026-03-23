@@ -7073,6 +7073,53 @@
       }
     },
     "/admin/settings/concurrency": {
+      "get": {
+        "operationId": "get_concurrency_settings_admin_settings_concurrency_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConcurrencySettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Concurrency Settings",
+        "tags": [
+          "admin"
+        ]
+      },
       "post": {
         "operationId": "update_concurrency_admin_settings_concurrency_post",
         "parameters": [
@@ -7132,6 +7179,53 @@
       }
     },
     "/admin/settings/idle-timeout": {
+      "get": {
+        "operationId": "get_idle_timeout_settings_admin_settings_idle_timeout_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IdleTimeoutSettings"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Idle Timeout Settings",
+        "tags": [
+          "admin"
+        ]
+      },
       "post": {
         "operationId": "update_idle_timeout_admin_settings_idle_timeout_post",
         "parameters": [

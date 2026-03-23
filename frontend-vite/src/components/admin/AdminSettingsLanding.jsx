@@ -20,7 +20,7 @@ const AdminSettingsLanding = () => (
       </Link>
       <Link to="/admin/settings/runtime" className="tile">
         <h3>Runtime Settings</h3>
-        <p>View backend/runtime configuration (read-only).</p>
+        <p>View backend/runtime configuration and update global limits.</p>
       </Link>
       <Link to="/admin/settings/sso" className="tile">
         <h3>OIDC / SSO</h3>

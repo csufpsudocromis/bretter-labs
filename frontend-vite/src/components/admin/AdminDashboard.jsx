@@ -23,7 +23,16 @@ const tiles = [
     description: "Review admin changes and operational mutations",
     to: "/admin/audit-events",
   },
-  { title: "Settings", description: "View runtime settings", to: "/admin/settings" },
+  {
+    title: "Settings",
+    description: "Runtime, storage, SSO, LDAP, and multi-cluster controls",
+    to: "/admin/settings",
+  },
+  {
+    title: "Multi-Cluster",
+    description: "Placement policies, replication queue, and cluster routing controls",
+    to: "/admin/settings/multi-cluster",
+  },
 ];
 
 const AdminDashboard = () => (

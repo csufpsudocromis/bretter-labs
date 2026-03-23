@@ -5407,6 +5407,36 @@ def list_admin_audit_events(
     return [_admin_audit_event_out(row) for row in rows]
 
 
+@router.get(
+    "/settings/concurrency",
+    response_model=ConcurrencySettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def get_concurrency_settings(session: Session = Depends(get_session)) -> ConcurrencySettings:
+    cfg = session.get(Config, 1)
+    max_concurrent_vms = int(
+        getattr(cfg, "max_concurrent_vms", settings.max_concurrent_vms) or settings.max_concurrent_vms
+    )
+    per_user_vm_limit = int(getattr(cfg, "per_user_vm_limit", settings.per_user_vm_limit) or settings.per_user_vm_limit)
+    return ConcurrencySettings(
+        max_concurrent_vms=max(1, max_concurrent_vms),
+        per_user_vm_limit=max(1, per_user_vm_limit),
+    )
+
+
+@router.get(
+    "/settings/idle-timeout",
+    response_model=IdleTimeoutSettings,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def get_idle_timeout_settings(session: Session = Depends(get_session)) -> IdleTimeoutSettings:
+    cfg = session.get(Config, 1)
+    idle_timeout_minutes = int(
+        getattr(cfg, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
+    )
+    return IdleTimeoutSettings(idle_timeout_minutes=max(1, idle_timeout_minutes))
+
+
 @router.post(
     "/settings/concurrency",
     response_model=ConcurrencySettings,
