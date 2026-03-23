@@ -48,6 +48,7 @@ fi
   scripts/check_openapi_drift.py \
   scripts/export_openapi_schema.py \
   scripts/post_deploy_synthetic_check.py \
+  scripts/check_live_config_drift.py \
   scripts/backfill_labinstances_from_db.py \
   scripts/bump_version.py \
   scripts/validate_production_profile.py \

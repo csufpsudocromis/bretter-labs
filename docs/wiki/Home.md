@@ -105,6 +105,12 @@ Reference pages:
 - Release-branch smoke gates for post-deploy synthetic, restore drill, and Playwright Guacamole RDP browser checks
 - Main-branch userflow smoke gate (`deploy-userflow-smoke.yml`) on push/PR to `main`
 - Merge-time image promotion and digest auto-pin workflow on `main` (`publish-and-pin-images.yml`)
+- Production deploy workflow for digest-pinned rollouts + go-live proof + drift check (`deploy-production.yml`)
+- Scheduled/manual live config drift detection against rendered production values (`config-drift-check.yml`, `scripts/check_live_config_drift.py`)
+- Staging control-plane failure drill workflow (`staging-failure-drills.yml`, `scripts/failure_drill_control_plane.sh`)
+- Branch protection enforcement automation (`enforce-branch-protection.yml`, `scripts/apply_branch_protection.sh`)
+- Kind-based tenant impersonation isolation smoke in CI (`scripts/smoke_tenant_isolation_impersonation.sh`)
+- Grafana user-flow SLO dashboard ConfigMap pack applied by setup postdeploy
 - Dedicated LabImageImport controller with leader-election and metrics endpoints
 - OpenAPI snapshot + frontend API type drift checks in CI guardrails
 - Explicit PostgreSQL Alembic migration gate in CI (`scripts/check_alembic_postgres.sh`)

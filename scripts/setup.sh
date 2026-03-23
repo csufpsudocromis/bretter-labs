@@ -2637,6 +2637,27 @@ spec:
 EOF
 }
 
+apply_monitoring_slo_dashboard() {
+  if [ "$ENABLE_MONITORING" -ne 1 ]; then
+    return
+  fi
+
+  local template_file rendered_file monitoring_namespace_escaped
+  template_file="$ROOT_DIR/deploy/monitoring/grafana-userflow-slo-dashboard.yaml"
+  if [ ! -f "$template_file" ]; then
+    warn "User-flow SLO dashboard template not found (${template_file}); skipping dashboard apply."
+    return
+  fi
+
+  rendered_file="$(mktemp /tmp/bretter-userflow-slo-dashboard.XXXXXX.yaml)"
+  monitoring_namespace_escaped="$(escape_sed_replacement "$MONITORING_NAMESPACE")"
+  sed -e "s/__MONITORING_NAMESPACE__/${monitoring_namespace_escaped}/g" "$template_file" >"$rendered_file"
+
+  log "Applying Grafana user-flow SLO dashboard ConfigMap..."
+  kubectl -n "$MONITORING_NAMESPACE" apply -f "$rendered_file" >/dev/null
+  rm -f "$rendered_file"
+}
+
 enable_cpu_manager_static_all_nodes() {
   if [ "$CPU_MANAGER_STATIC" -ne 1 ]; then
     return
@@ -5792,6 +5813,7 @@ run_phase_postdeploy() {
   install_kyverno
   apply_admission_policies
   patch_default_pvc_alert_exclusions
+  apply_monitoring_slo_dashboard
   apply_monitoring_alert_rules
   run_post_deploy_api_health_check
   run_post_deploy_admin_api_smoke_check

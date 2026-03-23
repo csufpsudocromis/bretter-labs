@@ -1,0 +1,197 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: bretter-userflow-slo-dashboard
+  namespace: __MONITORING_NAMESPACE__
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: bretter-labs
+data:
+  bretter-userflow-slo.json: |
+    {
+      "id": null,
+      "uid": "bretter-userflow-slo",
+      "title": "Bretter Userflow SLO",
+      "schemaVersion": 38,
+      "version": 1,
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "textbox",
+            "label": "Namespace",
+            "query": "labs",
+            "current": {
+              "text": "labs",
+              "value": "labs"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "VM Launch Failure % (15m)",
+          "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-vm-launch-.*\"}[15m])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-vm-launch-.*\"}[15m])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-vm-launch-.*\"}[15m])), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 20 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "RDP Readiness Failure % (15m)",
+          "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-readiness-.*\"}[15m])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-readiness-.*\"}[15m])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-readiness-.*\"}[15m])), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 20 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "Upload Finalize Failure % (15m)",
+          "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-upload-finalize-.*\"}[15m])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-upload-finalize-.*\"}[15m])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-upload-finalize-.*\"}[15m])), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 20 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "stat",
+          "title": "RDP Connect Failure % (15m)",
+          "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-connect-latency-.*\"}[15m])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-connect-latency-.*\"}[15m])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-connect-latency-.*\"}[15m])), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 20 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Error-Budget Burn (%)",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "VM Launch",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-vm-launch-.*\"}[1h])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-vm-launch-.*\"}[1h])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-vm-launch-.*\"}[1h])), 1)"
+            },
+            {
+              "refId": "B",
+              "legendFormat": "RDP Readiness",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-readiness-.*\"}[1h])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-readiness-.*\"}[1h])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-readiness-.*\"}[1h])), 1)"
+            },
+            {
+              "refId": "C",
+              "legendFormat": "Upload Finalize",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-upload-finalize-.*\"}[1h])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-upload-finalize-.*\"}[1h])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-upload-finalize-.*\"}[1h])), 1)"
+            },
+            {
+              "refId": "D",
+              "legendFormat": "RDP Connect",
+              "expr": "100 * sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-connect-latency-.*\"}[1h])) / clamp_min(sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-connect-latency-.*\"}[1h])) + sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-rdp-connect-latency-.*\"}[1h])), 1)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "yellow", "value": 10 },
+                  { "color": "red", "value": 20 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Probe Volume (Succeeded vs Failed)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+          "targets": [
+            {
+              "refId": "A",
+              "legendFormat": "Succeeded",
+              "expr": "sum(increase(kube_job_status_succeeded{namespace=\"$namespace\",job_name=~\"bretter-slo-.*\"}[30m]))"
+            },
+            {
+              "refId": "B",
+              "legendFormat": "Failed",
+              "expr": "sum(increase(kube_job_status_failed{namespace=\"$namespace\",job_name=~\"bretter-slo-.*\"}[30m]))"
+            }
+          ]
+        }
+      ]
+    }

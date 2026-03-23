@@ -55,6 +55,9 @@ jobs:
       - name: Run LabImageImport controller smoke
         run: NAMESPACE=labs PYTHON=.venv/bin/python ./scripts/smoke_labimageimport_controller.sh
 
+      - name: Run tenant isolation impersonation smoke
+        run: ./scripts/smoke_tenant_isolation_impersonation.sh
+
       - name: Delete kind cluster
         if: always()
         run: kind delete cluster --name userflow-smoke || true

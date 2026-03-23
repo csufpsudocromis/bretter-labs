@@ -191,6 +191,14 @@ Main branch required smoke:
 
 - `.github/workflows/deploy-userflow-smoke.yml` now runs on `push` and `pull_request` to `main`.
 - Configure branch protection/rulesets to require the `userflow-smoke` job.
+- Use `.github/workflows/enforce-branch-protection.yml` (or scripts below) to keep required checks enforced as code.
+
+Branch protection automation (manual from local clone):
+
+```bash
+GH_TOKEN=<repo-admin-token> REQUIRED_CHECKS='guardrails,userflow-smoke,synthetic,restore-drill,rdp-smoke' ./scripts/apply_branch_protection.sh
+GH_TOKEN=<repo-admin-token> REQUIRED_CHECKS='guardrails,userflow-smoke,synthetic,restore-drill,rdp-smoke' ./scripts/check_branch_protection.sh
+```
 
 Manual trigger in GitHub Actions:
 
@@ -232,6 +240,26 @@ NAMESPACE=labs ./scripts/restore_drill_postgres.sh
 Nightly restore evidence workflow:
 
 - `.github/workflows/nightly-restore-drill.yml` (requires `KUBECONFIG_B64` repo secret)
+
+Staging failure-drill workflow:
+
+- `.github/workflows/staging-failure-drills.yml` (requires `STAGING_KUBECONFIG_B64` or `KUBECONFIG_B64`)
+- Script entrypoint: `scripts/failure_drill_control_plane.sh`
+
+Production deploy + drift workflows:
+
+- `.github/workflows/deploy-production.yml` deploys digest-pinned production values and runs go-live proof + drift check.
+- `.github/workflows/config-drift-check.yml` runs scheduled/manual live-vs-rendered drift checks using `scripts/check_live_config_drift.py`.
+
+Tenant isolation impersonation smoke:
+
+- Script: `scripts/smoke_tenant_isolation_impersonation.sh`
+- CI: included in `.github/workflows/ci-guardrails.yml` against kind.
+
+Grafana SLO dashboard pack:
+
+- ConfigMap manifest: `deploy/monitoring/grafana-userflow-slo-dashboard.yaml`
+- Applied by `setup.sh` postdeploy when monitoring is enabled.
 
 ## Rollback command
 

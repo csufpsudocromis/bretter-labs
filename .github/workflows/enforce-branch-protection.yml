@@ -1,0 +1,48 @@
+name: Enforce Branch Protection
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: "Branch to protect"
+        required: false
+        default: "main"
+      required_checks:
+        description: "Comma-separated required status checks"
+        required: false
+        default: "guardrails,userflow-smoke,synthetic,restore-drill,rdp-smoke"
+      dry_run:
+        description: "Only print payload (true/false)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  enforce:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+      TARGET_BRANCH: ${{ github.event.inputs.target_branch || 'main' }}
+      REQUIRED_CHECKS: ${{ github.event.inputs.required_checks || 'guardrails,userflow-smoke,synthetic,restore-drill,rdp-smoke' }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate admin token
+        run: |
+          set -euo pipefail
+          [ -n "${GH_TOKEN}" ] || { echo "REPO_ADMIN_TOKEN secret is required." >&2; exit 1; }
+
+      - name: Apply branch protection
+        run: |
+          set -euo pipefail
+          ./scripts/apply_branch_protection.sh
+
+      - name: Verify required checks
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          set -euo pipefail
+          ./scripts/check_branch_protection.sh
