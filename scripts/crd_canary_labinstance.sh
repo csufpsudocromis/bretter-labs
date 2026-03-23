@@ -43,8 +43,7 @@ resolve_desired_state_mode() {
       DESIRED_STATE_MODE="legacy"
       return
       ;;
-    auto | "")
-      ;;
+    auto | "") ;;
     *)
       echo "ERROR: LABINSTANCE_DESIRED_STATE_MODE must be one of: auto, lifecycle, legacy." >&2
       exit 1

@@ -35,6 +35,7 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.KYVERNO_SIGNATURE_IMAGE_PATTERNS` (first-party image patterns to enforce)
 - `appTemplateValues.TEAM_NAMESPACE_MODE` (`per_team` recommended for stronger tenant isolation)
 - `appTemplateValues.TEAM_NAMESPACE_PREFIX` (team namespace naming convention)
+- `appTemplateValues.TEAM_NAMESPACE_BOOTSTRAP_ENABLED` should remain `"1"` in production profile
 - `appTemplateValues.BACKEND_REPLICAS`
 - `appTemplateValues.FRONTEND_REPLICAS`
 - `appTemplateValues.BACKEND_HPA_MIN_REPLICAS`
@@ -49,7 +50,10 @@ Use `values-production.yaml` as the reusable hardened baseline and layer a site-
 - `appTemplateValues.REQUIRE_SCHEMA_READY` should remain `"1"` in production
 - `appTemplateValues.SECRETS_ENCRYPTION_KEY` should remain empty in committed production values (inject runtime secret at deploy time)
 - `appTemplateValues.POST_DEPLOY_AUTH_SECRET_NAME` and credential key names for authenticated postdeploy checks
+- `appTemplateValues.RUN_POST_DEPLOY_SYNTHETIC_CHECK` should remain `"1"` in production profile
+- `appTemplateValues.SYNTHETIC_CHECK_REQUIRE_TEMPLATES` should remain `"1"` in production profile
 - `appTemplateValues.ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE` should remain `"1"` with secret-backed auth keys
+- `appTemplateValues.MONITORING_VM_PENDING_MINUTES` / `appTemplateValues.MONITORING_VM_DISK_PVC_PENDING_MINUTES` tuned for your storage and node startup SLO
 
 ## Image pinning policy
 

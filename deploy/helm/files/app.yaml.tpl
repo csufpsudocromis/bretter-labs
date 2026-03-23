@@ -508,6 +508,8 @@ spec:
               value: "__TEAM_NAMESPACE_MODE__"
             - name: BLABS_TEAM_NAMESPACE_PREFIX
               value: "__TEAM_NAMESPACE_PREFIX__"
+            - name: BLABS_TEAM_NAMESPACE_BOOTSTRAP_ENABLED
+              value: "__TEAM_NAMESPACE_BOOTSTRAP_ENABLED__"
             - name: BLABS_BACKEND_IMAGE
               value: "__BACKEND_IMAGE__"
             - name: BLABS_BACKEND_ADMIN_IMAGE
@@ -1180,17 +1182,6 @@ spec:
   selector:
     matchLabels:
       app: bretter-frontend
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: bretter-labinstance-controller
-  namespace: __NAMESPACE__
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: bretter-labinstance-controller
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

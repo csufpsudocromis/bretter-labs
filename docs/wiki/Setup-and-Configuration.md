@@ -50,6 +50,7 @@ Core:
 - `LABIMAGEIMPORT_CONTROLLER_METRICS_PORT` (default `9410`)
 - `TEAM_NAMESPACE_MODE` (`shared`/`per_team`; production default `per_team`)
 - `TEAM_NAMESPACE_PREFIX` (default `labs-team-` in per-team mode)
+- `TEAM_NAMESPACE_BOOTSTRAP_ENABLED` (default `1`; auto-bootstrap per-team runtime namespaces)
 
 Storage:
 
@@ -145,6 +146,7 @@ Monitoring/ops:
 - `POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS`
 - `ADMIN_API_SMOKE_USERNAME`, `ADMIN_API_SMOKE_PASSWORD`
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
+- `SYNTHETIC_CHECK_REQUIRE_TEMPLATES` (set `1` to require launchable templates during synthetic checks)
 - `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
 - `POST_DEPLOY_AUTH_SECRET_NAME`
 - `POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY`, `POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY`
@@ -170,6 +172,8 @@ Monitoring/ops:
 - `GHCR_ACCESS_HEALTHCHECK_SCHEDULE`
 - `GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS`
 - `GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET`
+- `MONITORING_VM_PENDING_MINUTES` (default `10`; warning threshold for VM pods stuck pending/not-ready)
+- `MONITORING_VM_DISK_PVC_PENDING_MINUTES` (default `8`; warning threshold for `vm-disk-*` PVCs stuck pending)
 - `ENABLE_USERFLOW_SLO_PROBES`
 - `USERFLOW_SLO_PROBE_SCHEDULE`
 - `USERFLOW_SLO_LOOKBACK_MINUTES`
@@ -236,6 +240,7 @@ ENABLE_MONITORING=1 \
 - Production profile rejects localhost/127.0.0.1 CORS origins; set real UI origins.
 - Production profile requires `RUNNER_NODE_SELECTOR_VALUE`.
 - Production profile now also requires explicit non-placeholder `CONTROL_NODE`, `NODE_EXTERNAL_HOST`, and `VM_STORAGE_CLASS`.
+- Production profile requires `TEAM_NAMESPACE_MODE=per_team` and `TEAM_NAMESPACE_BOOTSTRAP_ENABLED=1`.
 - Keep `SECRETS_ENCRYPTION_KEY` empty in committed production values and inject the runtime key via `RUNTIME_SECRETS_SECRET_NAME`/`RUNTIME_SECRETS_ENCRYPTION_KEY_KEY`.
 - Production profile requires `CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1` with a non-empty `CONTAINER_SIGNATURE_KEY_REF`.
 - If `CONTAINER_SIGNATURE_KEY_REF` uses `/etc/bretter-signing/*`, ensure secret `CONTAINER_SIGNATURE_KEY_SECRET_NAME` contains that key file.
@@ -270,10 +275,12 @@ ENABLE_MONITORING=1 \
 - For image publish workflows, set repo Actions secrets `GHCR_USERNAME` and `GHCR_PAT` (`write:packages`) when publishing to pre-existing private GHCR packages; workflow falls back to `GITHUB_TOKEN` when those secrets are absent.
 - Admin container image registration uses direct OCI image references; if signature verification returns `no signatures found`, registration continues with warning-only policy messaging.
 - In production profile, post-deploy authenticated checks require explicit non-bootstrap credentials (`ADMIN_API_SMOKE_PASSWORD`/`SYNTHETIC_CHECK_PASSWORD`) or secret-backed auth via `POST_DEPLOY_AUTH_SECRET_NAME`.
+- Production profile requires `RUN_POST_DEPLOY_SYNTHETIC_CHECK=1` and `SYNTHETIC_CHECK_REQUIRE_TEMPLATES=1`.
 - In non-production profiles, if setup generated a new bootstrap admin secret and explicit check credentials were not set, setup can auto-disable authenticated checks to avoid false failures.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
 - For production RDP connect-latency probe auth, use pre-provisioned secret mode: `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0`.
 - After first-login reset, verify bootstrap env pruning: `kubectl -n labs get deploy bretter-backend -o yaml | grep BLABS_ADMIN_DEFAULT_PASSWORD` should return nothing.
+- User-facing VM launch readiness preflight endpoint: `GET /user/templates/{template_id}/preflight`.
 - When admission policies are enabled, setup installs/applies Kyverno policies that enforce immutable tags, non-root security context, dropped capabilities, and CPU/memory requests+limits for labeled Bretter core workloads.
 - Storage settings page supports clearing overrides back to env defaults.
 - Login background should be hosted locally (`/user/site-assets/...`) for reliability.

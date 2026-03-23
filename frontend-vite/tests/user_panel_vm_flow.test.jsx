@@ -37,6 +37,16 @@ describe("UserPanel VM flow", () => {
       if (url === "/user/pods") return { data: state.instances };
       if (url === "/user/container-templates") return { data: state.containerTemplates };
       if (url === "/user/containers") return { data: state.containerInstances };
+      if (url === "/user/templates/tmpl-1/preflight") {
+        return {
+          data: {
+            template_id: "tmpl-1",
+            ready: true,
+            blocking_reason: null,
+            checks: [{ key: "runner_image", status: "ok", detail: "ready" }],
+          },
+        };
+      }
       throw new Error(`unexpected GET ${url}`);
     });
 

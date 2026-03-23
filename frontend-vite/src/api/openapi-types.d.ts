@@ -1249,6 +1249,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/templates/{template_id}/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preflight Template Launch */
+        get: operations["preflight_template_launch_user_templates__template_id__preflight_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/templates/{template_id}/start": {
         parameters: {
             query?: never;
@@ -3208,6 +3225,33 @@ export interface components {
             rdp_default_username?: string | null;
             /** Tenant */
             tenant?: string | null;
+        };
+        /** VMTemplateLaunchPreflight */
+        VMTemplateLaunchPreflight: {
+            /** Blocking Reason */
+            blocking_reason?: string | null;
+            /** Checks */
+            checks?: components["schemas"]["VMTemplateLaunchPreflightCheck"][];
+            /** Cluster Id */
+            cluster_id: string;
+            /** Namespace */
+            namespace: string;
+            /** Ready */
+            ready: boolean;
+            /** Template Id */
+            template_id: string;
+        };
+        /** VMTemplateLaunchPreflightCheck */
+        VMTemplateLaunchPreflightCheck: {
+            /** Detail */
+            detail: string;
+            /** Key */
+            key: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "warn" | "error";
         };
         /** VMTemplateUpdate */
         VMTemplateUpdate: {
@@ -6291,6 +6335,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VMTemplate"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preflight_template_launch_user_templates__template_id__preflight_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                template_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMTemplateLaunchPreflight"];
                 };
             };
             /** @description Validation Error */

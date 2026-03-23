@@ -71,6 +71,18 @@ print(str(data.get(data_key, "")), end="")
 PY
 }
 
+secret_data_value_plain() {
+  local namespace="$1"
+  local secret_name="$2"
+  local data_key="$3"
+  local encoded
+  encoded="$(secret_data_value_b64 "$namespace" "$secret_name" "$data_key" 2>/dev/null || true)"
+  if [ -z "$encoded" ]; then
+    return 1
+  fi
+  printf '%s' "$encoded" | base64 -d 2>/dev/null || return 1
+}
+
 log "Production go-live proof started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "Namespace: $NAMESPACE"
 log "Report: $report_path"
@@ -219,15 +231,15 @@ fi
 
 should_run_crd_canary=0
 case "$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')" in
-  1|true|yes|on)
+  1 | true | yes | on)
     should_run_crd_canary=1
     ;;
-  0|false|no|off)
+  0 | false | no | off)
     should_run_crd_canary=0
     ;;
   auto)
     case "$(printf '%s' "$orchestration_backend" | tr '[:upper:]' '[:lower:]')" in
-      crd|dual) should_run_crd_canary=1 ;;
+      crd | dual) should_run_crd_canary=1 ;;
       *) should_run_crd_canary=0 ;;
     esac
     ;;
@@ -336,6 +348,28 @@ else
 fi
 
 log "CORS origins seen in backend env: ${cors_allowed_origins:-<none>}"
+
+if [ -z "$node_external_host" ]; then
+  fail_check "post-deploy synthetic user flow check (missing NODE_EXTERNAL_HOST)"
+else
+  synthetic_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY" || true)"
+  synthetic_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" || true)"
+  if [ -z "$synthetic_password" ]; then
+    fail_check "post-deploy synthetic user flow check (missing synthetic credentials)"
+  else
+    if [ -z "$synthetic_username" ]; then
+      synthetic_username="admin"
+    fi
+    run_check "post-deploy synthetic user flow check" \
+      env \
+      SYNTHETIC_API_BASE="${public_scheme}://${node_external_host}:30073/api" \
+      SYNTHETIC_USERNAME="$synthetic_username" \
+      SYNTHETIC_PASSWORD="$synthetic_password" \
+      SYNTHETIC_VERIFY_TLS=0 \
+      SYNTHETIC_REQUIRE_TEMPLATES=1 \
+      "$ROOT_DIR/scripts/post_deploy_synthetic_check.py"
+  fi
+fi
 
 case "$(printf '%s' "$RUN_RESTORE_DRILL" | tr '[:upper:]' '[:lower:]')" in
   1 | true | yes | on)

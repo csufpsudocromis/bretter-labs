@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import ssl
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 import secrets
 import warnings
@@ -14,6 +14,7 @@ import requests
 import websockets
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
 from fastapi.responses import FileResponse, RedirectResponse
+from kubernetes import client as k8s_client
 from kubernetes.client import ApiException
 from sqlmodel import Session, select
 from urllib3.exceptions import InsecureRequestWarning
@@ -22,7 +23,14 @@ from ..auth import consume_connect_grant, issue_connect_token, require_user, val
 from ..console_providers import normalize_vm_console_provider
 from ..config import settings
 from ..db import get_session
-from ..models import SiteSettings, SSOSettings, VMInstance, VMTemplate
+from ..models import (
+    SiteSettings,
+    SSOSettings,
+    VMInstance,
+    VMTemplate,
+    VMTemplateLaunchPreflight,
+    VMTemplateLaunchPreflightCheck,
+)
 from ..network_modes import normalize_vm_network_mode
 from ..secret_codec import decrypt_secret, secret_is_configured
 from ..services.launch_lock import lock_user_launch_slot
@@ -43,6 +51,7 @@ from ..services.multi_cluster import (
 )
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
+from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
 from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
 from ..time_utils import utc_now
@@ -54,6 +63,7 @@ _VM_CONNECT_GRANT_COOKIE_NAME = "blabs_connect_grant"
 _VM_CONNECT_SESSION_COOKIE_NAME = "blabs_connect_session"
 _VM_PROXY_TIMEOUT_SECONDS = 45
 _VM_RDP_READY_TIMEOUT_SECONDS = 2
+_VM_BUILD_TIMEOUT_MINUTES = 15
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -103,7 +113,27 @@ def _phase_to_instance_status(phase: str) -> str:
     }.get((phase or "").lower(), "unknown")
 
 
-def _status_feedback(status: str, pod_status: PodStatus | None) -> tuple[str, str]:
+def _elapsed_hint(started_at: datetime | None, *, timeout_minutes: int = _VM_BUILD_TIMEOUT_MINUTES) -> str:
+    if started_at is None:
+        return ""
+    try:
+        elapsed_seconds = max(0, int((utc_now() - started_at).total_seconds()))
+    except Exception:
+        return ""
+    elapsed_minutes, rem_seconds = divmod(elapsed_seconds, 60)
+    if elapsed_minutes > 0:
+        elapsed = f"{elapsed_minutes}m {rem_seconds:02d}s"
+    else:
+        elapsed = f"{rem_seconds}s"
+    return (
+        f"Elapsed: {elapsed}. "
+        f"If this exceeds {max(1, int(timeout_minutes))} minutes, verify PVC provisioning and storage class health."
+    )
+
+
+def _status_feedback(
+    status: str, pod_status: PodStatus | None, *, started_at: datetime | None = None
+) -> tuple[str, str]:
     normalized = (status or "unknown").lower()
     if normalized == "running":
         if pod_status and not pod_status.ready:
@@ -120,6 +150,16 @@ def _status_feedback(status: str, pod_status: PodStatus | None) -> tuple[str, st
             ]
         )
         detail = (pod_status.waiting_message or pod_status.message or "").strip()
+        detail_text = detail.lower()
+        if (
+            "unbound immediate persistentvolumeclaims" in detail_text
+            or "persistentvolumeclaim" in detail_text
+            or "attachvolume" in detail_text
+            or "mountvolume" in detail_text
+        ):
+            elapsed_hint = _elapsed_hint(started_at)
+            base = detail or "Preparing VM disk and container."
+            return "building", f"{base} {elapsed_hint}".strip()
         if "unschedulable" in reason_text or "failedscheduling" in reason_text:
             return "pending", detail or "Waiting for available node resources."
         build_reason_keywords = (
@@ -141,11 +181,12 @@ def _status_feedback(status: str, pod_status: PodStatus | None) -> tuple[str, st
             "creating container",
             "initializing",
         )
-        detail_text = detail.lower()
         if any(token in reason_text for token in build_reason_keywords) or any(
             token in detail_text for token in build_detail_keywords
         ):
-            return "building", detail or "Preparing VM disk and container."
+            elapsed_hint = _elapsed_hint(started_at)
+            base = detail or "Preparing VM disk and container."
+            return "building", f"{base} {elapsed_hint}".strip()
         return "pending", detail or "Waiting in scheduler queue."
     if normalized == "completed":
         return "completed", "VM completed and stopped."
@@ -174,6 +215,98 @@ def _vm_storage_request_gib(image: Image | None) -> int:
     if size_bytes <= 0:
         return 20
     return max(1, int(math.ceil(size_bytes / float(1024**3))))
+
+
+def _vm_preflight(
+    *,
+    runtime_kube,
+    runtime_namespace: str,
+    template: Template,
+    image: Image,
+    team: str | None,
+) -> VMTemplateLaunchPreflight:
+    checks: list[VMTemplateLaunchPreflightCheck] = []
+    blocking_reason = ""
+
+    def add_check(key: str, status_text: str, detail: str) -> None:
+        nonlocal blocking_reason
+        checks.append(VMTemplateLaunchPreflightCheck(key=key, status=status_text, detail=detail))
+        if not blocking_reason and status_text == "error":
+            blocking_reason = detail
+
+    try:
+        ensure_team_runtime_namespace(runtime_kube, team=team, namespace=runtime_namespace)
+        add_check("namespace", "ok", f"Runtime namespace {runtime_namespace} is ready.")
+    except Exception as exc:
+        add_check("namespace", "error", str(exc))
+        return VMTemplateLaunchPreflight(
+            template_id=template.id,
+            namespace=runtime_namespace,
+            cluster_id=str(getattr(template, "cluster_id", "") or local_cluster_id()),
+            ready=False,
+            blocking_reason=blocking_reason,
+            checks=checks,
+        )
+
+    source_pvc_name = str(getattr(image, "source_pvc", "") or "").strip()
+    source_storage_class = ""
+    if not source_pvc_name:
+        add_check(
+            "source_pvc",
+            "error",
+            "Image is not prepared for clone-based launch. Re-import the image from admin.",
+        )
+    else:
+        try:
+            source_pvc, source_ns = runtime_kube.resolve_vm_source_pvc(
+                image_source_pvc=source_pvc_name,
+                runtime_namespace=runtime_namespace,
+            )
+            source_storage_class = str(getattr(source_pvc.spec, "storage_class_name", "") or "").strip()
+            add_check(
+                "source_pvc",
+                "ok",
+                f"Source PVC {source_pvc_name} is available in namespace {source_ns}.",
+            )
+        except Exception as exc:
+            add_check("source_pvc", "error", str(exc))
+
+    desired_storage_class = str(settings.kube_vm_storage_class or source_storage_class or "").strip()
+    if not desired_storage_class:
+        add_check(
+            "storage_class",
+            "error",
+            "BLABS_KUBE_VM_STORAGE_CLASS is not configured and source PVC has no storage class.",
+        )
+    else:
+        try:
+            storage_api = k8s_client.StorageV1Api(runtime_kube._client().api_client)
+            storage_api.read_storage_class(name=desired_storage_class)
+            add_check("storage_class", "ok", f"StorageClass {desired_storage_class} is available.")
+        except ApiException as exc:
+            add_check(
+                "storage_class",
+                "error",
+                f"StorageClass {desired_storage_class} lookup failed: {exc.reason or exc.status}",
+            )
+        except Exception as exc:
+            add_check("storage_class", "error", f"StorageClass {desired_storage_class} check failed: {exc}")
+
+    pull_ok, pull_detail = runtime_kube.check_vm_runner_image_pullability(
+        namespace=runtime_namespace,
+        timeout_seconds=30,
+    )
+    add_check("runner_image", "ok" if pull_ok else "error", pull_detail)
+
+    selected_cluster_id = str(getattr(template, "cluster_id", "") or local_cluster_id())
+    return VMTemplateLaunchPreflight(
+        template_id=template.id,
+        namespace=runtime_namespace,
+        cluster_id=selected_cluster_id,
+        ready=not blocking_reason,
+        blocking_reason=(blocking_reason or None),
+        checks=checks,
+    )
 
 
 def _public_console_host() -> str:
@@ -547,6 +680,69 @@ def list_available_templates(
     ]
 
 
+@router.get("/templates/{template_id}/preflight", response_model=VMTemplateLaunchPreflight)
+def preflight_template_launch(
+    template_id: str,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> VMTemplateLaunchPreflight:
+    runtime_namespace = _vm_runtime_namespace(user)
+    user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
+    template = session.get(Template, template_id)
+    if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
+    if template_tenant not in {user_tenant, GLOBAL_TENANT}:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    image = session.get(Image, template.image_id)
+    if not image:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if image_tenant not in {template_tenant, GLOBAL_TENANT}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image tenant scope is invalid")
+    try:
+        placement = select_cluster_for_launch(
+            session,
+            team=getattr(user, "team", None),
+            workload_kind="vm",
+            template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
+        )
+    except PlacementError as exc:
+        return VMTemplateLaunchPreflight(
+            template_id=template.id,
+            namespace=runtime_namespace,
+            cluster_id="",
+            ready=False,
+            blocking_reason=str(exc),
+            checks=[
+                VMTemplateLaunchPreflightCheck(
+                    key="placement",
+                    status="error",
+                    detail=str(exc),
+                )
+            ],
+        )
+    selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
+    runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
+    result = _vm_preflight(
+        runtime_kube=runtime_kube,
+        runtime_namespace=runtime_namespace,
+        template=template,
+        image=image,
+        team=getattr(user, "team", None),
+    )
+    result.checks.insert(
+        0,
+        VMTemplateLaunchPreflightCheck(
+            key="placement",
+            status="ok",
+            detail=f"Selected cluster {selected_cluster_id} ({placement.reason}).",
+        ),
+    )
+    result.cluster_id = selected_cluster_id
+    return result
+
+
 @router.get("/pods", response_model=list[VMInstance])
 def list_user_pods(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[VMInstance]:
     instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
@@ -576,7 +772,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
                 mapped = "stopped"
             else:
                 raise
-        stage, detail = _status_feedback(mapped, pod_status)
+        stage, detail = _status_feedback(mapped, pod_status, started_at=record.started_at)
         if mapped == "running" and console_provider == "guacamole_rdp":
             rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id, record_namespace)
             if not rdp_ready:
@@ -610,7 +806,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
 
     items: list[VMInstance] = []
     for record in instances:
-        stage, detail = feedback.get(record.id, _status_feedback(record.status, None))
+        stage, detail = feedback.get(record.id, _status_feedback(record.status, None, started_at=record.started_at))
         items.append(
             VMInstance(
                 id=record.id,
@@ -1165,6 +1361,10 @@ def start_vm(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
+    try:
+        ensure_team_runtime_namespace(runtime_kube, team=getattr(user, "team", None), namespace=runtime_namespace)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1270,7 +1470,7 @@ def start_vm(
                     detail="LabInstance CRD is unavailable; VM launch cannot be queued.",
                 ) from exc
 
-    stage, detail = _status_feedback(instance.status, pod_status)
+    stage, detail = _status_feedback(instance.status, pod_status, started_at=instance.started_at)
     if not use_legacy_orchestration:
         detail = "Queued for operator reconciliation."
     return VMInstance(
@@ -1323,7 +1523,7 @@ def stop_vm(
     session.add(record)
     session.commit()
     session.refresh(record)
-    stage, detail = _status_feedback(record.status, None)
+    stage, detail = _status_feedback(record.status, None, started_at=record.started_at)
     return VMInstance(
         id=record.id,
         template_id=record.template_id,
@@ -1405,6 +1605,10 @@ def restart_vm(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
+    try:
+        ensure_team_runtime_namespace(runtime_kube, team=getattr(user, "team", None), namespace=runtime_namespace)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1505,7 +1709,7 @@ def restart_vm(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="LabInstance CRD is unavailable; VM restart cannot be queued.",
                 ) from exc
-    stage, detail = _status_feedback(record.status, pod_status)
+    stage, detail = _status_feedback(record.status, pod_status, started_at=record.started_at)
     if not use_legacy_orchestration:
         detail = "Queued for operator reconciliation."
     return VMInstance(

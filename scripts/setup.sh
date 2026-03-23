@@ -109,6 +109,7 @@ LABIMAGEIMPORT_CONTROLLER_METRICS_BIND="${LABIMAGEIMPORT_CONTROLLER_METRICS_BIND
 LABIMAGEIMPORT_CONTROLLER_METRICS_PORT="${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT:-9410}"
 TEAM_NAMESPACE_MODE="${TEAM_NAMESPACE_MODE:-shared}"
 TEAM_NAMESPACE_PREFIX="${TEAM_NAMESPACE_PREFIX:-labs-team-}"
+TEAM_NAMESPACE_BOOTSTRAP_ENABLED="${TEAM_NAMESPACE_BOOTSTRAP_ENABLED:-1}"
 REQUIRE_SCHEMA_READY="${REQUIRE_SCHEMA_READY:-1}"
 EXPECTED_ALEMBIC_REVISION="${EXPECTED_ALEMBIC_REVISION:-}"
 CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
@@ -204,6 +205,8 @@ MONITORING_CHART_VERSION="${MONITORING_CHART_VERSION:-v82.10.4}"
 MONITORING_RESTART_ALERT_COUNT="${MONITORING_RESTART_ALERT_COUNT:-3}"
 MONITORING_DV_STALE_MINUTES="${MONITORING_DV_STALE_MINUTES:-60}"
 MONITORING_WARM_POOL_MIN_READY="${MONITORING_WARM_POOL_MIN_READY:-1}"
+MONITORING_VM_PENDING_MINUTES="${MONITORING_VM_PENDING_MINUTES:-10}"
+MONITORING_VM_DISK_PVC_PENDING_MINUTES="${MONITORING_VM_DISK_PVC_PENDING_MINUTES:-8}"
 ENABLE_GHCR_ACCESS_HEALTHCHECK="${ENABLE_GHCR_ACCESS_HEALTHCHECK:-1}"
 GHCR_ACCESS_HEALTHCHECK_SCHEDULE="${GHCR_ACCESS_HEALTHCHECK_SCHEDULE:-*/10 * * * *}"
 GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS="${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS:-120}"
@@ -775,6 +778,10 @@ validate_orchestration_backend_config() {
     shared | per_team) ;;
     *) fail "TEAM_NAMESPACE_MODE must be either shared or per_team." ;;
   esac
+  case "$TEAM_NAMESPACE_BOOTSTRAP_ENABLED" in
+    0 | 1) ;;
+    *) fail "TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be either 0 or 1." ;;
+  esac
   if [ "$TEAM_NAMESPACE_MODE" = "per_team" ]; then
     if [ -z "$TEAM_NAMESPACE_PREFIX" ]; then
       fail "TEAM_NAMESPACE_PREFIX cannot be empty when TEAM_NAMESPACE_MODE=per_team."
@@ -950,6 +957,18 @@ validate_auth_and_cors_config() {
     if [ -z "$RUNNER_NODE_SELECTOR_VALUE" ]; then
       fail "RUNNER_NODE_SELECTOR_VALUE must be set when PRODUCTION_PROFILE=1."
     fi
+    if [ "$TEAM_NAMESPACE_MODE" != "per_team" ]; then
+      fail "TEAM_NAMESPACE_MODE must be per_team when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$TEAM_NAMESPACE_BOOTSTRAP_ENABLED" -ne 1 ]; then
+      fail "TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be 1 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$RUN_POST_DEPLOY_SYNTHETIC_CHECK" -ne 1 ]; then
+      fail "RUN_POST_DEPLOY_SYNTHETIC_CHECK must be 1 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$SYNTHETIC_CHECK_REQUIRE_TEMPLATES" -ne 1 ]; then
+      fail "SYNTHETIC_CHECK_REQUIRE_TEMPLATES must be 1 when PRODUCTION_PROFILE=1."
+    fi
   fi
 }
 
@@ -1086,6 +1105,12 @@ validate_monitoring_config() {
   fi
   if [ "$MONITORING_WARM_POOL_MIN_READY" -lt 0 ]; then
     fail "MONITORING_WARM_POOL_MIN_READY must be an integer >= 0."
+  fi
+  if ! is_uint "$MONITORING_VM_PENDING_MINUTES" || [ "$MONITORING_VM_PENDING_MINUTES" -lt 1 ]; then
+    fail "MONITORING_VM_PENDING_MINUTES must be an integer >= 1."
+  fi
+  if ! is_uint "$MONITORING_VM_DISK_PVC_PENDING_MINUTES" || [ "$MONITORING_VM_DISK_PVC_PENDING_MINUTES" -lt 1 ]; then
+    fail "MONITORING_VM_DISK_PVC_PENDING_MINUTES must be an integer >= 1."
   fi
   [ -n "$ALERTMANAGER_DEFAULT_RECEIVER_NAME" ] || fail "ALERTMANAGER_DEFAULT_RECEIVER_NAME cannot be empty."
   [ -n "$ALERTMANAGER_ROUTE_GROUP_BY" ] || fail "ALERTMANAGER_ROUTE_GROUP_BY cannot be empty."
@@ -1696,20 +1721,22 @@ PY
     fi
     alertmanager_webhook_url_escaped="$(yaml_escape "$alertmanager_webhook_url")"
     alertmanager_webhook_matchers_escaped="$(yaml_escape "$ALERTMANAGER_WEBHOOK_MATCHERS")"
-    alertmanager_route_children_yaml="$(cat <<EOF
+    alertmanager_route_children_yaml="$(
+      cat <<EOF
           - receiver: "${ALERTMANAGER_WEBHOOK_RECEIVER_NAME}"
             matchers:
               - "${alertmanager_webhook_matchers_escaped}"
             continue: false
 EOF
-)"
-    alertmanager_receivers_extra_yaml="$(cat <<EOF
+    )"
+    alertmanager_receivers_extra_yaml="$(
+      cat <<EOF
         - name: "${ALERTMANAGER_WEBHOOK_RECEIVER_NAME}"
           webhook_configs:
             - url: "${alertmanager_webhook_url_escaped}"
               send_resolved: true
 EOF
-)"
+    )"
   fi
 
   values_file="$(mktemp /tmp/bretter-monitoring-values.XXXXXX.yaml)"
@@ -2077,7 +2104,8 @@ PY
     fail "KYVERNO_SIGNATURE_IMAGE_PATTERNS must include at least one image pattern."
   fi
   if [ "$KYVERNO_SIGNATURE_SCOPE" = "namespace_first_party" ]; then
-    rule_match_yaml="$(cat <<EOF
+    rule_match_yaml="$(
+      cat <<EOF
       match:
         any:
           - resources:
@@ -2086,9 +2114,10 @@ PY
               namespaces:
                 - ${NAMESPACE}
 EOF
-)"
+    )"
   else
-    rule_match_yaml="$(cat <<EOF
+    rule_match_yaml="$(
+      cat <<EOF
       match:
         any:
           - resources:
@@ -2100,18 +2129,19 @@ EOF
                 matchLabels:
                   security.bretter-labs.io/enforce-admission: "true"
 EOF
-)"
+    )"
   fi
 
   registry_credentials_yaml=""
   if [ -n "$KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME" ]; then
     sync_kyverno_registry_credentials_secret
-    registry_credentials_yaml="$(cat <<EOF
+    registry_credentials_yaml="$(
+      cat <<EOF
           imageRegistryCredentials:
             secrets:
               - ${KYVERNO_SIGNATURE_REGISTRY_SECRET_NAME}
 EOF
-)"
+    )"
   fi
 
   log "Applying Kyverno verifyImages policy (mode=${validation_action} scope=${KYVERNO_SIGNATURE_SCOPE} images=${KYVERNO_SIGNATURE_IMAGE_PATTERNS})."
@@ -2291,6 +2321,38 @@ spec:
             severity: warning
           annotations:
             summary: Container pod startup is taking longer than expected.
+        - alert: BretterVmStartupSlow
+          expr: |
+            (
+              (time() - kube_pod_created{namespace="${NAMESPACE}",pod=~"vm-.*"}) / 60
+            ) > ${MONITORING_VM_PENDING_MINUTES}
+            and on(namespace, pod)
+            kube_pod_status_phase{namespace="${NAMESPACE}",phase=~"Pending|Running"} == 1
+            and on(namespace, pod)
+            kube_pod_status_ready{namespace="${NAMESPACE}",condition="true"} == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: VM pod startup is taking longer than ${MONITORING_VM_PENDING_MINUTES} minutes.
+        - alert: BretterVmDiskPvcPendingTooLong
+          expr: |
+            (
+              (time() - kube_persistentvolumeclaim_created{
+                namespace="${NAMESPACE}",
+                persistentvolumeclaim=~"vm-disk-.*"
+              }) / 60
+            ) > ${MONITORING_VM_DISK_PVC_PENDING_MINUTES}
+            and on(namespace, persistentvolumeclaim)
+            kube_persistentvolumeclaim_status_phase{
+              namespace="${NAMESPACE}",
+              phase="Pending"
+            } == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: VM disk PVC provisioning is taking longer than ${MONITORING_VM_DISK_PVC_PENDING_MINUTES} minutes.
         - alert: BretterContainerCrashLoop
           expr: |
             max by (namespace, pod, container) (
@@ -2362,7 +2424,9 @@ spec:
             summary: A direct-upload DataVolume PVC has been active for over ${MONITORING_DV_STALE_MINUTES} minutes.
         - alert: BretterGhcrAccessCheckFailing
           expr: |
-            increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-ghcr-access-check-.*"}[30m]) > 0
+            sum by (namespace) (
+              increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-ghcr-access-check-.*"}[30m])
+            ) > 0
           for: 10m
           labels:
             severity: critical
@@ -2396,20 +2460,6 @@ spec:
             severity: critical
           annotations:
             summary: Frontend deployment has no available replicas.
-        - alert: BretterLabInstanceControllerUnavailable
-          expr: |
-            (
-              max(kube_deployment_spec_replicas{namespace="${NAMESPACE}",deployment="bretter-labinstance-controller"}) > 0
-            )
-            and
-            (
-              max(kube_deployment_status_replicas_available{namespace="${NAMESPACE}",deployment="bretter-labinstance-controller"}) < 1
-            )
-          for: 10m
-          labels:
-            severity: critical
-          annotations:
-            summary: LabInstance controller has no available replicas.
         - alert: BretterLabImageImportControllerUnavailable
           expr: |
             (
@@ -2428,13 +2478,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[15m]))
                   ),
                   1
                 )
@@ -2449,13 +2499,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-vm-launch-.*"}[1h]))
                   ),
                   1
                 )
@@ -2470,13 +2520,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[15m]))
                   ),
                   1
                 )
@@ -2491,13 +2541,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-readiness-.*"}[1h]))
                   ),
                   1
                 )
@@ -2512,13 +2562,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[15m]))
                   ),
                   1
                 )
@@ -2533,13 +2583,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-upload-finalize-.*"}[1h]))
                   ),
                   1
                 )
@@ -2554,13 +2604,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[15m]))
                   ),
                   1
                 )
@@ -2575,13 +2625,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-image-import-queue-age-.*"}[1h]))
                   ),
                   1
                 )
@@ -2596,13 +2646,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[15m]))
                   ),
                   1
                 )
@@ -2617,13 +2667,13 @@ spec:
           expr: |
             (
               100 * (
-                sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
+                sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
                 /
                 clamp_min(
                   (
-                    sum(increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_failed{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
                     +
-                    sum(increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
+                    sum by (namespace) (increase(kube_job_status_succeeded{namespace="${NAMESPACE}",job_name=~"bretter-slo-rdp-connect-latency-.*"}[1h]))
                   ),
                   1
                 )
@@ -2963,7 +3013,7 @@ render_helm_values_override() {
   local labimageimport_controller_lease_name labimageimport_controller_lease_duration_seconds
   local labimageimport_controller_retry_period_seconds labimageimport_controller_poll_seconds
   local labimageimport_controller_metrics_bind labimageimport_controller_metrics_port
-  local team_namespace_mode team_namespace_prefix
+  local team_namespace_mode team_namespace_prefix team_namespace_bootstrap_enabled
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
   local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
   local backend_service_type backend_service_nodeport_line
@@ -3016,6 +3066,7 @@ render_helm_values_override() {
   labimageimport_controller_metrics_port="$(yaml_escape "$LABIMAGEIMPORT_CONTROLLER_METRICS_PORT")"
   team_namespace_mode="$(yaml_escape "$TEAM_NAMESPACE_MODE")"
   team_namespace_prefix="$(yaml_escape "$TEAM_NAMESPACE_PREFIX")"
+  team_namespace_bootstrap_enabled="$(yaml_escape "$TEAM_NAMESPACE_BOOTSTRAP_ENABLED")"
   public_scheme="$(yaml_escape "$PUBLIC_SCHEME")"
   tls_secret_name="$(yaml_escape "$TLS_SECRET_NAME")"
   windows_machine_type="$(yaml_escape "$WINDOWS_MACHINE_TYPE")"
@@ -3115,6 +3166,7 @@ appTemplateValues:
   LABIMAGEIMPORT_CONTROLLER_METRICS_PORT: "${labimageimport_controller_metrics_port}"
   TEAM_NAMESPACE_MODE: "${team_namespace_mode}"
   TEAM_NAMESPACE_PREFIX: "${team_namespace_prefix}"
+  TEAM_NAMESPACE_BOOTSTRAP_ENABLED: "${team_namespace_bootstrap_enabled}"
   PUBLIC_SCHEME: "${public_scheme}"
   TLS_SECRET_NAME: "${tls_secret_name}"
   ADMIN_BOOTSTRAP_PASSWORD: "${admin_bootstrap_password}"
@@ -4362,15 +4414,18 @@ spec:
 
                   def parse_ref(image_ref: str) -> tuple[str, str]:
                       ref = image_ref.strip()
+                      manifest_ref = ""
+                      name_part = ref
                       if "@" in ref:
-                          image_name, manifest_ref = ref.rsplit("@", 1)
-                          return image_name, manifest_ref
-                      image_name = ref
+                          name_part, manifest_ref = ref.rsplit("@", 1)
+                      image_name = name_part
                       tail = image_name.rsplit("/", 1)[-1]
                       if ":" in tail:
-                          manifest_ref = tail.rsplit(":", 1)[-1]
-                          image_name = image_name[: -(len(manifest_ref) + 1)]
-                      else:
+                          tag = tail.rsplit(":", 1)[-1]
+                          image_name = image_name[: -(len(tag) + 1)]
+                          if not manifest_ref:
+                              manifest_ref = tag
+                      if not manifest_ref:
                           manifest_ref = "latest"
                       return image_name, manifest_ref
 
@@ -5134,7 +5189,8 @@ run_post_deploy_admin_api_smoke_check() {
     admin_verify_tls="0"
   fi
   if postdeploy_admin_uses_secret_credentials; then
-    admin_auth_env_yaml="$(cat <<EOF
+    admin_auth_env_yaml="$(
+      cat <<EOF
             - name: USERNAME
               valueFrom:
                 secretKeyRef:
@@ -5149,11 +5205,12 @@ run_post_deploy_admin_api_smoke_check() {
             - name: USERNAME_FALLBACK
               value: "${ADMIN_API_SMOKE_USERNAME}"
 EOF
-)"
+    )"
   else
     username_b64="$(printf '%s' "$ADMIN_API_SMOKE_USERNAME" | base64 -w0)"
     password_b64="$(printf '%s' "$ADMIN_API_SMOKE_PASSWORD" | base64 -w0)"
-    admin_auth_env_yaml="$(cat <<EOF
+    admin_auth_env_yaml="$(
+      cat <<EOF
             - name: USERNAME_B64
               value: "${username_b64}"
             - name: PASSWORD_B64
@@ -5161,7 +5218,7 @@ EOF
             - name: USERNAME_FALLBACK
               value: "${ADMIN_API_SMOKE_USERNAME}"
 EOF
-)"
+    )"
   fi
 
   log "Running post-deploy admin API smoke validation job..."
@@ -5304,7 +5361,8 @@ run_post_deploy_synthetic_check() {
     synthetic_verify_tls="0"
   fi
   if postdeploy_synthetic_uses_secret_credentials; then
-    synthetic_auth_env_yaml="$(cat <<EOF
+    synthetic_auth_env_yaml="$(
+      cat <<EOF
             - name: SYNTHETIC_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -5319,11 +5377,12 @@ run_post_deploy_synthetic_check() {
             - name: SYNTHETIC_USERNAME_FALLBACK
               value: "${SYNTHETIC_CHECK_USERNAME}"
 EOF
-)"
+    )"
   else
     username_b64="$(printf '%s' "$SYNTHETIC_CHECK_USERNAME" | base64 -w0)"
     password_b64="$(printf '%s' "$SYNTHETIC_CHECK_PASSWORD" | base64 -w0)"
-    synthetic_auth_env_yaml="$(cat <<EOF
+    synthetic_auth_env_yaml="$(
+      cat <<EOF
             - name: SYNTHETIC_USERNAME_B64
               value: "${username_b64}"
             - name: SYNTHETIC_PASSWORD_B64
@@ -5331,7 +5390,7 @@ EOF
             - name: SYNTHETIC_USERNAME_FALLBACK
               value: "${SYNTHETIC_CHECK_USERNAME}"
 EOF
-)"
+    )"
   fi
 
   log "Running post-deploy synthetic validation job..."
@@ -5684,7 +5743,7 @@ log_runtime_configuration() {
   log "Backend images (runtime/admin jobs): ${BACKEND_IMAGE} / ${BACKEND_ADMIN_IMAGE}"
   log "Orchestration backends (vm/image): ${ORCHESTRATION_BACKEND} / ${IMAGE_IMPORT_BACKEND}"
   log "LabImageImport controller enabled: ${LABIMAGEIMPORT_CONTROLLER_ENABLED} (poll=${LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS}s metrics=${LABIMAGEIMPORT_CONTROLLER_METRICS_BIND}:${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT} leader-election=${LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED})"
-  log "Team namespace mode: ${TEAM_NAMESPACE_MODE} (prefix=${TEAM_NAMESPACE_PREFIX})"
+  log "Team namespace mode: ${TEAM_NAMESPACE_MODE} (prefix=${TEAM_NAMESPACE_PREFIX} bootstrap=${TEAM_NAMESPACE_BOOTSTRAP_ENABLED})"
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Backend/frontend HPA min-max cpu-target: ${BACKEND_HPA_MIN_REPLICAS}-${BACKEND_HPA_MAX_REPLICAS}@${BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}% / ${FRONTEND_HPA_MIN_REPLICAS}-${FRONTEND_HPA_MAX_REPLICAS}@${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}%"
   log "Uvicorn workers per backend pod: ${UVICORN_WORKERS}"

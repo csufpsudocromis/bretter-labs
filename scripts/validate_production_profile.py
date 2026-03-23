@@ -232,6 +232,9 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             errors.append("TEAM_NAMESPACE_PREFIX must be set when TEAM_NAMESPACE_MODE=per_team.")
         elif not team_namespace_prefix.endswith("-"):
             errors.append("TEAM_NAMESPACE_PREFIX must end with '-' for deterministic tenant namespace names.")
+    team_namespace_bootstrap_enabled = get_bool("TEAM_NAMESPACE_BOOTSTRAP_ENABLED", default=False)
+    if not team_namespace_bootstrap_enabled:
+        errors.append("TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be enabled for production.")
 
     runtime_secret_name = get_text("RUNTIME_SECRETS_SECRET_NAME")
     if _looks_placeholder(runtime_secret_name):

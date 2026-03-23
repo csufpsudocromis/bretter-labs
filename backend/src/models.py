@@ -223,6 +223,21 @@ class VMTemplate(BaseModel):
     created_at: datetime
 
 
+class VMTemplateLaunchPreflightCheck(BaseModel):
+    key: str
+    status: Literal["ok", "warn", "error"]
+    detail: str
+
+
+class VMTemplateLaunchPreflight(BaseModel):
+    template_id: str
+    namespace: str
+    cluster_id: str
+    ready: bool
+    blocking_reason: Optional[str] = None
+    checks: list[VMTemplateLaunchPreflightCheck] = Field(default_factory=list)
+
+
 class ContainerTemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# shellcheck disable=SC2317  # cleanup() is invoked indirectly via EXIT trap.
+# shellcheck disable=SC2317,SC2329  # cleanup() is invoked indirectly via EXIT trap.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,8 +47,7 @@ resolve_desired_state_mode() {
       DESIRED_STATE_MODE="legacy"
       return
       ;;
-    auto | "")
-      ;;
+    auto | "") ;;
     *)
       echo "ERROR: LABINSTANCE_DESIRED_STATE_MODE must be one of: auto, lifecycle, legacy." >&2
       exit 1

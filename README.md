@@ -269,6 +269,7 @@ Proof artifact and operator docs:
 | `LABIMAGEIMPORT_CONTROLLER_METRICS_PORT` | `9410` | Metrics/liveness/readiness port for image-import controller |
 | `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`); production hardening requires `per_team` (namespace-first isolation) |
 | `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
+| `TEAM_NAMESPACE_BOOTSTRAP_ENABLED` | `1` | Auto-bootstrap per-team runtime namespaces (RBAC/quota/network policy/secret sync); required in production profile |
 | `MULTI_CLUSTER_LOCAL_CLUSTER_ID` | `local` | Logical cluster id used by the control-plane for the local runtime cluster |
 | `MULTI_CLUSTER_LOCAL_REGION` | `local` | Region label assigned to the local runtime cluster record |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
@@ -343,12 +344,16 @@ Proof artifact and operator docs:
 | `POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS` | `180` | Timeout budget for admin API smoke job |
 | `ADMIN_API_SMOKE_USERNAME` | `admin` | Admin username used by postdeploy admin smoke validation |
 | `ADMIN_API_SMOKE_PASSWORD` | empty | Admin password used by postdeploy admin smoke validation |
+| `RUN_POST_DEPLOY_SYNTHETIC_CHECK` | `1` | Run authenticated user-flow synthetic check during postdeploy (required in production profile) |
+| `SYNTHETIC_CHECK_REQUIRE_TEMPLATES` | `0` | Require at least one launchable VM template in synthetic flow (`1` enforced in production profile) |
 | `POST_DEPLOY_AUTH_SECRET_NAME` | empty | Optional secret-backed credential source for admin + synthetic post-deploy checks |
 | `POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY` | `admin_password` | Password key inside `POST_DEPLOY_AUTH_SECRET_NAME` for admin API smoke |
 | `POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY` | `synthetic_password` | Password key inside `POST_DEPLOY_AUTH_SECRET_NAME` for synthetic check |
 | `ENABLE_GHCR_ACCESS_HEALTHCHECK` | `1` | Deploy recurring GHCR registry access CronJob |
 | `GHCR_ACCESS_HEALTHCHECK_SCHEDULE` | `*/10 * * * *` | Cron schedule for GHCR access checks |
 | `GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS` | `120` | Timeout budget for each GHCR access probe run |
+| `MONITORING_VM_PENDING_MINUTES` | `10` | Alert threshold (minutes) for VM pods stuck pending/not-ready |
+| `MONITORING_VM_DISK_PVC_PENDING_MINUTES` | `8` | Alert threshold (minutes) for `vm-disk-*` PVCs stuck in Pending |
 | `ENABLE_USERFLOW_SLO_PROBES` | `1` | Deploy recurring VM/RDP/upload SLO probe CronJobs |
 | `USERFLOW_SLO_PROBE_SCHEDULE` | `*/10 * * * *` | Cron schedule for user-flow SLO probes |
 | `USERFLOW_SLO_LOOKBACK_MINUTES` | `30` | Lookback window for SLO rate checks |
@@ -428,6 +433,12 @@ Production note:
 - VM/container connect uses short-lived access tokens for connect windows.
 - Session/connect tokens are stored hashed in DB; legacy plaintext rows are migrated by Alembic.
 - Optional LDAP login support can be enabled under `/admin/settings/ldap`.
+
+## VM Launch Readiness Preflight
+
+- API: `GET /user/templates/{template_id}/preflight`
+- Purpose: checks placement, tenant runtime namespace bootstrap, source PVC availability, storage class readiness, and runner image pullability before launch.
+- UI behavior: User page runs this check per template and only enables **Start Lab** when preflight is ready.
 - Enterprise CORS mode (`BLABS_CORS_ENTERPRISE_PROFILE=1`) requires explicit `BLABS_CORS_ALLOWED_ORIGINS`, disables `BLABS_CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - In enterprise mode, default CORS methods/headers are `GET,POST,PUT,PATCH,DELETE,OPTIONS` and `Accept,Content-Type,Authorization` (override via `BLABS_CORS_ALLOWED_METHODS` and `BLABS_CORS_ALLOWED_HEADERS`).
 - Server-side launch locking enforces one active lab per user, even under concurrent requests.

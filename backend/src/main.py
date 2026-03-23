@@ -107,6 +107,8 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
     if team_namespace_mode != "per_team":
         errors.append("BLABS_TEAM_NAMESPACE_MODE must be per_team when BLABS_PRODUCTION_PROFILE=true.")
+    if not bool(getattr(settings, "team_namespace_bootstrap_enabled", True)):
+        errors.append("BLABS_TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be true when BLABS_PRODUCTION_PROFILE=true.")
     if not _configured_cors_origins():
         errors.append("BLABS_CORS_ALLOWED_ORIGINS must be set when BLABS_PRODUCTION_PROFILE=true.")
     cors_origins_raw = str(getattr(settings, "cors_allowed_origins", "") or "").strip().lower()

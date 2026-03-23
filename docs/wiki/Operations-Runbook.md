@@ -93,6 +93,49 @@ kubectl -n labs get pods | rg '^ct-'
 kubectl -n labs get pods | rg '^vm-|^virt-launcher-'
 ```
 
+## VM launch preflight and pending triage
+
+Check user-facing launch preflight for a specific template before escalating:
+
+```bash
+TOKEN='<session-or-api-token>'
+TEMPLATE_ID='<template-id>'
+curl -k -sS -H "Authorization: Bearer ${TOKEN}" \
+  "https://<NODE_EXTERNAL_HOST>:30073/api/user/templates/${TEMPLATE_ID}/preflight" | jq .
+```
+
+Inspect preflight blockers quickly:
+
+- `checks[].key=placement`: cluster selection/policy issue.
+- `checks[].key=namespace`: tenant namespace bootstrap/RBAC/secret-sync issue.
+- `checks[].key=source_pvc`: image clone source PVC missing/inaccessible.
+- `checks[].key=storage_class`: storage class lookup mismatch.
+- `checks[].key=runner_image`: node-level image pull issue.
+
+For pods stuck in `pending`/`building`:
+
+```bash
+kubectl -n labs get pods | rg '^vm-|^virt-launcher-'
+kubectl -n labs describe pod <vm-pod-name>
+kubectl -n labs get pvc | rg '^vm-disk-'
+kubectl -n labs describe pvc <vm-disk-pvc-name>
+kubectl -n labs get events --sort-by=.metadata.creationTimestamp | tail -n 80
+```
+
+Storage class health check:
+
+```bash
+kubectl get storageclass
+kubectl get csinodes
+```
+
+Alert-focused checks for pending VM startup/PVC provisioning:
+
+```bash
+kubectl -n monitoring get prometheusrules | rg BretterVmStartupSlow
+kubectl -n monitoring get prometheusrules | rg BretterVmDiskPvcPendingTooLong
+```
+
 ## Rollout verification
 
 ```bash

@@ -11,6 +11,7 @@ Use this checklist before first production deployment and for each release.
 - Set `appTemplateValues.CONTROL_NODE` in site overlay.
 - Set `appTemplateValues.NODE_EXTERNAL_HOST` in site overlay.
 - Set `appTemplateValues.RUNNER_NODE_SELECTOR_VALUE` in site overlay.
+- Set `appTemplateValues.TEAM_NAMESPACE_MODE=per_team` and `appTemplateValues.TEAM_NAMESPACE_BOOTSTRAP_ENABLED=1`.
 - Set `appTemplateValues.CORS_ALLOWED_ORIGINS` to your real UI origins (no localhost/127.0.0.1).
 - Set `appTemplateValues.VM_STORAGE_CLASS` to the intended production class.
 - Set `appTemplateValues.TLS_SECRET_NAME` to the production certificate secret.
@@ -25,6 +26,7 @@ Use this checklist before first production deployment and for each release.
 - Set `KYVERNO_SIGNATURE_SCOPE=namespace_first_party` and define `KYVERNO_SIGNATURE_IMAGE_PATTERNS`.
 - Keep `REQUIRE_SCHEMA_READY=1` in production values/overlays.
 - Set `POST_DEPLOY_AUTH_SECRET_NAME` and credential key names for authenticated post-deploy checks.
+- Keep `RUN_POST_DEPLOY_SYNTHETIC_CHECK=1` and `SYNTHETIC_CHECK_REQUIRE_TEMPLATES=1` for production profiles.
 - Enable RDP connect-latency probe (`ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE=1`) with secret-based auth (`USERFLOW_SLO_API_AUTH_SECRET_NAME`, `USERFLOW_SLO_API_AUTH_*_KEY`, `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0`).
 
 ## Image and supply chain
@@ -65,6 +67,7 @@ Use this checklist before first production deployment and for each release.
 - Run post-deploy API health, admin API smoke, and synthetic checks.
 - Ensure release-branch required checks include post-deploy synthetic + restore drill + Playwright RDP smoke workflows.
 - Verify recurring probe CronJobs are healthy (`bretter-ghcr-access-check`, `bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).
+- Verify pending-path alerts are configured for startup/storage bottlenecks (`BretterVmStartupSlow`, `BretterVmDiskPvcPendingTooLong`) and tune thresholds via `MONITORING_VM_PENDING_MINUTES` + `MONITORING_VM_DISK_PVC_PENDING_MINUTES`.
 - Verify backup/restore path for Postgres before go-live:
   - `NAMESPACE=labs ./scripts/restore_drill_postgres.sh`
   - or `NAMESPACE=labs RUN_RESTORE_DRILL=1 ./scripts/production_go_live_proof.sh`

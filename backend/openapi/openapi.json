@@ -4404,6 +4404,80 @@
         "title": "VMTemplateCreate",
         "type": "object"
       },
+      "VMTemplateLaunchPreflight": {
+        "properties": {
+          "blocking_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocking Reason"
+          },
+          "checks": {
+            "items": {
+              "$ref": "#/components/schemas/VMTemplateLaunchPreflightCheck"
+            },
+            "title": "Checks",
+            "type": "array"
+          },
+          "cluster_id": {
+            "title": "Cluster Id",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "template_id": {
+            "title": "Template Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "template_id",
+          "namespace",
+          "cluster_id",
+          "ready"
+        ],
+        "title": "VMTemplateLaunchPreflight",
+        "type": "object"
+      },
+      "VMTemplateLaunchPreflightCheck": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "warn",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "status",
+          "detail"
+        ],
+        "title": "VMTemplateLaunchPreflightCheck",
+        "type": "object"
+      },
       "VMTemplateUpdate": {
         "properties": {
           "auto_delete_minutes": {
@@ -9897,6 +9971,64 @@
           }
         },
         "summary": "List Available Templates",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/user/templates/{template_id}/preflight": {
+      "get": {
+        "operationId": "preflight_template_launch_user_templates__template_id__preflight_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VMTemplateLaunchPreflight"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preflight Template Launch",
         "tags": [
           "user"
         ]

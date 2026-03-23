@@ -36,6 +36,7 @@ appTemplateValues:
   LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS: "10"
   TEAM_NAMESPACE_MODE: per_team
   TEAM_NAMESPACE_PREFIX: "labs-team-"
+  TEAM_NAMESPACE_BOOTSTRAP_ENABLED: "1"
   REQUIRE_SCHEMA_READY: "1"
   EXPECTED_ALEMBIC_REVISION: ""
   # Keep empty in committed values files. Inject key material via runtime Kubernetes Secret.

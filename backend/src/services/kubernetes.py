@@ -123,6 +123,9 @@ class KubernetesService:
             return self._namespace_override
         return str(settings.kube_namespace or "labs").strip() or "labs"
 
+    def _control_namespace(self) -> str:
+        return str(settings.kube_namespace or "labs").strip() or "labs"
+
     def _safe_owner(self, owner: str) -> str:
         safe_owner = re.sub(r"[^a-z0-9-]+", "-", (owner or "").lower()).strip("-")
         return safe_owner or "user"
@@ -296,6 +299,69 @@ class KubernetesService:
     def _pool_pvc_name(self, template_id: str) -> str:
         return f"pool-{template_id[:8]}-{uuid4().hex[:6]}"
 
+    def _read_source_pvc_with_fallback(
+        self,
+        *,
+        image_source_pvc: str,
+        runtime_namespace: str,
+    ) -> tuple[client.V1PersistentVolumeClaim, str]:
+        core = self._client()
+        source_name = str(image_source_pvc or "").strip()
+        if not source_name:
+            raise RuntimeError("image source PVC is required for clone-based VM launch")
+        primary_namespace = self._control_namespace()
+        candidates = [runtime_namespace]
+        if runtime_namespace != primary_namespace:
+            candidates.append(primary_namespace)
+        last_exc: ApiException | None = None
+        for candidate_ns in candidates:
+            try:
+                source = core.read_namespaced_persistent_volume_claim(name=source_name, namespace=candidate_ns)
+                return source, candidate_ns
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+                last_exc = exc
+        if last_exc is not None:
+            raise RuntimeError(
+                f"source PVC {source_name} not found in runtime namespace {runtime_namespace} "
+                f"or control namespace {primary_namespace}"
+            ) from last_exc
+        raise RuntimeError(f"source PVC {source_name} not found")
+
+    @staticmethod
+    def _clone_data_source_kwargs(
+        *,
+        source_name: str,
+        source_namespace: str,
+        target_namespace: str,
+    ) -> dict[str, object]:
+        if source_namespace == target_namespace:
+            return {
+                "data_source": client.V1TypedLocalObjectReference(
+                    api_group="",
+                    kind="PersistentVolumeClaim",
+                    name=source_name,
+                )
+            }
+        return {
+            "data_source_ref": client.V1TypedObjectReference(
+                api_group="",
+                kind="PersistentVolumeClaim",
+                name=source_name,
+                namespace=source_namespace,
+            )
+        }
+
+    def resolve_vm_source_pvc(
+        self,
+        *,
+        image_source_pvc: str,
+        runtime_namespace: str | None = None,
+    ) -> tuple[client.V1PersistentVolumeClaim, str]:
+        namespace = self._namespace(runtime_namespace)
+        return self._read_source_pvc_with_fallback(image_source_pvc=image_source_pvc, runtime_namespace=namespace)
+
     def _ensure_instance_disk_pvc(self, req: PodRequest) -> str:
         core = self._client()
         namespace = self._namespace(req.namespace)
@@ -337,12 +403,21 @@ class KubernetesService:
             if exc.status != 404:
                 raise
 
-        source = core.read_namespaced_persistent_volume_claim(name=req.image_source_pvc, namespace=namespace)
+        source, source_namespace = self._read_source_pvc_with_fallback(
+            image_source_pvc=req.image_source_pvc,
+            runtime_namespace=namespace,
+        )
         source_request = None
         if source.spec and source.spec.resources and source.spec.resources.requests:
             source_request = source.spec.resources.requests.get("storage")
         if not source_request:
             raise RuntimeError(f"source PVC {req.image_source_pvc} has no storage request")
+
+        clone_data_source_kwargs = self._clone_data_source_kwargs(
+            source_name=req.image_source_pvc,
+            source_namespace=source_namespace,
+            target_namespace=namespace,
+        )
 
         body = client.V1PersistentVolumeClaim(
             metadata=client.V1ObjectMeta(
@@ -353,11 +428,7 @@ class KubernetesService:
                 access_modes=["ReadWriteOnce"],
                 storage_class_name=(settings.kube_vm_storage_class or source.spec.storage_class_name or None),
                 resources=client.V1ResourceRequirements(requests={"storage": source_request}),
-                data_source=client.V1TypedLocalObjectReference(
-                    api_group="",
-                    kind="PersistentVolumeClaim",
-                    name=req.image_source_pvc,
-                ),
+                **clone_data_source_kwargs,
             ),
         )
         core.create_namespaced_persistent_volume_claim(namespace=namespace, body=body)
@@ -437,7 +508,10 @@ class KubernetesService:
         if current >= desired:
             return
 
-        source = core.read_namespaced_persistent_volume_claim(name=image_source_pvc, namespace=namespace)
+        source, source_namespace = self._read_source_pvc_with_fallback(
+            image_source_pvc=image_source_pvc,
+            runtime_namespace=namespace,
+        )
         source_request = None
         if source.spec and source.spec.resources and source.spec.resources.requests:
             source_request = source.spec.resources.requests.get("storage")
@@ -461,10 +535,10 @@ class KubernetesService:
                     access_modes=["ReadWriteOnce"],
                     storage_class_name=storage_class,
                     resources=client.V1ResourceRequirements(requests={"storage": source_request}),
-                    data_source=client.V1TypedLocalObjectReference(
-                        api_group="",
-                        kind="PersistentVolumeClaim",
-                        name=image_source_pvc,
+                    **self._clone_data_source_kwargs(
+                        source_name=image_source_pvc,
+                        source_namespace=source_namespace,
+                        target_namespace=namespace,
                     ),
                 ),
             )
@@ -473,6 +547,106 @@ class KubernetesService:
             except ApiException as exc:
                 if exc.status != 409:
                     raise
+
+    def check_vm_runner_image_pullability(
+        self,
+        *,
+        namespace: str | None = None,
+        timeout_seconds: int = 30,
+    ) -> tuple[bool, str]:
+        core = self._client()
+        ns = self._namespace(namespace)
+        timeout = max(10, int(timeout_seconds or 30))
+        digest = hashlib.sha1(str(settings.runner_image).encode("utf-8")).hexdigest()[:10]
+        pod_name = f"runner-preflight-{digest}-{uuid4().hex[:6]}"
+
+        metadata = client.V1ObjectMeta(
+            name=pod_name,
+            labels={
+                "app.kubernetes.io/component": "vm-runner-preflight",
+                "app.kubernetes.io/part-of": "bretter-labs",
+            },
+        )
+        container = client.V1Container(
+            name="runner-preflight",
+            image=settings.runner_image,
+            image_pull_policy="IfNotPresent",
+        )
+        spec_kwargs: dict[str, object] = {
+            "containers": [container],
+            "restart_policy": "Never",
+            "termination_grace_period_seconds": 0,
+            "tolerations": [
+                client.V1Toleration(
+                    key="node-role.kubernetes.io/control-plane",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+                client.V1Toleration(
+                    key="node-role.kubernetes.io/master",
+                    operator="Exists",
+                    effect="NoSchedule",
+                ),
+            ],
+        }
+        node_selector_value = str(settings.kube_node_selector_value or "").strip()
+        if node_selector_value:
+            node_selector_key = str(settings.kube_node_selector_key or "kubernetes.io/hostname").strip()
+            spec_kwargs["node_selector"] = {node_selector_key: node_selector_value}
+        if settings.image_pull_secret:
+            spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
+        pod = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=client.V1PodSpec(**spec_kwargs))
+
+        try:
+            core.create_namespaced_pod(namespace=ns, body=pod)
+        except ApiException as exc:
+            detail = exc.reason or str(exc.status)
+            return False, f"failed to create runner preflight pod: {detail}"
+
+        deadline = time.time() + timeout
+        try:
+            while time.time() < deadline:
+                try:
+                    snapshot = core.read_namespaced_pod(name=pod_name, namespace=ns)
+                except ApiException as exc:
+                    if exc.status == 404:
+                        return False, "runner preflight pod disappeared before completion"
+                    return False, f"failed to poll runner preflight pod: {exc.reason or exc.status}"
+                phase = str(snapshot.status.phase or "").strip().lower()
+                wait_reason = ""
+                wait_message = ""
+                for status_row in list(snapshot.status.init_container_statuses or []) + list(
+                    snapshot.status.container_statuses or []
+                ):
+                    state = status_row.state
+                    if state and state.waiting:
+                        wait_reason = str(state.waiting.reason or "").strip()
+                        wait_message = str(state.waiting.message or "").strip()
+                        break
+                if wait_reason.lower() in {"imagepullbackoff", "errimagepull", "invalidimagename"}:
+                    detail = wait_message or wait_reason
+                    return False, f"runner image pull failed: {detail}"
+                if phase in {"running", "succeeded", "failed"}:
+                    # A failed phase can still mean image pull succeeded but command/process exited quickly.
+                    return True, f"runner image pull check completed (phase={phase})."
+                if phase == "pending":
+                    reason = str(snapshot.status.reason or "").lower()
+                    message = str(snapshot.status.message or "")
+                    if "unschedulable" in reason or "unschedulable" in message.lower():
+                        return False, message or "runner preflight pod is unschedulable."
+                time.sleep(1)
+            return False, f"runner image pull check timed out after {timeout}s"
+        finally:
+            try:
+                core.delete_namespaced_pod(
+                    name=pod_name,
+                    namespace=ns,
+                    grace_period_seconds=0,
+                    propagation_policy="Foreground",
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.debug("Failed to delete runner preflight pod %s: %s", pod_name, exc)
 
     def create_service_for_pod(
         self,

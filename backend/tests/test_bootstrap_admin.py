@@ -17,6 +17,9 @@ def _set_valid_production_baseline(monkeypatch):
     monkeypatch.setattr(main_module.settings, "container_signature_key_ref", "/etc/bretter-signing/cosign.pub")
     monkeypatch.setattr(main_module.settings, "cors_enterprise_profile", True)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://10.68.49.250:30073")
+    monkeypatch.setattr(main_module.settings, "team_namespace_mode", "per_team")
+    monkeypatch.setattr(main_module.settings, "team_namespace_prefix", "labs-team-")
+    monkeypatch.setattr(main_module.settings, "team_namespace_bootstrap_enabled", True)
     monkeypatch.setattr(main_module.settings, "kube_node_selector_value", "cbekube2")
     monkeypatch.setattr(main_module.settings, "secrets_encryption_key", "A" * 32)
 
@@ -80,6 +83,13 @@ def test_startup_validation_requires_signature_key_ref_in_production(monkeypatch
     _set_valid_production_baseline(monkeypatch)
     monkeypatch.setattr(main_module.settings, "container_signature_key_ref", "")
     with pytest.raises(RuntimeError, match="BLABS_CONTAINER_SIGNATURE_KEY_REF must be set"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_requires_team_namespace_bootstrap_in_production(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "team_namespace_bootstrap_enabled", False)
+    with pytest.raises(RuntimeError, match="BLABS_TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be true"):
         main_module._validate_startup_config()
 
 

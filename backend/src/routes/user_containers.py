@@ -40,6 +40,7 @@ from ..services.multi_cluster import (
 )
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
+from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
@@ -1374,11 +1375,13 @@ def _create_container_runtime(
     *,
     instance_id: str,
     owner: str,
+    team: str | None,
     namespace: str,
     runtime_kube,
     template: ContainerTemplateTable,
     image_ref: str,
 ) -> tuple[PodStatus, str | None, int]:
+    ensure_team_runtime_namespace(runtime_kube, team=team, namespace=namespace)
     pod_status = runtime_kube.create_container_pod(
         _container_launch_request(instance_id, owner, template, image_ref, namespace)
     )
@@ -1535,6 +1538,7 @@ def list_user_containers(
                         pod_status, access_url, _ = _create_container_runtime(
                             instance_id=record.id,
                             owner=record.owner,
+                            team=getattr(record, "tenant", None),
                             namespace=record_namespace,
                             runtime_kube=runtime_kube,
                             template=tmpl,
@@ -1856,6 +1860,7 @@ def start_container_template(
         pod_status, access_url, container_port = _create_container_runtime(
             instance_id=instance_id,
             owner=user.username,
+            team=getattr(user, "team", None),
             namespace=runtime_namespace,
             runtime_kube=runtime_kube,
             template=template,
@@ -2091,6 +2096,7 @@ def restart_container(
     pod_status, access_url, container_port = _create_container_runtime(
         instance_id=record.id,
         owner=user.username,
+        team=getattr(user, "team", None),
         namespace=runtime_namespace,
         runtime_kube=runtime_kube,
         template=template,
