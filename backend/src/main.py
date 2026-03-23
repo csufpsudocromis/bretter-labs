@@ -15,7 +15,7 @@ from .logging_utils import configure_capped_error_file_logging
 from .rbac import Role
 from .routes import admin, admin_containers, admin_multicluster, auth, user, user_containers
 from .services.kubernetes import kube
-from .services.multi_cluster import ensure_local_cluster
+from .services.multi_cluster import ensure_local_cluster, process_artifact_replication_queue
 from .tables import Config, ContainerImage, User
 from .time_utils import utc_now
 from .version import APP_VERSION
@@ -271,6 +271,7 @@ async def reaper_loop() -> None:
             with Session(engine) as session:
                 kube.reaper_tick(session)
                 _scan_due_container_image(session)
+                process_artifact_replication_queue(session, limit=25)
         except Exception as exc:
             logger.warning("Reaper loop error: %s", exc)
         await asyncio.sleep(settings.reaper_interval_seconds)

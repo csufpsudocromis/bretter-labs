@@ -384,6 +384,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/replication/artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Artifact Replications */
+        get: operations["list_artifact_replications_admin_replication_artifacts_get"];
+        put?: never;
+        /** Enqueue Artifact Replication */
+        post: operations["enqueue_artifact_replication_admin_replication_artifacts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/replication/artifacts/process": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Process Replication Queue */
+        post: operations["process_replication_queue_admin_replication_artifacts_process_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/replication/artifacts/{replication_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Artifact Replication */
+        patch: operations["update_artifact_replication_admin_replication_artifacts__replication_id__patch"];
+        trace?: never;
+    };
     "/admin/resources": {
         parameters: {
             query?: never;
@@ -395,6 +447,76 @@ export interface paths {
         get: operations["cluster_resources_admin_resources_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/clusters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Clusters */
+        get: operations["list_clusters_admin_settings_clusters_get"];
+        put?: never;
+        /** Create Cluster */
+        post: operations["create_cluster_admin_settings_clusters_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/clusters/telemetry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Cluster Telemetry */
+        get: operations["cluster_telemetry_admin_settings_clusters_telemetry_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/clusters/{cluster_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Disable Cluster */
+        delete: operations["disable_cluster_admin_settings_clusters__cluster_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Cluster */
+        patch: operations["update_cluster_admin_settings_clusters__cluster_id__patch"];
+        trace?: never;
+    };
+    "/admin/settings/clusters/{cluster_id}/probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Probe Cluster */
+        post: operations["probe_cluster_admin_settings_clusters__cluster_id__probe_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -451,6 +573,58 @@ export interface paths {
         head?: never;
         /** Update Ldap Settings */
         patch: operations["update_ldap_settings_admin_settings_ldap_patch"];
+        trace?: never;
+    };
+    "/admin/settings/placement-policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Team Placement Policies */
+        get: operations["list_team_placement_policies_admin_settings_placement_policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/placement-policies/explain": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Explain Team Placement Policy */
+        get: operations["explain_team_placement_policy_admin_settings_placement_policies_explain_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/placement-policies/{team}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Upsert Team Placement Policy */
+        put: operations["upsert_team_placement_policy_admin_settings_placement_policies__team__put"];
+        post?: never;
+        /** Delete Team Placement Policy */
+        delete: operations["delete_team_placement_policy_admin_settings_placement_policies__team__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/settings/runtime": {
@@ -1118,6 +1292,11 @@ export interface components {
             target_id: string;
             /** Target Type */
             target_type: string;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
         };
         /** AlertManagerAlert */
         AlertManagerAlert: {
@@ -1183,6 +1362,79 @@ export interface components {
             fetched_at: string;
             rdp_readiness?: components["schemas"]["RdpReadinessTelemetry"];
         };
+        /** ArtifactReplicationCreate */
+        ArtifactReplicationCreate: {
+            /** Artifact Id */
+            artifact_id: string;
+            /**
+             * Artifact Type
+             * @enum {string}
+             */
+            artifact_type: "vm_image" | "vm_template" | "container_image" | "container_template";
+            /** Source Cluster Id */
+            source_cluster_id?: string | null;
+            /** Target Cluster Ids */
+            target_cluster_ids: string[];
+            /** Tenant */
+            tenant?: string | null;
+        };
+        /** ArtifactReplicationOut */
+        ArtifactReplicationOut: {
+            /** Artifact Id */
+            artifact_id: string;
+            /** Artifact Type */
+            artifact_type: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Id */
+            id: string;
+            /** Last Attempt At */
+            last_attempt_at?: string | null;
+            /** Last Synced At */
+            last_synced_at?: string | null;
+            /**
+             * Requested By
+             * @default
+             */
+            requested_by: string;
+            /** Source Cluster Id */
+            source_cluster_id: string;
+            /** Status */
+            status: string;
+            /** Target Cluster Id */
+            target_cluster_id: string;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ArtifactReplicationUpdate */
+        ArtifactReplicationUpdate: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "syncing" | "ready" | "error";
+        };
         /** Body_upload_image_admin_images_post */
         Body_upload_image_admin_images_post: {
             /**
@@ -1198,6 +1450,213 @@ export interface components {
              * Format: binary
              */
             file: string;
+        };
+        /** ClusterConfigCreate */
+        ClusterConfigCreate: {
+            /**
+             * Capacity Weight
+             * @default 100
+             */
+            capacity_weight: number;
+            /** Compliance Tags */
+            compliance_tags?: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /** Id */
+            id: string;
+            /** Kubeconfig */
+            kubeconfig?: string | null;
+            /** Kubeconfig Secret Key */
+            kubeconfig_secret_key?: string | null;
+            /** Kubeconfig Secret Name */
+            kubeconfig_secret_name?: string | null;
+            /** Kubeconfig Secret Namespace */
+            kubeconfig_secret_namespace?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /**
+             * Region
+             * @default local
+             */
+            region: string;
+            /**
+             * Runtime Enabled
+             * @default false
+             */
+            runtime_enabled: boolean;
+            /** Runtime Namespace */
+            runtime_namespace?: string | null;
+            /**
+             * Schedule Enabled
+             * @default true
+             */
+            schedule_enabled: boolean;
+        };
+        /** ClusterConfigOut */
+        ClusterConfigOut: {
+            /** Capacity Weight */
+            capacity_weight: number;
+            /** Compliance Tags */
+            compliance_tags?: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Health Message
+             * @default
+             */
+            health_message: string;
+            /**
+             * Health Status
+             * @default unknown
+             */
+            health_status: string;
+            /** Id */
+            id: string;
+            /** Is Local */
+            is_local: boolean;
+            /**
+             * Kubeconfig Configured
+             * @default false
+             */
+            kubeconfig_configured: boolean;
+            /** Kubeconfig Secret Key */
+            kubeconfig_secret_key?: string | null;
+            /** Kubeconfig Secret Name */
+            kubeconfig_secret_name?: string | null;
+            /** Kubeconfig Secret Namespace */
+            kubeconfig_secret_namespace?: string | null;
+            /**
+             * Kubeconfig Source
+             * @default none
+             */
+            kubeconfig_source: string;
+            /** Last Heartbeat At */
+            last_heartbeat_at?: string | null;
+            /** Name */
+            name: string;
+            /**
+             * Notes
+             * @default
+             */
+            notes: string;
+            /** Region */
+            region: string;
+            /** Runtime Enabled */
+            runtime_enabled: boolean;
+            /**
+             * Runtime Namespace
+             * @default
+             */
+            runtime_namespace: string;
+            /** Schedule Enabled */
+            schedule_enabled: boolean;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ClusterConfigUpdate */
+        ClusterConfigUpdate: {
+            /** Capacity Weight */
+            capacity_weight?: number | null;
+            /** Compliance Tags */
+            compliance_tags?: string[] | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Kubeconfig */
+            kubeconfig?: string | null;
+            /** Kubeconfig Secret Key */
+            kubeconfig_secret_key?: string | null;
+            /** Kubeconfig Secret Name */
+            kubeconfig_secret_name?: string | null;
+            /** Kubeconfig Secret Namespace */
+            kubeconfig_secret_namespace?: string | null;
+            /** Name */
+            name?: string | null;
+            /** Notes */
+            notes?: string | null;
+            /** Region */
+            region?: string | null;
+            /** Runtime Enabled */
+            runtime_enabled?: boolean | null;
+            /** Runtime Namespace */
+            runtime_namespace?: string | null;
+            /** Schedule Enabled */
+            schedule_enabled?: boolean | null;
+        };
+        /** ClusterTelemetryOut */
+        ClusterTelemetryOut: {
+            /**
+             * Active Container Instances
+             * @default 0
+             */
+            active_container_instances: number;
+            /**
+             * Active Vm Instances
+             * @default 0
+             */
+            active_vm_instances: number;
+            /** Cluster Id */
+            cluster_id: string;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Error Replications
+             * @default 0
+             */
+            error_replications: number;
+            /**
+             * Health Status
+             * @default unknown
+             */
+            health_status: string;
+            /**
+             * Queued Replications
+             * @default 0
+             */
+            queued_replications: number;
+            /**
+             * Runtime Client Message
+             * @default
+             */
+            runtime_client_message: string;
+            /**
+             * Runtime Client Ready
+             * @default false
+             */
+            runtime_client_ready: boolean;
+            /**
+             * Runtime Enabled
+             * @default false
+             */
+            runtime_enabled: boolean;
+            /**
+             * Schedule Enabled
+             * @default true
+             */
+            schedule_enabled: boolean;
+            /**
+             * Syncing Replications
+             * @default 0
+             */
+            syncing_replications: number;
         };
         /** ConcurrencySettings */
         ConcurrencySettings: {
@@ -1225,13 +1684,22 @@ export interface components {
         };
         /** ContainerImageCreate */
         ContainerImageCreate: {
+            /** Cluster Id */
+            cluster_id?: string | null;
             /** Image Ref */
             image_ref: string;
             /** Name */
             name: string;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** ContainerImageMeta */
         ContainerImageMeta: {
+            /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
             /**
              * Created At
              * Format: date-time
@@ -1257,18 +1725,32 @@ export interface components {
             name: string;
             /** Signature Warning */
             signature_warning?: string | null;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
         };
         /** ContainerImageUpdate */
         ContainerImageUpdate: {
+            /** Cluster Id */
+            cluster_id?: string | null;
             /** Image Ref */
             image_ref?: string | null;
             /** Name */
             name?: string | null;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** ContainerInstance */
         ContainerInstance: {
             /** Access Url */
             access_url?: string | null;
+            /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
             /** Container Port */
             container_port?: number | null;
             /** Id */
@@ -1280,6 +1762,11 @@ export interface components {
             last_active_at: string;
             /** Launch Diagnostics */
             launch_diagnostics?: string[];
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Owner */
             owner: string;
             /** Pod Name */
@@ -1309,6 +1796,11 @@ export interface components {
             status_stage?: string | null;
             /** Template Id */
             template_id: string;
+            /**
+             * Tenant
+             * @default default
+             */
+            tenant: string;
         };
         /** ContainerTemplate */
         ContainerTemplate: {
@@ -1319,6 +1811,11 @@ export interface components {
              * @default 60
              */
             auto_delete_minutes: number;
+            /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
             /** Command */
             command?: string | null;
             /** Container Image Id */
@@ -1414,6 +1911,11 @@ export interface components {
             /** Template Key */
             template_key: string;
             /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
+            /**
              * Version
              * @default 1
              */
@@ -1428,6 +1930,8 @@ export interface components {
              * @default 60
              */
             auto_delete_minutes: number;
+            /** Cluster Id */
+            cluster_id?: string | null;
             /** Command */
             command?: string | null;
             /** Container Image Id */
@@ -1517,6 +2021,8 @@ export interface components {
              * @default 300
              */
             startup_timeout_seconds: number;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** ContainerTemplateUpdate */
         ContainerTemplateUpdate: {
@@ -1524,6 +2030,8 @@ export interface components {
             args?: string[] | null;
             /** Auto Delete Minutes */
             auto_delete_minutes?: number | null;
+            /** Cluster Id */
+            cluster_id?: string | null;
             /** Command */
             command?: string | null;
             /** Container Image Id */
@@ -1570,6 +2078,8 @@ export interface components {
             run_as_non_root?: boolean | null;
             /** Startup Timeout Seconds */
             startup_timeout_seconds?: number | null;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** Credentials */
         Credentials: {
@@ -1673,6 +2183,11 @@ export interface components {
             /** Checksum */
             checksum: string;
             /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
+            /**
              * Created At
              * Format: date-time
              */
@@ -1685,6 +2200,11 @@ export interface components {
             name: string;
             /** Size Bytes */
             size_bytes: number;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
         };
         /** ImageImport */
         ImageImport: {
@@ -1703,6 +2223,11 @@ export interface components {
             /** Checksum */
             checksum: string;
             /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
+            /**
              * Created At
              * Format: date-time
              */
@@ -1713,6 +2238,11 @@ export interface components {
             name: string;
             /** Size Bytes */
             size_bytes: number;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
         };
         /** ImageRename */
         ImageRename: {
@@ -1921,6 +2451,38 @@ export interface components {
             status_mismatch: number;
             /** Status Mismatch Samples */
             status_mismatch_samples?: components["schemas"]["OrchestrationParityItem"][];
+        };
+        /** PlacementCandidateOut */
+        PlacementCandidateOut: {
+            /** Allowed */
+            allowed: boolean;
+            /** Cluster Id */
+            cluster_id: string;
+            /** Reasons */
+            reasons?: string[];
+        };
+        /** PlacementExplainOut */
+        PlacementExplainOut: {
+            /** Candidates */
+            candidates?: components["schemas"]["PlacementCandidateOut"][];
+            /** Error */
+            error?: string | null;
+            /** Selected Cluster Id */
+            selected_cluster_id?: string | null;
+            /** Selected Reason */
+            selected_reason?: string | null;
+            /**
+             * Team
+             * @default default
+             */
+            team: string;
+            /** Template Cluster Id */
+            template_cluster_id?: string | null;
+            /**
+             * Workload Kind
+             * @default vm
+             */
+            workload_kind: string;
         };
         /** RdpReadinessTelemetry */
         RdpReadinessTelemetry: {
@@ -2268,6 +2830,52 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** TeamPlacementPolicyOut */
+        TeamPlacementPolicyOut: {
+            /** Allowed Cluster Ids */
+            allowed_cluster_ids?: string[];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Hard Pin Cluster
+             * @default false
+             */
+            hard_pin_cluster: boolean;
+            /** Id */
+            id: string;
+            /** Preferred Cluster Id */
+            preferred_cluster_id?: string | null;
+            /** Required Compliance Tags */
+            required_compliance_tags?: string[];
+            /** Required Regions */
+            required_regions?: string[];
+            /** Team */
+            team: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** TeamPlacementPolicyUpdate */
+        TeamPlacementPolicyUpdate: {
+            /** Allowed Cluster Ids */
+            allowed_cluster_ids?: string[];
+            /**
+             * Hard Pin Cluster
+             * @default false
+             */
+            hard_pin_cluster: boolean;
+            /** Preferred Cluster Id */
+            preferred_cluster_id?: string | null;
+            /** Required Compliance Tags */
+            required_compliance_tags?: string[];
+            /** Required Regions */
+            required_regions?: string[];
+        };
         /** TeamQuotaCreate */
         TeamQuotaCreate: {
             /**
@@ -2422,6 +3030,11 @@ export interface components {
         };
         /** VMInstance */
         VMInstance: {
+            /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
             /** Console Url */
             console_url?: string | null;
             /** Id */
@@ -2431,6 +3044,11 @@ export interface components {
              * Format: date-time
              */
             last_active_at: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Owner */
             owner: string;
             /**
@@ -2449,11 +3067,21 @@ export interface components {
             status_stage?: string | null;
             /** Template Id */
             template_id: string;
+            /**
+             * Tenant
+             * @default default
+             */
+            tenant: string;
         };
         /** VMTemplate */
         VMTemplate: {
             /** Auto Delete Minutes */
             auto_delete_minutes: number;
+            /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
             /**
              * Console Provider
              * @default spice
@@ -2509,11 +3137,18 @@ export interface components {
             rdp_default_password_configured: boolean;
             /** Rdp Default Username */
             rdp_default_username?: string | null;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
         };
         /** VMTemplateCreate */
         VMTemplateCreate: {
             /** Auto Delete Minutes */
             auto_delete_minutes: number;
+            /** Cluster Id */
+            cluster_id?: string | null;
             /**
              * Console Provider
              * @default spice
@@ -2571,11 +3206,15 @@ export interface components {
             rdp_default_password?: string | null;
             /** Rdp Default Username */
             rdp_default_username?: string | null;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** VMTemplateUpdate */
         VMTemplateUpdate: {
             /** Auto Delete Minutes */
             auto_delete_minutes?: number | null;
+            /** Cluster Id */
+            cluster_id?: string | null;
             /** Console Provider */
             console_provider?: string | null;
             /** Cpu Cores */
@@ -2606,6 +3245,8 @@ export interface components {
             rdp_default_password?: string | null;
             /** Rdp Default Username */
             rdp_default_username?: string | null;
+            /** Tenant */
+            tenant?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -3549,6 +4190,149 @@ export interface operations {
             };
         };
     };
+    list_artifact_replications_admin_replication_artifacts_get: {
+        parameters: {
+            query?: {
+                artifact_type?: string | null;
+                target_cluster_id?: string | null;
+                status?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactReplicationOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    enqueue_artifact_replication_admin_replication_artifacts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactReplicationCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactReplicationOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    process_replication_queue_admin_replication_artifacts_process_post: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_artifact_replication_admin_replication_artifacts__replication_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                replication_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArtifactReplicationUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactReplicationOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     cluster_resources_admin_resources_get: {
         parameters: {
             query?: never;
@@ -3569,6 +4353,208 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_clusters_admin_settings_clusters_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterConfigOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_cluster_admin_settings_clusters_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClusterConfigCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cluster_telemetry_admin_settings_clusters_telemetry_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterTelemetryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disable_cluster_admin_settings_clusters__cluster_id__delete: {
+        parameters: {
+            query?: {
+                force?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                cluster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_cluster_admin_settings_clusters__cluster_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                cluster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ClusterConfigUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterConfigOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_cluster_admin_settings_clusters__cluster_id__probe_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                cluster_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClusterConfigOut"];
                 };
             };
             /** @description Validation Error */
@@ -3706,6 +4692,140 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["LDAPSettings"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_team_placement_policies_admin_settings_placement_policies_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamPlacementPolicyOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    explain_team_placement_policy_admin_settings_placement_policies_explain_get: {
+        parameters: {
+            query?: {
+                team?: string | null;
+                workload_kind?: string;
+                template_cluster_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlacementExplainOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upsert_team_placement_policy_admin_settings_placement_policies__team__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                team: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamPlacementPolicyUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamPlacementPolicyOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_team_placement_policy_admin_settings_placement_policies__team__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                team: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

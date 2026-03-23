@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: March 20, 2026.
+Last reviewed: March 23, 2026.
 
 ## Audience paths
 
@@ -25,6 +25,7 @@ Last reviewed: March 20, 2026.
 - CRD evolution: [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)
 - API contract checks: [API Contract and Drift Guardrails](API-Contract-and-Drift-Guardrails)
 - Tenant isolation: [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
+- Multi-cluster operations: [Multi-Cluster Operations](Multi-Cluster-Operations)
 
 ## Core pages
 
@@ -44,6 +45,7 @@ Last reviewed: March 20, 2026.
 - [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
+- [Multi-Cluster Operations](Multi-Cluster-Operations)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
@@ -104,6 +106,7 @@ Reference pages:
 - Dedicated LabImageImport controller with leader-election and metrics endpoints
 - OpenAPI snapshot + frontend API type drift checks in CI guardrails
 - Tenant namespace bootstrap script for per-team quota/policy scaffolding
+- Multi-cluster runtime dispatch with placement policy explain/telemetry and replication queue processing
 
 ## Architecture diagram
 

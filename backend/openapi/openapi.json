@@ -32,6 +32,11 @@
           "target_type": {
             "title": "Target Type",
             "type": "string"
+          },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -162,6 +167,181 @@
         "title": "AlertsAndErrorsView",
         "type": "object"
       },
+      "ArtifactReplicationCreate": {
+        "properties": {
+          "artifact_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "artifact_type": {
+            "enum": [
+              "vm_image",
+              "vm_template",
+              "container_image",
+              "container_template"
+            ],
+            "title": "Artifact Type",
+            "type": "string"
+          },
+          "source_cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Cluster Id"
+          },
+          "target_cluster_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Target Cluster Ids",
+            "type": "array"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
+          }
+        },
+        "required": [
+          "artifact_type",
+          "artifact_id",
+          "target_cluster_ids"
+        ],
+        "title": "ArtifactReplicationCreate",
+        "type": "object"
+      },
+      "ArtifactReplicationOut": {
+        "properties": {
+          "artifact_id": {
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "artifact_type": {
+            "title": "Artifact Type",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_attempt_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Attempt At"
+          },
+          "last_synced_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Synced At"
+          },
+          "requested_by": {
+            "default": "",
+            "title": "Requested By",
+            "type": "string"
+          },
+          "source_cluster_id": {
+            "title": "Source Cluster Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target_cluster_id": {
+            "title": "Target Cluster Id",
+            "type": "string"
+          },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "artifact_type",
+          "artifact_id",
+          "source_cluster_id",
+          "target_cluster_id",
+          "status",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ArtifactReplicationOut",
+        "type": "object"
+      },
+      "ArtifactReplicationUpdate": {
+        "properties": {
+          "detail": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "queued",
+              "syncing",
+              "ready",
+              "error"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ArtifactReplicationUpdate",
+        "type": "object"
+      },
       "Body_upload_image_admin_images_post": {
         "properties": {
           "file": {
@@ -188,6 +368,506 @@
           "file"
         ],
         "title": "Body_upload_site_background_admin_settings_site_background_post",
+        "type": "object"
+      },
+      "ClusterConfigCreate": {
+        "properties": {
+          "capacity_weight": {
+            "default": 100,
+            "maximum": 10000.0,
+            "minimum": 1.0,
+            "title": "Capacity Weight",
+            "type": "integer"
+          },
+          "compliance_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Compliance Tags",
+            "type": "array"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "kubeconfig": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig"
+          },
+          "kubeconfig_secret_key": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Key"
+          },
+          "kubeconfig_secret_name": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Name"
+          },
+          "kubeconfig_secret_namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Namespace"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Notes",
+            "type": "string"
+          },
+          "region": {
+            "default": "local",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Region",
+            "type": "string"
+          },
+          "runtime_enabled": {
+            "default": false,
+            "title": "Runtime Enabled",
+            "type": "boolean"
+          },
+          "runtime_namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Namespace"
+          },
+          "schedule_enabled": {
+            "default": true,
+            "title": "Schedule Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ClusterConfigCreate",
+        "type": "object"
+      },
+      "ClusterConfigOut": {
+        "properties": {
+          "capacity_weight": {
+            "title": "Capacity Weight",
+            "type": "integer"
+          },
+          "compliance_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Compliance Tags",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "health_message": {
+            "default": "",
+            "title": "Health Message",
+            "type": "string"
+          },
+          "health_status": {
+            "default": "unknown",
+            "title": "Health Status",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_local": {
+            "title": "Is Local",
+            "type": "boolean"
+          },
+          "kubeconfig_configured": {
+            "default": false,
+            "title": "Kubeconfig Configured",
+            "type": "boolean"
+          },
+          "kubeconfig_secret_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Key"
+          },
+          "kubeconfig_secret_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Name"
+          },
+          "kubeconfig_secret_namespace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Namespace"
+          },
+          "kubeconfig_source": {
+            "default": "none",
+            "title": "Kubeconfig Source",
+            "type": "string"
+          },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "title": "Notes",
+            "type": "string"
+          },
+          "region": {
+            "title": "Region",
+            "type": "string"
+          },
+          "runtime_enabled": {
+            "title": "Runtime Enabled",
+            "type": "boolean"
+          },
+          "runtime_namespace": {
+            "default": "",
+            "title": "Runtime Namespace",
+            "type": "string"
+          },
+          "schedule_enabled": {
+            "title": "Schedule Enabled",
+            "type": "boolean"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "region",
+          "capacity_weight",
+          "enabled",
+          "schedule_enabled",
+          "runtime_enabled",
+          "is_local",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ClusterConfigOut",
+        "type": "object"
+      },
+      "ClusterConfigUpdate": {
+        "properties": {
+          "capacity_weight": {
+            "anyOf": [
+              {
+                "maximum": 10000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Capacity Weight"
+          },
+          "compliance_tags": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compliance Tags"
+          },
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "kubeconfig": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig"
+          },
+          "kubeconfig_secret_key": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Key"
+          },
+          "kubeconfig_secret_name": {
+            "anyOf": [
+              {
+                "maxLength": 253,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Name"
+          },
+          "kubeconfig_secret_namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kubeconfig Secret Namespace"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
+          "region": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Region"
+          },
+          "runtime_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Enabled"
+          },
+          "runtime_namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runtime Namespace"
+          },
+          "schedule_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Enabled"
+          }
+        },
+        "title": "ClusterConfigUpdate",
+        "type": "object"
+      },
+      "ClusterTelemetryOut": {
+        "properties": {
+          "active_container_instances": {
+            "default": 0,
+            "title": "Active Container Instances",
+            "type": "integer"
+          },
+          "active_vm_instances": {
+            "default": 0,
+            "title": "Active Vm Instances",
+            "type": "integer"
+          },
+          "cluster_id": {
+            "title": "Cluster Id",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "error_replications": {
+            "default": 0,
+            "title": "Error Replications",
+            "type": "integer"
+          },
+          "health_status": {
+            "default": "unknown",
+            "title": "Health Status",
+            "type": "string"
+          },
+          "queued_replications": {
+            "default": 0,
+            "title": "Queued Replications",
+            "type": "integer"
+          },
+          "runtime_client_message": {
+            "default": "",
+            "title": "Runtime Client Message",
+            "type": "string"
+          },
+          "runtime_client_ready": {
+            "default": false,
+            "title": "Runtime Client Ready",
+            "type": "boolean"
+          },
+          "runtime_enabled": {
+            "default": false,
+            "title": "Runtime Enabled",
+            "type": "boolean"
+          },
+          "schedule_enabled": {
+            "default": true,
+            "title": "Schedule Enabled",
+            "type": "boolean"
+          },
+          "syncing_replications": {
+            "default": 0,
+            "title": "Syncing Replications",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cluster_id"
+        ],
+        "title": "ClusterTelemetryOut",
         "type": "object"
       },
       "ConcurrencySettings": {
@@ -249,6 +929,19 @@
       },
       "ContainerImageCreate": {
         "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Id"
+          },
           "image_ref": {
             "maxLength": 255,
             "minLength": 1,
@@ -260,6 +953,19 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "required": [
@@ -271,6 +977,11 @@
       },
       "ContainerImageMeta": {
         "properties": {
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -320,6 +1031,11 @@
               }
             ],
             "title": "Signature Warning"
+          },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -333,6 +1049,19 @@
       },
       "ContainerImageUpdate": {
         "properties": {
+          "cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Id"
+          },
           "image_ref": {
             "anyOf": [
               {
@@ -358,6 +1087,19 @@
               }
             ],
             "title": "Name"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "title": "ContainerImageUpdate",
@@ -375,6 +1117,11 @@
               }
             ],
             "title": "Access Url"
+          },
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
           },
           "container_port": {
             "anyOf": [
@@ -402,6 +1149,11 @@
             },
             "title": "Launch Diagnostics",
             "type": "array"
+          },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
           },
           "owner": {
             "title": "Owner",
@@ -489,6 +1241,11 @@
           "template_id": {
             "title": "Template Id",
             "type": "string"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -515,6 +1272,11 @@
             "default": 60,
             "title": "Auto Delete Minutes",
             "type": "integer"
+          },
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
           },
           "command": {
             "anyOf": [
@@ -657,6 +1419,11 @@
             "title": "Template Key",
             "type": "string"
           },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
+          },
           "version": {
             "default": 1,
             "title": "Version",
@@ -690,6 +1457,19 @@
             "minimum": 1.0,
             "title": "Auto Delete Minutes",
             "type": "integer"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Id"
           },
           "command": {
             "anyOf": [
@@ -839,6 +1619,19 @@
             "minimum": 10.0,
             "title": "Startup Timeout Seconds",
             "type": "integer"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "required": [
@@ -876,6 +1669,19 @@
               }
             ],
             "title": "Auto Delete Minutes"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Id"
           },
           "command": {
             "anyOf": [
@@ -1147,6 +1953,19 @@
               }
             ],
             "title": "Startup Timeout Seconds"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "title": "ContainerTemplateUpdate",
@@ -1348,6 +2167,11 @@
             "title": "Checksum",
             "type": "string"
           },
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1368,6 +2192,11 @@
           "size_bytes": {
             "title": "Size Bytes",
             "type": "integer"
+          },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -1416,6 +2245,11 @@
             "title": "Checksum",
             "type": "string"
           },
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -1432,6 +2266,11 @@
           "size_bytes": {
             "title": "Size Bytes",
             "type": "integer"
+          },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -1816,6 +2655,98 @@
           }
         },
         "title": "OrchestrationParityReport",
+        "type": "object"
+      },
+      "PlacementCandidateOut": {
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "cluster_id": {
+            "title": "Cluster Id",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cluster_id",
+          "allowed"
+        ],
+        "title": "PlacementCandidateOut",
+        "type": "object"
+      },
+      "PlacementExplainOut": {
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/PlacementCandidateOut"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "selected_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Cluster Id"
+          },
+          "selected_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Reason"
+          },
+          "team": {
+            "default": "default",
+            "title": "Team",
+            "type": "string"
+          },
+          "template_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Template Cluster Id"
+          },
+          "workload_kind": {
+            "default": "vm",
+            "title": "Workload Kind",
+            "type": "string"
+          }
+        },
+        "title": "PlacementExplainOut",
         "type": "object"
       },
       "RdpReadinessTelemetry": {
@@ -2513,6 +3444,118 @@
         "title": "StorageValidationCheck",
         "type": "object"
       },
+      "TeamPlacementPolicyOut": {
+        "properties": {
+          "allowed_cluster_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Cluster Ids",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "hard_pin_cluster": {
+            "default": false,
+            "title": "Hard Pin Cluster",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "preferred_cluster_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Cluster Id"
+          },
+          "required_compliance_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Compliance Tags",
+            "type": "array"
+          },
+          "required_regions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Regions",
+            "type": "array"
+          },
+          "team": {
+            "title": "Team",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "team",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "TeamPlacementPolicyOut",
+        "type": "object"
+      },
+      "TeamPlacementPolicyUpdate": {
+        "properties": {
+          "allowed_cluster_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Cluster Ids",
+            "type": "array"
+          },
+          "hard_pin_cluster": {
+            "default": false,
+            "title": "Hard Pin Cluster",
+            "type": "boolean"
+          },
+          "preferred_cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preferred Cluster Id"
+          },
+          "required_compliance_tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Compliance Tags",
+            "type": "array"
+          },
+          "required_regions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Regions",
+            "type": "array"
+          }
+        },
+        "title": "TeamPlacementPolicyUpdate",
+        "type": "object"
+      },
       "TeamQuotaCreate": {
         "properties": {
           "enabled": {
@@ -2994,6 +4037,11 @@
       },
       "VMInstance": {
         "properties": {
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
+          },
           "console_url": {
             "anyOf": [
               {
@@ -3012,6 +4060,11 @@
           "last_active_at": {
             "format": "date-time",
             "title": "Last Active At",
+            "type": "string"
+          },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
             "type": "string"
           },
           "owner": {
@@ -3060,6 +4113,11 @@
           "template_id": {
             "title": "Template Id",
             "type": "string"
+          },
+          "tenant": {
+            "default": "default",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -3078,6 +4136,11 @@
           "auto_delete_minutes": {
             "title": "Auto Delete Minutes",
             "type": "integer"
+          },
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
           },
           "console_provider": {
             "default": "spice",
@@ -3167,6 +4230,11 @@
               }
             ],
             "title": "Rdp Default Username"
+          },
+          "tenant": {
+            "default": "global",
+            "title": "Tenant",
+            "type": "string"
           }
         },
         "required": [
@@ -3191,6 +4259,19 @@
             "minimum": 1.0,
             "title": "Auto Delete Minutes",
             "type": "integer"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Id"
           },
           "console_provider": {
             "default": "spice",
@@ -3298,6 +4379,19 @@
               }
             ],
             "title": "Rdp Default Username"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "required": [
@@ -3324,6 +4418,19 @@
               }
             ],
             "title": "Auto Delete Minutes"
+          },
+          "cluster_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster Id"
           },
           "console_provider": {
             "anyOf": [
@@ -3506,6 +4613,19 @@
               }
             ],
             "title": "Rdp Default Username"
+          },
+          "tenant": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant"
           }
         },
         "title": "VMTemplateUpdate",
@@ -5165,6 +6285,313 @@
         ]
       }
     },
+    "/admin/replication/artifacts": {
+      "get": {
+        "operationId": "list_artifact_replications_admin_replication_artifacts_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "artifact_type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Artifact Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_cluster_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Cluster Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 200,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactReplicationOut"
+                  },
+                  "title": "Response List Artifact Replications Admin Replication Artifacts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Artifact Replications",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "enqueue_artifact_replication_admin_replication_artifacts_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactReplicationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactReplicationOut"
+                  },
+                  "title": "Response Enqueue Artifact Replication Admin Replication Artifacts Post",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Enqueue Artifact Replication",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/replication/artifacts/process": {
+      "post": {
+        "operationId": "process_replication_queue_admin_replication_artifacts_process_post",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Process Replication Queue Admin Replication Artifacts Process Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Process Replication Queue",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/replication/artifacts/{replication_id}": {
+      "patch": {
+        "operationId": "update_artifact_replication_admin_replication_artifacts__replication_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "replication_id",
+            "required": true,
+            "schema": {
+              "title": "Replication Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactReplicationUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactReplicationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Artifact Replication",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/resources": {
       "get": {
         "operationId": "cluster_resources_admin_resources_get",
@@ -5211,6 +6638,361 @@
           }
         },
         "summary": "Cluster Resources",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/clusters": {
+      "get": {
+        "operationId": "list_clusters_admin_settings_clusters_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterConfigOut"
+                  },
+                  "title": "Response List Clusters Admin Settings Clusters Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Clusters",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "create_cluster_admin_settings_clusters_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClusterConfigCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Cluster",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/clusters/telemetry": {
+      "get": {
+        "operationId": "cluster_telemetry_admin_settings_clusters_telemetry_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ClusterTelemetryOut"
+                  },
+                  "title": "Response Cluster Telemetry Admin Settings Clusters Telemetry Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cluster Telemetry",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/clusters/{cluster_id}": {
+      "delete": {
+        "operationId": "disable_cluster_admin_settings_clusters__cluster_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable Cluster",
+        "tags": [
+          "admin"
+        ]
+      },
+      "patch": {
+        "operationId": "update_cluster_admin_settings_clusters__cluster_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClusterConfigUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Cluster",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/clusters/{cluster_id}/probe": {
+      "post": {
+        "operationId": "probe_cluster_admin_settings_clusters__cluster_id__probe_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "cluster_id",
+            "required": true,
+            "schema": {
+              "title": "Cluster Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClusterConfigOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Probe Cluster",
         "tags": [
           "admin"
         ]
@@ -5435,6 +7217,268 @@
           }
         },
         "summary": "Update Ldap Settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/placement-policies": {
+      "get": {
+        "operationId": "list_team_placement_policies_admin_settings_placement_policies_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TeamPlacementPolicyOut"
+                  },
+                  "title": "Response List Team Placement Policies Admin Settings Placement Policies Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Team Placement Policies",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/placement-policies/explain": {
+      "get": {
+        "operationId": "explain_team_placement_policy_admin_settings_placement_policies_explain_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "team",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": "default",
+              "title": "Team"
+            }
+          },
+          {
+            "in": "query",
+            "name": "workload_kind",
+            "required": false,
+            "schema": {
+              "default": "vm",
+              "title": "Workload Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "template_cluster_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Template Cluster Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlacementExplainOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Explain Team Placement Policy",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/placement-policies/{team}": {
+      "delete": {
+        "operationId": "delete_team_placement_policy_admin_settings_placement_policies__team__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "team",
+            "required": true,
+            "schema": {
+              "title": "Team",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Team Placement Policy",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "upsert_team_placement_policy_admin_settings_placement_policies__team__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "team",
+            "required": true,
+            "schema": {
+              "title": "Team",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeamPlacementPolicyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeamPlacementPolicyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Team Placement Policy",
         "tags": [
           "admin"
         ]

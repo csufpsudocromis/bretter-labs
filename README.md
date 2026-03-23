@@ -78,6 +78,7 @@ _User view: launch feedback and in-browser connect workflow._
 - Per-template VM console provider selection (`spice`, `guacamole`/VNC, or `guacamole_rdp`)
 - Container image registry management
 - Runtime, storage, appearance, and alert/error settings
+- Multi-cluster cluster inventory/telemetry, placement policy explain, and artifact replication queue controls (`/admin/settings/multi-cluster`)
 - Resource, pod, and health visibility in admin pages
 
 ### User features

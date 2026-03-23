@@ -90,9 +90,16 @@ class PodStatus:
 
 
 class KubernetesService:
-    def __init__(self) -> None:
-        self._core = None
-        self._networking = None
+    def __init__(
+        self,
+        *,
+        core_api: client.CoreV1Api | None = None,
+        networking_api: client.NetworkingV1Api | None = None,
+        namespace_override: str | None = None,
+    ) -> None:
+        self._core = core_api
+        self._networking = networking_api
+        self._namespace_override = str(namespace_override or "").strip()
 
     def _client(self):
         if self._core is None:
@@ -112,6 +119,8 @@ class KubernetesService:
         resolved = str(namespace or "").strip()
         if resolved:
             return resolved
+        if self._namespace_override:
+            return self._namespace_override
         return str(settings.kube_namespace or "labs").strip() or "labs"
 
     def _safe_owner(self, owner: str) -> str:
@@ -159,6 +168,7 @@ class KubernetesService:
         mount_signature_key: bool = False,
     ) -> tuple[int, str]:
         core = self._client()
+        namespace = self._namespace()
         pod_name = self._admin_helper_pod_name()
         helper_image = (
             str(getattr(settings, "backend_admin_image", "") or "").strip()
@@ -185,7 +195,7 @@ class KubernetesService:
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
-                namespace=settings.kube_namespace,
+                namespace=namespace,
                 labels={"app.kubernetes.io/part-of": "bretter-labs", "job-type": "backend-admin-tool"},
             ),
             spec=client.V1PodSpec(
@@ -211,11 +221,11 @@ class KubernetesService:
 
         logs = ""
         try:
-            core.create_namespaced_pod(namespace=settings.kube_namespace, body=pod)
+            core.create_namespaced_pod(namespace=namespace, body=pod)
             deadline = time.time() + max(30, int(timeout_seconds or 180))
             last_phase = ""
             while time.time() < deadline:
-                snapshot = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+                snapshot = core.read_namespaced_pod(name=pod_name, namespace=namespace)
                 last_phase = str(snapshot.status.phase or "").strip().lower()
                 if last_phase in {"succeeded", "failed"}:
                     break
@@ -226,7 +236,7 @@ class KubernetesService:
             try:
                 logs = core.read_namespaced_pod_log(
                     name=pod_name,
-                    namespace=settings.kube_namespace,
+                    namespace=namespace,
                     container="worker",
                     tail_lines=2000,
                 )
@@ -244,7 +254,7 @@ class KubernetesService:
             try:
                 core.delete_namespaced_pod(
                     name=pod_name,
-                    namespace=settings.kube_namespace,
+                    namespace=namespace,
                     grace_period_seconds=0,
                     propagation_policy="Background",
                 )
@@ -400,9 +410,10 @@ class KubernetesService:
 
     def ensure_warm_pool(self, template_id: str, image_source_pvc: str, desired: int) -> None:
         core = self._client()
+        namespace = self._namespace()
         selector = f"blabs-pool=true,template-id={template_id},pool-state=ready"
         ready_pool = core.list_namespaced_persistent_volume_claim(
-            namespace=settings.kube_namespace,
+            namespace=namespace,
             label_selector=selector,
         ).items
         # Include Pending/Bound "ready" clones in current so we don't over-provision while clones bind.
@@ -417,7 +428,7 @@ class KubernetesService:
                 try:
                     core.delete_namespaced_persistent_volume_claim(
                         name=pvc.metadata.name,
-                        namespace=settings.kube_namespace,
+                        namespace=namespace,
                     )
                 except ApiException as exc:
                     if exc.status != 404:
@@ -426,7 +437,7 @@ class KubernetesService:
         if current >= desired:
             return
 
-        source = core.read_namespaced_persistent_volume_claim(name=image_source_pvc, namespace=settings.kube_namespace)
+        source = core.read_namespaced_persistent_volume_claim(name=image_source_pvc, namespace=namespace)
         source_request = None
         if source.spec and source.spec.resources and source.spec.resources.requests:
             source_request = source.spec.resources.requests.get("storage")
@@ -458,7 +469,7 @@ class KubernetesService:
                 ),
             )
             try:
-                core.create_namespaced_persistent_volume_claim(namespace=settings.kube_namespace, body=body)
+                core.create_namespaced_persistent_volume_claim(namespace=namespace, body=body)
             except ApiException as exc:
                 if exc.status != 409:
                     raise
@@ -681,6 +692,7 @@ class KubernetesService:
         if not settings.container_image_prepull_enabled:
             return
         core = self._client()
+        namespace = self._namespace()
         timeout = max(10, int(timeout_seconds or settings.container_image_prepull_timeout_seconds))
         digest = hashlib.sha1(image_ref.encode("utf-8")).hexdigest()[:10]
         try:
@@ -746,7 +758,7 @@ class KubernetesService:
                 spec_kwargs["image_pull_secrets"] = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
             body = client.V1Pod(api_version="v1", kind="Pod", metadata=metadata, spec=client.V1PodSpec(**spec_kwargs))
             try:
-                core.create_namespaced_pod(namespace=settings.kube_namespace, body=body)
+                core.create_namespaced_pod(namespace=namespace, body=body)
             except ApiException as exc:
                 if exc.status != 409:
                     logger.warning("Failed to create pre-pull pod %s: %s", pod_name, exc)
@@ -755,7 +767,7 @@ class KubernetesService:
             deadline = time.time() + timeout
             while time.time() < deadline:
                 try:
-                    pod = core.read_namespaced_pod(name=pod_name, namespace=settings.kube_namespace)
+                    pod = core.read_namespaced_pod(name=pod_name, namespace=namespace)
                 except ApiException as exc:
                     if exc.status == 404:
                         break
@@ -781,7 +793,7 @@ class KubernetesService:
             try:
                 core.delete_namespaced_pod(
                     name=pod_name,
-                    namespace=settings.kube_namespace,
+                    namespace=namespace,
                     grace_period_seconds=0,
                     propagation_policy="Foreground",
                 )
@@ -1803,14 +1815,14 @@ exit "$rc"
                     inst.id,
                     inst.owner,
                     disk_pvc=inst.disk_pvc,
-                    namespace=str(getattr(inst, "namespace", "") or settings.kube_namespace),
+                    namespace=str(getattr(inst, "namespace", "") or self._namespace()),
                 )
             except Exception:
                 logger.warning("Failed to delete pod for instance %s during reaper", inst.id)
             session.delete(inst)
         for inst in stale_container_instances:
             try:
-                ns = str(getattr(inst, "namespace", "") or settings.kube_namespace)
+                ns = str(getattr(inst, "namespace", "") or self._namespace())
                 self.delete_container_pod(inst.id, inst.owner, namespace=ns)
                 self.delete_container_service(inst.id, namespace=ns)
             except Exception:

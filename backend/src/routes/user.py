@@ -35,7 +35,12 @@ from ..services.labinstance_crd import (
     vm_orchestration_writes_crd,
 )
 from ..services.kubernetes import PodRequest, PodStatus, kube
-from ..services.multi_cluster import PlacementError, local_cluster_id, select_cluster_for_launch
+from ..services.multi_cluster import (
+    PlacementError,
+    kube_service_for_cluster,
+    local_cluster_id,
+    select_cluster_for_launch,
+)
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
@@ -301,6 +306,13 @@ def _instance_cluster_id(record: Instance) -> str:
     return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
 
 
+def _kube_for_instance_cluster(session: Session, cluster_id: str):
+    try:
+        return kube_service_for_cluster(session, cluster_id)
+    except PlacementError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+
 def _vm_service_host(instance_id: str, namespace: str) -> str:
     return f"svc-{instance_id[:8]}.{namespace}.svc.cluster.local"
 
@@ -550,12 +562,14 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             changed = True
         tmpl = templates.get(record.template_id)
         record_namespace = _instance_namespace(record, user)
+        instance_cluster_id = _instance_cluster_id(record)
+        runtime_kube = _kube_for_instance_cluster(session, instance_cluster_id)
         console_provider = normalize_vm_console_provider(
             getattr(tmpl, "console_provider", _console_provider_from_url(record.console_url))
         )
         pod_status: PodStatus | None = None
         try:
-            pod_status = kube.get_status(record.id, record.owner, namespace=record_namespace)
+            pod_status = runtime_kube.get_status(record.id, record.owner, namespace=record_namespace)
             mapped = _phase_to_instance_status(pod_status.phase)
         except ApiException as exc:
             if exc.status == 404:
@@ -579,7 +593,9 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             cutoff = utc_now() - timedelta(minutes=tmpl.auto_delete_minutes)
             if record.last_active_at < cutoff:
                 try:
-                    kube.delete_pod(record.id, record.owner, disk_pvc=record.disk_pvc, namespace=record_namespace)
+                    runtime_kube.delete_pod(
+                        record.id, record.owner, disk_pvc=record.disk_pvc, namespace=record_namespace
+                    )
                 except Exception:
                     pass
                 to_delete.append(record)
@@ -1148,14 +1164,7 @@ def start_vm(
     except PlacementError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
-    if selected_cluster_id != local_cluster_id():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"selected cluster '{selected_cluster_id}' is remote. "
-                "This backend build currently supports VM runtime launches on the local cluster only."
-            ),
-        )
+    runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1169,7 +1178,7 @@ def start_vm(
     disk_pvc: str | None = None
     if use_legacy_orchestration:
         try:
-            warm_pool_pvc = kube.reserve_warm_pool_pvc(
+            warm_pool_pvc = runtime_kube.reserve_warm_pool_pvc(
                 template.id, instance_id, user.username, namespace=runtime_namespace
             )
         except Exception:
@@ -1192,11 +1201,11 @@ def start_vm(
             namespace=runtime_namespace,
         )
         try:
-            pod_status = kube.create_pod(pod_request)
+            pod_status = runtime_kube.create_pod(pod_request)
         except Exception:
             if warm_pool_pvc:
                 try:
-                    kube._client().delete_namespaced_persistent_volume_claim(
+                    runtime_kube._client().delete_namespaced_persistent_volume_claim(
                         name=warm_pool_pvc,
                         namespace=runtime_namespace,
                     )
@@ -1206,8 +1215,8 @@ def start_vm(
         disk_pvc = pod_status.disk_pvc
         # Keep VM console service internal; browser access goes through authenticated backend proxy.
         service_name = f"svc-{instance_id[:8]}"
-        kube.create_service_for_pod(
-            pod_name=kube._pod_name(pod_request),
+        runtime_kube.create_service_for_pod(
+            pod_name=runtime_kube._pod_name(pod_request),
             service_name=service_name,
             service_type="ClusterIP",
             namespace=runtime_namespace,
@@ -1288,10 +1297,11 @@ def stop_vm(
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     instance_namespace = _instance_namespace(record, user)
+    runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
-        kube.stop_pod(instance_id, record.owner, namespace=instance_namespace)
+        runtime_kube.stop_pod(instance_id, record.owner, namespace=instance_namespace)
     if write_crd_shadow:
         try:
             patch_vm_labinstance_desired_state(instance_id, "stopped", namespace=instance_namespace)
@@ -1394,14 +1404,7 @@ def restart_vm(
     except PlacementError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
-    if selected_cluster_id != local_cluster_id():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"selected cluster '{selected_cluster_id}' is remote. "
-                "This backend build currently supports VM runtime launches on the local cluster only."
-            ),
-        )
+    runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1415,13 +1418,13 @@ def restart_vm(
     if use_legacy_orchestration:
         # Ensure any old pod with the same name is removed before re-create.
         try:
-            kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc, namespace=runtime_namespace)
+            runtime_kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc, namespace=runtime_namespace)
         except ApiException as exc:
             if exc.status != 404:
                 raise
 
         try:
-            warm_pool_pvc = kube.reserve_warm_pool_pvc(
+            warm_pool_pvc = runtime_kube.reserve_warm_pool_pvc(
                 template.id, record.id, user.username, namespace=runtime_namespace
             )
         except Exception:
@@ -1444,11 +1447,11 @@ def restart_vm(
             namespace=runtime_namespace,
         )
         try:
-            pod_status = kube.create_pod(pod_request)
+            pod_status = runtime_kube.create_pod(pod_request)
         except Exception:
             if warm_pool_pvc:
                 try:
-                    kube._client().delete_namespaced_persistent_volume_claim(
+                    runtime_kube._client().delete_namespaced_persistent_volume_claim(
                         name=warm_pool_pvc,
                         namespace=runtime_namespace,
                     )
@@ -1457,8 +1460,8 @@ def restart_vm(
             raise
         disk_pvc = pod_status.disk_pvc
         service_name = f"svc-{instance_id[:8]}"
-        kube.create_service_for_pod(
-            pod_name=kube._pod_name(pod_request),
+        runtime_kube.create_service_for_pod(
+            pod_name=runtime_kube._pod_name(pod_request),
             service_name=service_name,
             service_type="ClusterIP",
             namespace=runtime_namespace,
@@ -1527,11 +1530,12 @@ def delete_vm(instance_id: str, user: User = Depends(require_user), session: Ses
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     instance_namespace = _instance_namespace(record, user)
+    runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
         try:
-            kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc, namespace=instance_namespace)
+            runtime_kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc, namespace=instance_namespace)
         except ApiException as exc:
             # VM teardown can race with Kubernetes garbage collection.
             # Treat not-found/conflict during delete as best-effort success.

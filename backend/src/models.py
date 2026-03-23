@@ -598,6 +598,10 @@ class ClusterConfigCreate(BaseModel):
     enabled: bool = True
     schedule_enabled: bool = True
     runtime_enabled: bool = False
+    runtime_namespace: str | None = Field(default=None, min_length=1, max_length=63)
+    kubeconfig_secret_name: str | None = Field(default=None, min_length=1, max_length=253)
+    kubeconfig_secret_namespace: str | None = Field(default=None, min_length=1, max_length=63)
+    kubeconfig_secret_key: str | None = Field(default=None, min_length=1, max_length=253)
     kubeconfig: str | None = None
     notes: str = Field(default="", max_length=2000)
 
@@ -610,6 +614,10 @@ class ClusterConfigUpdate(BaseModel):
     enabled: bool | None = None
     schedule_enabled: bool | None = None
     runtime_enabled: bool | None = None
+    runtime_namespace: str | None = Field(default=None, max_length=63)
+    kubeconfig_secret_name: str | None = Field(default=None, max_length=253)
+    kubeconfig_secret_namespace: str | None = Field(default=None, max_length=63)
+    kubeconfig_secret_key: str | None = Field(default=None, max_length=253)
     kubeconfig: str | None = None
     notes: str | None = Field(default=None, max_length=2000)
 
@@ -624,13 +632,49 @@ class ClusterConfigOut(BaseModel):
     schedule_enabled: bool
     runtime_enabled: bool
     is_local: bool
+    runtime_namespace: str = ""
     kubeconfig_configured: bool = False
+    kubeconfig_source: str = "none"
+    kubeconfig_secret_name: str | None = None
+    kubeconfig_secret_namespace: str | None = None
+    kubeconfig_secret_key: str | None = None
     notes: str = ""
     health_status: str = "unknown"
     health_message: str = ""
     last_heartbeat_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ClusterTelemetryOut(BaseModel):
+    cluster_id: str
+    health_status: str = "unknown"
+    enabled: bool = True
+    schedule_enabled: bool = True
+    runtime_enabled: bool = False
+    active_vm_instances: int = 0
+    active_container_instances: int = 0
+    queued_replications: int = 0
+    syncing_replications: int = 0
+    error_replications: int = 0
+    runtime_client_ready: bool = False
+    runtime_client_message: str = ""
+
+
+class PlacementCandidateOut(BaseModel):
+    cluster_id: str
+    allowed: bool
+    reasons: list[str] = Field(default_factory=list)
+
+
+class PlacementExplainOut(BaseModel):
+    team: str = "default"
+    workload_kind: str = "vm"
+    template_cluster_id: str | None = None
+    selected_cluster_id: str | None = None
+    selected_reason: str | None = None
+    error: str | None = None
+    candidates: list[PlacementCandidateOut] = Field(default_factory=list)
 
 
 class TeamPlacementPolicyUpdate(BaseModel):

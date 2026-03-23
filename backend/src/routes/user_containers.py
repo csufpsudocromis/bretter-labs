@@ -32,7 +32,12 @@ from ..models import ContainerDependencyCheck
 from ..models import ContainerTemplate as ContainerTemplateView
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
-from ..services.multi_cluster import PlacementError, local_cluster_id, select_cluster_for_launch
+from ..services.multi_cluster import (
+    PlacementError,
+    kube_service_for_cluster,
+    local_cluster_id,
+    select_cluster_for_launch,
+)
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
@@ -177,6 +182,13 @@ def _container_instance_namespace(record: ContainerInstanceTable, user: User | N
 
 def _container_instance_cluster_id(record: ContainerInstanceTable) -> str:
     return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
+
+
+def _kube_for_container_cluster(session: Session, cluster_id: str):
+    try:
+        return kube_service_for_cluster(session, cluster_id)
+    except PlacementError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 def _container_service_host(instance_id: str, namespace: str) -> str:
@@ -1363,10 +1375,11 @@ def _create_container_runtime(
     instance_id: str,
     owner: str,
     namespace: str,
+    runtime_kube,
     template: ContainerTemplateTable,
     image_ref: str,
 ) -> tuple[PodStatus, str | None, int]:
-    pod_status = kube.create_container_pod(
+    pod_status = runtime_kube.create_container_pod(
         _container_launch_request(instance_id, owner, template, image_ref, namespace)
     )
     container_port = max(1, int(getattr(template, "container_port", 80) or 80))
@@ -1378,7 +1391,7 @@ def _create_container_runtime(
     )
     service_type = "ClusterIP" if ingress_enabled else "NodePort"
     try:
-        node_port = kube.ensure_container_service(
+        node_port = runtime_kube.ensure_container_service(
             instance_id,
             owner,
             container_port,
@@ -1387,14 +1400,14 @@ def _create_container_runtime(
         )
         ingress_host = None
         if ingress_enabled:
-            ingress_host = kube.ensure_container_ingress(
+            ingress_host = runtime_kube.ensure_container_ingress(
                 instance_id,
                 f"ctsvc-{instance_id[:8]}",
                 container_port,
                 namespace=namespace,
             )
             if ingress_host is None:
-                node_port = kube.ensure_container_service(
+                node_port = runtime_kube.ensure_container_service(
                     instance_id,
                     owner,
                     container_port,
@@ -1405,8 +1418,8 @@ def _create_container_runtime(
         return pod_status, access_url, container_port
     except Exception:
         try:
-            kube.delete_container_pod(instance_id, owner, namespace=namespace)
-            kube.delete_container_service(instance_id, namespace=namespace)
+            runtime_kube.delete_container_pod(instance_id, owner, namespace=namespace)
+            runtime_kube.delete_container_service(instance_id, namespace=namespace)
         except Exception:
             pass
         raise
@@ -1453,6 +1466,8 @@ def list_user_containers(
 
     for record in instances:
         record_namespace = _container_instance_namespace(record, user)
+        record_cluster_id = _container_instance_cluster_id(record)
+        runtime_kube = _kube_for_container_cluster(session, record_cluster_id)
         if record.status in {"running", "pending"}:
             # Match VM behavior so active user polling keeps running labs from being reaped.
             record.last_active_at = utc_now()
@@ -1521,11 +1536,12 @@ def list_user_containers(
                             instance_id=record.id,
                             owner=record.owner,
                             namespace=record_namespace,
+                            runtime_kube=runtime_kube,
                             template=tmpl,
                             image_ref=image.image_ref,
                         )
                         record.status = "pending"
-                        record.pod_name = kube.container_pod_name(instance_id=record.id, owner=record.owner)
+                        record.pod_name = runtime_kube.container_pod_name(instance_id=record.id, owner=record.owner)
                         record.started_at = now
                         record.last_active_at = now
                         record.queue_not_before = None
@@ -1556,7 +1572,7 @@ def list_user_containers(
 
         pod_status: PodStatus | None = None
         try:
-            pod_status = kube.get_container_status(record.id, record.owner, namespace=record_namespace)
+            pod_status = runtime_kube.get_container_status(record.id, record.owner, namespace=record_namespace)
             mapped = _phase_to_status(pod_status.phase)
         except ApiException as exc:
             if exc.status == 404:
@@ -1567,7 +1583,7 @@ def list_user_containers(
         stage, detail = _status_feedback(mapped, pod_status)
         feedback[record.id] = (stage, detail)
         try:
-            diagnostics_map[record.id] = kube.get_container_launch_diagnostics(
+            diagnostics_map[record.id] = runtime_kube.get_container_launch_diagnostics(
                 record.id,
                 record.owner,
                 namespace=record_namespace,
@@ -1576,7 +1592,7 @@ def list_user_containers(
             diagnostics_map[record.id] = []
         if mapped in {"pending", "running"} and tmpl:
             try:
-                node_port = kube.ensure_container_service(
+                node_port = runtime_kube.ensure_container_service(
                     record.id,
                     record.owner,
                     container_port,
@@ -1585,14 +1601,14 @@ def list_user_containers(
                 )
                 ingress_host = None
                 if ingress_enabled:
-                    ingress_host = kube.ensure_container_ingress(
+                    ingress_host = runtime_kube.ensure_container_ingress(
                         record.id,
                         f"ctsvc-{record.id[:8]}",
                         container_port,
                         namespace=record_namespace,
                     )
                     if ingress_host is None:
-                        node_port = kube.ensure_container_service(
+                        node_port = runtime_kube.ensure_container_service(
                             record.id,
                             record.owner,
                             container_port,
@@ -1639,7 +1655,7 @@ def list_user_containers(
         else:
             access_map[record.id] = None
             try:
-                kube.delete_container_service(record.id, namespace=record_namespace)
+                runtime_kube.delete_container_service(record.id, namespace=record_namespace)
             except Exception:
                 pass
 
@@ -1653,8 +1669,8 @@ def list_user_containers(
             )
             if "unschedulable" in reason_text or "failedscheduling" in reason_text:
                 try:
-                    kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
-                    kube.delete_container_service(record.id, namespace=record_namespace)
+                    runtime_kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
+                    runtime_kube.delete_container_service(record.id, namespace=record_namespace)
                 except Exception:
                     pass
                 _mark_queued(record, detail or "Waiting for available resources.")
@@ -1678,8 +1694,8 @@ def list_user_containers(
             cutoff = utc_now() - timedelta(minutes=max(1, int(tmpl.auto_delete_minutes or 60)))
             if record.last_active_at < cutoff:
                 try:
-                    kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
-                    kube.delete_container_service(record.id, namespace=record_namespace)
+                    runtime_kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
+                    runtime_kube.delete_container_service(record.id, namespace=record_namespace)
                 except Exception:
                     pass
                 to_delete.append(record)
@@ -1782,14 +1798,7 @@ def start_container_template(
     except PlacementError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
-    if selected_cluster_id != local_cluster_id():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"selected cluster '{selected_cluster_id}' is remote. "
-                "This backend build currently supports container runtime launches on the local cluster only."
-            ),
-        )
+    runtime_kube = _kube_for_container_cluster(session, selected_cluster_id)
 
     instance_id = str(uuid4())
     now = utc_now()
@@ -1812,7 +1821,7 @@ def start_container_template(
             namespace=runtime_namespace,
             cluster_id=selected_cluster_id,
             status="queued",
-            pod_name=kube.container_pod_name(instance_id=instance_id, owner=user.username),
+            pod_name=runtime_kube.container_pod_name(instance_id=instance_id, owner=user.username),
             queue_attempts=0,
             queue_reason=_humanize_queue_reason(queue_reason),
             queue_not_before=now + timedelta(seconds=_queue_backoff_seconds(0)),
@@ -1842,12 +1851,13 @@ def start_container_template(
     if cluster_full:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
 
-    pod_name = kube.container_pod_name(instance_id=instance_id, owner=user.username)
+    pod_name = runtime_kube.container_pod_name(instance_id=instance_id, owner=user.username)
     try:
         pod_status, access_url, container_port = _create_container_runtime(
             instance_id=instance_id,
             owner=user.username,
             namespace=runtime_namespace,
+            runtime_kube=runtime_kube,
             template=template,
             image_ref=image.image_ref,
         )
@@ -1867,7 +1877,7 @@ def start_container_template(
         session.commit()
         session.refresh(record)
         stage, detail = _status_feedback(record.status, pod_status)
-        diagnostics = kube.get_container_launch_diagnostics(
+        diagnostics = runtime_kube.get_container_launch_diagnostics(
             record.id,
             record.owner,
             namespace=runtime_namespace,
@@ -1922,11 +1932,12 @@ def stop_container(
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     instance_namespace = _container_instance_namespace(record, user)
+    runtime_kube = _kube_for_container_cluster(session, _container_instance_cluster_id(record))
 
     if record.status != "queued":
-        kube.stop_container_pod(instance_id, user.username, namespace=instance_namespace)
+        runtime_kube.stop_container_pod(instance_id, user.username, namespace=instance_namespace)
         try:
-            kube.delete_container_service(instance_id, namespace=instance_namespace)
+            runtime_kube.delete_container_service(instance_id, namespace=instance_namespace)
         except Exception:
             pass
     record.status = "stopped"
@@ -2029,14 +2040,7 @@ def restart_container(
     except PlacementError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
-    if selected_cluster_id != local_cluster_id():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                f"selected cluster '{selected_cluster_id}' is remote. "
-                "This backend build currently supports container runtime launches on the local cluster only."
-            ),
-        )
+    runtime_kube = _kube_for_container_cluster(session, selected_cluster_id)
 
     if quota_check.error_detail and settings.container_start_queue_enabled:
         record.status = "queued"
@@ -2079,7 +2083,7 @@ def restart_container(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=headroom_error)
 
     try:
-        kube.delete_container_pod(instance_id, user.username, namespace=runtime_namespace)
+        runtime_kube.delete_container_pod(instance_id, user.username, namespace=runtime_namespace)
     except ApiException as exc:
         if exc.status != 404:
             raise
@@ -2088,6 +2092,7 @@ def restart_container(
         instance_id=record.id,
         owner=user.username,
         namespace=runtime_namespace,
+        runtime_kube=runtime_kube,
         template=template,
         image_ref=image.image_ref,
     )
@@ -2096,7 +2101,7 @@ def restart_container(
     record.tenant = user_tenant
     record.namespace = runtime_namespace
     record.cluster_id = selected_cluster_id
-    record.pod_name = kube.container_pod_name(instance_id=record.id, owner=user.username)
+    record.pod_name = runtime_kube.container_pod_name(instance_id=record.id, owner=user.username)
     record.queue_attempts = 0
     record.queue_not_before = None
     record.queue_reason = None
@@ -2106,7 +2111,7 @@ def restart_container(
     session.commit()
     session.refresh(record)
     stage, detail = _status_feedback(record.status, pod_status)
-    diagnostics = kube.get_container_launch_diagnostics(record.id, record.owner, namespace=runtime_namespace)
+    diagnostics = runtime_kube.get_container_launch_diagnostics(record.id, record.owner, namespace=runtime_namespace)
     return _instance_out(
         record,
         stage=stage,
@@ -2143,10 +2148,11 @@ def delete_container(
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     instance_namespace = _container_instance_namespace(record, user)
+    runtime_kube = _kube_for_container_cluster(session, _container_instance_cluster_id(record))
 
-    kube.delete_container_pod(instance_id, user.username, namespace=instance_namespace)
+    runtime_kube.delete_container_pod(instance_id, user.username, namespace=instance_namespace)
     try:
-        kube.delete_container_service(instance_id, namespace=instance_namespace)
+        runtime_kube.delete_container_service(instance_id, namespace=instance_namespace)
     except Exception:
         pass
     session.delete(record)

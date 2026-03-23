@@ -30,6 +30,10 @@ const AdminSettingsLanding = () => (
         <h3>LDAP</h3>
         <p>Enable/configure LDAP authentication and search settings.</p>
       </Link>
+      <Link to="/admin/settings/multi-cluster" className="tile">
+        <h3>Multi-Cluster</h3>
+        <p>Clusters, placement policies, and replication queue operations.</p>
+      </Link>
     </div>
   </div>
 );

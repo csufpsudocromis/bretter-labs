@@ -1,11 +1,8 @@
 import logging
 from uuid import uuid4
 
-import yaml
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from kubernetes import client as k8s_client
-from kubernetes import config as k8s_config
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from ..auth import require_permission, require_user
 from ..models import (
@@ -15,16 +12,25 @@ from ..models import (
     ClusterConfigCreate,
     ClusterConfigOut,
     ClusterConfigUpdate,
+    ClusterTelemetryOut,
+    PlacementCandidateOut,
+    PlacementExplainOut,
     TeamPlacementPolicyOut,
     TeamPlacementPolicyUpdate,
 )
 from ..rbac import Permission
-from ..secret_codec import decrypt_secret, encrypt_secret, secret_is_configured
-from ..services.kubernetes import kube
+from ..secret_codec import encrypt_secret
 from ..services.multi_cluster import (
+    cluster_has_kubeconfig,
+    cluster_kubeconfig_source,
+    cluster_runtime_namespace,
     csv_tokens,
+    explain_cluster_selection,
     ensure_local_cluster,
+    kube_service_for_cluster,
     local_cluster_id,
+    process_artifact_replication_queue,
+    runtime_client_probe,
     split_csv_tokens,
 )
 from ..services.tenant_context import (
@@ -38,8 +44,10 @@ from ..tables import (
     ArtifactReplication,
     Cluster,
     ContainerImage,
+    ContainerInstance,
     ContainerTemplate,
     Image,
+    Instance,
     TeamPlacementPolicy,
     Template,
     User,
@@ -82,6 +90,9 @@ def _require_platform_admin(user: User) -> None:
 
 
 def _cluster_out(record: Cluster) -> ClusterConfigOut:
+    secret_name = str(getattr(record, "kubeconfig_secret_name", "") or "").strip() or None
+    secret_namespace = str(getattr(record, "kubeconfig_secret_namespace", "") or "").strip() or None
+    secret_key = str(getattr(record, "kubeconfig_secret_key", "") or "").strip() or None
     return ClusterConfigOut(
         id=record.id,
         name=record.name,
@@ -92,7 +103,12 @@ def _cluster_out(record: Cluster) -> ClusterConfigOut:
         schedule_enabled=bool(record.schedule_enabled),
         runtime_enabled=bool(record.runtime_enabled),
         is_local=bool(record.is_local),
-        kubeconfig_configured=secret_is_configured(record.kubeconfig),
+        runtime_namespace=cluster_runtime_namespace(record),
+        kubeconfig_configured=cluster_has_kubeconfig(record),
+        kubeconfig_source=cluster_kubeconfig_source(record),
+        kubeconfig_secret_name=secret_name,
+        kubeconfig_secret_namespace=secret_namespace,
+        kubeconfig_secret_key=(secret_key or "kubeconfig") if secret_name else None,
         notes=str(record.notes or ""),
         health_status=str(record.health_status or "unknown"),
         health_message=str(record.health_message or ""),
@@ -146,27 +162,17 @@ def _normalize_cluster_id(raw: str | None) -> str:
     return normalized[:64]
 
 
-def _probe_cluster(record: Cluster) -> tuple[str, str]:
-    if _normalize_cluster_id(record.id) == local_cluster_id():
-        try:
-            kube._client().list_namespace(limit=1)
-            return "healthy", "local cluster api reachable"
-        except Exception as exc:
-            return "unhealthy", f"local probe failed: {exc}"
-
-    kubeconfig_raw = str(record.kubeconfig or "").strip()
-    if not kubeconfig_raw:
-        return "unknown", "no kubeconfig configured"
-
+def _probe_cluster(session: Session, record: Cluster) -> tuple[str, str]:
     try:
-        kubeconfig_data = yaml.safe_load(decrypt_secret(kubeconfig_raw))
-        if not isinstance(kubeconfig_data, dict):
-            raise RuntimeError("invalid kubeconfig content")
-        api_client = k8s_config.new_client_from_config_dict(config_dict=kubeconfig_data)
-        version_api = k8s_client.VersionApi(api_client)
-        version_api.get_code()
-        return "healthy", "remote cluster api reachable"
+        kube_service = kube_service_for_cluster(session=session, cluster_id=record.id, require_runtime_enabled=False)
+        kube_service._client().list_namespace(limit=1)
+        source = cluster_kubeconfig_source(record)
+        if source == "local":
+            return "healthy", "local cluster api reachable"
+        return "healthy", f"remote cluster api reachable via {source}"
     except Exception as exc:
+        if cluster_kubeconfig_source(record) == "none":
+            return "unknown", "no kubeconfig configured"
         return "unhealthy", f"remote probe failed: {exc}"
 
 
@@ -186,6 +192,59 @@ def _validate_artifact_exists(session: Session, artifact_type: str, artifact_id:
     return normalize_tenant(getattr(row, "tenant", None), default=GLOBAL_TENANT)
 
 
+def _default_runtime_namespace() -> str:
+    return str(cluster_runtime_namespace(None) or "labs").strip() or "labs"
+
+
+def _count_active_cluster_workloads(session: Session, cluster_id: str) -> tuple[int, int]:
+    vm_active = int(
+        session.exec(
+            select(func.count())
+            .select_from(Instance)
+            .where(Instance.cluster_id == cluster_id)
+            .where(Instance.status.in_(["pending", "running"]))
+        ).one()
+        or 0
+    )
+    container_active = int(
+        session.exec(
+            select(func.count())
+            .select_from(ContainerInstance)
+            .where(ContainerInstance.cluster_id == cluster_id)
+            .where(ContainerInstance.status.in_(["queued", "pending", "running"]))
+        ).one()
+        or 0
+    )
+    return vm_active, container_active
+
+
+def _policies_referencing_cluster(session: Session, cluster_id: str) -> list[TeamPlacementPolicy]:
+    refs: list[TeamPlacementPolicy] = []
+    rows = session.exec(select(TeamPlacementPolicy)).all()
+    for row in rows:
+        preferred = _normalize_cluster_id(getattr(row, "preferred_cluster_id", ""))
+        allowed = set(split_csv_tokens(getattr(row, "allowed_cluster_ids_csv", "")))
+        if preferred == cluster_id or cluster_id in allowed:
+            refs.append(row)
+    return refs
+
+
+def _validate_policy_cluster_ids(session: Session, cluster_ids: list[str], *, field: str) -> list[str]:
+    normalized_ids: list[str] = []
+    for raw_id in cluster_ids:
+        normalized = _normalize_cluster_id(raw_id)
+        if not normalized:
+            continue
+        if not _cluster_exists(session, normalized):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{field} cluster not found: {raw_id}",
+            )
+        if normalized not in normalized_ids:
+            normalized_ids.append(normalized)
+    return normalized_ids
+
+
 @router.get(
     "/settings/clusters",
     response_model=list[ClusterConfigOut],
@@ -199,6 +258,68 @@ def list_clusters(
     ensure_local_cluster(session)
     rows = session.exec(select(Cluster).order_by(Cluster.is_local.desc(), Cluster.id.asc())).all()
     return [_cluster_out(row) for row in rows]
+
+
+@router.get(
+    "/settings/clusters/telemetry",
+    response_model=list[ClusterTelemetryOut],
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def cluster_telemetry(
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+) -> list[ClusterTelemetryOut]:
+    _require_platform_admin(user)
+    ensure_local_cluster(session)
+    clusters = session.exec(select(Cluster).order_by(Cluster.id.asc())).all()
+
+    vm_rows = session.exec(
+        select(Instance.cluster_id, func.count())
+        .where(Instance.status.in_(["pending", "running"]))
+        .group_by(Instance.cluster_id)
+    ).all()
+    vm_counts = {str(cluster_id or ""): int(count or 0) for cluster_id, count in vm_rows}
+
+    container_rows = session.exec(
+        select(ContainerInstance.cluster_id, func.count())
+        .where(ContainerInstance.status.in_(["queued", "pending", "running"]))
+        .group_by(ContainerInstance.cluster_id)
+    ).all()
+    container_counts = {str(cluster_id or ""): int(count or 0) for cluster_id, count in container_rows}
+
+    replication_rows = session.exec(
+        select(ArtifactReplication.target_cluster_id, ArtifactReplication.status, func.count()).group_by(
+            ArtifactReplication.target_cluster_id, ArtifactReplication.status
+        )
+    ).all()
+    replication_counts: dict[str, dict[str, int]] = {}
+    for target_cluster_id, status_value, count in replication_rows:
+        cluster_key = str(target_cluster_id or "")
+        status_key = str(status_value or "").strip().lower()
+        bucket = replication_counts.setdefault(cluster_key, {})
+        bucket[status_key] = int(count or 0)
+
+    telemetry: list[ClusterTelemetryOut] = []
+    for cluster in clusters:
+        ready, ready_message = runtime_client_probe(session, cluster.id)
+        cluster_replication = replication_counts.get(cluster.id, {})
+        telemetry.append(
+            ClusterTelemetryOut(
+                cluster_id=cluster.id,
+                health_status=str(getattr(cluster, "health_status", "unknown") or "unknown"),
+                enabled=bool(getattr(cluster, "enabled", False)),
+                schedule_enabled=bool(getattr(cluster, "schedule_enabled", False)),
+                runtime_enabled=bool(getattr(cluster, "runtime_enabled", False)),
+                active_vm_instances=vm_counts.get(cluster.id, 0),
+                active_container_instances=container_counts.get(cluster.id, 0),
+                queued_replications=cluster_replication.get("queued", 0),
+                syncing_replications=cluster_replication.get("syncing", 0),
+                error_replications=cluster_replication.get("error", 0),
+                runtime_client_ready=bool(ready),
+                runtime_client_message=str(ready_message or ""),
+            )
+        )
+    return telemetry
 
 
 @router.post(
@@ -219,6 +340,11 @@ def create_cluster(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="cluster id is required")
     if session.get(Cluster, cluster_id):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="cluster already exists")
+    kubeconfig_secret_name = str(payload.kubeconfig_secret_name or "").strip()
+    kubeconfig_secret_namespace = str(payload.kubeconfig_secret_namespace or "").strip()
+    kubeconfig_secret_key = str(payload.kubeconfig_secret_key or "").strip() or "kubeconfig"
+    runtime_namespace = str(payload.runtime_namespace or "").strip() or _default_runtime_namespace()
+    legacy_kubeconfig = str(payload.kubeconfig or "").strip()
     record = Cluster(
         id=cluster_id,
         name=str(payload.name or "").strip(),
@@ -229,7 +355,11 @@ def create_cluster(
         schedule_enabled=bool(payload.schedule_enabled),
         runtime_enabled=bool(payload.runtime_enabled),
         is_local=(cluster_id == local_cluster_id()),
-        kubeconfig=encrypt_secret(payload.kubeconfig) if payload.kubeconfig is not None else "",
+        runtime_namespace=runtime_namespace,
+        kubeconfig_secret_name=kubeconfig_secret_name,
+        kubeconfig_secret_namespace=kubeconfig_secret_namespace,
+        kubeconfig_secret_key=kubeconfig_secret_key,
+        kubeconfig=(encrypt_secret(legacy_kubeconfig) if legacy_kubeconfig else ""),
         notes=str(payload.notes or "").strip(),
         health_status="unknown",
         health_message="",
@@ -240,6 +370,12 @@ def create_cluster(
         record.enabled = True
         record.schedule_enabled = True
         record.runtime_enabled = True
+        record.runtime_namespace = _default_runtime_namespace()
+    elif record.runtime_enabled and not cluster_has_kubeconfig(record):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="remote runtime-enabled clusters must configure kubeconfig secret reference or kubeconfig payload",
+        )
     session.add(record)
     _record_admin_audit_event(
         session,
@@ -285,14 +421,34 @@ def update_cluster(
         record.schedule_enabled = bool(payload.schedule_enabled)
     if payload.runtime_enabled is not None:
         record.runtime_enabled = bool(payload.runtime_enabled)
+    if payload.runtime_namespace is not None:
+        record.runtime_namespace = str(payload.runtime_namespace or "").strip()
+    if payload.kubeconfig_secret_name is not None:
+        record.kubeconfig_secret_name = str(payload.kubeconfig_secret_name or "").strip()
+        if not record.kubeconfig_secret_name:
+            record.kubeconfig_secret_namespace = ""
+            record.kubeconfig_secret_key = "kubeconfig"
+    if payload.kubeconfig_secret_namespace is not None:
+        record.kubeconfig_secret_namespace = str(payload.kubeconfig_secret_namespace or "").strip()
+    if payload.kubeconfig_secret_key is not None:
+        record.kubeconfig_secret_key = str(payload.kubeconfig_secret_key or "").strip() or "kubeconfig"
     if payload.notes is not None:
         record.notes = str(payload.notes or "").strip()
     if payload.kubeconfig is not None:
-        record.kubeconfig = encrypt_secret(payload.kubeconfig)
+        kubeconfig_text = str(payload.kubeconfig or "").strip()
+        record.kubeconfig = encrypt_secret(kubeconfig_text) if kubeconfig_text else ""
     if bool(record.is_local):
         record.enabled = True
         record.schedule_enabled = True
         record.runtime_enabled = True
+        record.runtime_namespace = _default_runtime_namespace()
+    elif record.runtime_enabled and not cluster_has_kubeconfig(record):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="remote runtime-enabled clusters must configure kubeconfig secret reference or kubeconfig payload",
+        )
+    if not str(record.runtime_namespace or "").strip():
+        record.runtime_namespace = _default_runtime_namespace()
     record.updated_at = utc_now()
     session.add(record)
     _record_admin_audit_event(
@@ -324,7 +480,7 @@ def probe_cluster(
     record = session.get(Cluster, normalized_id)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cluster not found")
-    health_status, health_message = _probe_cluster(record)
+    health_status, health_message = _probe_cluster(session, record)
     record.health_status = health_status
     record.health_message = health_message
     record.last_heartbeat_at = utc_now()
@@ -350,6 +506,7 @@ def probe_cluster(
 )
 def disable_cluster(
     cluster_id: str,
+    force: bool = Query(default=False),
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
 ) -> ClusterConfigOut:
@@ -360,6 +517,33 @@ def disable_cluster(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="cluster not found")
     if bool(record.is_local):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="local cluster cannot be disabled")
+    vm_active, container_active = _count_active_cluster_workloads(session, normalized_id)
+    if (vm_active or container_active) and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"cluster has active workloads (vm={vm_active}, container={container_active}); "
+                "set force=true to disable anyway"
+            ),
+        )
+    policy_refs = _policies_referencing_cluster(session, normalized_id)
+    if policy_refs and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"cluster is referenced by {len(policy_refs)} placement policies; "
+                "set force=true to disable and automatically sanitize policy references"
+            ),
+        )
+    if force and policy_refs:
+        for policy in policy_refs:
+            if _normalize_cluster_id(getattr(policy, "preferred_cluster_id", "")) == normalized_id:
+                policy.preferred_cluster_id = None
+                policy.hard_pin_cluster = False
+            allowed = split_csv_tokens(getattr(policy, "allowed_cluster_ids_csv", ""))
+            policy.allowed_cluster_ids_csv = csv_tokens([cid for cid in allowed if cid != normalized_id])
+            policy.updated_at = utc_now()
+            session.add(policy)
     record.enabled = False
     record.schedule_enabled = False
     record.runtime_enabled = False
@@ -371,7 +555,7 @@ def disable_cluster(
         action="disable",
         target_type="cluster",
         target_id=record.id,
-        detail="cluster disabled",
+        detail=f"cluster disabled force={force} active_vm={vm_active} active_container={container_active}",
     )
     session.commit()
     session.refresh(record)
@@ -392,6 +576,39 @@ def list_team_placement_policies(
     return [_policy_out(row) for row in rows]
 
 
+@router.get(
+    "/settings/placement-policies/explain",
+    response_model=PlacementExplainOut,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def explain_team_placement_policy(
+    team: str | None = Query(default="default"),
+    workload_kind: str = Query(default="vm"),
+    template_cluster_id: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+) -> PlacementExplainOut:
+    _require_platform_admin(user)
+    explanation = explain_cluster_selection(
+        session,
+        team=team,
+        workload_kind=workload_kind,
+        template_cluster_id=template_cluster_id,
+    )
+    return PlacementExplainOut(
+        team=explanation.team,
+        workload_kind=explanation.workload_kind,
+        template_cluster_id=explanation.template_cluster_id,
+        selected_cluster_id=explanation.selected_cluster_id,
+        selected_reason=explanation.selected_reason,
+        error=explanation.error,
+        candidates=[
+            PlacementCandidateOut(cluster_id=row.cluster_id, allowed=row.allowed, reasons=row.reasons)
+            for row in explanation.candidates
+        ],
+    )
+
+
 @router.put(
     "/settings/placement-policies/{team}",
     response_model=TeamPlacementPolicyOut,
@@ -410,6 +627,19 @@ def upsert_team_placement_policy(
     preferred_cluster = _normalize_cluster_id(payload.preferred_cluster_id)
     if preferred_cluster and not _cluster_exists(session, preferred_cluster):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="preferred_cluster_id not found")
+    allowed_cluster_ids = _validate_policy_cluster_ids(
+        session, [str(item or "") for item in payload.allowed_cluster_ids], field="allowed_cluster_ids"
+    )
+    if bool(payload.hard_pin_cluster) and not preferred_cluster:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="hard_pin_cluster requires preferred_cluster_id",
+        )
+    if preferred_cluster and allowed_cluster_ids and preferred_cluster not in set(allowed_cluster_ids):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="preferred_cluster_id must be included in allowed_cluster_ids when allowlist is set",
+        )
 
     row = session.exec(select(TeamPlacementPolicy).where(TeamPlacementPolicy.team == normalized_team)).first()
     now = utc_now()
@@ -419,7 +649,7 @@ def upsert_team_placement_policy(
     row.hard_pin_cluster = bool(payload.hard_pin_cluster)
     row.required_regions_csv = csv_tokens(payload.required_regions)
     row.required_compliance_tags_csv = csv_tokens(payload.required_compliance_tags)
-    row.allowed_cluster_ids_csv = csv_tokens(payload.allowed_cluster_ids)
+    row.allowed_cluster_ids_csv = csv_tokens(allowed_cluster_ids)
     row.updated_at = now
     session.add(row)
     _record_admin_audit_event(
@@ -574,6 +804,30 @@ def enqueue_artifact_replication(
     for row in created:
         session.refresh(row)
     return [_replication_out(row) for row in created]
+
+
+@router.post(
+    "/replication/artifacts/process",
+    response_model=dict[str, int],
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def process_replication_queue(
+    limit: int = Query(default=25, ge=1, le=200),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+) -> dict[str, int]:
+    _require_platform_admin(user)
+    processed = process_artifact_replication_queue(session, limit=limit)
+    _record_admin_audit_event(
+        session,
+        actor=user.username,
+        action="process",
+        target_type="artifact_replication",
+        target_id="queue",
+        detail=f"processed={processed}",
+    )
+    session.commit()
+    return {"processed": int(processed)}
 
 
 @router.patch(
