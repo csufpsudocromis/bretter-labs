@@ -36,7 +36,8 @@ if [ -z "$REPO_SLUG" ]; then
 fi
 
 IFS=',' read -r -a check_contexts <<<"$REQUIRED_CHECKS"
-checks_json="$(python3 - "${check_contexts[@]}" <<'PY'
+checks_json="$(
+  python3 - "${check_contexts[@]}" <<'PY'
 import json
 import sys
 contexts = [str(item).strip() for item in sys.argv[1:] if str(item).strip()]
@@ -44,7 +45,8 @@ print(json.dumps(contexts))
 PY
 )"
 
-payload="$(python3 - "$checks_json" "$REQUIRE_APPROVING_REVIEWS" "$REQUIRED_APPROVING_REVIEW_COUNT" "$ENFORCE_ADMINS" "$REQUIRE_CONVERSATION_RESOLUTION" <<'PY'
+payload="$(
+  python3 - "$checks_json" "$REQUIRE_APPROVING_REVIEWS" "$REQUIRED_APPROVING_REVIEW_COUNT" "$ENFORCE_ADMINS" "$REQUIRE_CONVERSATION_RESOLUTION" <<'PY'
 import json
 import sys
 
