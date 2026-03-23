@@ -24,6 +24,7 @@ from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
 from ..tables import User
 from ..services.kubernetes import kube
+from ..services.multi_cluster import local_cluster_id
 from ..services.tenant_context import (
     GLOBAL_TENANT,
     actor_tenant,
@@ -258,6 +259,7 @@ def _image_out(record: ContainerImageTable, signature_warning: str | None = None
         name=record.name,
         image_ref=record.image_ref,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         signature_warning=signature_warning,
         last_scan_at=getattr(record, "last_scan_at", None),
         last_scan_status=str(getattr(record, "last_scan_status", "never") or "never"),
@@ -294,6 +296,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         is_default=bool(getattr(record, "is_default", True)),
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         container_image_id=record.container_image_id,
         cpu_millicores=record.cpu_millicores,
@@ -332,6 +335,7 @@ def _instance_out(record: ContainerInstanceTable) -> ContainerInstanceView:
         owner=record.owner,
         tenant=normalize_tenant(getattr(record, "tenant", None), default="default"),
         namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         status=str(record.status or "unknown"),
         status_stage=None,
         status_detail=None,
@@ -457,6 +461,7 @@ def create_container_image(
         name=name,
         image_ref=image_ref,
         tenant=resource_tenant,
+        cluster_id=str(payload.cluster_id or local_cluster_id()),
         last_scan_at=utc_now() if settings.container_scan_enabled else None,
         last_scan_status="queued" if settings.container_scan_enabled else "never",
         last_scan_summary="scan queued" if settings.container_scan_enabled else "",
@@ -533,6 +538,8 @@ def update_container_image(
             record.last_scan_at = utc_now()
             record.last_scan_status = "queued"
             record.last_scan_summary = "scan queued"
+    if "cluster_id" in updates:
+        record.cluster_id = str(updates.get("cluster_id") or "").strip() or local_cluster_id()
     record.tenant = next_tenant
 
     session.add(record)
@@ -673,6 +680,7 @@ def create_container_template(
         is_default=True,
         name=(payload.name or "").strip(),
         tenant=resource_tenant,
+        cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=(payload.description or "").strip(),
         container_image_id=payload.container_image_id,
         cpu_millicores=payload.cpu_millicores,
@@ -768,6 +776,8 @@ def update_container_template(
 
     if "name" in updates:
         record.name = str(updates.get("name") or "").strip()
+    if "cluster_id" in updates:
+        record.cluster_id = str(updates.get("cluster_id") or "").strip() or local_cluster_id()
     if "description" in updates:
         record.description = str(updates.get("description") or "").strip()
     if "container_image_id" in updates:

@@ -13,8 +13,9 @@ from .config import settings
 from .db import engine, init_db
 from .logging_utils import configure_capped_error_file_logging
 from .rbac import Role
-from .routes import admin, admin_containers, auth, user, user_containers
+from .routes import admin, admin_containers, admin_multicluster, auth, user, user_containers
 from .services.kubernetes import kube
+from .services.multi_cluster import ensure_local_cluster
 from .tables import Config, ContainerImage, User
 from .time_utils import utc_now
 from .version import APP_VERSION
@@ -330,6 +331,7 @@ async def lifespan(_: FastAPI):
                 "force_password_change=true",
                 settings.admin_default_username,
             )
+        ensure_local_cluster(session)
         session.commit()
     global _reaper_task
     _reaper_task = asyncio.create_task(reaper_loop())
@@ -370,6 +372,7 @@ def healthcheck() -> dict[str, str]:
 
 app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(admin_containers.router, prefix="/admin", tags=["admin"])
+app.include_router(admin_multicluster.router, prefix="/admin", tags=["admin"])
 app.include_router(user.router, prefix="/user", tags=["user"])
 app.include_router(user_containers.router, prefix="/user", tags=["user"])
 app.include_router(auth.router, prefix="/auth", tags=["auth"])

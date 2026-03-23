@@ -238,6 +238,7 @@ Proof artifact and operator docs:
 - Alert routing defaults: [docs/wiki/Alert-Routing-and-Receiver-Defaults.md](docs/wiki/Alert-Routing-and-Receiver-Defaults.md)
 - Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
 - Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
+- Multi-cluster operations and placement: [docs/wiki/Multi-Cluster-Operations.md](docs/wiki/Multi-Cluster-Operations.md)
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - GitHub release/packages runbook: [docs/wiki/GitHub-Release-and-Packages-Operations.md](docs/wiki/GitHub-Release-and-Packages-Operations.md)
 
@@ -259,6 +260,8 @@ Proof artifact and operator docs:
 | `LABIMAGEIMPORT_CONTROLLER_METRICS_PORT` | `9410` | Metrics/liveness/readiness port for image-import controller |
 | `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`); production hardening requires `per_team` (namespace-first isolation) |
 | `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
+| `MULTI_CLUSTER_LOCAL_CLUSTER_ID` | `local` | Logical cluster id used by the control-plane for the local runtime cluster |
+| `MULTI_CLUSTER_LOCAL_REGION` | `local` | Region label assigned to the local runtime cluster record |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |

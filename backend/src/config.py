@@ -63,6 +63,8 @@ class Settings(BaseSettings):
     labimageimport_controller_metrics_port: int = 9410
     team_namespace_mode: str = "shared"  # shared|per_team
     team_namespace_prefix: str = "labs-team-"
+    multi_cluster_local_cluster_id: str = "local"
+    multi_cluster_local_region: str = "local"
     # Default Windows to UEFI/q35; can be overridden per environment.
     windows_efi_enabled: bool = True
     windows_machine_type: str = "q35"

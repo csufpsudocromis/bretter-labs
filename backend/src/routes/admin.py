@@ -84,6 +84,7 @@ from ..services.labimageimport_crd import (
     upsert_labimageimport_for_task,
 )
 from ..services.kubernetes import kube
+from ..services.multi_cluster import local_cluster_id
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
 from ..services.tenant_context import (
     GLOBAL_TENANT,
@@ -1462,6 +1463,8 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN rdp_default_password TEXT DEFAULT ''")
         if "tenant" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "cluster_id" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN cluster_id TEXT DEFAULT 'local'")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1483,6 +1486,7 @@ def _ensure_template_columns() -> None:
             cur.execute("UPDATE template SET rdp_default_username = '' WHERE rdp_default_username IS NULL")
             cur.execute("UPDATE template SET rdp_default_password = '' WHERE rdp_default_password IS NULL")
             cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute("UPDATE template SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
             conn.commit()
         cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
         if "console_provider" in cols:
@@ -1506,7 +1510,10 @@ def _ensure_template_columns() -> None:
         if "tenant" in cols:
             cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_template_tenant ON template(tenant)")
-        if "rdp_default_username" in cols or "rdp_default_password" in cols or "tenant" in cols:
+        if "cluster_id" in cols:
+            cur.execute("UPDATE template SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_template_cluster_id ON template(cluster_id)")
+        if "rdp_default_username" in cols or "rdp_default_password" in cols or "tenant" in cols or "cluster_id" in cols:
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -1529,9 +1536,15 @@ def _ensure_image_columns() -> None:
             cur.execute("ALTER TABLE image ADD COLUMN source_pvc TEXT")
         if "tenant" not in cols:
             cur.execute("ALTER TABLE image ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "cluster_id" not in cols:
+            cur.execute("ALTER TABLE image ADD COLUMN cluster_id TEXT DEFAULT 'local'")
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(image)")}
         if "tenant" in {row[1] for row in cur.execute("PRAGMA table_info(image)")}:
             cur.execute("UPDATE image SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_image_tenant ON image(tenant)")
+        if "cluster_id" in cols:
+            cur.execute("UPDATE image SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_image_cluster_id ON image(cluster_id)")
         conn.commit()
     except Exception:
         logger.exception("Failed to ensure image columns")
@@ -1559,6 +1572,8 @@ def _ensure_instance_columns() -> None:
             cur.execute("ALTER TABLE instance ADD COLUMN tenant TEXT DEFAULT 'default'")
         if "namespace" not in cols:
             cur.execute("ALTER TABLE instance ADD COLUMN namespace TEXT DEFAULT 'labs'")
+        if "cluster_id" not in cols:
+            cur.execute("ALTER TABLE instance ADD COLUMN cluster_id TEXT DEFAULT 'local'")
         cols = {row[1] for row in cur.execute("PRAGMA table_info(instance)")}
         if "tenant" in cols:
             cur.execute("UPDATE instance SET tenant = 'default' WHERE tenant IS NULL OR trim(tenant) = ''")
@@ -1566,6 +1581,9 @@ def _ensure_instance_columns() -> None:
         if "namespace" in cols:
             cur.execute("UPDATE instance SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_namespace ON instance(namespace)")
+        if "cluster_id" in cols:
+            cur.execute("UPDATE instance SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_cluster_id ON instance(cluster_id)")
         conn.commit()
     except Exception:
         logger.exception("Failed to ensure instance columns")
@@ -1614,6 +1632,8 @@ def _ensure_upload_task_columns() -> None:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_started_at TIMESTAMP")
         if "tenant" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "cluster_id" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN cluster_id TEXT DEFAULT 'local'")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1634,6 +1654,11 @@ def _ensure_upload_task_columns() -> None:
         if "tenant" in cols:
             cur.execute("UPDATE imageuploadtask SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_imageuploadtask_tenant ON imageuploadtask(tenant)")
+        if "cluster_id" in cols:
+            cur.execute(
+                "UPDATE imageuploadtask SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''"
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_imageuploadtask_cluster_id ON imageuploadtask(cluster_id)")
         conn.commit()
     except Exception:
         logger.exception("Failed to ensure image upload task columns")
@@ -2650,6 +2675,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         existing.name = task.filename
         existing.filename = task.filename
         existing.tenant = normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT)
+        existing.cluster_id = str(getattr(task, "cluster_id", "") or local_cluster_id())
         existing.source_pvc = task.source_pvc
         existing.checksum = task.checksum
         existing.size_bytes = task.size_bytes
@@ -2661,6 +2687,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         name=task.filename,
         filename=task.filename,
         tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
+        cluster_id=str(getattr(task, "cluster_id", "") or local_cluster_id()),
         source_pvc=task.source_pvc,
         checksum=task.checksum,
         size_bytes=task.size_bytes,
@@ -4011,6 +4038,7 @@ def upload_image(
         original_filename=Path(file.filename).name,
         filename=filename,
         tenant=resolve_resource_tenant(actor),
+        cluster_id=local_cluster_id(),
         size_bytes=size_bytes,
         status="finalizing",
         stage="finalizing",
@@ -4102,6 +4130,7 @@ def start_direct_upload(
         original_filename=filename,
         filename=filename,
         tenant=resolve_resource_tenant(actor),
+        cluster_id=local_cluster_id(),
         size_bytes=payload.size_bytes,
         status="uploading",
         stage="uploading",
@@ -4254,6 +4283,7 @@ def import_image(
         name=payload.name or dest_path.name,
         filename=dest_path.name,
         tenant=resource_tenant,
+        cluster_id=local_cluster_id(),
         source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
@@ -4275,6 +4305,7 @@ def import_image(
         name=record.name,
         filename=record.filename,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -4300,6 +4331,7 @@ def list_images(session: Session = Depends(get_session), actor: User = Depends(r
                 name=fname,
                 filename=fname,
                 tenant=GLOBAL_TENANT,
+                cluster_id=local_cluster_id(),
                 source_pvc=None,
                 checksum="",
                 size_bytes=info.get("size", 0),
@@ -4314,6 +4346,7 @@ def list_images(session: Session = Depends(get_session), actor: User = Depends(r
             id=record.id,
             name=record.name,
             tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+            cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
             checksum=record.checksum,
             size_bytes=record.size_bytes,
             created_at=record.created_at,
@@ -4463,6 +4496,7 @@ def rename_image(
         id=record.id,
         name=record.name,
         tenant=managed_tenant,
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -4478,6 +4512,7 @@ def _template_to_model(record: Template) -> VMTemplate:
         id=record.id,
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         os_type=record.os_type,
         image_id=record.image_id,
@@ -4534,6 +4569,7 @@ def create_template(
         id=str(uuid4()),
         name=payload.name,
         tenant=resource_tenant,
+        cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=payload.description or "",
         os_type=payload.os_type or "windows",
         image_id=payload.image_id,
@@ -4604,6 +4640,8 @@ def update_template(
         next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
     if payload.name is not None:
         record.name = payload.name
+    if payload.cluster_id is not None:
+        record.cluster_id = str(payload.cluster_id or "").strip() or local_cluster_id()
     if payload.description is not None:
         record.description = payload.description
     if payload.os_type is not None:
@@ -5924,6 +5962,9 @@ def list_running_pods(session: Session = Depends(get_session)) -> list[VMInstanc
             id=record.id,
             template_id=record.template_id,
             owner=record.owner,
+            tenant=normalize_tenant(getattr(record, "tenant", None), default="default"),
+            namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+            cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
             status=record.status,
             started_at=record.started_at,
             last_active_at=record.last_active_at,
@@ -5952,6 +5993,9 @@ def stop_pod(instance_id: str, session: Session = Depends(get_session)) -> VMIns
         id=record.id,
         template_id=record.template_id,
         owner=record.owner,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default="default"),
+        namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         status=record.status,
         started_at=record.started_at,
         last_active_at=record.last_active_at,

@@ -9,6 +9,8 @@ from sqlalchemy import Engine, inspect
 
 APP_TABLES: set[str] = {
     "adminauditevent",
+    "artifactreplication",
+    "cluster",
     "config",
     "connecttoken",
     "containerimage",
@@ -19,6 +21,7 @@ APP_TABLES: set[str] = {
     "instance",
     "oidcloginstate",
     "template",
+    "teamplacementpolicy",
     "teamquota",
     "token",
     "user",

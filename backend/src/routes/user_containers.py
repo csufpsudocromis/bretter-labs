@@ -32,6 +32,7 @@ from ..models import ContainerDependencyCheck
 from ..models import ContainerTemplate as ContainerTemplateView
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
+from ..services.multi_cluster import PlacementError, local_cluster_id, select_cluster_for_launch
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
@@ -172,6 +173,10 @@ def _container_instance_namespace(record: ContainerInstanceTable, user: User | N
     if user is not None:
         return _container_runtime_namespace(user)
     return str(settings.kube_namespace or "labs").strip() or "labs"
+
+
+def _container_instance_cluster_id(record: ContainerInstanceTable) -> str:
+    return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
 
 
 def _container_service_host(instance_id: str, namespace: str) -> str:
@@ -826,6 +831,7 @@ def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | Non
         is_default=bool(getattr(record, "is_default", True)),
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         container_image_id=record.container_image_id,
         cpu_millicores=record.cpu_millicores,
@@ -867,6 +873,7 @@ def _instance_out(
         owner=record.owner,
         tenant=normalize_tenant(getattr(record, "tenant", None), default="default"),
         namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+        cluster_id=_container_instance_cluster_id(record),
         status=record.status,
         status_stage=stage or resolved_stage,
         status_detail=detail or resolved_detail,
@@ -1765,6 +1772,24 @@ def start_container_template(
             getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
         ),
     )
+    try:
+        placement = select_cluster_for_launch(
+            session,
+            team=getattr(user, "team", None),
+            workload_kind="container",
+            template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
+        )
+    except PlacementError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
+    if selected_cluster_id != local_cluster_id():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"selected cluster '{selected_cluster_id}' is remote. "
+                "This backend build currently supports container runtime launches on the local cluster only."
+            ),
+        )
 
     instance_id = str(uuid4())
     now = utc_now()
@@ -1785,6 +1810,7 @@ def start_container_template(
             owner=user.username,
             tenant=user_tenant,
             namespace=runtime_namespace,
+            cluster_id=selected_cluster_id,
             status="queued",
             pod_name=kube.container_pod_name(instance_id=instance_id, owner=user.username),
             queue_attempts=0,
@@ -1831,6 +1857,7 @@ def start_container_template(
             owner=user.username,
             tenant=user_tenant,
             namespace=runtime_namespace,
+            cluster_id=selected_cluster_id,
             status="pending",
             pod_name=pod_name,
             started_at=now,
@@ -1862,6 +1889,7 @@ def start_container_template(
                 owner=user.username,
                 tenant=user_tenant,
                 namespace=runtime_namespace,
+                cluster_id=selected_cluster_id,
                 status="queued",
                 pod_name=pod_name,
                 queue_attempts=1,
@@ -1991,6 +2019,25 @@ def restart_container(
         ),
         exclude_container_instance_id=record.id,
     )
+    try:
+        placement = select_cluster_for_launch(
+            session,
+            team=getattr(user, "team", None),
+            workload_kind="container",
+            template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
+        )
+    except PlacementError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
+    if selected_cluster_id != local_cluster_id():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"selected cluster '{selected_cluster_id}' is remote. "
+                "This backend build currently supports container runtime launches on the local cluster only."
+            ),
+        )
+
     if quota_check.error_detail and settings.container_start_queue_enabled:
         record.status = "queued"
         record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
@@ -2048,6 +2095,7 @@ def restart_container(
     record.status = "pending"
     record.tenant = user_tenant
     record.namespace = runtime_namespace
+    record.cluster_id = selected_cluster_id
     record.pod_name = kube.container_pod_name(instance_id=record.id, owner=user.username)
     record.queue_attempts = 0
     record.queue_not_before = None

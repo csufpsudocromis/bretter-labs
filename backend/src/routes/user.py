@@ -35,6 +35,7 @@ from ..services.labinstance_crd import (
     vm_orchestration_writes_crd,
 )
 from ..services.kubernetes import PodRequest, PodStatus, kube
+from ..services.multi_cluster import PlacementError, local_cluster_id, select_cluster_for_launch
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
@@ -296,6 +297,10 @@ def _instance_namespace(record: Instance, user: User | None = None) -> str:
     return str(settings.kube_namespace or "labs").strip() or "labs"
 
 
+def _instance_cluster_id(record: Instance) -> str:
+    return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
+
+
 def _vm_service_host(instance_id: str, namespace: str) -> str:
     return f"svc-{instance_id[:8]}.{namespace}.svc.cluster.local"
 
@@ -501,6 +506,7 @@ def list_available_templates(
         VMTemplate(
             id=record.id,
             name=record.name,
+            cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
             description=record.description,
             os_type=record.os_type,
             image_id=record.image_id,
@@ -598,6 +604,7 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
                     getattr(record, "tenant", None), default=normalize_tenant(user.team, default="default")
                 ),
                 namespace=_instance_namespace(record, user),
+                cluster_id=_instance_cluster_id(record),
                 status=record.status,
                 status_stage=stage,
                 status_detail=detail,
@@ -1131,6 +1138,24 @@ def start_vm(
         requested_storage_gib=_vm_storage_request_gib(image),
         requested_idle_timeout_minutes=template.idle_timeout_minutes or settings.idle_timeout_minutes,
     )
+    try:
+        placement = select_cluster_for_launch(
+            session,
+            team=getattr(user, "team", None),
+            workload_kind="vm",
+            template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
+        )
+    except PlacementError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
+    if selected_cluster_id != local_cluster_id():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"selected cluster '{selected_cluster_id}' is remote. "
+                "This backend build currently supports VM runtime launches on the local cluster only."
+            ),
+        )
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1202,6 +1227,7 @@ def start_vm(
         owner=user.username,
         tenant=user_tenant,
         namespace=runtime_namespace,
+        cluster_id=selected_cluster_id,
         status="pending",
         disk_pvc=disk_pvc,
         started_at=utc_now(),
@@ -1244,6 +1270,7 @@ def start_vm(
         owner=instance.owner,
         tenant=normalize_tenant(getattr(instance, "tenant", None), default=user_tenant),
         namespace=str(getattr(instance, "namespace", "") or runtime_namespace),
+        cluster_id=_instance_cluster_id(instance),
         status=instance.status,
         status_stage=stage,
         status_detail=detail,
@@ -1295,6 +1322,7 @@ def stop_vm(
             getattr(record, "tenant", None), default=normalize_tenant(user.team, default="default")
         ),
         namespace=instance_namespace,
+        cluster_id=_instance_cluster_id(record),
         status=record.status,
         status_stage=stage,
         status_detail=detail,
@@ -1356,6 +1384,24 @@ def restart_vm(
         requested_idle_timeout_minutes=template.idle_timeout_minutes or settings.idle_timeout_minutes,
         exclude_vm_instance_id=record.id,
     )
+    try:
+        placement = select_cluster_for_launch(
+            session,
+            team=getattr(user, "team", None),
+            workload_kind="vm",
+            template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
+        )
+    except PlacementError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
+    if selected_cluster_id != local_cluster_id():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"selected cluster '{selected_cluster_id}' is remote. "
+                "This backend build currently supports VM runtime launches on the local cluster only."
+            ),
+        )
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1428,6 +1474,7 @@ def restart_vm(
     record.status = "pending"
     record.tenant = user_tenant
     record.namespace = runtime_namespace
+    record.cluster_id = selected_cluster_id
     record.disk_pvc = disk_pvc
     record.started_at = utc_now()
     record.last_active_at = utc_now()
@@ -1464,6 +1511,7 @@ def restart_vm(
         owner=record.owner,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=user_tenant),
         namespace=runtime_namespace,
+        cluster_id=_instance_cluster_id(record),
         status=record.status,
         status_stage=stage,
         status_detail=detail,

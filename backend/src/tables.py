@@ -47,6 +47,7 @@ class Image(SQLModel, table=True):
     name: str
     filename: str
     tenant: str = Field(default="global", index=True)
+    cluster_id: str = Field(default="local", index=True)
     source_pvc: Optional[str] = None
     checksum: str
     size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))
@@ -58,6 +59,7 @@ class ImageUploadTask(SQLModel, table=True):
     original_filename: str
     filename: str
     tenant: str = Field(default="global", index=True)
+    cluster_id: str = Field(default="local", index=True)
     size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "queued"
     stage: str = "queued"
@@ -83,6 +85,7 @@ class Template(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     tenant: str = Field(default="global", index=True)
+    cluster_id: str = Field(default="local", index=True)
     description: str = ""
     os_type: str = "windows"
     image_id: str = Field(foreign_key="image.id")
@@ -107,6 +110,7 @@ class Instance(SQLModel, table=True):
     owner: str = Field(foreign_key="user.username")
     tenant: str = Field(default="default", index=True)
     namespace: str = Field(default="labs", index=True)
+    cluster_id: str = Field(default="local", index=True)
     status: str = "pending"
     disk_pvc: Optional[str] = None
     started_at: datetime = Field(default_factory=utc_now)
@@ -119,6 +123,7 @@ class ContainerImage(SQLModel, table=True):
     name: str
     image_ref: str
     tenant: str = Field(default="global", index=True)
+    cluster_id: str = Field(default="local", index=True)
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
     last_scan_summary: str = ""
@@ -134,6 +139,7 @@ class ContainerTemplate(SQLModel, table=True):
     is_default: bool = True
     name: str
     tenant: str = Field(default="global", index=True)
+    cluster_id: str = Field(default="local", index=True)
     description: str = ""
     container_image_id: str = Field(foreign_key="containerimage.id")
     cpu_millicores: int = 500
@@ -165,6 +171,7 @@ class ContainerInstance(SQLModel, table=True):
     owner: str = Field(foreign_key="user.username")
     tenant: str = Field(default="default", index=True)
     namespace: str = Field(default="labs", index=True)
+    cluster_id: str = Field(default="local", index=True)
     status: str = "pending"
     pod_name: Optional[str] = None
     queue_attempts: int = 0
@@ -239,6 +246,64 @@ class TeamQuota(SQLModel, table=True):
     max_storage_gib: Optional[int] = None
     idle_timeout_minutes_cap: Optional[int] = None
     enabled: bool = True
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class Cluster(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    name: str
+    region: str = Field(default="local", index=True)
+    compliance_tags_csv: str = ""
+    capacity_weight: int = 100
+    enabled: bool = True
+    schedule_enabled: bool = True
+    runtime_enabled: bool = False
+    is_local: bool = False
+    kubeconfig: str = ""
+    notes: str = ""
+    health_status: str = "unknown"
+    health_message: str = ""
+    last_heartbeat_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class TeamPlacementPolicy(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("team", name="uq_teamplacementpolicy_team"),)
+
+    id: str = Field(primary_key=True, index=True)
+    team: str = Field(index=True)
+    preferred_cluster_id: Optional[str] = Field(default=None, foreign_key="cluster.id")
+    hard_pin_cluster: bool = False
+    required_regions_csv: str = ""
+    required_compliance_tags_csv: str = ""
+    allowed_cluster_ids_csv: str = ""
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class ArtifactReplication(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint(
+            "artifact_type",
+            "artifact_id",
+            "target_cluster_id",
+            name="uq_artifactreplication_artifact_target",
+        ),
+    )
+
+    id: str = Field(primary_key=True, index=True)
+    tenant: str = Field(default="global", index=True)
+    artifact_type: str = Field(index=True)
+    artifact_id: str = Field(index=True)
+    source_cluster_id: str = Field(foreign_key="cluster.id")
+    target_cluster_id: str = Field(foreign_key="cluster.id")
+    status: str = Field(default="queued", index=True)
+    detail: str = ""
+    requested_by: str = ""
+    last_attempt_at: Optional[datetime] = None
+    last_synced_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

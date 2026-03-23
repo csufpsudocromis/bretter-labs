@@ -84,6 +84,7 @@ class ImageMeta(BaseModel):
     id: str
     name: str
     tenant: str = "global"
+    cluster_id: str = "local"
     checksum: str
     size_bytes: int
     created_at: datetime
@@ -127,12 +128,14 @@ class ContainerImageCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     image_ref: str = Field(..., min_length=1, max_length=255)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 class ContainerImageUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     image_ref: Optional[str] = Field(default=None, min_length=1, max_length=255)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
 class ContainerImageMeta(BaseModel):
@@ -140,6 +143,7 @@ class ContainerImageMeta(BaseModel):
     name: str
     image_ref: str
     tenant: str = "global"
+    cluster_id: str = "local"
     signature_warning: Optional[str] = None
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
@@ -157,6 +161,7 @@ class ContainerDependencyCheck(BaseModel):
 class VMTemplateCreate(BaseModel):
     name: str
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     os_type: str = Field(default="windows", pattern="^(windows|linux)$")
     image_id: str
@@ -177,6 +182,7 @@ class VMTemplateCreate(BaseModel):
 class VMTemplateUpdate(BaseModel):
     name: Optional[str] = None
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     os_type: Optional[str] = Field(default=None, pattern="^(windows|linux)$")
     image_id: Optional[str] = None
@@ -198,6 +204,7 @@ class VMTemplate(BaseModel):
     id: str
     name: str
     tenant: str = "global"
+    cluster_id: str = "local"
     description: Optional[str] = None
     os_type: str
     image_id: str
@@ -219,6 +226,7 @@ class VMTemplate(BaseModel):
 class ContainerTemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     container_image_id: str
     cpu_millicores: int = Field(default=500, ge=50, le=16000)
@@ -247,6 +255,7 @@ class ContainerTemplateUpdate(BaseModel):
     is_default: Optional[bool] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     container_image_id: Optional[str] = None
     cpu_millicores: Optional[int] = Field(default=None, ge=50, le=16000)
@@ -278,6 +287,7 @@ class ContainerTemplate(BaseModel):
     is_default: bool = True
     name: str
     tenant: str = "global"
+    cluster_id: str = "local"
     description: Optional[str] = None
     container_image_id: str
     cpu_millicores: int
@@ -549,6 +559,7 @@ class VMInstance(BaseModel):
     owner: str
     tenant: str = "default"
     namespace: str = "labs"
+    cluster_id: str = "local"
     status: Literal["pending", "running", "stopped", "completed", "failed", "unknown"]
     status_stage: Optional[str] = None
     status_detail: Optional[str] = None
@@ -563,6 +574,7 @@ class ContainerInstance(BaseModel):
     owner: str
     tenant: str = "default"
     namespace: str = "labs"
+    cluster_id: str = "local"
     status: Literal["queued", "pending", "running", "stopped", "completed", "failed", "unknown"]
     status_stage: Optional[str] = None
     status_detail: Optional[str] = None
@@ -575,3 +587,96 @@ class ContainerInstance(BaseModel):
     launch_diagnostics: list[str] = Field(default_factory=list)
     started_at: datetime
     last_active_at: datetime
+
+
+class ClusterConfigCreate(BaseModel):
+    id: str = Field(..., min_length=1, max_length=64)
+    name: str = Field(..., min_length=1, max_length=128)
+    region: str = Field(default="local", min_length=1, max_length=64)
+    compliance_tags: list[str] = Field(default_factory=list)
+    capacity_weight: int = Field(default=100, ge=1, le=10000)
+    enabled: bool = True
+    schedule_enabled: bool = True
+    runtime_enabled: bool = False
+    kubeconfig: str | None = None
+    notes: str = Field(default="", max_length=2000)
+
+
+class ClusterConfigUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    region: str | None = Field(default=None, min_length=1, max_length=64)
+    compliance_tags: list[str] | None = None
+    capacity_weight: int | None = Field(default=None, ge=1, le=10000)
+    enabled: bool | None = None
+    schedule_enabled: bool | None = None
+    runtime_enabled: bool | None = None
+    kubeconfig: str | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class ClusterConfigOut(BaseModel):
+    id: str
+    name: str
+    region: str
+    compliance_tags: list[str] = Field(default_factory=list)
+    capacity_weight: int
+    enabled: bool
+    schedule_enabled: bool
+    runtime_enabled: bool
+    is_local: bool
+    kubeconfig_configured: bool = False
+    notes: str = ""
+    health_status: str = "unknown"
+    health_message: str = ""
+    last_heartbeat_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TeamPlacementPolicyUpdate(BaseModel):
+    preferred_cluster_id: str | None = Field(default=None, min_length=1, max_length=64)
+    hard_pin_cluster: bool = False
+    required_regions: list[str] = Field(default_factory=list)
+    required_compliance_tags: list[str] = Field(default_factory=list)
+    allowed_cluster_ids: list[str] = Field(default_factory=list)
+
+
+class TeamPlacementPolicyOut(BaseModel):
+    id: str
+    team: str
+    preferred_cluster_id: str | None = None
+    hard_pin_cluster: bool = False
+    required_regions: list[str] = Field(default_factory=list)
+    required_compliance_tags: list[str] = Field(default_factory=list)
+    allowed_cluster_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArtifactReplicationCreate(BaseModel):
+    artifact_type: Literal["vm_image", "vm_template", "container_image", "container_template"]
+    artifact_id: str = Field(..., min_length=1, max_length=128)
+    target_cluster_ids: list[str] = Field(..., min_length=1)
+    source_cluster_id: str | None = Field(default=None, min_length=1, max_length=64)
+    tenant: str | None = Field(default=None, min_length=1, max_length=64)
+
+
+class ArtifactReplicationUpdate(BaseModel):
+    status: Literal["queued", "syncing", "ready", "error"]
+    detail: str = Field(default="", max_length=2000)
+
+
+class ArtifactReplicationOut(BaseModel):
+    id: str
+    tenant: str = "global"
+    artifact_type: str
+    artifact_id: str
+    source_cluster_id: str
+    target_cluster_id: str
+    status: str
+    detail: str = ""
+    requested_by: str = ""
+    last_attempt_at: datetime | None = None
+    last_synced_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
