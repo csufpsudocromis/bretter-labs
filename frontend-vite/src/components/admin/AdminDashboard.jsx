@@ -25,13 +25,8 @@ const tiles = [
   },
   {
     title: "Settings",
-    description: "Runtime, storage, SSO, LDAP, and multi-cluster controls",
+    description: "Runtime, storage, SSO, and LDAP controls",
     to: "/admin/settings",
-  },
-  {
-    title: "Multi-Cluster",
-    description: "Placement policies, replication queue, and cluster routing controls",
-    to: "/admin/settings/multi-cluster",
   },
 ];
 

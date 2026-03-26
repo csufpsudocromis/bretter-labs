@@ -116,7 +116,7 @@ Reference pages:
 - Explicit PostgreSQL Alembic migration gate in CI (`scripts/check_alembic_postgres.sh`)
 - Tenant isolation audit gate for values/RBAC/network policy posture (`scripts/audit_tenant_isolation.sh`)
 - Tenant namespace bootstrap script for per-team quota/policy scaffolding
-- Multi-cluster runtime dispatch with placement policy edit/delete/explain, telemetry, and replication queue status processing
+- Single-cluster multi-node runtime scheduling by default, with optional advanced multi-cluster APIs documented separately
 
 ## Architecture diagram
 

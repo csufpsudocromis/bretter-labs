@@ -78,7 +78,6 @@ _User view: launch feedback and in-browser connect workflow._
 - Per-template VM console provider selection (`spice`, `guacamole`/VNC, or `guacamole_rdp`)
 - Container image registry management
 - Runtime, storage, appearance, and alert/error settings (including global concurrency and default idle-timeout controls in `/admin/settings/runtime`)
-- Multi-cluster cluster inventory/telemetry, placement policy edit/delete + explain, and artifact replication queue status update controls (`/admin/settings/multi-cluster`)
 - Resource, pod, and health visibility in admin pages
 
 ### User features
@@ -94,6 +93,7 @@ _User view: launch feedback and in-browser connect workflow._
 
 - FastAPI backend + React (Vite) frontend
 - Kubernetes-native VM/container lifecycle orchestration
+- Single-cluster, multi-node deployment model by default
 - Clone-based VM storage workflows
 - CDI direct upload/finalization support
 - Postgres-backed DB stack with Alembic migrations
@@ -247,7 +247,7 @@ Proof artifact and operator docs:
 - Alert routing defaults: [docs/wiki/Alert-Routing-and-Receiver-Defaults.md](docs/wiki/Alert-Routing-and-Receiver-Defaults.md)
 - Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
 - Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
-- Multi-cluster operations and placement: [docs/wiki/Multi-Cluster-Operations.md](docs/wiki/Multi-Cluster-Operations.md)
+- Optional advanced multi-cluster operations and placement: [docs/wiki/Multi-Cluster-Operations.md](docs/wiki/Multi-Cluster-Operations.md)
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - GitHub release/packages runbook: [docs/wiki/GitHub-Release-and-Packages-Operations.md](docs/wiki/GitHub-Release-and-Packages-Operations.md)
 
@@ -270,8 +270,8 @@ Proof artifact and operator docs:
 | `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`); production hardening requires `per_team` (namespace-first isolation) |
 | `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
 | `TEAM_NAMESPACE_BOOTSTRAP_ENABLED` | `1` | Auto-bootstrap per-team runtime namespaces (RBAC/quota/network policy/secret sync); required in production profile |
-| `MULTI_CLUSTER_LOCAL_CLUSTER_ID` | `local` | Logical cluster id used by the control-plane for the local runtime cluster |
-| `MULTI_CLUSTER_LOCAL_REGION` | `local` | Region label assigned to the local runtime cluster record |
+| `MULTI_CLUSTER_LOCAL_CLUSTER_ID` | `local` | Optional advanced multi-cluster metadata for the local runtime cluster |
+| `MULTI_CLUSTER_LOCAL_REGION` | `local` | Optional advanced multi-cluster region label for the local runtime cluster record |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |

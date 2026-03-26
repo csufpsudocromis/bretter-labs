@@ -227,12 +227,12 @@ ENABLE_MONITORING=1 \
 - `/admin/settings/appearance`: theme, contrast targets, background upload, font sizing
 - `/admin/settings/sso`: SSO provider config
 - `/admin/settings/ldap`: LDAP bind/search settings
-- `/admin/settings/multi-cluster`: cluster inventory/telemetry, placement policy edit/delete/explain, replication queue controls
 - `/admin/scaling-quotas`: namespace quota controls for lab count/cpu/ram/storage/idle cap
 
 ## Notes
 
 - Runtime settings keeps detailed env/runtime values read-only, while exposing writable global concurrency and idle-timeout controls.
+- The default deployment posture is single-cluster with multiple nodes; multi-cluster controls are optional advanced operations documented separately.
 - `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
 - Backend startup is fail-fast if no admin user exists and `ADMIN_BOOTSTRAP_PASSWORD` is empty.
 - By default, setup prunes `BLABS_ADMIN_DEFAULT_PASSWORD` from the backend deployment after rollout to avoid long-lived bootstrap secrets in pod specs.
