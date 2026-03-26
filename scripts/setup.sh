@@ -2308,7 +2308,12 @@ spec:
         - alert: BretterPodRestartBurst
           expr: |
             sum by (namespace, pod) (
-              increase(kube_pod_container_status_restarts_total{namespace="${NAMESPACE}"}[15m])
+              increase(
+                kube_pod_container_status_restarts_total{
+                  namespace="${NAMESPACE}",
+                  pod!~"bretter-(slo-|cleanup-|ghcr-access-check-|kubelet-serving-csr-approver-).*"
+                }[15m]
+              )
             ) >= ${MONITORING_RESTART_ALERT_COUNT}
           for: 5m
           labels:

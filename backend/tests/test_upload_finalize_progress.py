@@ -4,7 +4,9 @@ from src.routes.admin import (
     _parse_finalize_progress_percent,
     _requested_upload_pvc_gi,
     _retry_backoff_seconds,
+    _task_stage_progress,
 )
+from src.tables import ImageUploadTask
 
 
 def test_parse_finalize_progress_percent_from_qemu_progress_log() -> None:
@@ -39,3 +41,33 @@ def test_requested_upload_pvc_gi_uses_larger_computed_size(monkeypatch) -> None:
 def test_finalize_retry_backoff_is_bounded() -> None:
     assert _retry_backoff_seconds(1) >= 5
     assert _retry_backoff_seconds(5) >= _retry_backoff_seconds(2)
+
+
+def test_task_stage_progress_defaults_importing_to_zero_until_reported() -> None:
+    task = ImageUploadTask(
+        id="task-importing-zero",
+        original_filename="sample.vdi",
+        filename="sample.vdi",
+        size_bytes=1024,
+        status="importing",
+        stage="importing",
+        progress_percent=None,
+    )
+    stage, progress = _task_stage_progress(task)
+    assert stage == "importing"
+    assert progress == 0
+
+
+def test_task_stage_progress_defaults_finalizing_to_zero_until_reported() -> None:
+    task = ImageUploadTask(
+        id="task-finalizing-zero",
+        original_filename="sample.vdi",
+        filename="sample.vdi",
+        size_bytes=1024,
+        status="finalizing",
+        stage="finalizing",
+        progress_percent=None,
+    )
+    stage, progress = _task_stage_progress(task)
+    assert stage == "finalizing"
+    assert progress == 0

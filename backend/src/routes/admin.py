@@ -1201,6 +1201,41 @@ def _fetch_alertmanager_alerts() -> tuple[list[AlertManagerAlert], str]:
     if not isinstance(payload, list):
         return [], "Alertmanager response format is unexpected."
 
+    suppressed_names_raw = str(getattr(settings, "alertmanager_suppressed_alert_names", "") or "").strip()
+    suppressed_names = {item.strip().lower() for item in suppressed_names_raw.split(",") if item.strip()}
+
+    job_name_re: re.Pattern[str] | None = None
+    job_name_pattern = str(getattr(settings, "alertmanager_suppressed_job_name_regex", "") or "").strip()
+    if job_name_pattern:
+        try:
+            job_name_re = re.compile(job_name_pattern)
+        except re.error:
+            logger.warning("Invalid BLABS_ALERTMANAGER_SUPPRESSED_JOB_NAME_REGEX: %s", job_name_pattern)
+
+    pod_name_re: re.Pattern[str] | None = None
+    pod_name_pattern = str(getattr(settings, "alertmanager_suppressed_pod_regex", "") or "").strip()
+    if pod_name_pattern:
+        try:
+            pod_name_re = re.compile(pod_name_pattern)
+        except re.error:
+            logger.warning("Invalid BLABS_ALERTMANAGER_SUPPRESSED_POD_REGEX: %s", pod_name_pattern)
+
+    def _is_suppressed_alert(alert_name: str, labels: dict[str, str]) -> bool:
+        if not suppressed_names:
+            return False
+        normalized_name = str(alert_name or "").strip().lower()
+        if normalized_name not in suppressed_names:
+            return False
+        if job_name_re is None and pod_name_re is None:
+            return True
+        job_name = _to_str(labels.get("job_name")) or _to_str(labels.get("job")) or _to_str(labels.get("cronjob"))
+        pod_name = _to_str(labels.get("pod"))
+        if job_name and job_name_re and job_name_re.search(job_name):
+            return True
+        if pod_name and pod_name_re and pod_name_re.search(pod_name):
+            return True
+        return False
+
     alerts: list[AlertManagerAlert] = []
     for item in payload:
         if not isinstance(item, dict):
@@ -1208,9 +1243,12 @@ def _fetch_alertmanager_alerts() -> tuple[list[AlertManagerAlert], str]:
         labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
         annotations = item.get("annotations") if isinstance(item.get("annotations"), dict) else {}
         status_obj = item.get("status") if isinstance(item.get("status"), dict) else {}
+        alert_name = _to_str(labels.get("alertname")) or "unnamed-alert"
+        if _is_suppressed_alert(alert_name, {str(k): _to_str(v) for k, v in labels.items()}):
+            continue
         alerts.append(
             AlertManagerAlert(
-                name=_to_str(labels.get("alertname")) or "unnamed-alert",
+                name=alert_name,
                 state=_to_str(status_obj.get("state")) or "unknown",
                 severity=_to_str(labels.get("severity")),
                 summary=_to_str(annotations.get("summary")),
@@ -1790,20 +1828,49 @@ def _retry_backoff_seconds(retry_count: int) -> int:
     return min(FINALIZE_RETRY_MAX_SECONDS, max(FINALIZE_RETRY_BASE_SECONDS, int(delay)))
 
 
+def _coerce_progress_percent(value: object, *, default: int = 0, upper_bound: int = 100) -> int:
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except Exception:
+        parsed = int(default)
+    return max(0, min(int(upper_bound), parsed))
+
+
+def _advance_progress_percent(
+    task: ImageUploadTask,
+    *,
+    floor: int = 0,
+    cap: int = 99,
+    step: int | None = None,
+) -> int:
+    normalized_floor = max(0, min(100, int(floor)))
+    normalized_cap = max(normalized_floor, min(100, int(cap)))
+    if step is None:
+        step = max(1, int(getattr(settings, "image_import_progress_step_percent", 3) or 3))
+    else:
+        step = max(1, int(step))
+    current = _coerce_progress_percent(
+        getattr(task, "progress_percent", None), default=normalized_floor, upper_bound=100
+    )
+    next_progress = max(normalized_floor, min(normalized_cap, current + step))
+    task.progress_percent = next_progress
+    return next_progress
+
+
 def _task_stage_progress(task: ImageUploadTask) -> tuple[str, int | None]:
     status = str(getattr(task, "status", "") or "").strip().lower()
     stage = str(getattr(task, "stage", "") or "").strip().lower()
     if status == "completed":
         return ("completed", 100)
     if status == "failed":
-        return ("failed", int(getattr(task, "progress_percent", 0) or 0))
+        return ("failed", _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=100))
     if status == "uploading":
-        return ("uploading", int(getattr(task, "progress_percent", 0) or 0))
+        return ("uploading", _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=100))
     if status == "finalizing":
         progress = getattr(task, "progress_percent", None)
-        return ("finalizing", int(progress) if isinstance(progress, int) else None)
+        return ("finalizing", _coerce_progress_percent(progress, default=0, upper_bound=100))
     if status == "importing":
-        return ("importing", int(getattr(task, "progress_percent", 100) or 100))
+        return ("importing", _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=99))
     if stage:
         return (stage, getattr(task, "progress_percent", None))
     return ("queued", getattr(task, "progress_percent", None))
@@ -2848,14 +2915,21 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             except Exception:
                 progress = _parse_finalize_progress_percent(finalize_log)
                 if progress is None:
-                    task.detail = "Finalizing image format/checksum on cluster (0% complete)"
-                    task.progress_percent = 0
+                    synthetic = _advance_progress_percent(task, floor=1, cap=95, step=2)
+                    task.detail = f"Finalizing image format/checksum on cluster ({synthetic}% complete)"
                 elif progress >= 100 and _finalize_in_checksum_phase(finalize_log):
-                    task.detail = "Finalizing image format/checksum on cluster (100% complete; computing checksum)"
-                    task.progress_percent = 100
+                    task.detail = "Finalizing image format/checksum on cluster (95% complete; computing checksum)"
+                    task.progress_percent = max(
+                        _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=95),
+                        95,
+                    )
                 else:
-                    task.detail = f"Finalizing image format/checksum on cluster ({progress}% complete)"
-                    task.progress_percent = progress
+                    normalized_progress = max(
+                        _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=95),
+                        _coerce_progress_percent(progress, default=0, upper_bound=95),
+                    )
+                    task.detail = f"Finalizing image format/checksum on cluster ({normalized_progress}% complete)"
+                    task.progress_percent = normalized_progress
                 task.stage = "finalizing"
                 task.error_message = None
                 _commit_task()
@@ -2868,10 +2942,13 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.filename = out_name
             task.size_bytes = out_size
             task.checksum = out_sha
-            task.detail = "Preparing source PVC copy job"
+            task.detail = "Preparing source PVC copy job (96% complete)"
             task.error_message = None
             task.stage = "finalizing"
-            task.progress_percent = 100
+            task.progress_percent = max(
+                _coerce_progress_percent(getattr(task, "progress_percent", 95), default=95, upper_bound=99),
+                96,
+            )
             _commit_task()
         except Exception as exc:
             task.status = "failed"
@@ -2892,7 +2969,11 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 if copy_job.startswith("dv:")
                 else "Copying image into clone source PVC"
             )
-            task.progress_percent = None
+            task.progress_percent = max(
+                _coerce_progress_percent(getattr(task, "progress_percent", 96), default=96, upper_bound=99),
+                97,
+            )
+            task.detail = f"{task.detail} ({task.progress_percent}% complete)"
             _commit_task()
             return task
         except Exception as exc:
@@ -2915,6 +2996,11 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     else "Copying image into clone source PVC"
                 )
                 task.stage = "importing"
+                task.progress_percent = max(
+                    _coerce_progress_percent(getattr(task, "progress_percent", 96), default=96, upper_bound=99),
+                    97,
+                )
+                task.detail = f"{task.detail} ({task.progress_percent}% complete)"
                 _commit_task()
             except Exception as exc:
                 task.status = "failed"
@@ -2940,7 +3026,8 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
 
             phase_lower = dv_phase.lower()
             if phase_lower not in {"succeeded", "failed"}:
-                task.detail = "Importing image into clone source PVC via CDI DataVolume"
+                import_progress = _advance_progress_percent(task, floor=97, cap=99, step=1)
+                task.detail = f"Importing image into clone source PVC via CDI DataVolume ({import_progress}% complete)"
                 task.stage = "importing"
                 task.error_message = None
                 _commit_task()
@@ -2982,7 +3069,8 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 raise
 
             if phase in {"running", "pending"}:
-                task.detail = "Copying image into clone source PVC"
+                import_progress = _advance_progress_percent(task, floor=97, cap=99, step=1)
+                task.detail = f"Copying image into clone source PVC ({import_progress}% complete)"
                 task.stage = "importing"
                 task.error_message = None
                 _commit_task()
@@ -3014,15 +3102,20 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
     return task
 
 
-def run_upload_task_watchdog(session: Session, *, max_tasks: int | None = None) -> dict[str, int]:
+def run_upload_task_watchdog(
+    session: Session,
+    *,
+    max_tasks: int | None = None,
+    stale_seconds: int | None = None,
+) -> dict[str, int]:
     """Refresh active upload/finalize tasks so progress/retries continue without client polling."""
     limit = max(1, int(max_tasks or getattr(settings, "image_upload_watchdog_max_tasks", 25) or 25))
-    tasks = session.exec(
-        select(ImageUploadTask)
-        .where(ImageUploadTask.status.notin_(["completed", "failed"]))
-        .order_by(ImageUploadTask.updated_at.asc())
-        .limit(limit)
-    ).all()
+    query = select(ImageUploadTask).where(ImageUploadTask.status.notin_(["completed", "failed"]))
+    stale_cutoff_seconds = max(0, int(stale_seconds or 0))
+    if stale_cutoff_seconds > 0:
+        cutoff = utc_now() - timedelta(seconds=stale_cutoff_seconds)
+        query = query.where(ImageUploadTask.updated_at <= cutoff)
+    tasks = session.exec(query.order_by(ImageUploadTask.updated_at.asc()).limit(limit)).all()
 
     stats = {"scanned": 0, "completed": 0, "failed": 0, "errors": 0}
     for task in tasks:

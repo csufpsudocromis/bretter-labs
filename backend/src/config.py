@@ -135,6 +135,8 @@ class Settings(BaseSettings):
     connect_cookie_secure: bool = True
     image_upload_watchdog_enabled: bool = True
     image_upload_watchdog_max_tasks: int = 25
+    image_upload_watchdog_stale_seconds: int = 45
+    image_import_progress_step_percent: int = 3
     vm_connect_insecure_tls: bool = False
     container_connect_insecure_tls: bool = False
     secrets_encryption_key: str = ""
@@ -143,6 +145,13 @@ class Settings(BaseSettings):
         "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
     )
     alertmanager_timeout_seconds: int = 5
+    alertmanager_suppressed_alert_names: str = "KubeJobFailed,KubePodNotReady"
+    alertmanager_suppressed_job_name_regex: str = (
+        r"^bretter-(slo-|cleanup-|ghcr-access-check-|kubelet-serving-csr-approver-)"
+    )
+    alertmanager_suppressed_pod_regex: str = (
+        r"^bretter-(slo-|cleanup-|ghcr-access-check-|kubelet-serving-csr-approver-)"
+    )
     error_log_file_path: str = "/data/error.log"
     error_log_max_bytes: int = 10 * 1024 * 1024
     api_docs_enabled: bool = False

@@ -74,49 +74,24 @@ jobs:
             printf '%s' "${DEPLOY_VALUES_PROD_SITE_B64}" | base64 -d > deploy/helm/values-prod-site.ci.yaml
           fi
 
-      - name: Validate production profile (strict)
+      - name: Safe deploy (atomic + proof + rollback)
         run: |
           set -euo pipefail
           if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
-            python3 scripts/validate_production_profile.py --strict \
-              -f deploy/helm/values-production.yaml \
-              -f deploy/helm/values-prod-site.ci.yaml
+            NAMESPACE="${NAMESPACE}" \
+            HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
+            BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+            SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.ci.yaml" \
+            REQUIRE_SITE_VALUES_FILE=1 \
+            ROLLBACK_ON_PROOF_FAILURE=1 \
+            ./scripts/deploy_production_safe.sh
           else
-            python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml
-          fi
-
-      - name: Deploy with digest-pinned values
-        run: |
-          set -euo pipefail
-          helm_args=(
-            upgrade --install "${HELM_RELEASE_NAME}" ./deploy/helm
-            --namespace "${NAMESPACE}"
-            --create-namespace
-            -f deploy/helm/values.yaml
-            -f deploy/helm/values-production.yaml
-            --wait
-            --timeout 15m
-          )
-          if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
-            helm_args+=(-f deploy/helm/values-prod-site.ci.yaml)
-          fi
-          helm "${helm_args[@]}"
-
-      - name: Wait for core rollout
-        run: |
-          set -euo pipefail
-          kubectl -n "${NAMESPACE}" rollout status deployment/bretter-postgres --timeout=300s
-          kubectl -n "${NAMESPACE}" rollout status deployment/bretter-backend --timeout=300s
-          kubectl -n "${NAMESPACE}" rollout status deployment/bretter-frontend --timeout=300s
-
-      - name: Run go-live proof
-        run: |
-          set -euo pipefail
-          if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
-            NAMESPACE="${NAMESPACE}" SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.ci.yaml" \
-              ./scripts/production_go_live_proof.sh
-          else
-            NAMESPACE="${NAMESPACE}" REQUIRE_SITE_VALUES_FILE=0 ./scripts/production_go_live_proof.sh
+            NAMESPACE="${NAMESPACE}" \
+            HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
+            BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+            REQUIRE_SITE_VALUES_FILE=0 \
+            ROLLBACK_ON_PROOF_FAILURE=1 \
+            ./scripts/deploy_production_safe.sh
           fi
 
       - name: Check live config drift

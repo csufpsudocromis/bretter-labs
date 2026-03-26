@@ -430,6 +430,12 @@ Production note:
 - Provide signature key material via `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` (or pre-create `CONTAINER_SIGNATURE_KEY_SECRET_NAME`).
 - In production profile, set explicit `CONTROL_NODE`, `NODE_EXTERNAL_HOST`, `RUNNER_NODE_SELECTOR_VALUE`, and `VM_STORAGE_CLASS`; setup now fails fast if they are missing or placeholder values.
 - `RUN_PRODUCTION_GO_LIVE_PROOF` defaults to `1` when `PRODUCTION_PROFILE=1`, so `postdeploy` now includes live go/no-go verification by default.
+- For CI/CD production rollouts, use `scripts/deploy_production_safe.sh` (atomic Helm upgrade + go-live proof + auto-rollback on proof failure).
+- Validate backup retention on-cluster with `scripts/validate_backup_retention.sh` (wired into `.github/workflows/nightly-restore-drill.yml`).
+- Alert noise suppression for expected cronjob pods can be tuned with:
+  - `BLABS_ALERTMANAGER_SUPPRESSED_ALERT_NAMES`
+  - `BLABS_ALERTMANAGER_SUPPRESSED_JOB_NAME_REGEX`
+  - `BLABS_ALERTMANAGER_SUPPRESSED_POD_REGEX`
 
 ## Security and Session Model
 

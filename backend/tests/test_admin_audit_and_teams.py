@@ -121,3 +121,72 @@ def test_admin_image_upload_finalize_smoke(login_admin: TestClient, monkeypatch,
     assert status.json()["status"] == "completed"
     assert status.json()["stage"] == "completed"
     assert status.json()["progress_percent"] == 100
+
+
+def test_admin_image_upload_finalize_and_delete_smoke(login_admin: TestClient, monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(admin_routes, "_image_dir", lambda: tmp_path)
+
+    def _fake_ensure_finalize(task):  # noqa: ANN001
+        task.finalize_job = "img-finalize-delete-smoke"
+        task.status = "finalizing"
+        task.stage = "finalizing"
+        task.progress_percent = 50
+        task.detail = "Finalizing image format/checksum on cluster"
+        task.updated_at = utc_now()
+
+    def _fake_refresh(task, session):  # noqa: ANN001
+        if task.status != "completed":
+            task.status = "completed"
+            task.stage = "completed"
+            task.progress_percent = 100
+            task.detail = "Image ready"
+            task.error_message = None
+            task.source_pvc = None
+            task.checksum = task.checksum or ("b" * 64)
+            existing = session.get(Image, task.image_id)
+            if not existing:
+                session.add(
+                    Image(
+                        id=task.image_id or "img-delete-smoke",
+                        name=task.filename,
+                        filename=task.filename,
+                        source_pvc=None,
+                        checksum=task.checksum,
+                        size_bytes=max(1, int(task.size_bytes or 1)),
+                        created_at=utc_now(),
+                    )
+                )
+            session.add(task)
+            session.commit()
+            session.refresh(task)
+        return task
+
+    monkeypatch.setattr(admin_routes, "_ensure_upload_task_finalize_job", _fake_ensure_finalize)
+    monkeypatch.setattr(admin_routes, "_refresh_upload_task", _fake_refresh)
+
+    upload = login_admin.post(
+        "/admin/images",
+        files={"file": ("delete-smoke.qcow2", b"not-real-qcow2", "application/octet-stream")},
+    )
+    assert upload.status_code == 202, upload.text
+    task_id = upload.json()["task_id"]
+
+    status = login_admin.get(f"/admin/images/upload-tasks/{task_id}")
+    assert status.status_code == 200, status.text
+    payload = status.json()
+    assert payload["status"] == "completed"
+    image_id = payload.get("image_id")
+    assert image_id
+
+    file_on_disk = tmp_path / payload["filename"]
+    file_on_disk.write_bytes(b"dummy")
+    assert file_on_disk.exists()
+
+    deleted = login_admin.delete(f"/admin/images/{image_id}")
+    assert deleted.status_code == 204, deleted.text
+    assert not file_on_disk.exists()
+
+    listed = login_admin.get("/admin/images")
+    assert listed.status_code == 200, listed.text
+    ids = {item["id"] for item in listed.json()}
+    assert image_id not in ids

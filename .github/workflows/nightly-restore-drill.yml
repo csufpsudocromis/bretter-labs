@@ -13,6 +13,10 @@ on:
         description: "Kubernetes namespace to run restore drill in"
         required: false
         default: "labs"
+      require_backup_cronjob:
+        description: "Fail when backup CronJob is missing (true/false)"
+        required: false
+        default: "false"
   schedule:
     - cron: "42 9 * * *"
 
@@ -24,6 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NAMESPACE: ${{ github.event.inputs.namespace || 'labs' }}
+      REQUIRE_BACKUP_CRONJOB: ${{ github.event.inputs.require_backup_cronjob || 'false' }}
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
     steps:
       - name: Checkout
@@ -44,10 +49,22 @@ jobs:
           set -euo pipefail
           NAMESPACE="${NAMESPACE}" ./scripts/restore_drill_postgres.sh
 
+      - name: Validate backup retention policy
+        run: |
+          set -euo pipefail
+          require_flag=0
+          case "$(printf '%s' "${REQUIRE_BACKUP_CRONJOB}" | tr '[:upper:]' '[:lower:]')" in
+            1 | true | yes | on) require_flag=1 ;;
+            *) require_flag=0 ;;
+          esac
+          NAMESPACE="${NAMESPACE}" REQUIRE_BACKUP_CRONJOB="${require_flag}" ./scripts/validate_backup_retention.sh
+
       - name: Upload restore-drill report
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
         with:
           name: nightly-restore-drill-report
-          path: artifacts/restore-drill/
+          path: |
+            artifacts/restore-drill/
+            artifacts/backup-retention/
           if-no-files-found: warn

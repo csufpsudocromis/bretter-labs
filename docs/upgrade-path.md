@@ -26,14 +26,24 @@ python3 scripts/validate_production_profile.py --strict \
 ## Upgrade procedure
 
 1. Pull latest main/tagged release.
-2. Deploy with setup or Helm upgrade.
+2. Deploy with safe atomic workflow (recommended) or setup.
+
+```bash
+NAMESPACE=labs \
+HELM_RELEASE_NAME=bretter-labs \
+BASE_VALUES_FILE=deploy/helm/values-production.yaml \
+SITE_VALUES_FILE=deploy/helm/values-prod-site.yaml \
+./scripts/deploy_production_safe.sh
+```
+
+Alternative:
 
 ```bash
 PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 ```
 
 3. Confirm rollout health and API health endpoint.
-4. Generate a go-live proof report:
+4. Generate a go-live proof report if you did not run `deploy_production_safe.sh`:
 
 ```bash
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
@@ -46,6 +56,11 @@ RUN_POST_DEPLOY_SYNTHETIC_CHECK=1 \
 SYNTHETIC_CHECK_USERNAME=admin \
 SYNTHETIC_CHECK_PASSWORD='<EXISTING_ADMIN_PASSWORD>' \
 ./scripts/setup.sh
+```
+6. Validate backup retention policy:
+
+```bash
+NAMESPACE=labs ./scripts/validate_backup_retention.sh
 ```
 
 ## Token storage migration notes

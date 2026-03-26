@@ -325,6 +325,22 @@ async def reaper_loop() -> None:
                 kube.reaper_tick(session)
                 _scan_due_container_image(session)
                 process_artifact_replication_queue(session, limit=25)
+                if bool(getattr(settings, "image_upload_watchdog_enabled", True)):
+                    stale_seconds = max(0, int(getattr(settings, "image_upload_watchdog_stale_seconds", 45) or 45))
+                    watchdog_stats = admin.run_upload_task_watchdog(
+                        session,
+                        max_tasks=int(getattr(settings, "image_upload_watchdog_max_tasks", 25) or 25),
+                        stale_seconds=stale_seconds,
+                    )
+                    if watchdog_stats["scanned"] > 0:
+                        logger.info(
+                            "Upload watchdog (backend fallback) scanned=%s completed=%s failed=%s errors=%s stale_seconds=%s",
+                            watchdog_stats["scanned"],
+                            watchdog_stats["completed"],
+                            watchdog_stats["failed"],
+                            watchdog_stats["errors"],
+                            stale_seconds,
+                        )
         except Exception as exc:
             logger.warning("Reaper loop error: %s", exc)
         await asyncio.sleep(settings.reaper_interval_seconds)

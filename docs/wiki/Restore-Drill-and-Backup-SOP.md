@@ -20,6 +20,24 @@ Outputs:
   - restored Alembic revision
   - restored user table row count
 
+## Validate backup retention policy
+
+```bash
+NAMESPACE=labs ./scripts/validate_backup_retention.sh
+```
+
+Behavior:
+
+- Reads `bretter-postgres-backup` CronJob config (`BACKUP_MOUNT_PATH`, `BACKUP_RETENTION_DAYS`, PVC claim).
+- Runs a short-lived in-cluster validator pod against the backup PVC.
+- Fails if no backup dump files exist or if dumps older than retention are still present.
+
+Strict mode (require cronjob):
+
+```bash
+NAMESPACE=labs REQUIRE_BACKUP_CRONJOB=1 ./scripts/validate_backup_retention.sh
+```
+
 ## Keep restored DB for manual inspection (optional)
 
 ```bash
@@ -73,3 +91,10 @@ If drill fails:
 2. Verify `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` are present in postgres pod env.
 3. Validate persistent storage health (`kubectl -n labs get pvc,pv` and storage backend status).
 4. Re-run drill after remediation and archive successful report with release artifacts.
+
+If retention validation fails:
+
+1. Inspect the report under `artifacts/backup-retention/`.
+2. Verify backup CronJob config (`BACKUP_MOUNT_PATH`, `BACKUP_RETENTION_DAYS`).
+3. Check backup job logs and PVC mount path contents.
+4. Re-run `validate_backup_retention.sh` after cleanup/fix.

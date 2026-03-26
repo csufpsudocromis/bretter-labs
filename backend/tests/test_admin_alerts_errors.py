@@ -91,3 +91,86 @@ def test_list_backend_pods_excludes_completed_and_terminating(monkeypatch):
     pods, err = admin_routes._list_backend_pods(FakeCore())
     assert err == ""
     assert [pod.metadata.name for pod in pods] == ["bretter-backend-running"]
+
+
+def test_fetch_alertmanager_alerts_filters_expected_job_noise(monkeypatch):
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "labels": {
+                        "alertname": "KubeJobFailed",
+                        "severity": "warning",
+                        "job_name": "bretter-slo-rdp-connect-latency-29575830",
+                    },
+                    "annotations": {"summary": "job failed"},
+                    "status": {"state": "active"},
+                    "startsAt": "2026-03-26T00:00:00Z",
+                    "generatorURL": "http://prometheus",
+                },
+                {
+                    "labels": {
+                        "alertname": "BretterBackendUnavailable",
+                        "severity": "critical",
+                        "pod": "bretter-backend-abc",
+                    },
+                    "annotations": {"summary": "backend unavailable"},
+                    "status": {"state": "active"},
+                    "startsAt": "2026-03-26T00:01:00Z",
+                    "generatorURL": "http://prometheus",
+                },
+            ]
+
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_api_url", "http://example-alertmanager")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_alert_names", "KubeJobFailed,KubePodNotReady")
+    monkeypatch.setattr(
+        admin_routes.settings,
+        "alertmanager_suppressed_job_name_regex",
+        r"^bretter-(slo-|cleanup-|ghcr-access-check-|kubelet-serving-csr-approver-)",
+    )
+    monkeypatch.setattr(
+        admin_routes.settings,
+        "alertmanager_suppressed_pod_regex",
+        r"^bretter-(slo-|cleanup-|ghcr-access-check-|kubelet-serving-csr-approver-)",
+    )
+    monkeypatch.setattr(admin_routes.requests, "get", lambda url, timeout: FakeResp())
+
+    alerts, err = admin_routes._fetch_alertmanager_alerts()
+    assert err == ""
+    assert len(alerts) == 1
+    assert alerts[0].name == "BretterBackendUnavailable"
+
+
+def test_fetch_alertmanager_alerts_keeps_actionable_kubejobfailed_alerts(monkeypatch):
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "labels": {
+                        "alertname": "KubeJobFailed",
+                        "severity": "warning",
+                        "job_name": "database-maintenance-nightly",
+                    },
+                    "annotations": {"summary": "job failed"},
+                    "status": {"state": "active"},
+                    "startsAt": "2026-03-26T00:00:00Z",
+                    "generatorURL": "http://prometheus",
+                }
+            ]
+
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_api_url", "http://example-alertmanager")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_alert_names", "KubeJobFailed")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_job_name_regex", r"^bretter-slo-")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_pod_regex", r"^bretter-slo-")
+    monkeypatch.setattr(admin_routes.requests, "get", lambda url, timeout: FakeResp())
+
+    alerts, err = admin_routes._fetch_alertmanager_alerts()
+    assert err == ""
+    assert len(alerts) == 1
+    assert alerts[0].name == "KubeJobFailed"
