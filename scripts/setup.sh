@@ -35,6 +35,7 @@ FRONTEND_HPA_MAX_REPLICAS="${FRONTEND_HPA_MAX_REPLICAS:-$FRONTEND_REPLICAS}"
 FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT="${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT:-70}"
 UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
 ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
+ALLOW_CODE_MOUNT_OVERRIDES="${ALLOW_CODE_MOUNT_OVERRIDES:-0}"
 SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
 SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
@@ -893,6 +894,10 @@ validate_auth_and_cors_config() {
     0 | 1) ;;
     *) fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be either 0 or 1." ;;
   esac
+  case "$ALLOW_CODE_MOUNT_OVERRIDES" in
+    0 | 1) ;;
+    *) fail "ALLOW_CODE_MOUNT_OVERRIDES must be either 0 or 1." ;;
+  esac
   if [ -z "$RUNTIME_SECRETS_SECRET_NAME" ]; then
     fail "RUNTIME_SECRETS_SECRET_NAME cannot be empty."
   fi
@@ -941,6 +946,9 @@ validate_auth_and_cors_config() {
     fi
     if [ "$PRUNE_BOOTSTRAP_ADMIN_ENV" -ne 1 ]; then
       fail "PRUNE_BOOTSTRAP_ADMIN_ENV must be 1 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$ALLOW_CODE_MOUNT_OVERRIDES" -ne 0 ]; then
+      fail "ALLOW_CODE_MOUNT_OVERRIDES must be 0 when PRODUCTION_PROFILE=1."
     fi
     if [ "$VM_CONNECT_INSECURE_TLS" -ne 0 ] || [ "$CONTAINER_CONNECT_INSECURE_TLS" -ne 0 ]; then
       fail "VM/CONTAINER_CONNECT_INSECURE_TLS must be 0 when PRODUCTION_PROFILE=1."
@@ -2460,6 +2468,28 @@ spec:
             severity: critical
           annotations:
             summary: Frontend deployment has no available replicas.
+        - alert: BretterWebsocketHandshakeFailuresHigh
+          expr: |
+            (
+              sum(increase(blabs_ws_proxy_handshake_total{result="failure"}[10m]))
+              /
+              clamp_min(sum(increase(blabs_ws_proxy_handshake_total[10m])), 1)
+            ) > 0.25
+            and
+            sum(increase(blabs_ws_proxy_handshake_total[10m])) >= 20
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Websocket proxy handshake failure ratio is above 25% over 10m.
+        - alert: BretterWebsocketDisconnectBurst
+          expr: |
+            sum(increase(blabs_ws_proxy_disconnect_total{direction="upstream",code!~"1000|1001|unknown"}[10m])) > 30
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Websocket proxy upstream disconnect burst detected over 10m.
         - alert: BretterLabImageImportControllerUnavailable
           expr: |
             (
@@ -2706,6 +2736,34 @@ apply_monitoring_slo_dashboard() {
   log "Applying Grafana user-flow SLO dashboard ConfigMap..."
   kubectl -n "$MONITORING_NAMESPACE" apply -f "$rendered_file" >/dev/null
   rm -f "$rendered_file"
+}
+
+apply_backend_metrics_servicemonitor() {
+  if [ "$ENABLE_MONITORING" -ne 1 ]; then
+    return
+  fi
+
+  log "Applying backend metrics ServiceMonitor..."
+  kubectl -n "$MONITORING_NAMESPACE" apply -f - <<EOF
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: bretter-backend
+  namespace: ${MONITORING_NAMESPACE}
+  labels:
+    release: kube-prometheus-stack
+spec:
+  namespaceSelector:
+    matchNames:
+      - ${NAMESPACE}
+  selector:
+    matchLabels:
+      app: bretter-backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+EOF
 }
 
 enable_cpu_manager_static_all_nodes() {
@@ -3022,7 +3080,7 @@ render_helm_values_override() {
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref container_signature_key_secret_name
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
-  local production_profile require_schema_ready expected_alembic_revision
+  local production_profile allow_code_mount_overrides require_schema_ready expected_alembic_revision
   local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
   local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
   local vm_connect_insecure_tls container_connect_insecure_tls runtime_secrets_secret_name runtime_secrets_encryption_key_key secrets_encryption_key
@@ -3106,6 +3164,7 @@ render_helm_values_override() {
   container_start_queue_base_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_BASE_DELAY_SECONDS")"
   container_start_queue_max_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
   production_profile="$(yaml_escape "$PRODUCTION_PROFILE")"
+  allow_code_mount_overrides="$(yaml_escape "$ALLOW_CODE_MOUNT_OVERRIDES")"
   require_schema_ready="$(yaml_escape "$REQUIRE_SCHEMA_READY")"
   expected_alembic_revision="$(yaml_escape "$EXPECTED_ALEMBIC_REVISION")"
   cors_enterprise_profile="$(yaml_escape "$CORS_ENTERPRISE_PROFILE")"
@@ -3200,6 +3259,7 @@ appTemplateValues:
   CONTAINER_START_QUEUE_BASE_DELAY_SECONDS: "${container_start_queue_base_delay_seconds}"
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "${container_start_queue_max_delay_seconds}"
   PRODUCTION_PROFILE: "${production_profile}"
+  ALLOW_CODE_MOUNT_OVERRIDES: "${allow_code_mount_overrides}"
   REQUIRE_SCHEMA_READY: "${require_schema_ready}"
   EXPECTED_ALEMBIC_REVISION: "${expected_alembic_revision}"
   CORS_ENTERPRISE_PROFILE: "${cors_enterprise_profile}"
@@ -5779,6 +5839,7 @@ log_runtime_configuration() {
   log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION} signature-scope: ${KYVERNO_SIGNATURE_SCOPE} signature-images: ${KYVERNO_SIGNATURE_IMAGE_PATTERNS})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
+  log "Code-mount override escape hatch allowed: $ALLOW_CODE_MOUNT_OVERRIDES"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
   log "Post-deploy admin API smoke enabled: $RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK (timeout: ${POST_DEPLOY_ADMIN_API_SMOKE_TIMEOUT_SECONDS}s user: ${ADMIN_API_SMOKE_USERNAME})"
   log "Post-deploy synthetic check enabled: $RUN_POST_DEPLOY_SYNTHETIC_CHECK (timeout: ${SYNTHETIC_CHECK_TIMEOUT_SECONDS}s)"
@@ -5872,8 +5933,9 @@ run_phase_postdeploy() {
   install_kyverno
   apply_admission_policies
   patch_default_pvc_alert_exclusions
-  apply_monitoring_slo_dashboard
   apply_monitoring_alert_rules
+  apply_backend_metrics_servicemonitor
+  apply_monitoring_slo_dashboard
   run_post_deploy_api_health_check
   run_post_deploy_admin_api_smoke_check
   run_post_deploy_synthetic_check

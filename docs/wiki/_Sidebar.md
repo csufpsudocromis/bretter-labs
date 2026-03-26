@@ -20,6 +20,7 @@
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
+- [WebSocket Reliability and Diagnostics](WebSocket-Reliability-and-Diagnostics)
 - [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - [Template Best Practices](Template-Best-Practices)
 - [Security and Auth](Security-and-Auth)

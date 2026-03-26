@@ -53,6 +53,7 @@ from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
+from ..services import ws_metrics
 from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
 from ..time_utils import utc_now
 
@@ -1086,8 +1087,11 @@ async def proxy_vm_console_ws(
     proxy_path: str,
     session: Session = Depends(get_session),
 ) -> None:
+    resource_type = "vm"
     token_value = _extract_vm_connect_session_token_ws(websocket)
     if not token_value:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4401")
         await websocket.close(code=4401, reason="missing connect token")
         return
     try:
@@ -1098,13 +1102,19 @@ async def proxy_vm_console_ws(
             resource_type="vm",
         )
     except HTTPException as exc:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4401")
         await websocket.close(code=4401, reason=str(exc.detail))
         return
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4404")
         await websocket.close(code=4404, reason="instance not found")
         return
     if record.status not in {"pending", "running"}:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4409")
         await websocket.close(code=4409, reason="instance is not running")
         return
     instance_namespace = _instance_namespace(record, user)
@@ -1145,12 +1155,19 @@ async def proxy_vm_console_ws(
                 max_size=None,
                 ssl=ssl_context,
             ) as upstream:
+                ws_metrics.record_handshake(resource_type, success=True)
+                connection_started_at = ws_metrics.mark_connection_open(resource_type)
 
                 async def client_to_upstream() -> None:
                     while True:
                         message = await websocket.receive()
                         kind = message.get("type")
                         if kind == "websocket.disconnect":
+                            ws_metrics.record_disconnect(
+                                resource_type,
+                                direction="downstream",
+                                code=message.get("code"),
+                            )
                             await upstream.close()
                             return
                         payload_bytes = message.get("bytes")
@@ -1163,24 +1180,39 @@ async def proxy_vm_console_ws(
 
                 async def upstream_to_client() -> None:
                     while True:
-                        payload = await upstream.recv()
+                        try:
+                            payload = await upstream.recv()
+                        except Exception as exc:
+                            ws_metrics.record_disconnect(
+                                resource_type,
+                                direction="upstream",
+                                code=ws_metrics.extract_close_code(exc),
+                            )
+                            raise
                         if isinstance(payload, bytes):
                             await websocket.send_bytes(payload)
                         else:
                             await websocket.send_text(payload)
 
-                task_client = asyncio.create_task(client_to_upstream())
-                task_upstream = asyncio.create_task(upstream_to_client())
-                done, pending = await asyncio.wait({task_client, task_upstream}, return_when=asyncio.FIRST_COMPLETED)
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                await asyncio.gather(*done, return_exceptions=True)
-                return
+                try:
+                    task_client = asyncio.create_task(client_to_upstream())
+                    task_upstream = asyncio.create_task(upstream_to_client())
+                    done, pending = await asyncio.wait(
+                        {task_client, task_upstream}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    await asyncio.gather(*done, return_exceptions=True)
+                    return
+                finally:
+                    ws_metrics.mark_connection_close(resource_type, connection_started_at)
         except Exception as exc:
             last_exc = exc
             continue
 
+    ws_metrics.record_handshake(resource_type, success=False)
+    ws_metrics.record_disconnect(resource_type, direction="upstream", code=ws_metrics.extract_close_code(last_exc))
     exc_info = (type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None
     logger.warning(
         "VM websocket proxy failed for instance %s path %s attempted=%s",

@@ -10,6 +10,8 @@ from typing import Any
 
 import yaml
 
+IMMUTABLE_CODE_MOUNT_PREFIXES = ("/app/backend/src", "/app/backend/backend/src")
+
 
 def _run_json(cmd: list[str]) -> Any:
     try:
@@ -113,6 +115,31 @@ def _compare_backend_env(expected: dict[str, Any], live: dict[str, Any], mismatc
         live_value = live_env.get(key)
         if live_value != expected_value:
             mismatches.append(f"backend env drift for {key}: expected={expected_value!r} live={live_value!r}")
+
+    expected_blocked = _find_blocked_code_mounts(expected_backend)
+    live_blocked = _find_blocked_code_mounts(live_backend)
+    if expected_blocked:
+        joined = ", ".join(expected_blocked)
+        mismatches.append(f"rendered backend contains immutable-code mount override(s): {joined}")
+    if live_blocked:
+        joined = ", ".join(live_blocked)
+        mismatches.append(f"live backend contains immutable-code mount override(s): {joined}")
+
+
+def _find_blocked_code_mounts(container: dict[str, Any]) -> list[str]:
+    mounts = container.get("volumeMounts") or []
+    blocked: set[str] = set()
+    for row in mounts:
+        if not isinstance(row, dict):
+            continue
+        mount_path = str(row.get("mountPath") or "").strip()
+        if not mount_path:
+            continue
+        for prefix in IMMUTABLE_CODE_MOUNT_PREFIXES:
+            if mount_path == prefix or mount_path.startswith(f"{prefix}/"):
+                blocked.add(mount_path)
+                break
+    return sorted(blocked)
 
 
 def main() -> int:

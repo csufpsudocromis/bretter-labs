@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: March 23, 2026.
+Last reviewed: March 26, 2026.
 
 ## Audience paths
 
@@ -16,6 +16,7 @@ Last reviewed: March 23, 2026.
 - Secrets/Ops: [Secret Operations Runbook](Secret-Operations-Runbook)
 - Alert routing: [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - Troubleshooting: [Error Catalog](Error-Catalog) + [Operations Runbook](Operations-Runbook)
+- Websocket/connect triage: [WebSocket Reliability and Diagnostics](WebSocket-Reliability-and-Diagnostics)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive) + [Template Best Practices](Template-Best-Practices)
 - Console/RDP operations: [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - Security: [Security and Auth](Security-and-Auth) + [LDAP Authentication](LDAP-Authentication) + [Hardened Deployment Guide](Hardened-Deployment-Guide)
@@ -50,6 +51,7 @@ Last reviewed: March 23, 2026.
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
 - [Connect Flow Deep Dive](Connect-Flow-Deep-Dive)
+- [WebSocket Reliability and Diagnostics](WebSocket-Reliability-and-Diagnostics)
 - [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - [Template Best Practices](Template-Best-Practices)
 - [VM Image Formats](VM-Image-Formats)

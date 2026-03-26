@@ -125,6 +125,36 @@ def _wait_for_rdp_connect(
     return ""
 
 
+def _wait_for_container_ws_readiness(
+    *,
+    session: requests.Session,
+    api_base: str,
+    verify_tls: bool,
+    container_id: str,
+    deadline_epoch: float,
+    poll_seconds: float,
+) -> None:
+    last_detail = ""
+    while time.time() < deadline_epoch:
+        readiness = _request(
+            session,
+            method="GET",
+            api_base=api_base,
+            path_or_url=f"/user/containers/{container_id}/connect-readiness",
+            verify_tls=verify_tls,
+        )
+        if readiness.status_code == 200:
+            payload = readiness.json() or {}
+            if bool(payload.get("ready")):
+                return
+            last_detail = str(payload.get("detail") or "").strip()
+        else:
+            last_detail = f"connect-readiness returned {readiness.status_code}"
+        time.sleep(poll_seconds)
+    detail = last_detail[:300] if last_detail else "no readiness detail"
+    _fail(f"timeout waiting for container websocket readiness: {detail}")
+
+
 def _require_rdp_frame(
     *,
     session: requests.Session,
@@ -157,6 +187,7 @@ def main() -> int:
     timeout_seconds = max(120, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "900"))
     poll_seconds = max(1.0, float(os.environ.get("SYNTHETIC_POLL_SECONDS") or "3"))
     rdp_marker_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS") or "180"))
+    container_ws_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_CONTAINER_WS_TIMEOUT_SECONDS") or "180"))
     single_lab_limit_message = "you already have a virtual lab running"
 
     if not api_base:
@@ -324,6 +355,14 @@ def main() -> int:
             poll_seconds=poll_seconds,
             allowed_stages={"pending", "building", "queued", "starting", "running", "ready"},
         )
+        _wait_for_container_ws_readiness(
+            session=session,
+            api_base=api_base,
+            verify_tls=verify_tls,
+            container_id=container_id,
+            deadline_epoch=min(deadline, time.time() + container_ws_timeout_seconds),
+            poll_seconds=poll_seconds,
+        )
 
         container_token = _request(
             session,
@@ -364,7 +403,7 @@ def main() -> int:
         _request(session, method="POST", api_base=api_base, path_or_url="/auth/logout", verify_tls=verify_tls)
         print(
             "PASS: synthetic validation succeeded "
-            "(login -> VM launch -> Guacamole RDP readiness/frame -> VM teardown -> container launch/connect/delete)."
+            "(login -> VM launch -> Guacamole RDP readiness/frame -> VM teardown -> container launch/websocket readiness/connect/delete)."
         )
         return 0
     finally:

@@ -586,6 +586,8 @@ spec:
               value: "__CONTAINER_START_QUEUE_MAX_DELAY_SECONDS__"
             - name: BLABS_PRODUCTION_PROFILE
               value: "__PRODUCTION_PROFILE__"
+            - name: BLABS_ALLOW_CODE_MOUNT_OVERRIDES
+              value: "__ALLOW_CODE_MOUNT_OVERRIDES__"
             - name: BLABS_REQUIRE_SCHEMA_READY
               value: "__REQUIRE_SCHEMA_READY__"
             - name: BLABS_EXPECTED_ALEMBIC_REVISION
@@ -647,12 +649,15 @@ kind: Service
 metadata:
   name: bretter-backend
   namespace: __NAMESPACE__
+  labels:
+    app: bretter-backend
 spec:
   type: __BACKEND_SERVICE_TYPE__
   selector:
     app: bretter-backend
   ports:
-    - port: 8000
+    - name: http
+      port: 8000
       targetPort: 8000
 __BACKEND_SERVICE_NODEPORT_LINE__
 ---

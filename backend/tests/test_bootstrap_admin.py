@@ -93,6 +93,21 @@ def test_startup_validation_requires_team_namespace_bootstrap_in_production(monk
         main_module._validate_startup_config()
 
 
+def test_startup_validation_rejects_production_code_mount_overrides(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "allow_code_mount_overrides", False)
+    monkeypatch.setattr(main_module, "_find_code_override_mounts", lambda: ["/app/backend/src/routes/user.py"])
+    with pytest.raises(RuntimeError, match="Immutable backend deploy violation"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_allows_production_code_mount_overrides_with_explicit_opt_in(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "allow_code_mount_overrides", True)
+    monkeypatch.setattr(main_module, "_find_code_override_mounts", lambda: ["/app/backend/src/routes/user.py"])
+    main_module._validate_startup_config()
+
+
 def test_startup_validation_rejects_invalid_image_import_backend(monkeypatch):
     monkeypatch.setattr(main_module.settings, "admin_default_username", "admin")
     monkeypatch.setattr(main_module.settings, "admin_default_password", "")

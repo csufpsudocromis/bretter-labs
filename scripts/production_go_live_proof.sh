@@ -182,6 +182,20 @@ signature_secret_name = volume_secret_names.get("container-signature-key", "")
 if signature_key_ref.startswith("/etc/bretter-signing/") and not signature_secret_name:
     errors.append("container-signature-key volume secret is missing while key ref uses /etc/bretter-signing/.")
 
+blocked_mounts: list[str] = []
+blocked_prefixes = ("/app/backend/src", "/app/backend/backend/src")
+for mount in backend.get("volumeMounts") or []:
+    mount_path = str((mount or {}).get("mountPath") or "").strip()
+    if not mount_path:
+        continue
+    for prefix in blocked_prefixes:
+        if mount_path == prefix or mount_path.startswith(f"{prefix}/"):
+            blocked_mounts.append(mount_path)
+            break
+if blocked_mounts and not is_truthy(env_values.get("BLABS_ALLOW_CODE_MOUNT_OVERRIDES", "")):
+    mounts_joined = ", ".join(sorted(set(blocked_mounts)))
+    errors.append(f"immutable backend code mount override detected: {mounts_joined}")
+
 if errors:
     for item in errors:
         print(item, file=sys.stderr)

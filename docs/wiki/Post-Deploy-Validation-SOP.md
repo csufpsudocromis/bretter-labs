@@ -1,6 +1,6 @@
 # Post-Deploy Validation SOP
 
-Last reviewed: March 20, 2026.
+Last reviewed: March 26, 2026.
 
 Run this after every deployment before closing the change.
 
@@ -17,6 +17,7 @@ Validates:
 - Login/auth session
 - VM launch/connect/delete
 - Container launch/connect/delete
+- Container websocket readiness/frame validation (`/user/containers/{id}/connect-readiness`)
 - Admin API read-path health (`/admin/*`)
 - Idle timeout prompt visibility (user page + connect page)
 - Runner image startup on runner node (postdeploy smoke pod)
@@ -50,6 +51,12 @@ Optional one-shot proof report:
 
 ```bash
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
+```
+
+Quick websocket/connect diagnostics snapshot:
+
+```bash
+NAMESPACE=labs ./scripts/diagnose_connectivity.sh
 ```
 
 Note:

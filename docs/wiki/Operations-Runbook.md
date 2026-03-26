@@ -1,6 +1,6 @@
 # Operations Runbook
 
-Last reviewed: March 20, 2026.
+Last reviewed: March 26, 2026.
 
 ## Production pre-rollout gate
 
@@ -38,6 +38,14 @@ kubectl -n labs get pods -o wide
 kubectl -n labs logs deploy/bretter-backend --tail=200
 kubectl -n labs logs deploy/bretter-frontend --tail=200
 ```
+
+One-command websocket/connect diagnostics:
+
+```bash
+NAMESPACE=labs ./scripts/diagnose_connectivity.sh
+```
+
+This captures websocket metrics (`blabs_ws_proxy_*`), backend websocket log sample, and monitoring rule wiring in one reportable pass.
 
 Bootstrap env pruning check (after first bootstrap rollout):
 

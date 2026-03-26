@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from urllib.parse import urlparse
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlmodel import Session, select
 
 from .auth import hash_password
@@ -30,6 +31,7 @@ ENTERPRISE_CORS_DEFAULT_HEADERS = ["Accept", "Content-Type", "Authorization"]
 ENTERPRISE_CORS_ALLOWED_METHODS = set(ENTERPRISE_CORS_DEFAULT_METHODS)
 INSECURE_BOOTSTRAP_PASSWORDS = {"admin", "password", "changeme", "admin123"}
 WEAK_SECRET_VALUES = INSECURE_BOOTSTRAP_PASSWORDS | {"secret", "default"}
+IMMUTABLE_CODE_MOUNT_PREFIXES = ("/app/backend/src", "/app/backend/backend/src")
 
 
 def _resolve_admin_bootstrap_password() -> str:
@@ -126,6 +128,55 @@ def _validate_startup_config() -> None:
 
     if errors:
         raise RuntimeError("Invalid production startup configuration:\n- " + "\n- ".join(errors))
+    _validate_immutable_code_mounts()
+
+
+def _decode_mountinfo_path(raw: str) -> str:
+    value = str(raw or "")
+    return value.replace("\\040", " ").replace("\\011", "\t").replace("\\012", "\n").replace("\\134", "\\")
+
+
+def _find_code_override_mounts() -> list[str]:
+    mountinfo_path = "/proc/self/mountinfo"
+    try:
+        with open(mountinfo_path, "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except OSError:
+        return []
+
+    blocked: list[str] = []
+    seen: set[str] = set()
+    for raw_line in lines:
+        parts = raw_line.split()
+        if len(parts) < 5:
+            continue
+        mount_path = _decode_mountinfo_path(parts[4]).strip()
+        if not mount_path:
+            continue
+        for prefix in IMMUTABLE_CODE_MOUNT_PREFIXES:
+            if mount_path == prefix or mount_path.startswith(f"{prefix}/"):
+                if mount_path not in seen:
+                    seen.add(mount_path)
+                    blocked.append(mount_path)
+                break
+    return sorted(blocked)
+
+
+def _validate_immutable_code_mounts() -> None:
+    blocked_mounts = _find_code_override_mounts()
+    if not blocked_mounts:
+        return
+    if bool(getattr(settings, "allow_code_mount_overrides", False)):
+        logger.warning(
+            "Production code-mount override(s) allowed by BLABS_ALLOW_CODE_MOUNT_OVERRIDES=1: %s",
+            ", ".join(blocked_mounts),
+        )
+        return
+    raise RuntimeError(
+        "Immutable backend deploy violation: code override mount(s) detected in production: "
+        + ", ".join(blocked_mounts)
+        + ". Remove code-file mounts and redeploy immutable backend images."
+    )
 
 
 def _normalize_origin(origin: str) -> str | None:
@@ -371,6 +422,11 @@ app.add_middleware(
 @app.get("/health")
 def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics() -> Response:
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 app.include_router(admin.router, prefix="/admin", tags=["admin"])

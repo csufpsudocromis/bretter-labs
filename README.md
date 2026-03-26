@@ -99,6 +99,7 @@ _User view: launch feedback and in-browser connect workflow._
 - Postgres-backed DB stack with Alembic migrations
 - Backend/frontend HPA controls with CPU-based autoscaling thresholds
 - Monitoring hooks, alert ingestion, and capped error logs
+- Websocket reliability telemetry and alerting for VM/container connect paths
 - Secure session cookie auth with short-lived connect access flow
 
 ## Supported VM Image Types
@@ -229,6 +230,7 @@ Proof artifact and operator docs:
 - Postgres restore drill: [scripts/restore_drill_postgres.sh](scripts/restore_drill_postgres.sh)
 - Staging failure drill script: [scripts/failure_drill_control_plane.sh](scripts/failure_drill_control_plane.sh)
 - CRD canary script: [scripts/crd_canary_labinstance.sh](scripts/crd_canary_labinstance.sh)
+- One-command websocket/connect diagnostics: [scripts/diagnose_connectivity.sh](scripts/diagnose_connectivity.sh)
 - LabImageImport controller smoke: [scripts/smoke_labimageimport_controller.sh](scripts/smoke_labimageimport_controller.sh)
 - Tenant isolation impersonation smoke: [scripts/smoke_tenant_isolation_impersonation.sh](scripts/smoke_tenant_isolation_impersonation.sh)
 - Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
@@ -247,6 +249,7 @@ Proof artifact and operator docs:
 - Alert routing defaults: [docs/wiki/Alert-Routing-and-Receiver-Defaults.md](docs/wiki/Alert-Routing-and-Receiver-Defaults.md)
 - Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
 - Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
+- Websocket reliability and diagnostics: [docs/wiki/WebSocket-Reliability-and-Diagnostics.md](docs/wiki/WebSocket-Reliability-and-Diagnostics.md)
 - Optional advanced multi-cluster operations and placement: [docs/wiki/Multi-Cluster-Operations.md](docs/wiki/Multi-Cluster-Operations.md)
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - GitHub release/packages runbook: [docs/wiki/GitHub-Release-and-Packages-Operations.md](docs/wiki/GitHub-Release-and-Packages-Operations.md)
@@ -260,6 +263,7 @@ Proof artifact and operator docs:
 | `NODE_EXTERNAL_HOST` | auto | Public host/IP used in generated URLs |
 | `PUBLIC_SCHEME` | `https` | Public URL scheme |
 | `PRODUCTION_PROFILE` | `0` | Enables backend startup hardening checks (set `1` for production) |
+| `ALLOW_CODE_MOUNT_OVERRIDES` | `0` | Dev-only escape hatch to allow code-file mounts under `/app/backend/src` in production profile (default hard-fails to enforce immutable deploys) |
 | `ORCHESTRATION_BACKEND` | `db` | VM orchestration mode: `db` (legacy), `dual` (legacy + LabInstance CRD shadow write), `crd` (LabInstance CRD-first) |
 | `IMAGE_IMPORT_BACKEND` | `crd` | Image import tracking mode: `db`, `dual` (DB + LabImageImport shadow), `crd` |
 | `LABIMAGEIMPORT_CONTROLLER_ENABLED` | `1` | Enable dedicated LabImageImport reconcile controller when image-import backend is `dual`/`crd` |

@@ -164,6 +164,8 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
 
     if get_bool("ALLOW_MUTABLE_IMAGE_TAGS", default=False):
         errors.append("ALLOW_MUTABLE_IMAGE_TAGS must be disabled for production.")
+    if get_bool("ALLOW_CODE_MOUNT_OVERRIDES", default=False):
+        errors.append("ALLOW_CODE_MOUNT_OVERRIDES must be disabled for production.")
     if not get_bool("PRODUCTION_PROFILE", default=False):
         errors.append("PRODUCTION_PROFILE must be enabled for production.")
     if not get_bool("REQUIRE_SCHEMA_READY", default=True):

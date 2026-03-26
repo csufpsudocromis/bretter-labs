@@ -115,6 +115,7 @@ class Settings(BaseSettings):
     cdi_upload_source_filename: str = "disk.img"
     public_scheme: str = "https"
     production_profile: bool = False
+    allow_code_mount_overrides: bool = False
     cors_allow_http: bool = False
     cors_allowed_origins: str = ""
     cors_allowed_origin_regex: str = ""

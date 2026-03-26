@@ -5,6 +5,8 @@ import json
 import logging
 import ssl
 import socket
+import threading
+import time
 import warnings
 from http.client import HTTPConnection
 from datetime import timedelta
@@ -28,6 +30,7 @@ from ..auth import (
 from ..config import settings
 from ..db import get_session
 from ..models import ContainerInstance as ContainerInstanceView
+from ..models import ContainerConnectReadiness
 from ..models import ContainerDependencyCheck
 from ..models import ContainerTemplate as ContainerTemplateView
 from ..services.launch_lock import lock_user_launch_slot
@@ -42,6 +45,7 @@ from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
+from ..services import ws_metrics
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
@@ -56,6 +60,7 @@ _PROXY_TIMEOUT_SECONDS = 45
 _CONNECT_GRANT_COOKIE_NAME = "blabs_connect_grant"
 _CONNECT_SESSION_COOKIE_NAME = "blabs_connect_session"
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
+_CONNECT_READINESS_CACHE_TTL_SECONDS = 20.0
 _HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -68,6 +73,8 @@ _HOP_BY_HOP_HEADERS = {
 }
 
 _TLS_LIKELY_PORTS = {443, 8443, 9443, 6901, 4902}
+_CONNECT_READINESS_CACHE_LOCK = threading.Lock()
+_CONNECT_READINESS_CACHE: dict[str, tuple[float, bool, str]] = {}
 
 
 def _phase_to_status(phase: str) -> str:
@@ -293,6 +300,98 @@ def _upstream_basic_auth_header(
         return _build_basic_auth_header(username, password)
 
     return None
+
+
+def _readiness_cache_get(instance_id: str) -> tuple[bool, str] | None:
+    now = time.monotonic()
+    with _CONNECT_READINESS_CACHE_LOCK:
+        row = _CONNECT_READINESS_CACHE.get(instance_id)
+        if not row:
+            return None
+        expires_at, ready, detail = row
+        if now > expires_at:
+            _CONNECT_READINESS_CACHE.pop(instance_id, None)
+            return None
+        return bool(ready), str(detail or "")
+
+
+def _readiness_cache_set(instance_id: str, *, ready: bool, detail: str) -> None:
+    expires_at = time.monotonic() + _CONNECT_READINESS_CACHE_TTL_SECONDS
+    with _CONNECT_READINESS_CACHE_LOCK:
+        _CONNECT_READINESS_CACHE[instance_id] = (expires_at, bool(ready), str(detail or ""))
+
+
+def _container_requires_ws_probe(session: Session, template: ContainerTemplateTable | None) -> bool:
+    image_ref = _template_image_ref(session, template)
+    if not image_ref:
+        return False
+    return "linuxserver/webtop" in image_ref or "kasmweb/" in image_ref
+
+
+async def _probe_container_connect_websocket(
+    *,
+    session: Session,
+    template: ContainerTemplateTable | None,
+    instance_id: str,
+    namespace: str,
+    container_port: int,
+) -> tuple[bool, str]:
+    upstream_host = _container_service_host(instance_id, namespace)
+    protocols: list[str] = []
+    upstream_auth_header = _upstream_basic_auth_header(session, template)
+    is_kasm = _is_kasm_template(session, template)
+    upstream_origin = None
+    node_host = str(getattr(settings, "kube_node_external_host", "") or "").strip()
+    if node_host:
+        scheme = str(getattr(settings, "public_scheme", "https") or "https").strip().lower()
+        if scheme not in {"http", "https"}:
+            scheme = "https"
+        upstream_origin = f"{scheme}://{node_host}:30073"
+    upstream_ws_headers: dict[str, str] = {}
+    if upstream_auth_header:
+        upstream_ws_headers["Authorization"] = upstream_auth_header
+    if upstream_origin and is_kasm:
+        upstream_ws_headers["Sec-WebSocket-Origin"] = upstream_origin
+    if not upstream_ws_headers:
+        upstream_ws_headers = None
+
+    attempted_urls: list[str] = []
+    attempt_errors: list[str] = []
+    for scheme in _container_ws_schemes(template, container_port):
+        upstream_url = f"{scheme}://{upstream_host}:{container_port}/websockets"
+        attempted_urls.append(upstream_url)
+        ssl_context = _tls_client_context() if scheme == "wss" else None
+        try:
+            async with websockets.connect(
+                upstream_url,
+                subprotocols=protocols or None,
+                additional_headers=upstream_ws_headers,
+                origin=None if is_kasm else upstream_origin,
+                open_timeout=3,
+                close_timeout=2,
+                max_size=None,
+                ssl=ssl_context,
+            ) as upstream:
+                try:
+                    first_payload = await asyncio.wait_for(upstream.recv(), timeout=2)
+                except asyncio.TimeoutError:
+                    return False, "websocket connected but no startup frame received yet"
+                if isinstance(first_payload, bytes):
+                    if not first_payload:
+                        return False, "websocket connected but received empty startup frame"
+                else:
+                    if not str(first_payload or "").strip():
+                        return False, "websocket connected but received empty startup message"
+                return True, "ready"
+        except Exception as exc:
+            attempt_errors.append(f"{upstream_url} -> {type(exc).__name__}: {exc}")
+            continue
+    detail = "websocket probe failed"
+    if attempt_errors:
+        detail = attempt_errors[-1]
+    elif attempted_urls:
+        detail = f"websocket probe failed for {', '.join(attempted_urls)}"
+    return False, detail
 
 
 def _extract_connect_grant_token(request: Request) -> str:
@@ -1057,6 +1156,135 @@ def issue_container_connect_token(
     return response
 
 
+@router.get(
+    "/containers/{instance_id}/connect-readiness",
+    response_model=ContainerConnectReadiness,
+)
+async def container_connect_readiness(
+    instance_id: str,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> ContainerConnectReadiness:
+    record = session.get(ContainerInstanceTable, instance_id)
+    if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+
+    if record.status != "running":
+        stage, detail = _status_feedback(record.status, None)
+        return ContainerConnectReadiness(
+            ready=False,
+            detail=detail or f"container is {stage}",
+            checked_at=utc_now(),
+        )
+
+    cached = _readiness_cache_get(record.id)
+    if cached is not None:
+        ready, detail = cached
+        return ContainerConnectReadiness(ready=ready, detail=detail, checked_at=utc_now())
+
+    template = session.get(ContainerTemplateTable, record.template_id)
+    if template is None:
+        readiness = ContainerConnectReadiness(
+            ready=False,
+            detail="container template not found for readiness check",
+            checked_at=utc_now(),
+        )
+        _readiness_cache_set(record.id, ready=readiness.ready, detail=readiness.detail)
+        return readiness
+
+    instance_namespace = _container_instance_namespace(record, user)
+    record_cluster_id = _container_instance_cluster_id(record)
+    runtime_kube = _kube_for_container_cluster(session, record_cluster_id)
+    container_port = max(1, int(getattr(template, "container_port", 80) or 80))
+    healthcheck_protocol = str(getattr(template, "healthcheck_protocol", "tcp") or "tcp")
+    healthcheck_path = str(getattr(template, "healthcheck_path", "/") or "/")
+    readiness_http_status = max(100, min(599, int(getattr(template, "readiness_http_status", 200) or 200)))
+    readiness_success_path = _normalize_http_path(getattr(template, "readiness_success_path", None), allow_blank=True)
+    expose_strategy = str(getattr(template, "expose_strategy", "nodeport") or "nodeport")
+    ingress_enabled = (
+        expose_strategy == "ingress"
+        and settings.container_ingress_enabled
+        and bool((settings.container_ingress_base_domain or "").strip())
+    )
+    service_type = "ClusterIP" if ingress_enabled else "NodePort"
+
+    try:
+        node_port = runtime_kube.ensure_container_service(
+            record.id,
+            record.owner,
+            container_port,
+            service_type=service_type,
+            namespace=instance_namespace,
+        )
+        ingress_host = None
+        if ingress_enabled:
+            ingress_host = runtime_kube.ensure_container_ingress(
+                record.id,
+                f"ctsvc-{record.id[:8]}",
+                container_port,
+                namespace=instance_namespace,
+            )
+            if ingress_host is None:
+                node_port = runtime_kube.ensure_container_service(
+                    record.id,
+                    record.owner,
+                    container_port,
+                    service_type="NodePort",
+                    namespace=instance_namespace,
+                )
+    except ApiException as exc:
+        if exc.status == 404:
+            readiness = ContainerConnectReadiness(
+                ready=False,
+                detail="container service is not available yet",
+                checked_at=utc_now(),
+            )
+            _readiness_cache_set(record.id, ready=readiness.ready, detail=readiness.detail)
+            return readiness
+        raise
+
+    service_ready = _container_service_ready(
+        record.id,
+        instance_namespace,
+        container_port,
+        protocol=healthcheck_protocol,
+        healthcheck_path=healthcheck_path,
+        expected_http_status=readiness_http_status,
+        success_path=readiness_success_path,
+    )
+    externally_ready = ingress_host is not None or _nodeport_ready(
+        node_port,
+        protocol=healthcheck_protocol,
+        healthcheck_path=healthcheck_path,
+        expected_http_status=readiness_http_status,
+        success_path=readiness_success_path,
+    )
+    if not service_ready or not externally_ready:
+        readiness = ContainerConnectReadiness(
+            ready=False,
+            detail="container app is still starting",
+            checked_at=utc_now(),
+        )
+        _readiness_cache_set(record.id, ready=readiness.ready, detail=readiness.detail)
+        return readiness
+
+    if not _container_requires_ws_probe(session, template):
+        readiness = ContainerConnectReadiness(ready=True, detail="ready", checked_at=utc_now())
+        _readiness_cache_set(record.id, ready=readiness.ready, detail=readiness.detail)
+        return readiness
+
+    ws_ready, ws_detail = await _probe_container_connect_websocket(
+        session=session,
+        template=template,
+        instance_id=record.id,
+        namespace=instance_namespace,
+        container_port=container_port,
+    )
+    readiness = ContainerConnectReadiness(ready=ws_ready, detail=ws_detail, checked_at=utc_now())
+    _readiness_cache_set(record.id, ready=readiness.ready, detail=readiness.detail)
+    return readiness
+
+
 @router.api_route(
     "/containers/{instance_id}/connect",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
@@ -1246,8 +1474,11 @@ async def proxy_container_connect_ws(
     proxy_path: str,
     session: Session = Depends(get_session),
 ) -> None:
+    resource_type = "container"
     token_value = _extract_connect_session_token_ws(websocket)
     if not token_value:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4401")
         await websocket.close(code=4401, reason="missing connect session")
         return
     try:
@@ -1258,14 +1489,20 @@ async def proxy_container_connect_ws(
             resource_type="container",
         )
     except HTTPException:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4401")
         await websocket.close(code=4401, reason="invalid connect session")
         return
 
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4404")
         await websocket.close(code=4404, reason="container not found")
         return
     if record.status not in {"pending", "running"}:
+        ws_metrics.record_handshake(resource_type, success=False)
+        ws_metrics.record_disconnect(resource_type, direction="downstream", code="4409")
         await websocket.close(code=4409, reason="container not running")
         return
     instance_namespace = _container_instance_namespace(record, user)
@@ -1324,12 +1561,19 @@ async def proxy_container_connect_ws(
                 max_size=None,
                 ssl=ssl_context,
             ) as upstream:
+                ws_metrics.record_handshake(resource_type, success=True)
+                connection_started_at = ws_metrics.mark_connection_open(resource_type)
 
                 async def client_to_upstream() -> None:
                     while True:
                         message = await websocket.receive()
                         kind = message.get("type")
                         if kind == "websocket.disconnect":
+                            ws_metrics.record_disconnect(
+                                resource_type,
+                                direction="downstream",
+                                code=message.get("code"),
+                            )
                             await upstream.close()
                             return
                         payload_bytes = message.get("bytes")
@@ -1342,25 +1586,45 @@ async def proxy_container_connect_ws(
 
                 async def upstream_to_client() -> None:
                     while True:
-                        payload = await upstream.recv()
+                        try:
+                            payload = await upstream.recv()
+                        except Exception as exc:
+                            ws_metrics.record_disconnect(
+                                resource_type,
+                                direction="upstream",
+                                code=ws_metrics.extract_close_code(exc),
+                            )
+                            raise
                         if isinstance(payload, bytes):
                             await websocket.send_bytes(payload)
                         else:
                             await websocket.send_text(payload)
 
-                task_client = asyncio.create_task(client_to_upstream())
-                task_upstream = asyncio.create_task(upstream_to_client())
-                done, pending = await asyncio.wait({task_client, task_upstream}, return_when=asyncio.FIRST_COMPLETED)
-                for task in pending:
-                    task.cancel()
-                await asyncio.gather(*pending, return_exceptions=True)
-                await asyncio.gather(*done, return_exceptions=True)
-                return
+                try:
+                    task_client = asyncio.create_task(client_to_upstream())
+                    task_upstream = asyncio.create_task(upstream_to_client())
+                    done, pending = await asyncio.wait(
+                        {task_client, task_upstream},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    await asyncio.gather(*pending, return_exceptions=True)
+                    await asyncio.gather(*done, return_exceptions=True)
+                    return
+                finally:
+                    ws_metrics.mark_connection_close(resource_type, connection_started_at)
         except Exception as exc:
             last_exc = exc
             attempt_errors.append(f"{upstream_url} -> {type(exc).__name__}: {exc}")
             continue
 
+    ws_metrics.record_handshake(resource_type, success=False)
+    ws_metrics.record_disconnect(
+        resource_type,
+        direction="upstream",
+        code=ws_metrics.extract_close_code(last_exc),
+    )
     exc_info = (type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None
     logger.warning(
         "Container websocket proxy failed for instance %s path %s attempted=%s errors=%s",

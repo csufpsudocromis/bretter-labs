@@ -604,6 +604,12 @@ class ContainerInstance(BaseModel):
     last_active_at: datetime
 
 
+class ContainerConnectReadiness(BaseModel):
+    ready: bool
+    detail: str = ""
+    checked_at: datetime
+
+
 class ClusterConfigCreate(BaseModel):
     id: str = Field(..., min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=128)

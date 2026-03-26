@@ -8,6 +8,7 @@ const UserPanel = () => {
   const [instances, setInstances] = useState([]);
   const [containerTemplates, setContainerTemplates] = useState([]);
   const [containerInstances, setContainerInstances] = useState([]);
+  const [containerConnectReadiness, setContainerConnectReadiness] = useState({});
   const [vmPreflight, setVmPreflight] = useState({});
   const [message, setMessage] = useState("");
   const [polling, setPolling] = useState(null);
@@ -34,12 +35,15 @@ const UserPanel = () => {
   const stickyLimitMessageRef = useRef(false);
   const vmPreflightInFlightRef = useRef(new Set());
   const vmPreflightCheckedAtRef = useRef({});
+  const containerConnectReadinessInFlightRef = useRef(new Set());
+  const containerConnectReadinessCheckedAtRef = useRef({});
   const [sessionEnded, setSessionEnded] = useState(false);
   const idlePromptRef = useRef(false);
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
   const VM_PREFLIGHT_CACHE_MS = 60000;
+  const CONTAINER_CONNECT_READINESS_CACHE_MS = 10000;
   const VM_PRESENCE_GRACE_MS = 10000;
   const ACTIVITY_STORAGE_KEY = "blabs:last-activity-at";
 
@@ -80,6 +84,72 @@ const UserPanel = () => {
     );
   };
 
+  const refreshContainerConnectReadiness = async (nextContainerInstances) => {
+    const rows = Array.isArray(nextContainerInstances) ? nextContainerInstances : [];
+    const runningInstances = rows.filter(
+      (instance) => String(instance?.status_stage || instance?.status || "").toLowerCase() === "running"
+    );
+    const runningIds = new Set(runningInstances.map((instance) => String(instance?.id || "").trim()).filter(Boolean));
+    setContainerConnectReadiness((prev) => {
+      const next = {};
+      Object.entries(prev || {}).forEach(([id, state]) => {
+        if (!runningIds.has(id)) {
+          delete containerConnectReadinessCheckedAtRef.current[id];
+          containerConnectReadinessInFlightRef.current.delete(id);
+          return;
+        }
+        next[id] = state;
+      });
+      return next;
+    });
+
+    const now = Date.now();
+    const targets = runningInstances.filter((instance) => {
+      const id = String(instance?.id || "").trim();
+      if (!id) return false;
+      if (containerConnectReadinessInFlightRef.current.has(id)) return false;
+      const checkedAt = Number(containerConnectReadinessCheckedAtRef.current[id] || 0);
+      return !checkedAt || now - checkedAt >= CONTAINER_CONNECT_READINESS_CACHE_MS;
+    });
+    if (!targets.length) {
+      return;
+    }
+
+    await Promise.all(
+      targets.map(async (instance) => {
+        const id = String(instance?.id || "").trim();
+        if (!id) return;
+        containerConnectReadinessInFlightRef.current.add(id);
+        try {
+          const response = await api.get(`/user/containers/${id}/connect-readiness`);
+          const payload = response?.data || {};
+          containerConnectReadinessCheckedAtRef.current[id] = Date.now();
+          setContainerConnectReadiness((prev) => ({
+            ...prev,
+            [id]: {
+              ready: Boolean(payload.ready),
+              detail: String(payload.detail || "").trim(),
+              checked_at: payload.checked_at || "",
+            },
+          }));
+        } catch (err) {
+          const detail = err.response?.data?.detail || "Connect readiness check failed";
+          containerConnectReadinessCheckedAtRef.current[id] = Date.now();
+          setContainerConnectReadiness((prev) => ({
+            ...prev,
+            [id]: {
+              ready: false,
+              detail: String(detail || "").trim(),
+              checked_at: "",
+            },
+          }));
+        } finally {
+          containerConnectReadinessInFlightRef.current.delete(id);
+        }
+      })
+    );
+  };
+
   const refresh = async () => {
     try {
       const [tmplRes, podsRes, ctTmplRes, ctInstRes] = await Promise.all([
@@ -94,6 +164,7 @@ const UserPanel = () => {
       setInstances(nextVmInstances);
       setContainerTemplates(ctTmplRes.data || []);
       setContainerInstances(nextContainerInstances);
+      void refreshContainerConnectReadiness(nextContainerInstances);
       nextVmInstances.forEach((inst) => rememberAllowedOrigin(inst?.console_url));
       nextContainerInstances.forEach((inst) => {
         rememberAllowedOrigin(inst?.access_url);
@@ -288,6 +359,21 @@ const UserPanel = () => {
   const openContainer = async (instance) => {
     if (!instance?.id) return;
     try {
+      const readiness = await api.get(`/user/containers/${instance.id}/connect-readiness`);
+      const readinessPayload = readiness?.data || {};
+      setContainerConnectReadiness((prev) => ({
+        ...prev,
+        [instance.id]: {
+          ready: Boolean(readinessPayload.ready),
+          detail: String(readinessPayload.detail || "").trim(),
+          checked_at: readinessPayload.checked_at || "",
+        },
+      }));
+      containerConnectReadinessCheckedAtRef.current[instance.id] = Date.now();
+      if (!readinessPayload.ready) {
+        setMessage(String(readinessPayload.detail || "Container connect is not ready yet."));
+        return;
+      }
       const res = await api.post(`/user/containers/${instance.id}/connect-token`);
       const connectUrl = String(res?.data?.connect_url || "").trim();
       const fallbackUrl = String(instance.access_url || "").trim();
@@ -493,6 +579,15 @@ const UserPanel = () => {
     return containerDiagnostics(instance).some((line) => errorPattern.test(String(line || "")));
   };
   const isContainerRunning = (instance) => effectiveContainerStatus(instance) === "running";
+  const containerConnectState = (instance) => containerConnectReadiness[String(instance?.id || "").trim()] || null;
+  const isContainerConnectReady = (instance) => Boolean(containerConnectState(instance)?.ready);
+  const containerConnectStatusDetail = (instance) => {
+    if (!isContainerRunning(instance)) return "";
+    const state = containerConnectState(instance);
+    if (!state) return "Checking connect readiness...";
+    if (state.ready) return "";
+    return state.detail || "Connect not ready yet.";
+  };
 
   const readStoredActivity = () => {
     try {
@@ -1300,11 +1395,17 @@ const UserPanel = () => {
                       {line}
                     </div>
                   ))}
+                {!hasContainerStartupError(c) && containerConnectStatusDetail(c) && (
+                  <div className="muted small">{containerConnectStatusDetail(c)}</div>
+                )}
                 <div className="actions">
                   <button className="danger" onClick={() => removeContainer(c.id)}>
                     Delete
                   </button>
-                  <button onClick={() => openContainer(c)} disabled={!c.access_url || !isContainerRunning(c)}>
+                  <button
+                    onClick={() => openContainer(c)}
+                    disabled={!c.access_url || !isContainerRunning(c) || !isContainerConnectReady(c)}
+                  >
                     Connect
                   </button>
                 </div>
