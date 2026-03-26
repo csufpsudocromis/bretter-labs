@@ -52,6 +52,13 @@ def _pod_security_labels(*, privileged_runtime: bool) -> dict[str, str]:
     }
 
 
+def _rbac_service_account_subject(service_account_namespace: str):
+    subject_cls = getattr(client, "RbacV1Subject", None) or getattr(client, "V1Subject", None)
+    if subject_cls is not None:
+        return subject_cls(kind="ServiceAccount", name="bretter-backend", namespace=service_account_namespace)
+    return {"kind": "ServiceAccount", "name": "bretter-backend", "namespace": service_account_namespace}
+
+
 def _runtime_role() -> client.V1Role:
     return client.V1Role(
         metadata=client.V1ObjectMeta(name=_ROLE_NAME),
@@ -204,7 +211,7 @@ def _upsert_role_binding(
     body = client.V1RoleBinding(
         metadata=client.V1ObjectMeta(name=_ROLE_BINDING_NAME),
         role_ref=client.V1RoleRef(api_group="rbac.authorization.k8s.io", kind="Role", name=_ROLE_NAME),
-        subjects=[client.V1Subject(kind="ServiceAccount", name="bretter-backend", namespace=service_account_namespace)],
+        subjects=[_rbac_service_account_subject(service_account_namespace)],
     )
     try:
         rbac_api.create_namespaced_role_binding(namespace=namespace, body=body)
