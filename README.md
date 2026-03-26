@@ -340,7 +340,7 @@ Proof artifact and operator docs:
 | `POSTGRES_BACKUP_RETENTION_DAYS` | `7` | Retention window (days) for backup dump files |
 | `POSTGRES_BACKUP_PVC_NAME` | `bretter-postgres-backups` | PVC name used by backup automation |
 | `POSTGRES_BACKUP_PVC_SIZE` | `20Gi` | Backup PVC requested size |
-| `ENABLE_POSTGRES_BACKUP_REPLICATION` | `0` | Enable encrypted off-cluster replication of latest backup dump to S3-compatible storage (required when `PRODUCTION_PROFILE=1`) |
+| `ENABLE_POSTGRES_BACKUP_REPLICATION` | `0` | Enable encrypted off-cluster replication of latest backup dump to S3-compatible storage (recommended for production DR) |
 | `POSTGRES_BACKUP_REPLICATION_BUCKET` | empty | Target S3 bucket for backup replication |
 | `POSTGRES_BACKUP_REPLICATION_SECRET_NAME` | `bretter-postgres-backup-replication` | Secret containing replication credentials (`aws_access_key_id`/`aws_secret_access_key`) |
 | `POSTGRES_BACKUP_REPLICATION_SSE_MODE` | `AES256` | Server-side encryption mode for replicated backups (`AES256` or `aws:kms`) |

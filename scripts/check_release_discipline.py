@@ -343,46 +343,53 @@ def main() -> int:
     backup_replication_enabled = (
         _extract_yaml_scalar(values_production, "ENABLE_POSTGRES_BACKUP_REPLICATION").strip().lower()
     )
-    if backup_replication_enabled not in {"1", "true", "yes", "on"}:
-        errors.append(
-            "deploy/helm/values-production.yaml must enable ENABLE_POSTGRES_BACKUP_REPLICATION for production."
+    if backup_replication_enabled in {"1", "true", "yes", "on"}:
+        for key in (
+            "POSTGRES_BACKUP_REPLICATION_BUCKET",
+            "POSTGRES_BACKUP_REPLICATION_SECRET_NAME",
+            "POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY",
+            "POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY",
+        ):
+            value = _extract_yaml_scalar(values_production, key).strip()
+            if _looks_placeholder(value):
+                errors.append(f"deploy/helm/values-production.yaml must set {key} when backup replication is required.")
+        backup_sse_mode = (
+            _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_SSE_MODE").strip().lower()
         )
-    for key in (
-        "POSTGRES_BACKUP_REPLICATION_BUCKET",
-        "POSTGRES_BACKUP_REPLICATION_SECRET_NAME",
-        "POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY",
-        "POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY",
-    ):
-        value = _extract_yaml_scalar(values_production, key).strip()
-        if _looks_placeholder(value):
-            errors.append(f"deploy/helm/values-production.yaml must set {key} when backup replication is required.")
-    backup_sse_mode = _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_SSE_MODE").strip().lower()
-    if backup_sse_mode not in {"aes256", "aws:kms"}:
-        errors.append(
-            "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_SSE_MODE to AES256 or aws:kms."
-        )
-    if backup_sse_mode == "aws:kms":
-        kms_key = _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID").strip()
-        if _looks_placeholder(kms_key):
+        if backup_sse_mode not in {"aes256", "aws:kms"}:
             errors.append(
-                "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID when SSE mode is aws:kms."
+                "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_SSE_MODE to AES256 or aws:kms."
             )
-    backup_object_lock_mode = (
-        _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE").strip().lower()
-    )
-    if backup_object_lock_mode not in {"governance", "compliance"}:
-        errors.append(
-            "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE to GOVERNANCE or COMPLIANCE."
+        if backup_sse_mode == "aws:kms":
+            kms_key = _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID").strip()
+            if _looks_placeholder(kms_key):
+                errors.append(
+                    "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID when SSE mode is aws:kms."
+                )
+        backup_object_lock_mode = (
+            _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE").strip().lower()
         )
-    backup_object_lock_days = _extract_yaml_scalar(
-        values_production, "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS"
-    ).strip()
-    if not re.match(r"^[0-9]+$", backup_object_lock_days):
+        if backup_object_lock_mode not in {"governance", "compliance"}:
+            errors.append(
+                "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE to GOVERNANCE or COMPLIANCE."
+            )
+        backup_object_lock_days = _extract_yaml_scalar(
+            values_production, "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS"
+        ).strip()
+        if not re.match(r"^[0-9]+$", backup_object_lock_days):
+            errors.append(
+                "deploy/helm/values-production.yaml POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be an integer."
+            )
+        elif int(backup_object_lock_days) < 7:
+            errors.append(
+                "deploy/helm/values-production.yaml POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be >= 7."
+            )
+    elif backup_replication_enabled in {"0", "false", "no", "off", ""}:
+        pass
+    else:
         errors.append(
-            "deploy/helm/values-production.yaml POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be an integer."
+            "deploy/helm/values-production.yaml ENABLE_POSTGRES_BACKUP_REPLICATION must be a boolean-like value."
         )
-    elif int(backup_object_lock_days) < 7:
-        errors.append("deploy/helm/values-production.yaml POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be >= 7.")
 
     if values_site_template:
         for key in (

@@ -134,7 +134,7 @@ run_failure "reject production profile with missing explicit control-node overri
   CONTAINER_SIGNATURE_VERIFICATION_ENABLED=1 CONTAINER_SIGNATURE_KEY_REF=/etc/bretter-signing/cosign.pub \
   "$SETUP_SCRIPT"
 
-run_failure "reject production profile when backup replication is disabled" \
+run_success "allow production profile when backup replication is disabled" \
   env SETUP_DRY_RUN=1 PRODUCTION_PROFILE=1 CORS_ENTERPRISE_PROFILE=1 CORS_ALLOWED_ORIGINS=https://prod-labs.internal:30073 \
   BACKEND_IMAGE="$PROD_BACKEND_IMAGE" BACKEND_ADMIN_IMAGE="$PROD_BACKEND_ADMIN_IMAGE" \
   FRONTEND_IMAGE="$PROD_FRONTEND_IMAGE" RUNNER_IMAGE="$PROD_RUNNER_IMAGE" \

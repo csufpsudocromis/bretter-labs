@@ -60,9 +60,9 @@ Optional:
 NAMESPACE=labs RUN_RESTORE_DRILL=1 RESTORE_DRILL_KEEP_DB=1 ./scripts/production_go_live_proof.sh
 ```
 
-## Off-cluster encrypted backup replication (required in production profile)
+## Off-cluster encrypted backup replication (optional, recommended for production DR)
 
-Setup deploys `bretter-postgres-backup-replication` to copy the latest dump to S3-compatible object storage with SSE when production profile hardening is enabled.
+When enabled, setup deploys `bretter-postgres-backup-replication` to copy the latest dump to S3-compatible object storage with SSE.
 
 Key settings:
 

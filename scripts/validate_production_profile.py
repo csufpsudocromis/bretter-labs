@@ -354,7 +354,9 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
 
     backup_replication_enabled = get_bool("ENABLE_POSTGRES_BACKUP_REPLICATION", default=False)
     if not backup_replication_enabled:
-        errors.append("ENABLE_POSTGRES_BACKUP_REPLICATION must be enabled for production.")
+        warnings.append(
+            "ENABLE_POSTGRES_BACKUP_REPLICATION is disabled; off-cluster backup replication checks are skipped."
+        )
     else:
         if _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_BUCKET")):
             errors.append("POSTGRES_BACKUP_REPLICATION_BUCKET must be set when backup replication is enabled.")

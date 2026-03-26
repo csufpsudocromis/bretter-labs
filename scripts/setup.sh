@@ -1048,9 +1048,6 @@ validate_auth_and_cors_config() {
     if [ -z "$RUNNER_NODE_SELECTOR_VALUE" ]; then
       fail "RUNNER_NODE_SELECTOR_VALUE must be set when PRODUCTION_PROFILE=1."
     fi
-    if [ "$ENABLE_POSTGRES_BACKUP_REPLICATION" -ne 1 ]; then
-      fail "ENABLE_POSTGRES_BACKUP_REPLICATION must be 1 when PRODUCTION_PROFILE=1."
-    fi
     if [ "$TEAM_NAMESPACE_MODE" != "per_team" ]; then
       fail "TEAM_NAMESPACE_MODE must be per_team when PRODUCTION_PROFILE=1."
     fi

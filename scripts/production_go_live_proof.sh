@@ -453,23 +453,21 @@ if [[ "$signature_key_ref" == /etc/bretter-signing/* ]]; then
   fi
 fi
 
-if [ "$backup_replication_enabled" != "1" ]; then
-  fail_check "backup replication enabled in merged values"
-elif [ -n "$backup_replication_secret_name" ] && [ -n "$backup_replication_secret_key" ]; then
-  backup_replication_secret_b64="$(secret_data_value_b64 "$NAMESPACE" "$backup_replication_secret_name" "$backup_replication_secret_key" 2>/dev/null || true)"
-  if [ -n "$backup_replication_secret_b64" ]; then
-    pass_check "backup replication secret exists with expected key"
+if [ "$backup_replication_enabled" = "1" ]; then
+  if [ -n "$backup_replication_secret_name" ] && [ -n "$backup_replication_secret_key" ]; then
+    backup_replication_secret_b64="$(secret_data_value_b64 "$NAMESPACE" "$backup_replication_secret_name" "$backup_replication_secret_key" 2>/dev/null || true)"
+    if [ -n "$backup_replication_secret_b64" ]; then
+      pass_check "backup replication secret exists with expected key"
+    else
+      fail_check "backup replication secret exists with expected key"
+    fi
   else
     fail_check "backup replication secret exists with expected key"
   fi
-else
-  fail_check "backup replication secret exists with expected key"
-fi
-
-run_check "postgres backup replication cronjob present" \
-  kubectl -n "$NAMESPACE" get cronjob bretter-postgres-backup-replication
-run_check "backup replication object lock env policy" \
-  python3 - "$NAMESPACE" "$backup_replication_object_lock_mode" "$backup_replication_object_lock_days" <<'PY'
+  run_check "postgres backup replication cronjob present" \
+    kubectl -n "$NAMESPACE" get cronjob bretter-postgres-backup-replication
+  run_check "backup replication object lock env policy" \
+    python3 - "$NAMESPACE" "$backup_replication_object_lock_mode" "$backup_replication_object_lock_days" <<'PY'
 import json
 import sys
 from datetime import UTC, datetime
@@ -524,6 +522,9 @@ if required_days < 7:
 print(f"object_lock_policy mode={mode} days={required_days}")
 print(f"checked_at={datetime.now(UTC).isoformat()}")
 PY
+else
+  pass_check "backup replication checks skipped (ENABLE_POSTGRES_BACKUP_REPLICATION=0)"
+fi
 
 postdeploy_admin_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY" 2>/dev/null || true)"
 if [ -n "$postdeploy_admin_b64" ]; then

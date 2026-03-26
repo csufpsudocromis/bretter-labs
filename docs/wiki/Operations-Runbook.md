@@ -78,7 +78,7 @@ kubectl -n labs get secret bretter-userflow-slo-api-auth -o go-template='{{index
 
 Expected: each command prints a value greater than `0`.
 
-Production profile requires off-cluster backup replication:
+If off-cluster backup replication is enabled, verify the CronJob and secret wiring:
 
 ```bash
 kubectl -n labs get cronjob bretter-postgres-backup-replication
