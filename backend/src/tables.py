@@ -250,6 +250,36 @@ class TeamQuota(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class ManagedNamespace(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("namespace", name="uq_managednamespace_namespace"),)
+
+    id: str = Field(primary_key=True, index=True)
+    namespace: str = Field(index=True)
+    team_label: str = Field(default="default", index=True)
+    security_profile: str = "baseline"  # restricted|baseline|privileged
+    enforce_network_policies: bool = True
+    max_pods: str = "200"
+    max_services: str = "100"
+    max_persistent_volume_claims: str = "200"
+    requests_cpu: str = "8"
+    limits_cpu: str = "16"
+    requests_memory: str = "16Gi"
+    limits_memory: str = "32Gi"
+    requests_storage: str = "2Ti"
+    limit_min_cpu: str = "50m"
+    limit_min_memory: str = "64Mi"
+    limit_default_request_cpu: str = "250m"
+    limit_default_request_memory: str = "256Mi"
+    limit_default_cpu: str = "2"
+    limit_default_memory: str = "2Gi"
+    limit_max_cpu: str = "8"
+    limit_max_memory: str = "16Gi"
+    enabled: bool = True
+    last_reconciled_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class Cluster(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str

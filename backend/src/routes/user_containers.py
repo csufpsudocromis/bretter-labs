@@ -157,6 +157,8 @@ def _queue_backoff_seconds(attempts: int) -> int:
 def _humanize_queue_reason(raw_reason: str | None) -> str:
     text = str(raw_reason or "").strip()
     lowered = text.lower()
+    if "podsecurity" in lowered or "violates podsecurity" in lowered:
+        return "Waiting for container security policy compatibility (PodSecurity)."
     if "forbidden" in lowered or "quota" in lowered:
         return "Waiting for available resources or namespace quota."
     if "unschedulable" in lowered or "failedscheduling" in lowered:

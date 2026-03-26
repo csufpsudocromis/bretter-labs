@@ -36,6 +36,7 @@ from src.tables import (  # noqa: E402
     ContainerTemplate,
     Image,
     Instance,
+    ManagedNamespace,
     OIDCLoginState,
     TeamQuota,
     Template,
@@ -141,6 +142,7 @@ def reset_db():
             Image,
             ContainerImage,
             Config,
+            ManagedNamespace,
             TeamQuota,
             User,
         ]:

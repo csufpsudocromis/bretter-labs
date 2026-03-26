@@ -22,6 +22,10 @@ const AdminSettingsLanding = () => (
         <h3>Runtime Settings</h3>
         <p>View backend/runtime configuration and update global limits.</p>
       </Link>
+      <Link to="/admin/settings/namespaces" className="tile">
+        <h3>Namespaces</h3>
+        <p>Add/remove managed namespaces and tune namespace security/resource policies.</p>
+      </Link>
       <Link to="/admin/settings/sso" className="tile">
         <h3>OIDC / SSO</h3>
         <p>Configure OIDC login, role mapping, and user provisioning behavior.</p>

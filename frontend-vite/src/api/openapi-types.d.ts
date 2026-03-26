@@ -577,6 +577,59 @@ export interface paths {
         patch: operations["update_ldap_settings_admin_settings_ldap_patch"];
         trace?: never;
     };
+    "/admin/settings/namespaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Managed Namespaces */
+        get: operations["list_managed_namespaces_admin_settings_namespaces_get"];
+        put?: never;
+        /** Create Managed Namespace */
+        post: operations["create_managed_namespace_admin_settings_namespaces_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/namespaces/{namespace}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Managed Namespace */
+        delete: operations["delete_managed_namespace_admin_settings_namespaces__namespace__delete"];
+        options?: never;
+        head?: never;
+        /** Update Managed Namespace */
+        patch: operations["update_managed_namespace_admin_settings_namespaces__namespace__patch"];
+        trace?: never;
+    };
+    "/admin/settings/namespaces/{namespace}/reconcile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconcile Managed Namespace */
+        post: operations["reconcile_managed_namespace_admin_settings_namespaces__namespace__reconcile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/settings/placement-policies": {
         parameters: {
             query?: never;
@@ -2438,6 +2491,237 @@ export interface components {
              * @default (uid={username})
              */
             ldap_user_filter: string;
+        };
+        /** ManagedNamespaceCreate */
+        ManagedNamespaceCreate: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Enforce Network Policies
+             * @default true
+             */
+            enforce_network_policies: boolean;
+            /**
+             * Limit Default Cpu
+             * @default 2
+             */
+            limit_default_cpu: string;
+            /**
+             * Limit Default Memory
+             * @default 2Gi
+             */
+            limit_default_memory: string;
+            /**
+             * Limit Default Request Cpu
+             * @default 250m
+             */
+            limit_default_request_cpu: string;
+            /**
+             * Limit Default Request Memory
+             * @default 256Mi
+             */
+            limit_default_request_memory: string;
+            /**
+             * Limit Max Cpu
+             * @default 8
+             */
+            limit_max_cpu: string;
+            /**
+             * Limit Max Memory
+             * @default 16Gi
+             */
+            limit_max_memory: string;
+            /**
+             * Limit Min Cpu
+             * @default 50m
+             */
+            limit_min_cpu: string;
+            /**
+             * Limit Min Memory
+             * @default 64Mi
+             */
+            limit_min_memory: string;
+            /**
+             * Limits Cpu
+             * @default 16
+             */
+            limits_cpu: string;
+            /**
+             * Limits Memory
+             * @default 32Gi
+             */
+            limits_memory: string;
+            /**
+             * Max Persistent Volume Claims
+             * @default 200
+             */
+            max_persistent_volume_claims: string;
+            /**
+             * Max Pods
+             * @default 200
+             */
+            max_pods: string;
+            /**
+             * Max Services
+             * @default 100
+             */
+            max_services: string;
+            /** Namespace */
+            namespace: string;
+            /**
+             * Requests Cpu
+             * @default 8
+             */
+            requests_cpu: string;
+            /**
+             * Requests Memory
+             * @default 16Gi
+             */
+            requests_memory: string;
+            /**
+             * Requests Storage
+             * @default 2Ti
+             */
+            requests_storage: string;
+            /**
+             * Security Profile
+             * @default baseline
+             * @enum {string}
+             */
+            security_profile: "restricted" | "baseline" | "privileged";
+            /**
+             * Team Label
+             * @default default
+             */
+            team_label: string;
+        };
+        /** ManagedNamespaceOut */
+        ManagedNamespaceOut: {
+            /**
+             * Active Container Instances
+             * @default 0
+             */
+            active_container_instances: number;
+            /**
+             * Active Total Instances
+             * @default 0
+             */
+            active_total_instances: number;
+            /**
+             * Active Vm Instances
+             * @default 0
+             */
+            active_vm_instances: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Enforce Network Policies */
+            enforce_network_policies: boolean;
+            /** Id */
+            id: string;
+            /** Last Reconciled At */
+            last_reconciled_at?: string | null;
+            /** Limit Default Cpu */
+            limit_default_cpu: string;
+            /** Limit Default Memory */
+            limit_default_memory: string;
+            /** Limit Default Request Cpu */
+            limit_default_request_cpu: string;
+            /** Limit Default Request Memory */
+            limit_default_request_memory: string;
+            /** Limit Max Cpu */
+            limit_max_cpu: string;
+            /** Limit Max Memory */
+            limit_max_memory: string;
+            /** Limit Min Cpu */
+            limit_min_cpu: string;
+            /** Limit Min Memory */
+            limit_min_memory: string;
+            /** Limits Cpu */
+            limits_cpu: string;
+            /** Limits Memory */
+            limits_memory: string;
+            /** Max Persistent Volume Claims */
+            max_persistent_volume_claims: string;
+            /** Max Pods */
+            max_pods: string;
+            /** Max Services */
+            max_services: string;
+            /** Namespace */
+            namespace: string;
+            /**
+             * Present In Cluster
+             * @default false
+             */
+            present_in_cluster: boolean;
+            /** Requests Cpu */
+            requests_cpu: string;
+            /** Requests Memory */
+            requests_memory: string;
+            /** Requests Storage */
+            requests_storage: string;
+            /**
+             * Security Profile
+             * @enum {string}
+             */
+            security_profile: "restricted" | "baseline" | "privileged";
+            /** Team Label */
+            team_label: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ManagedNamespaceUpdate */
+        ManagedNamespaceUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Enforce Network Policies */
+            enforce_network_policies?: boolean | null;
+            /** Limit Default Cpu */
+            limit_default_cpu?: string | null;
+            /** Limit Default Memory */
+            limit_default_memory?: string | null;
+            /** Limit Default Request Cpu */
+            limit_default_request_cpu?: string | null;
+            /** Limit Default Request Memory */
+            limit_default_request_memory?: string | null;
+            /** Limit Max Cpu */
+            limit_max_cpu?: string | null;
+            /** Limit Max Memory */
+            limit_max_memory?: string | null;
+            /** Limit Min Cpu */
+            limit_min_cpu?: string | null;
+            /** Limit Min Memory */
+            limit_min_memory?: string | null;
+            /** Limits Cpu */
+            limits_cpu?: string | null;
+            /** Limits Memory */
+            limits_memory?: string | null;
+            /** Max Persistent Volume Claims */
+            max_persistent_volume_claims?: string | null;
+            /** Max Pods */
+            max_pods?: string | null;
+            /** Max Services */
+            max_services?: string | null;
+            /** Requests Cpu */
+            requests_cpu?: string | null;
+            /** Requests Memory */
+            requests_memory?: string | null;
+            /** Requests Storage */
+            requests_storage?: string | null;
+            /** Security Profile */
+            security_profile?: ("restricted" | "baseline" | "privileged") | null;
+            /** Team Label */
+            team_label?: string | null;
         };
         /** OrchestrationParityItem */
         OrchestrationParityItem: {
@@ -4831,6 +5115,175 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LDAPSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_managed_namespaces_admin_settings_namespaces_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_managed_namespace_admin_settings_namespaces_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedNamespaceCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_managed_namespace_admin_settings_namespaces__namespace__delete: {
+        parameters: {
+            query?: {
+                delete_cluster_namespace?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_managed_namespace_admin_settings_namespaces__namespace__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedNamespaceUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reconcile_managed_namespace_admin_settings_namespaces__namespace__reconcile_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceOut"];
                 };
             };
             /** @description Validation Error */

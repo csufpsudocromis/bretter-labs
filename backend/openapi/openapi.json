@@ -2591,6 +2591,592 @@
         "title": "LDAPSettingsUpdate",
         "type": "object"
       },
+      "ManagedNamespaceCreate": {
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "enforce_network_policies": {
+            "default": true,
+            "title": "Enforce Network Policies",
+            "type": "boolean"
+          },
+          "limit_default_cpu": {
+            "default": "2",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Default Cpu",
+            "type": "string"
+          },
+          "limit_default_memory": {
+            "default": "2Gi",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Default Memory",
+            "type": "string"
+          },
+          "limit_default_request_cpu": {
+            "default": "250m",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Default Request Cpu",
+            "type": "string"
+          },
+          "limit_default_request_memory": {
+            "default": "256Mi",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Default Request Memory",
+            "type": "string"
+          },
+          "limit_max_cpu": {
+            "default": "8",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Max Cpu",
+            "type": "string"
+          },
+          "limit_max_memory": {
+            "default": "16Gi",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Max Memory",
+            "type": "string"
+          },
+          "limit_min_cpu": {
+            "default": "50m",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Min Cpu",
+            "type": "string"
+          },
+          "limit_min_memory": {
+            "default": "64Mi",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limit Min Memory",
+            "type": "string"
+          },
+          "limits_cpu": {
+            "default": "16",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limits Cpu",
+            "type": "string"
+          },
+          "limits_memory": {
+            "default": "32Gi",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Limits Memory",
+            "type": "string"
+          },
+          "max_persistent_volume_claims": {
+            "default": "200",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Max Persistent Volume Claims",
+            "type": "string"
+          },
+          "max_pods": {
+            "default": "200",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Max Pods",
+            "type": "string"
+          },
+          "max_services": {
+            "default": "100",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Max Services",
+            "type": "string"
+          },
+          "namespace": {
+            "maxLength": 63,
+            "minLength": 1,
+            "title": "Namespace",
+            "type": "string"
+          },
+          "requests_cpu": {
+            "default": "8",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Requests Cpu",
+            "type": "string"
+          },
+          "requests_memory": {
+            "default": "16Gi",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Requests Memory",
+            "type": "string"
+          },
+          "requests_storage": {
+            "default": "2Ti",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Requests Storage",
+            "type": "string"
+          },
+          "security_profile": {
+            "default": "baseline",
+            "enum": [
+              "restricted",
+              "baseline",
+              "privileged"
+            ],
+            "title": "Security Profile",
+            "type": "string"
+          },
+          "team_label": {
+            "default": "default",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Team Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "namespace"
+        ],
+        "title": "ManagedNamespaceCreate",
+        "type": "object"
+      },
+      "ManagedNamespaceOut": {
+        "properties": {
+          "active_container_instances": {
+            "default": 0,
+            "title": "Active Container Instances",
+            "type": "integer"
+          },
+          "active_total_instances": {
+            "default": 0,
+            "title": "Active Total Instances",
+            "type": "integer"
+          },
+          "active_vm_instances": {
+            "default": 0,
+            "title": "Active Vm Instances",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "enforce_network_policies": {
+            "title": "Enforce Network Policies",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_reconciled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reconciled At"
+          },
+          "limit_default_cpu": {
+            "title": "Limit Default Cpu",
+            "type": "string"
+          },
+          "limit_default_memory": {
+            "title": "Limit Default Memory",
+            "type": "string"
+          },
+          "limit_default_request_cpu": {
+            "title": "Limit Default Request Cpu",
+            "type": "string"
+          },
+          "limit_default_request_memory": {
+            "title": "Limit Default Request Memory",
+            "type": "string"
+          },
+          "limit_max_cpu": {
+            "title": "Limit Max Cpu",
+            "type": "string"
+          },
+          "limit_max_memory": {
+            "title": "Limit Max Memory",
+            "type": "string"
+          },
+          "limit_min_cpu": {
+            "title": "Limit Min Cpu",
+            "type": "string"
+          },
+          "limit_min_memory": {
+            "title": "Limit Min Memory",
+            "type": "string"
+          },
+          "limits_cpu": {
+            "title": "Limits Cpu",
+            "type": "string"
+          },
+          "limits_memory": {
+            "title": "Limits Memory",
+            "type": "string"
+          },
+          "max_persistent_volume_claims": {
+            "title": "Max Persistent Volume Claims",
+            "type": "string"
+          },
+          "max_pods": {
+            "title": "Max Pods",
+            "type": "string"
+          },
+          "max_services": {
+            "title": "Max Services",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "present_in_cluster": {
+            "default": false,
+            "title": "Present In Cluster",
+            "type": "boolean"
+          },
+          "requests_cpu": {
+            "title": "Requests Cpu",
+            "type": "string"
+          },
+          "requests_memory": {
+            "title": "Requests Memory",
+            "type": "string"
+          },
+          "requests_storage": {
+            "title": "Requests Storage",
+            "type": "string"
+          },
+          "security_profile": {
+            "enum": [
+              "restricted",
+              "baseline",
+              "privileged"
+            ],
+            "title": "Security Profile",
+            "type": "string"
+          },
+          "team_label": {
+            "title": "Team Label",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "namespace",
+          "team_label",
+          "security_profile",
+          "enforce_network_policies",
+          "max_pods",
+          "max_services",
+          "max_persistent_volume_claims",
+          "requests_cpu",
+          "limits_cpu",
+          "requests_memory",
+          "limits_memory",
+          "requests_storage",
+          "limit_min_cpu",
+          "limit_min_memory",
+          "limit_default_request_cpu",
+          "limit_default_request_memory",
+          "limit_default_cpu",
+          "limit_default_memory",
+          "limit_max_cpu",
+          "limit_max_memory",
+          "enabled",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ManagedNamespaceOut",
+        "type": "object"
+      },
+      "ManagedNamespaceUpdate": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "enforce_network_policies": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enforce Network Policies"
+          },
+          "limit_default_cpu": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Default Cpu"
+          },
+          "limit_default_memory": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Default Memory"
+          },
+          "limit_default_request_cpu": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Default Request Cpu"
+          },
+          "limit_default_request_memory": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Default Request Memory"
+          },
+          "limit_max_cpu": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Max Cpu"
+          },
+          "limit_max_memory": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Max Memory"
+          },
+          "limit_min_cpu": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Min Cpu"
+          },
+          "limit_min_memory": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limit Min Memory"
+          },
+          "limits_cpu": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limits Cpu"
+          },
+          "limits_memory": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Limits Memory"
+          },
+          "max_persistent_volume_claims": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Persistent Volume Claims"
+          },
+          "max_pods": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Pods"
+          },
+          "max_services": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Services"
+          },
+          "requests_cpu": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Cpu"
+          },
+          "requests_memory": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Memory"
+          },
+          "requests_storage": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requests Storage"
+          },
+          "security_profile": {
+            "anyOf": [
+              {
+                "enum": [
+                  "restricted",
+                  "baseline",
+                  "privileged"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Security Profile"
+          },
+          "team_label": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Team Label"
+          }
+        },
+        "title": "ManagedNamespaceUpdate",
+        "type": "object"
+      },
       "OrchestrationParityItem": {
         "properties": {
           "crd_phase": {
@@ -7409,6 +7995,301 @@
           }
         },
         "summary": "Update Ldap Settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/namespaces": {
+      "get": {
+        "operationId": "list_managed_namespaces_admin_settings_namespaces_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManagedNamespaceOut"
+                  },
+                  "title": "Response List Managed Namespaces Admin Settings Namespaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Managed Namespaces",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "create_managed_namespace_admin_settings_namespaces_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedNamespaceCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedNamespaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Managed Namespace",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/namespaces/{namespace}": {
+      "delete": {
+        "operationId": "delete_managed_namespace_admin_settings_namespaces__namespace__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "delete_cluster_namespace",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Delete Cluster Namespace",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Managed Namespace",
+        "tags": [
+          "admin"
+        ]
+      },
+      "patch": {
+        "operationId": "update_managed_namespace_admin_settings_namespaces__namespace__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedNamespaceUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedNamespaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Managed Namespace",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/namespaces/{namespace}/reconcile": {
+      "post": {
+        "operationId": "reconcile_managed_namespace_admin_settings_namespaces__namespace__reconcile_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedNamespaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile Managed Namespace",
         "tags": [
           "admin"
         ]

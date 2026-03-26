@@ -78,6 +78,7 @@ _User view: launch feedback and in-browser connect workflow._
 - Per-template VM console provider selection (`spice`, `guacamole`/VNC, or `guacamole_rdp`)
 - Container image registry management
 - Runtime, storage, appearance, and alert/error settings (including global concurrency and default idle-timeout controls in `/admin/settings/runtime`)
+- Managed namespace settings (`/admin/settings/namespaces`) for namespace create/reconcile/delete, Pod Security profile, and namespace resource quotas/limits
 - Resource, pod, and health visibility in admin pages
 
 ### User features
@@ -462,7 +463,7 @@ Production note:
 1. Log in as admin.
 2. Upload VM images and register container images.
 3. Create and enable VM/container templates.
-4. Configure runtime/storage/appearance as needed.
+4. Configure runtime/storage/appearance and managed namespaces as needed.
 5. Monitor resources, alerts, and logs from admin pages.
 
 ### User

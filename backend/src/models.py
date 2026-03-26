@@ -80,6 +80,85 @@ class TeamQuotaOut(BaseModel):
     updated_at: datetime
 
 
+class ManagedNamespaceCreate(BaseModel):
+    namespace: str = Field(..., min_length=1, max_length=63)
+    team_label: str = Field(default="default", min_length=1, max_length=64)
+    security_profile: Literal["restricted", "baseline", "privileged"] = "baseline"
+    enforce_network_policies: bool = True
+    max_pods: str = Field(default="200", min_length=1, max_length=32)
+    max_services: str = Field(default="100", min_length=1, max_length=32)
+    max_persistent_volume_claims: str = Field(default="200", min_length=1, max_length=32)
+    requests_cpu: str = Field(default="8", min_length=1, max_length=32)
+    limits_cpu: str = Field(default="16", min_length=1, max_length=32)
+    requests_memory: str = Field(default="16Gi", min_length=1, max_length=32)
+    limits_memory: str = Field(default="32Gi", min_length=1, max_length=32)
+    requests_storage: str = Field(default="2Ti", min_length=1, max_length=32)
+    limit_min_cpu: str = Field(default="50m", min_length=1, max_length=32)
+    limit_min_memory: str = Field(default="64Mi", min_length=1, max_length=32)
+    limit_default_request_cpu: str = Field(default="250m", min_length=1, max_length=32)
+    limit_default_request_memory: str = Field(default="256Mi", min_length=1, max_length=32)
+    limit_default_cpu: str = Field(default="2", min_length=1, max_length=32)
+    limit_default_memory: str = Field(default="2Gi", min_length=1, max_length=32)
+    limit_max_cpu: str = Field(default="8", min_length=1, max_length=32)
+    limit_max_memory: str = Field(default="16Gi", min_length=1, max_length=32)
+    enabled: bool = True
+
+
+class ManagedNamespaceUpdate(BaseModel):
+    team_label: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    security_profile: Optional[Literal["restricted", "baseline", "privileged"]] = None
+    enforce_network_policies: Optional[bool] = None
+    max_pods: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    max_services: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    max_persistent_volume_claims: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    requests_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limits_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    requests_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limits_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    requests_storage: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_min_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_min_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_default_request_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_default_request_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_default_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_default_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_max_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    limit_max_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    enabled: Optional[bool] = None
+
+
+class ManagedNamespaceOut(BaseModel):
+    id: str
+    namespace: str
+    team_label: str
+    security_profile: Literal["restricted", "baseline", "privileged"]
+    enforce_network_policies: bool
+    max_pods: str
+    max_services: str
+    max_persistent_volume_claims: str
+    requests_cpu: str
+    limits_cpu: str
+    requests_memory: str
+    limits_memory: str
+    requests_storage: str
+    limit_min_cpu: str
+    limit_min_memory: str
+    limit_default_request_cpu: str
+    limit_default_request_memory: str
+    limit_default_cpu: str
+    limit_default_memory: str
+    limit_max_cpu: str
+    limit_max_memory: str
+    enabled: bool
+    present_in_cluster: bool = False
+    active_vm_instances: int = 0
+    active_container_instances: int = 0
+    active_total_instances: int = 0
+    last_reconciled_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class ImageMeta(BaseModel):
     id: str
     name: str

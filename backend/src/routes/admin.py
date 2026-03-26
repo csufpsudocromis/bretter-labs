@@ -97,7 +97,7 @@ from ..services.tenant_context import (
     tenant_namespace_for_team,
 )
 from ..secret_codec import encrypt_secret, secret_is_configured
-from ..tables import Config, Image, ImageUploadTask, Instance, TeamQuota, Template, User
+from ..tables import Config, Image, ImageUploadTask, Instance, ManagedNamespace, TeamQuota, Template, User
 from ..tables import AdminAuditEvent
 from ..time_utils import utc_now
 
@@ -3667,6 +3667,9 @@ def list_quota_namespaces(
         available.add(configured)
     rows = session.exec(select(TeamQuota.namespace)).all()
     for row in rows:
+        available.add(normalize_namespace(row))
+    managed_rows = session.exec(select(ManagedNamespace.namespace)).all()
+    for row in managed_rows:
         available.add(normalize_namespace(row))
     try:
         core = kube._client()
