@@ -175,13 +175,6 @@ const UserPanel = () => {
   }, []);
 
   useEffect(() => {
-    templates.forEach((template) => {
-      void fetchVmPreflight(template.id);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templates]);
-
-  useEffect(() => {
     rememberAllowedOrigin(window.location.origin);
     rememberAllowedOrigin(api?.defaults?.baseURL || "");
   }, []);
@@ -433,13 +426,12 @@ const UserPanel = () => {
   const vmPreflightState = (templateId) => vmPreflight[String(templateId || "").trim()] || null;
   const vmTemplateCanStart = (templateId) => {
     const state = vmPreflightState(templateId);
-    if (!state) return false;
-    if (state.loading) return false;
-    return Boolean(state.ready);
+    if (state?.loading) return false;
+    return true;
   };
   const vmTemplateStartHint = (templateId) => {
     const state = vmPreflightState(templateId);
-    if (!state) return "Checking launch readiness...";
+    if (!state) return "";
     if (state.loading) return "Checking launch readiness...";
     if (state.ready) return "Ready";
     return String(state.blocking_reason || "Launch preflight failed");

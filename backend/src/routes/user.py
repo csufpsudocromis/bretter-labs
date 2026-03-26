@@ -125,10 +125,7 @@ def _elapsed_hint(started_at: datetime | None, *, timeout_minutes: int = _VM_BUI
         elapsed = f"{elapsed_minutes}m {rem_seconds:02d}s"
     else:
         elapsed = f"{rem_seconds}s"
-    return (
-        f"Elapsed: {elapsed}. "
-        f"If this exceeds {max(1, int(timeout_minutes))} minutes, verify PVC provisioning and storage class health."
-    )
+    return f"Elapsed: {elapsed}."
 
 
 def _status_feedback(
