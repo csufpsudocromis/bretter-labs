@@ -541,6 +541,8 @@ Release workflow hardening:
 - Publish workflow gates promotion through `publish -> trivy scan -> cosign sign/verify -> digest promote`.
 - Published images include SBOM + provenance attestations.
 - Production digest auto-pin writes release-tagged digest refs (`<repo>:vX.Y.Z@sha256:...`) for runtime/admin/frontend/runner images.
+- Production deploy workflow gates rollout proof on authenticated synthetic checks for VM launch, Guacamole RDP frame render, and admin image upload/finalize/delete.
+- Production deploy workflow runs automatically only for release digest-promotion commits (or explicit workflow dispatch).
 
 For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
 

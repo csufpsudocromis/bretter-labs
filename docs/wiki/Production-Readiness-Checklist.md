@@ -1,6 +1,6 @@
 # Production Readiness Checklist
 
-Last reviewed: March 20, 2026.
+Last reviewed: March 26, 2026.
 
 Use this checklist before first production deployment and for each release.
 
@@ -62,6 +62,7 @@ Use this checklist before first production deployment and for each release.
   - `kubectl apply --dry-run=server -k deploy/crds`
 - Run `scripts/production_go_live_proof.sh` after rollout and archive the generated report.
 - Keep `RUN_PRODUCTION_GO_LIVE_PROOF=1` for production postdeploy automation (default when `PRODUCTION_PROFILE=1`).
+- Ensure CI deploy proof path validates authenticated synthetic VM launch, Guacamole RDP frame, and admin image upload/finalize/delete.
 - If using `ORCHESTRATION_BACKEND=dual|crd`, run operator canary:
   - `NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh`
 - Run post-deploy API health, admin API smoke, and synthetic checks.
@@ -71,6 +72,7 @@ Use this checklist before first production deployment and for each release.
 - Verify backup/restore path for Postgres before go-live:
   - `NAMESPACE=labs ./scripts/restore_drill_postgres.sh`
   - or `NAMESPACE=labs RUN_RESTORE_DRILL=1 ./scripts/production_go_live_proof.sh`
+- Keep nightly restore drill strict backup validation enabled (`require_backup_cronjob=true`) so missing backup CronJobs fail the gate.
 - If off-cluster backup replication is enabled, verify `bretter-postgres-backup-replication` CronJob succeeds and encrypted object uploads are present.
 - Verify OpenAPI and frontend API type artifacts are up to date:
   - `python3 scripts/check_openapi_drift.py`

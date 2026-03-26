@@ -58,6 +58,19 @@ jobs:
           sudo mv kubectl /usr/local/bin/kubectl
           kubectl version --client
 
+      - name: Install qemu-img
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-utils
+          qemu-img --version
+
+      - name: Build synthetic upload fixture
+        run: |
+          set -euo pipefail
+          qemu-img create -f qcow2 "${RUNNER_TEMP}/synthetic-upload.qcow2" 64M
+          ls -lh "${RUNNER_TEMP}/synthetic-upload.qcow2"
+
       - name: Setup kubeconfig
         run: |
           set -euo pipefail
@@ -78,18 +91,26 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
-            NAMESPACE="${NAMESPACE}" \
-            HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
-            BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
-            SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.ci.yaml" \
-            REQUIRE_SITE_VALUES_FILE=1 \
-            ROLLBACK_ON_PROOF_FAILURE=1 \
-            ./scripts/deploy_production_safe.sh
+              NAMESPACE="${NAMESPACE}" \
+              HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.ci.yaml" \
+              REQUIRE_SITE_VALUES_FILE=1 \
+              SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 \
+              SYNTHETIC_IMAGE_UPLOAD_FILE="${RUNNER_TEMP}/synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_NAME="synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=1200 \
+              ROLLBACK_ON_PROOF_FAILURE=1 \
+              ./scripts/deploy_production_safe.sh
           else
             NAMESPACE="${NAMESPACE}" \
             HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
             BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
             REQUIRE_SITE_VALUES_FILE=0 \
+            SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 \
+            SYNTHETIC_IMAGE_UPLOAD_FILE="${RUNNER_TEMP}/synthetic-upload.qcow2" \
+            SYNTHETIC_IMAGE_UPLOAD_NAME="synthetic-upload.qcow2" \
+            SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=1200 \
             ROLLBACK_ON_PROOF_FAILURE=1 \
             ./scripts/deploy_production_safe.sh
           fi

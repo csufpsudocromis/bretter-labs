@@ -62,6 +62,8 @@ AUTOCLEANUP_SCHEDULE="${AUTOCLEANUP_SCHEDULE:-*/15 * * * *}"
 AUTOCLEANUP_HELPER_MAX_AGE_MINUTES="${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES:-30}"
 AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES="${AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES:-60}"
 AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES="${AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES:-180}"
+AUTOCLEANUP_SYSTEM_POD_HYGIENE_ENABLED="${AUTOCLEANUP_SYSTEM_POD_HYGIENE_ENABLED:-1}"
+AUTOCLEANUP_SYSTEM_POD_MAX_AGE_MINUTES="${AUTOCLEANUP_SYSTEM_POD_MAX_AGE_MINUTES:-20}"
 AUTOCLEANUP_RESTART_ALERT_COUNT="${AUTOCLEANUP_RESTART_ALERT_COUNT:-3}"
 AUTOCLEANUP_NODEFS_WARN_PCT="${AUTOCLEANUP_NODEFS_WARN_PCT:-70}"
 AUTOCLEANUP_NODEFS_CRITICAL_PCT="${AUTOCLEANUP_NODEFS_CRITICAL_PCT:-85}"
@@ -523,6 +525,15 @@ validate_autocleanup_config() {
   fi
   if ! is_uint "$AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES" || [ "$AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES" -lt 1 ]; then
     fail "AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES must be an integer >= 1."
+  fi
+  case "$AUTOCLEANUP_SYSTEM_POD_HYGIENE_ENABLED" in
+    0 | 1) ;;
+    *) fail "AUTOCLEANUP_SYSTEM_POD_HYGIENE_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ "$AUTOCLEANUP_SYSTEM_POD_HYGIENE_ENABLED" -eq 1 ]; then
+    if ! is_uint "$AUTOCLEANUP_SYSTEM_POD_MAX_AGE_MINUTES" || [ "$AUTOCLEANUP_SYSTEM_POD_MAX_AGE_MINUTES" -lt 1 ]; then
+      fail "AUTOCLEANUP_SYSTEM_POD_MAX_AGE_MINUTES must be an integer >= 1."
+    fi
   fi
   if ! is_uint "$AUTOCLEANUP_RESTART_ALERT_COUNT" || [ "$AUTOCLEANUP_RESTART_ALERT_COUNT" -lt 1 ]; then
     fail "AUTOCLEANUP_RESTART_ALERT_COUNT must be an integer >= 1."
@@ -4242,6 +4253,9 @@ spec:
                   HELPER_MAX_MINUTES=${AUTOCLEANUP_HELPER_MAX_AGE_MINUTES}
                   FINISHED_MAX_MINUTES=${AUTOCLEANUP_FINISHED_MAX_AGE_MINUTES}
                   STALE_UPLOAD_MAX_MINUTES=${AUTOCLEANUP_STALE_UPLOAD_MAX_MINUTES}
+                  SYSTEM_POD_HYGIENE_ENABLED=${AUTOCLEANUP_SYSTEM_POD_HYGIENE_ENABLED}
+                  SYSTEM_POD_MAX_MINUTES=${AUTOCLEANUP_SYSTEM_POD_MAX_AGE_MINUTES}
+                  SYSTEM_POD_NAME_RE='^bretter-(slo-|cleanup|ghcr-access-check-|kubelet-serving-csr-approver-|labinstance-controller-smoke-|labimageimport-controller-smoke-|postgres-backup|postgres-backup-replication|post-deploy-check)'
                   RESTART_ALERT_COUNT=${AUTOCLEANUP_RESTART_ALERT_COUNT}
                   NODEFS_WARN_PCT=${AUTOCLEANUP_NODEFS_WARN_PCT}
                   NODEFS_CRITICAL_PCT=${AUTOCLEANUP_NODEFS_CRITICAL_PCT}
@@ -4314,6 +4328,14 @@ spec:
                       fi
                     fi
                     age_min=\$(( (now_epoch - created_epoch) / 60 ))
+
+                    if [ "\$SYSTEM_POD_HYGIENE_ENABLED" -eq 1 ] &&
+                      [[ "\$phase" == "Failed" || "\$phase" == "Succeeded" ]] &&
+                      [[ "\$name" =~ \$SYSTEM_POD_NAME_RE ]] &&
+                      [ "\$age_min" -ge "\$SYSTEM_POD_MAX_MINUTES" ]; then
+                      kubectl -n "\$NS" delete pod "\$name" --ignore-not-found=true >/dev/null || true
+                      continue
+                    fi
 
                     if [[ "\$name" == image-sync-* ]]; then
                       if [[ "\$phase" == "Failed" || "\$phase" == "Succeeded" ]]; then

@@ -3,12 +3,18 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 from urllib.parse import urljoin
 
 import requests
+
+ALLOWED_IMAGE_UPLOAD_SUFFIXES = {".vhd", ".vhdx", ".qcow", ".qcow2", ".vdi"}
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -42,6 +48,43 @@ def _fail(message: str) -> None:
     raise SystemExit(1)
 
 
+def _resolve_image_upload_fixture(require_upload_check: bool) -> tuple[Path | None, str, bool]:
+    fixture_path = str(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_FILE") or "").strip()
+    fixture_name_override = str(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_NAME") or "").strip()
+    if fixture_path:
+        candidate = Path(fixture_path).expanduser()
+        if not candidate.is_file():
+            _fail(f"SYNTHETIC_IMAGE_UPLOAD_FILE does not exist or is not a file: {candidate}")
+        filename = fixture_name_override or candidate.name
+        if Path(filename).suffix.lower() not in ALLOWED_IMAGE_UPLOAD_SUFFIXES:
+            _fail(
+                "SYNTHETIC_IMAGE_UPLOAD_NAME/SYNTHETIC_IMAGE_UPLOAD_FILE must end with one of "
+                f"{sorted(ALLOWED_IMAGE_UPLOAD_SUFFIXES)}."
+            )
+        return candidate, filename, False
+    if not require_upload_check:
+        return None, "", False
+    qemu_img = shutil.which("qemu-img")
+    if not qemu_img:
+        _fail(
+            "SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 requires SYNTHETIC_IMAGE_UPLOAD_FILE "
+            "or qemu-img available in PATH."
+        )
+    fixture_dir = Path(tempfile.mkdtemp(prefix="blabs-synth-upload-"))
+    candidate = fixture_dir / "synthetic-upload.qcow2"
+    try:
+        subprocess.run(
+            [qemu_img, "create", "-f", "qcow2", str(candidate), "64M"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        shutil.rmtree(fixture_dir, ignore_errors=True)
+        _fail(f"failed to auto-generate qcow2 fixture with qemu-img: {(exc.stderr or exc.stdout or '').strip()[:300]}")
+    return candidate, candidate.name, True
+
+
 def _wait_for(
     *,
     session: requests.Session,
@@ -65,6 +108,41 @@ def _wait_for(
                     return row
         time.sleep(poll_seconds)
     _fail(f"timeout waiting for instance {instance_id} in {list_path}")
+    return {}
+
+
+def _wait_for_upload_task(
+    *,
+    session: requests.Session,
+    api_base: str,
+    verify_tls: bool,
+    task_id: str,
+    deadline_epoch: float,
+    poll_seconds: float,
+) -> dict[str, Any]:
+    last_status = ""
+    last_detail = ""
+    while time.time() < deadline_epoch:
+        resp = _request(
+            session,
+            method="GET",
+            api_base=api_base,
+            path_or_url=f"/admin/images/upload-tasks/{task_id}",
+            verify_tls=verify_tls,
+        )
+        if resp.status_code == 200:
+            payload = resp.json() or {}
+            last_status = str(payload.get("status") or "").strip().lower()
+            last_detail = str(payload.get("detail") or payload.get("error") or "").strip()
+            if last_status in {"completed", "failed"}:
+                return payload
+            time.sleep(poll_seconds)
+            continue
+        if resp.status_code == 404:
+            time.sleep(poll_seconds)
+            continue
+        _fail(f"upload task refresh failed ({resp.status_code}): {resp.text[:300]}")
+    _fail(f"timeout waiting for upload task {task_id}: status={last_status or 'unknown'} detail={last_detail[:200]}")
     return {}
 
 
@@ -177,6 +255,55 @@ def _require_rdp_frame(
     _fail("timed out waiting for Guacamole RDP frame markers.")
 
 
+def _run_image_upload_finalize_check(
+    *,
+    session: requests.Session,
+    api_base: str,
+    verify_tls: bool,
+    upload_path: Path,
+    upload_filename: str,
+    deadline_epoch: float,
+    poll_seconds: float,
+) -> None:
+    with upload_path.open("rb") as handle:
+        upload_resp = session.post(
+            urljoin(api_base + "/", "admin/images"),
+            files={"file": (upload_filename, handle, "application/octet-stream")},
+            timeout=180,
+            verify=verify_tls,
+        )
+    if upload_resp.status_code != 202:
+        _fail(f"image upload submit failed ({upload_resp.status_code}): {upload_resp.text[:300]}")
+    upload_payload = upload_resp.json() or {}
+    task_id = str(upload_payload.get("task_id") or "").strip()
+    if not task_id:
+        _fail("image upload response missing task_id")
+    task_payload = _wait_for_upload_task(
+        session=session,
+        api_base=api_base,
+        verify_tls=verify_tls,
+        task_id=task_id,
+        deadline_epoch=deadline_epoch,
+        poll_seconds=poll_seconds,
+    )
+    status = str(task_payload.get("status") or "").strip().lower()
+    if status != "completed":
+        detail = str(task_payload.get("error") or task_payload.get("detail") or "upload finalize failed").strip()
+        _fail(f"image upload/finalize failed: {detail[:300]}")
+    image_id = str(task_payload.get("image_id") or "").strip()
+    if not image_id:
+        _fail("image upload task completed but image_id was missing")
+    image_delete = _request(
+        session,
+        method="DELETE",
+        api_base=api_base,
+        path_or_url=f"/admin/images/{image_id}",
+        verify_tls=verify_tls,
+    )
+    if image_delete.status_code not in {204, 404}:
+        _fail(f"image cleanup delete failed ({image_delete.status_code}): {image_delete.text[:300]}")
+
+
 def main() -> int:
     api_base = str(os.environ.get("SYNTHETIC_API_BASE") or "").strip().rstrip("/")
     username = str(os.environ.get("SYNTHETIC_USERNAME") or "").strip()
@@ -184,10 +311,12 @@ def main() -> int:
     verify_tls = _bool_env("SYNTHETIC_VERIFY_TLS", True)
     require_templates = _bool_env("SYNTHETIC_REQUIRE_TEMPLATES", True)
     require_rdp_template = _bool_env("SYNTHETIC_REQUIRE_RDP_TEMPLATE", False)
+    require_image_upload_check = _bool_env("SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK", False)
     timeout_seconds = max(120, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "900"))
     poll_seconds = max(1.0, float(os.environ.get("SYNTHETIC_POLL_SECONDS") or "3"))
     rdp_marker_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS") or "180"))
     container_ws_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_CONTAINER_WS_TIMEOUT_SECONDS") or "180"))
+    image_upload_timeout_seconds = max(60, int(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS") or "1200"))
     single_lab_limit_message = "you already have a virtual lab running"
 
     if not api_base:
@@ -200,6 +329,9 @@ def main() -> int:
     deadline = time.time() + timeout_seconds
     vm_id = ""
     container_id = ""
+    upload_fixture_path, upload_fixture_name, upload_fixture_generated = _resolve_image_upload_fixture(
+        require_upload_check=require_image_upload_check
+    )
 
     try:
         health = _request(session, method="GET", api_base=api_base, path_or_url="/health", verify_tls=verify_tls)
@@ -221,6 +353,17 @@ def main() -> int:
         )
         if login.status_code != 200:
             _fail(f"login failed ({login.status_code}): {login.text[:300]}")
+
+        if upload_fixture_path and upload_fixture_name:
+            _run_image_upload_finalize_check(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                upload_path=upload_fixture_path,
+                upload_filename=upload_fixture_name,
+                deadline_epoch=min(deadline, time.time() + image_upload_timeout_seconds),
+                poll_seconds=poll_seconds,
+            )
 
         vm_templates_resp = _request(
             session, method="GET", api_base=api_base, path_or_url="/user/templates", verify_tls=verify_tls
@@ -401,10 +544,18 @@ def main() -> int:
         container_id = ""
 
         _request(session, method="POST", api_base=api_base, path_or_url="/auth/logout", verify_tls=verify_tls)
-        print(
-            "PASS: synthetic validation succeeded "
-            "(login -> VM launch -> Guacamole RDP readiness/frame -> VM teardown -> container launch/websocket readiness/connect/delete)."
+        flow_parts = ["login"]
+        if upload_fixture_path and upload_fixture_name:
+            flow_parts.append("admin image upload/finalize/delete")
+        flow_parts.extend(
+            [
+                "VM launch",
+                "Guacamole RDP readiness/frame",
+                "VM teardown",
+                "container launch/websocket readiness/connect/delete",
+            ]
         )
+        print("PASS: synthetic validation succeeded (" + " -> ".join(flow_parts) + ").")
         return 0
     finally:
         if vm_id:
@@ -433,6 +584,8 @@ def main() -> int:
             _request(session, method="POST", api_base=api_base, path_or_url="/auth/logout", verify_tls=verify_tls)
         except Exception:
             pass
+        if upload_fixture_generated and upload_fixture_path:
+            shutil.rmtree(str(upload_fixture_path.parent), ignore_errors=True)
 
 
 if __name__ == "__main__":

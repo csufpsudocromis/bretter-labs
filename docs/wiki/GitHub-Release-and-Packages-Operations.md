@@ -1,6 +1,6 @@
 # GitHub Release and Packages Operations
 
-Last reviewed: March 20, 2026.
+Last reviewed: March 26, 2026.
 
 This page is the operator runbook for repository metadata, releases, CI guardrails, and GHCR package publishing.
 
@@ -51,6 +51,7 @@ Pipeline gates:
 2. scan published refs with Trivy (HIGH/CRITICAL)
 3. keyless sign and verify with Cosign
 4. promote digests into `deploy/helm/values-production.yaml` (only after gates pass)
+5. deploy workflow proof gate validates authenticated synthetic VM launch + Guacamole RDP frame + admin image upload/finalize/delete
 
 Inputs:
 
@@ -110,6 +111,7 @@ Release branch (`release/**`) expectations:
 - Post-deploy synthetic/API smoke runs on push + PR.
 - Restore drill workflow runs on push + PR.
 - Playwright Guacamole RDP browser smoke runs on push + PR.
+- Nightly restore drill defaults to strict backup-CronJob enforcement (`require_backup_cronjob=true`).
 - Configure these jobs as required branch checks in GitHub rulesets/branch protection.
 
 ## Common GitHub-side failures

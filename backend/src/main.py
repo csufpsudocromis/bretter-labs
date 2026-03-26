@@ -103,8 +103,14 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_CONTAINER_CONNECT_INSECURE_TLS must be false when BLABS_PRODUCTION_PROFILE=true.")
     if not bool(getattr(settings, "container_signature_verification_enabled", False)):
         errors.append("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED must be true when BLABS_PRODUCTION_PROFILE=true.")
-    if not str(getattr(settings, "container_signature_key_ref", "") or "").strip():
+    signature_key_ref = str(getattr(settings, "container_signature_key_ref", "") or "").strip()
+    if not signature_key_ref:
         errors.append("BLABS_CONTAINER_SIGNATURE_KEY_REF must be set when BLABS_PRODUCTION_PROFILE=true.")
+    elif signature_key_ref.startswith("/etc/bretter-signing/"):
+        if not str(getattr(settings, "container_signature_key_secret_name", "") or "").strip():
+            errors.append(
+                "BLABS_CONTAINER_SIGNATURE_KEY_SECRET_NAME must be set when BLABS_CONTAINER_SIGNATURE_KEY_REF uses /etc/bretter-signing/."
+            )
     if not bool(getattr(settings, "cors_enterprise_profile", False)):
         errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
     if team_namespace_mode != "per_team":
@@ -118,6 +124,8 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_CORS_ALLOWED_ORIGINS must not include localhost/127.0.0.1 in production.")
     if not str(getattr(settings, "kube_node_selector_value", "") or "").strip():
         errors.append("BLABS_KUBE_NODE_SELECTOR_VALUE must be set when BLABS_PRODUCTION_PROFILE=true.")
+    if not str(getattr(settings, "kube_vm_storage_class", "") or "").strip():
+        errors.append("BLABS_KUBE_VM_STORAGE_CLASS must be set when BLABS_PRODUCTION_PROFILE=true.")
     secrets_encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
     if not secrets_encryption_key:
         errors.append("BLABS_SECRETS_ENCRYPTION_KEY must be set when BLABS_PRODUCTION_PROFILE=true.")

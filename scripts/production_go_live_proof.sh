@@ -22,6 +22,10 @@ POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admi
 POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
 RDP_SLO_AUTH_SECRET_NAME="${RDP_SLO_AUTH_SECRET_NAME:-bretter-userflow-slo-api-auth}"
 RDP_SLO_AUTH_PASSWORD_KEY="${RDP_SLO_AUTH_PASSWORD_KEY:-password}"
+SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK="${SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK:-0}"
+SYNTHETIC_IMAGE_UPLOAD_FILE="${SYNTHETIC_IMAGE_UPLOAD_FILE:-}"
+SYNTHETIC_IMAGE_UPLOAD_NAME="${SYNTHETIC_IMAGE_UPLOAD_NAME:-}"
+SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS="${SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS:-1200}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="${REPORT_DIR}/production-go-live-${timestamp}.txt"
@@ -152,6 +156,8 @@ if not is_truthy(env_values.get("BLABS_CORS_ENTERPRISE_PROFILE", "")):
     errors.append("BLABS_CORS_ENTERPRISE_PROFILE is not enabled in backend deployment env.")
 if not is_truthy(env_values.get("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED", "")):
     errors.append("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED is not enabled in backend deployment env.")
+if not str(env_values.get("BLABS_KUBE_VM_STORAGE_CLASS", "")).strip():
+    errors.append("BLABS_KUBE_VM_STORAGE_CLASS is empty in backend deployment env.")
 
 cors_origins = env_values.get("BLABS_CORS_ALLOWED_ORIGINS", "")
 if not cors_origins:
@@ -214,6 +220,7 @@ print(f"node_external_host={env_values.get('BLABS_KUBE_NODE_EXTERNAL_HOST', '')}
 print(f"public_scheme={env_values.get('BLABS_PUBLIC_SCHEME', '')}")
 print(f"cors_allowed_origins={cors_origins}")
 print(f"orchestration_backend={env_values.get('BLABS_ORCHESTRATION_BACKEND', '')}")
+print(f"kube_vm_storage_class={env_values.get('BLABS_KUBE_VM_STORAGE_CLASS', '')}")
 PY
 )" || fail_check "backend deployment production env + secret wiring"
 
@@ -381,6 +388,10 @@ else
       SYNTHETIC_PASSWORD="$synthetic_password" \
       SYNTHETIC_VERIFY_TLS=0 \
       SYNTHETIC_REQUIRE_TEMPLATES=1 \
+      SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK="${SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK}" \
+      SYNTHETIC_IMAGE_UPLOAD_FILE="${SYNTHETIC_IMAGE_UPLOAD_FILE}" \
+      SYNTHETIC_IMAGE_UPLOAD_NAME="${SYNTHETIC_IMAGE_UPLOAD_NAME}" \
+      SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS="${SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS}" \
       "$ROOT_DIR/scripts/post_deploy_synthetic_check.py"
   fi
 fi

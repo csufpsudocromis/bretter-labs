@@ -89,6 +89,7 @@ def main() -> int:
     values_prod_site_template_path = root / "deploy" / "helm" / "values-production-site.template.yaml"
     setup_script_path = root / "scripts" / "setup.sh"
     publish_workflow_path = root / ".github" / "workflows" / "publish-and-pin-images.yml"
+    deploy_production_workflow_path = root / ".github" / "workflows" / "deploy-production.yml"
     post_deploy_synthetic_workflow_path = root / ".github" / "workflows" / "post-deploy-synthetic.yml"
     nightly_restore_workflow_path = root / ".github" / "workflows" / "nightly-restore-drill.yml"
     deploy_userflow_workflow_path = root / ".github" / "workflows" / "deploy-userflow-smoke.yml"
@@ -361,6 +362,22 @@ def main() -> int:
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must enable provenance attestations for image builds."
             )
+    if not deploy_production_workflow_path.exists():
+        errors.append(".github/workflows/deploy-production.yml is missing.")
+    else:
+        deploy_workflow = _read_text(deploy_production_workflow_path)
+        required_deploy_markers = (
+            "SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1",
+            "SYNTHETIC_IMAGE_UPLOAD_FILE=",
+            "SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=",
+            "qemu-img create -f qcow2",
+        )
+        for marker in required_deploy_markers:
+            if marker not in deploy_workflow:
+                errors.append(
+                    ".github/workflows/deploy-production.yml must enforce post-deploy upload/finalize synthetic gate "
+                    f"(missing marker: {marker})."
+                )
 
     for workflow_path, label in (
         (post_deploy_synthetic_workflow_path, "post-deploy synthetic"),
@@ -378,6 +395,16 @@ def main() -> int:
             errors.append(
                 f"{workflow_path.relative_to(root)} must run on push to release/** for required release gates."
             )
+        if label == "nightly restore drill":
+            if 'default: "true"' not in workflow_text:
+                errors.append(".github/workflows/nightly-restore-drill.yml must default require_backup_cronjob=true.")
+            if (
+                "REQUIRE_BACKUP_CRONJOB: ${{ github.event.inputs.require_backup_cronjob || 'true' }}"
+                not in workflow_text
+            ):
+                errors.append(
+                    ".github/workflows/nightly-restore-drill.yml must enforce require_backup_cronjob=true by default."
+                )
 
     if not playwright_rdp_workflow_path.exists():
         errors.append(".github/workflows/playwright-rdp-smoke.yml is missing.")
