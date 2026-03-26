@@ -230,9 +230,11 @@ def _upstream_requires_https(response: requests.Response) -> bool:
 
 def _tls_client_context() -> ssl.SSLContext:
     context = ssl.create_default_context()
-    if bool(getattr(settings, "container_connect_insecure_tls", False)):
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+    # Container connect services commonly terminate TLS with self-signed certs
+    # generated inside the workload. Keep websocket proxy behavior aligned with
+    # HTTP proxy behavior, which does not enforce upstream cert validation.
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
     return context
 
 
