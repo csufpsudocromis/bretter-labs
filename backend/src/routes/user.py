@@ -455,6 +455,54 @@ def _vm_uses_privileged_runtime() -> bool:
     return vm_launch_requires_privileged_runtime()
 
 
+def _resolve_vm_runtime_namespace_for_image(runtime_kube, desired_namespace: str, image: Image) -> str:
+    runtime_namespace = str(desired_namespace or "").strip() or str(settings.kube_namespace or "labs").strip() or "labs"
+    source_pvc_name = str(getattr(image, "source_pvc", "") or "").strip()
+    if not source_pvc_name:
+        return runtime_namespace
+    try:
+        source_pvc, source_namespace = runtime_kube.resolve_vm_source_pvc(
+            image_source_pvc=source_pvc_name,
+            runtime_namespace=runtime_namespace,
+        )
+    except Exception:
+        return runtime_namespace
+    source_namespace = str(source_namespace or "").strip()
+    if not source_namespace or source_namespace == runtime_namespace:
+        return runtime_namespace
+
+    source_request = None
+    if source_pvc.spec and source_pvc.spec.resources and source_pvc.spec.resources.requests:
+        source_request = source_pvc.spec.resources.requests.get("storage")
+    source_storage_class = str(getattr(source_pvc.spec, "storage_class_name", "") or "").strip() or None
+    try:
+        if runtime_kube.supports_cross_namespace_pvc_clone(
+            source_pvc_name=source_pvc_name,
+            source_namespace=source_namespace,
+            target_namespace=runtime_namespace,
+            storage_request=source_request,
+            storage_class_name=source_storage_class,
+        ):
+            return runtime_namespace
+    except Exception:
+        logger.warning(
+            "Cross-namespace PVC clone capability probe failed for source %s (%s -> %s)",
+            source_pvc_name,
+            source_namespace,
+            runtime_namespace,
+            exc_info=True,
+        )
+
+    logger.warning(
+        "Cross-namespace PVC clone unsupported for source %s (%s -> %s); falling back VM runtime namespace to %s.",
+        source_pvc_name,
+        source_namespace,
+        runtime_namespace,
+        source_namespace,
+    )
+    return source_namespace
+
+
 def _instance_namespace(record: Instance, user: User | None = None) -> str:
     explicit = str(getattr(record, "namespace", "") or "").strip()
     if explicit:
@@ -1425,6 +1473,7 @@ def start_vm(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
+    runtime_namespace = _resolve_vm_runtime_namespace_for_image(runtime_kube, runtime_namespace, image)
     preflight = _vm_preflight(
         runtime_kube=runtime_kube,
         runtime_namespace=runtime_namespace,
@@ -1679,6 +1728,7 @@ def restart_vm(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
+    runtime_namespace = _resolve_vm_runtime_namespace_for_image(runtime_kube, runtime_namespace, image)
     try:
         ensure_team_runtime_namespace(
             runtime_kube,

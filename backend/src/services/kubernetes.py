@@ -100,6 +100,7 @@ class KubernetesService:
         self._core = core_api
         self._networking = networking_api
         self._namespace_override = str(namespace_override or "").strip()
+        self._cross_namespace_clone_support_cache: dict[tuple[str, str], bool] = {}
 
     def _client(self):
         if self._core is None:
@@ -352,6 +353,76 @@ class KubernetesService:
                 namespace=source_namespace,
             )
         }
+
+    def supports_cross_namespace_pvc_clone(
+        self,
+        *,
+        source_pvc_name: str,
+        source_namespace: str,
+        target_namespace: str,
+        storage_request: object | None = None,
+        storage_class_name: str | None = None,
+    ) -> bool:
+        source_ns = str(source_namespace or "").strip()
+        target_ns = str(target_namespace or "").strip()
+        source_name = str(source_pvc_name or "").strip()
+        if not source_name or not source_ns or not target_ns:
+            return False
+        if source_ns == target_ns:
+            return True
+
+        cache_key = (source_ns, target_ns)
+        cached = self._cross_namespace_clone_support_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        core = self._client()
+        probe_name = f"blabs-xns-clone-probe-{uuid4().hex[:8]}"
+        request_size = storage_request
+        sc_name = str(storage_class_name or "").strip() or None
+        if request_size is None or not sc_name:
+            try:
+                source = core.read_namespaced_persistent_volume_claim(name=source_name, namespace=source_ns)
+                if request_size is None and source.spec and source.spec.resources and source.spec.resources.requests:
+                    request_size = source.spec.resources.requests.get("storage")
+                if not sc_name:
+                    sc_name = str(source.spec.storage_class_name or "").strip() or None
+            except ApiException:
+                self._cross_namespace_clone_support_cache[cache_key] = False
+                return False
+
+        if request_size is None:
+            self._cross_namespace_clone_support_cache[cache_key] = False
+            return False
+
+        body = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(name=probe_name),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=["ReadWriteOnce"],
+                storage_class_name=sc_name,
+                resources=client.V1ResourceRequirements(requests={"storage": request_size}),
+                data_source_ref=client.V1TypedObjectReference(
+                    api_group="",
+                    kind="PersistentVolumeClaim",
+                    name=source_name,
+                    namespace=source_ns,
+                ),
+            ),
+        )
+        supported = False
+        try:
+            probe = core.create_namespaced_persistent_volume_claim(namespace=target_ns, body=body, dry_run="All")
+            data_source_ref = getattr(getattr(probe, "spec", None), "data_source_ref", None)
+            supported = (
+                str(getattr(data_source_ref, "kind", "") or "").strip() == "PersistentVolumeClaim"
+                and str(getattr(data_source_ref, "name", "") or "").strip() == source_name
+                and str(getattr(data_source_ref, "namespace", "") or "").strip() == source_ns
+            )
+        except ApiException:
+            supported = False
+
+        self._cross_namespace_clone_support_cache[cache_key] = supported
+        return supported
 
     def resolve_vm_source_pvc(
         self,
