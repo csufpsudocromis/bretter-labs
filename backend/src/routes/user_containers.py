@@ -1305,6 +1305,7 @@ async def proxy_container_connect_ws(
     await websocket.accept(subprotocol=selected_subprotocol)
 
     attempted_urls: list[str] = []
+    attempt_errors: list[str] = []
     last_exc: Exception | None = None
     for scheme in _container_ws_schemes(template, container_port):
         upstream_url = f"{scheme}://{upstream_host}:{container_port}{upstream_path}"
@@ -1357,14 +1358,16 @@ async def proxy_container_connect_ws(
                 return
         except Exception as exc:
             last_exc = exc
+            attempt_errors.append(f"{upstream_url} -> {type(exc).__name__}: {exc}")
             continue
 
     exc_info = (type(last_exc), last_exc, last_exc.__traceback__) if last_exc else None
     logger.warning(
-        "Container websocket proxy failed for instance %s path %s attempted=%s",
+        "Container websocket proxy failed for instance %s path %s attempted=%s errors=%s",
         instance_id,
         proxy_path,
         ", ".join(attempted_urls),
+        " | ".join(attempt_errors),
         exc_info=exc_info,
     )
     try:
