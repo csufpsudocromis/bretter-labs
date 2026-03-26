@@ -468,6 +468,18 @@ spec:
                 secretKeyRef:
                   name: bretter-postgres
                   key: BLABS_DATABASE_URL
+            - name: BLABS_DATABASE_POOL_SIZE
+              value: "__DATABASE_POOL_SIZE__"
+            - name: BLABS_DATABASE_POOL_MAX_OVERFLOW
+              value: "__DATABASE_POOL_MAX_OVERFLOW__"
+            - name: BLABS_DATABASE_POOL_TIMEOUT_SECONDS
+              value: "__DATABASE_POOL_TIMEOUT_SECONDS__"
+            - name: BLABS_DATABASE_POOL_RECYCLE_SECONDS
+              value: "__DATABASE_POOL_RECYCLE_SECONDS__"
+            - name: BLABS_DATABASE_STATEMENT_TIMEOUT_MS
+              value: "__DATABASE_STATEMENT_TIMEOUT_MS__"
+            - name: BLABS_DATABASE_SLOW_QUERY_MS
+              value: "__DATABASE_SLOW_QUERY_MS__"
             - name: BLABS_ADMIN_DEFAULT_PASSWORD
               value: "__ADMIN_BOOTSTRAP_PASSWORD__"
             - name: BLABS_ERROR_LOG_FILE_PATH
@@ -532,10 +544,16 @@ spec:
               value: "__LINUX_EFI_ENABLED__"
             - name: BLABS_LINUX_CPU_MODEL
               value: __LINUX_CPU_MODEL__
+            - name: BLABS_KUBE_USE_KVM
+              value: "__KUBE_USE_KVM__"
             - name: BLABS_VM_NET_BACKEND
               value: __VM_NET_BACKEND__
             - name: BLABS_VM_RUNNER_PRIVILEGED
               value: "__VM_RUNNER_PRIVILEGED__"
+            - name: BLABS_VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED
+              value: "__VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED__"
+            - name: BLABS_VM_PRIVILEGED_NAMESPACE_PREFIX
+              value: "__VM_PRIVILEGED_NAMESPACE_PREFIX__"
             - name: BLABS_VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY
               value: "__VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY__"
             - name: BLABS_VM_CONSOLE_SOURCE_CIDRS

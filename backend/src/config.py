@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     storage_root: str = "/mnt/lab-images"
     database_path: str = "backend/data/app.db"
     database_url: str = ""
+    database_pool_size: int = 20
+    database_pool_max_overflow: int = 40
+    database_pool_timeout_seconds: int = 30
+    database_pool_recycle_seconds: int = 1800
+    database_statement_timeout_ms: int = 15000
+    database_slow_query_ms: int = 500
     require_schema_ready: bool = True
     expected_alembic_revision: str = ""
     kube_namespace: str = "labs"
@@ -76,6 +82,8 @@ class Settings(BaseSettings):
     linux_cpu_model: str = "host"
     vm_net_backend: str = "user"
     vm_runner_privileged: bool = False
+    vm_privileged_runtime_isolation_enabled: bool = True
+    vm_privileged_namespace_prefix: str = "labs-vm-priv-"
     vm_vhost_net_enabled: bool = True
     vm_net_multiqueue_enabled: bool = True
     vm_console_external_traffic_policy: str = "Local"
@@ -87,6 +95,8 @@ class Settings(BaseSettings):
     vm_runner_anti_affinity_enabled: bool = True
     launch_reserved_cpu_m: int = 1000
     launch_reserved_memory_mb: int = 2048
+    launch_admission_pending_pvc_block_minutes: int = 10
+    launch_admission_pending_pvc_block_count: int = 2
     container_ingress_enabled: bool = False
     container_ingress_class: str = ""
     container_ingress_base_domain: str = ""

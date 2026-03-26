@@ -123,6 +123,20 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             errors.append(f"{key} must be an integer >= 1 (found: {raw!r}).")
         return parsed
 
+    def get_non_negative_int(key: str, *, default: int = 0) -> int:
+        raw = get_text(key)
+        if not raw:
+            return default
+        try:
+            parsed = int(raw)
+        except ValueError:
+            errors.append(f"{key} must be an integer >= 0 (found: {raw!r}).")
+            return default
+        if parsed < 0:
+            errors.append(f"{key} must be an integer >= 0 (found: {raw!r}).")
+            return default
+        return parsed
+
     def get_percent(key: str) -> int:
         parsed = get_uint(key)
         if parsed > 100:
@@ -186,6 +200,8 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
     orchestration_backend = get_text("ORCHESTRATION_BACKEND").lower() or "db"
     if orchestration_backend not in {"db", "dual", "crd"}:
         errors.append("ORCHESTRATION_BACKEND must be one of: db, dual, crd.")
+    if orchestration_backend == "db":
+        errors.append("ORCHESTRATION_BACKEND must be dual or crd for production.")
     if orchestration_backend in {"dual", "crd"}:
         if not get_text("LABINSTANCE_CRD_GROUP"):
             errors.append("LABINSTANCE_CRD_GROUP is required when ORCHESTRATION_BACKEND is dual/crd.")
@@ -224,6 +240,43 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
         if not _looks_placeholder(value):
             continue
         errors.append(f"{key} appears unset/placeholder and must be overridden for production.")
+
+    kube_use_kvm = get_bool("KUBE_USE_KVM", default=True)
+    vm_runner_privileged = get_bool("VM_RUNNER_PRIVILEGED", default=False)
+    vm_net_backend = get_text("VM_NET_BACKEND").lower() or "user"
+    vm_privileged_runtime_isolation_enabled = get_bool("VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED", default=True)
+    vm_privileged_namespace_prefix = get_text("VM_PRIVILEGED_NAMESPACE_PREFIX")
+    if vm_privileged_runtime_isolation_enabled and _looks_placeholder(vm_privileged_namespace_prefix):
+        errors.append(
+            "VM_PRIVILEGED_NAMESPACE_PREFIX must be set when VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED is enabled."
+        )
+    elif vm_privileged_namespace_prefix and not vm_privileged_namespace_prefix.endswith("-"):
+        errors.append("VM_PRIVILEGED_NAMESPACE_PREFIX must end with '-' for deterministic namespace names.")
+    if (
+        kube_use_kvm or vm_runner_privileged or vm_net_backend == "tap-nat"
+    ) and not vm_privileged_runtime_isolation_enabled:
+        errors.append(
+            "VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED must be enabled when privileged VM runners are required."
+        )
+
+    database_pool_size = get_uint("DATABASE_POOL_SIZE")
+    database_pool_max_overflow = get_non_negative_int("DATABASE_POOL_MAX_OVERFLOW", default=0)
+    database_pool_timeout_seconds = get_uint("DATABASE_POOL_TIMEOUT_SECONDS")
+    database_pool_recycle_seconds = get_uint("DATABASE_POOL_RECYCLE_SECONDS")
+    database_statement_timeout_ms = get_uint("DATABASE_STATEMENT_TIMEOUT_MS")
+    database_slow_query_ms = get_uint("DATABASE_SLOW_QUERY_MS")
+    if database_pool_recycle_seconds and database_pool_recycle_seconds < 30:
+        errors.append("DATABASE_POOL_RECYCLE_SECONDS must be >= 30.")
+    if database_statement_timeout_ms and database_statement_timeout_ms < 1000:
+        errors.append("DATABASE_STATEMENT_TIMEOUT_MS must be >= 1000 in production.")
+    if database_slow_query_ms and database_slow_query_ms > 2000:
+        errors.append("DATABASE_SLOW_QUERY_MS must be <= 2000 in production.")
+    if database_pool_size and database_pool_size < 5:
+        errors.append("DATABASE_POOL_SIZE must be >= 5 in production.")
+    if database_pool_timeout_seconds and database_pool_timeout_seconds < 5:
+        errors.append("DATABASE_POOL_TIMEOUT_SECONDS must be >= 5 in production.")
+    if database_pool_max_overflow > 100:
+        warnings.append("DATABASE_POOL_MAX_OVERFLOW is very high (>100); validate DB connection limits.")
 
     team_namespace_mode = get_text("TEAM_NAMESPACE_MODE").lower() or "shared"
     if team_namespace_mode != "per_team":
@@ -301,9 +354,7 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
 
     backup_replication_enabled = get_bool("ENABLE_POSTGRES_BACKUP_REPLICATION", default=False)
     if not backup_replication_enabled:
-        warnings.append(
-            "ENABLE_POSTGRES_BACKUP_REPLICATION is disabled; off-cluster encrypted backup replication is recommended."
-        )
+        errors.append("ENABLE_POSTGRES_BACKUP_REPLICATION must be enabled for production.")
     else:
         if _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_BUCKET")):
             errors.append("POSTGRES_BACKUP_REPLICATION_BUCKET must be set when backup replication is enabled.")
@@ -324,6 +375,14 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
             )
         if sse_mode == "aws:kms" and _looks_placeholder(get_text("POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID")):
             errors.append("POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID must be set when SSE mode is aws:kms.")
+        object_lock_mode = get_text("POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE").lower()
+        if object_lock_mode not in {"governance", "compliance"}:
+            errors.append(
+                "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE must be GOVERNANCE or COMPLIANCE in production."
+            )
+        object_lock_days = get_uint("POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS")
+        if object_lock_days < 7:
+            errors.append("POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be >= 7 in production.")
 
     if get_bool("CONTAINER_INGRESS_ENABLED", default=False):
         if not get_text("CONTAINER_INGRESS_CLASS"):

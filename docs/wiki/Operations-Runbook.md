@@ -78,7 +78,7 @@ kubectl -n labs get secret bretter-userflow-slo-api-auth -o go-template='{{index
 
 Expected: each command prints a value greater than `0`.
 
-If off-cluster backup replication is enabled:
+Production profile requires off-cluster backup replication:
 
 ```bash
 kubectl -n labs get cronjob bretter-postgres-backup-replication
@@ -270,7 +270,7 @@ Manual trigger in GitHub Actions:
 
 ## Go-live proof artifact
 
-Generate and archive a single report covering rollout, production env checks, runtime/signature secret wiring, bootstrap pruning, and API health:
+Generate and archive a single report covering rollout, production env checks, runtime/signature secret wiring, tenant namespace baseline object checks (quota/limits/netpol), bootstrap pruning, and API health:
 
 ```bash
 NAMESPACE=labs ./scripts/production_go_live_proof.sh
@@ -300,6 +300,7 @@ Staging failure-drill workflow:
 Production deploy + drift workflows:
 
 - `.github/workflows/deploy-production.yml` deploys digest-pinned production values and runs go-live proof + drift check.
+- `.github/workflows/promote-staging-to-production.yml` enforces staging preflight + staging go-live proof before production deployment.
 - `.github/workflows/config-drift-check.yml` runs scheduled/manual live-vs-rendered drift checks using `scripts/check_live_config_drift.py`.
 
 Tenant isolation impersonation smoke:

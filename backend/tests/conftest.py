@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +25,8 @@ from src.db import engine  # noqa: E402
 from src.main import app  # noqa: E402
 import src.main as main_module  # noqa: E402
 import src.routes.auth as auth_routes  # noqa: E402
+import src.routes.user as user_routes  # noqa: E402
+import src.routes.user_containers as user_container_routes  # noqa: E402
 from src.services.kubernetes import PodStatus, kube  # noqa: E402
 from src.tables import (  # noqa: E402
     Config,
@@ -40,6 +43,14 @@ from src.tables import (  # noqa: E402
     User,
 )
 from src.rbac import Role  # noqa: E402
+
+
+class _FakeStorageApi:
+    def __init__(self, _api_client):
+        pass
+
+    def read_storage_class(self, name: str):
+        return {"metadata": {"name": name}}
 
 
 @pytest.fixture
@@ -64,6 +75,31 @@ def client(monkeypatch, reset_db):
     monkeypatch.setattr(
         kube, "get_status", lambda *args, **kwargs: PodStatus(instance_id="", phase="running", ready=True)
     )
+    kube._core = SimpleNamespace(api_client=object())
+    monkeypatch.setattr(
+        kube,
+        "resolve_vm_source_pvc",
+        lambda **kwargs: (
+            SimpleNamespace(spec=SimpleNamespace(storage_class_name="longhorn-r1")),
+            str(kwargs.get("runtime_namespace", "labs") or "labs"),
+        ),
+    )
+    monkeypatch.setattr(
+        kube,
+        "check_vm_runner_image_pullability",
+        lambda *args, **kwargs: (True, "runner image pull check completed (test fixture)."),
+    )
+    monkeypatch.setattr(user_routes.k8s_client, "StorageV1Api", _FakeStorageApi)
+    monkeypatch.setattr(
+        user_routes,
+        "evaluate_node_launch_admission",
+        lambda _kube: (True, "Node admission passed in test fixture."),
+    )
+    monkeypatch.setattr(
+        user_routes,
+        "evaluate_vm_storage_launch_admission",
+        lambda _kube, namespace: (True, f"PVC admission passed in test fixture ({namespace})."),
+    )
 
     monkeypatch.setattr(
         kube, "create_container_pod", lambda req: PodStatus(instance_id=req.instance_id, phase="pending")
@@ -74,6 +110,11 @@ def client(monkeypatch, reset_db):
     monkeypatch.setattr(kube, "stop_container_pod", lambda *args, **kwargs: None)
     monkeypatch.setattr(kube, "delete_container_service", lambda *args, **kwargs: None)
     monkeypatch.setattr(kube, "get_container_launch_diagnostics", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        user_container_routes,
+        "evaluate_node_launch_admission",
+        lambda _kube: (True, "Node admission passed in test fixture."),
+    )
 
     with TestClient(app) as test_client:
         yield test_client

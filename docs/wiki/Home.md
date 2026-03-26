@@ -103,11 +103,12 @@ Reference pages:
 - Post-deploy admin API smoke validation job (`bretter-post-deploy-admin-api-smoke`)
 - Recurring GHCR access and user-flow SLO probe CronJobs with Prometheus alert rules
 - Secret-backed postdeploy auth checks and RDP connect-latency probe credentials
-- Optional encrypted off-cluster backup replication CronJob (`bretter-postgres-backup-replication`)
+- Enforced encrypted off-cluster backup replication CronJob in production profile (`bretter-postgres-backup-replication`)
 - Release-branch smoke gates for post-deploy synthetic, restore drill, and Playwright Guacamole RDP browser checks
 - Main-branch userflow smoke gate (`deploy-userflow-smoke.yml`) on push/PR to `main`
 - Merge-time image promotion and digest auto-pin workflow on `main` (`publish-and-pin-images.yml`)
 - Production deploy workflow for digest-pinned rollouts + go-live proof + drift check (`deploy-production.yml`)
+- Staged promotion workflow for staging preflight/go-live gate before production rollout (`promote-staging-to-production.yml`)
 - Scheduled/manual live config drift detection against rendered production values (`config-drift-check.yml`, `scripts/check_live_config_drift.py`)
 - Staging control-plane failure drill workflow (`staging-failure-drills.yml`, `scripts/failure_drill_control_plane.sh`)
 - Branch protection enforcement automation (`enforce-branch-protection.yml`, `scripts/apply_branch_protection.sh`)

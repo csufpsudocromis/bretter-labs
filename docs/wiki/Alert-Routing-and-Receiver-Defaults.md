@@ -45,6 +45,7 @@ If the secret/key is missing when webhook routing is enabled, setup fails fast.
 - Keep an explicit default receiver (do not rely on chart implicit defaults).
 - Route actionable severities to at least one external receiver.
 - Keep receiver URLs in Kubernetes secrets, not committed values files.
+- VM launch/RDP/upload burn-rate alerts now include `runbook_url` annotations that point to the Operations Runbook triage sections.
 - Validate post-deploy health and alert wiring with:
 
 ```bash

@@ -34,6 +34,12 @@ FRONTEND_HPA_MIN_REPLICAS="${FRONTEND_HPA_MIN_REPLICAS:-$FRONTEND_REPLICAS}"
 FRONTEND_HPA_MAX_REPLICAS="${FRONTEND_HPA_MAX_REPLICAS:-$FRONTEND_REPLICAS}"
 FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT="${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT:-70}"
 UVICORN_WORKERS="${UVICORN_WORKERS:-1}"
+DATABASE_POOL_SIZE="${DATABASE_POOL_SIZE:-20}"
+DATABASE_POOL_MAX_OVERFLOW="${DATABASE_POOL_MAX_OVERFLOW:-40}"
+DATABASE_POOL_TIMEOUT_SECONDS="${DATABASE_POOL_TIMEOUT_SECONDS:-30}"
+DATABASE_POOL_RECYCLE_SECONDS="${DATABASE_POOL_RECYCLE_SECONDS:-1800}"
+DATABASE_STATEMENT_TIMEOUT_MS="${DATABASE_STATEMENT_TIMEOUT_MS:-15000}"
+DATABASE_SLOW_QUERY_MS="${DATABASE_SLOW_QUERY_MS:-500}"
 ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
 ALLOW_CODE_MOUNT_OVERRIDES="${ALLOW_CODE_MOUNT_OVERRIDES:-0}"
 SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
@@ -84,8 +90,11 @@ WINDOWS_CPU_MODEL="${WINDOWS_CPU_MODEL:-host}"
 LINUX_MACHINE_TYPE="${LINUX_MACHINE_TYPE:-pc}"
 LINUX_EFI_ENABLED="${LINUX_EFI_ENABLED:-false}"
 LINUX_CPU_MODEL="${LINUX_CPU_MODEL:-host}"
+KUBE_USE_KVM="${KUBE_USE_KVM:-1}"
 VM_NET_BACKEND="${VM_NET_BACKEND:-user}"
 VM_RUNNER_PRIVILEGED="${VM_RUNNER_PRIVILEGED:-0}"
+VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED="${VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED:-1}"
+VM_PRIVILEGED_NAMESPACE_PREFIX="${VM_PRIVILEGED_NAMESPACE_PREFIX:-labs-vm-priv-}"
 VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY="${VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY:-Local}"
 VM_CONSOLE_SOURCE_CIDRS="${VM_CONSOLE_SOURCE_CIDRS:-}"
 VM_CONSOLE_TICKET_LENGTH="${VM_CONSOLE_TICKET_LENGTH:-24}"
@@ -173,6 +182,8 @@ POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY="${POSTGRES_BACKUP_REPLICATION
 POSTGRES_BACKUP_REPLICATION_SESSION_TOKEN_KEY="${POSTGRES_BACKUP_REPLICATION_SESSION_TOKEN_KEY:-aws_session_token}"
 POSTGRES_BACKUP_REPLICATION_SSE_MODE="${POSTGRES_BACKUP_REPLICATION_SSE_MODE:-AES256}"
 POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID="${POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID:-}"
+POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE="${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE:-}"
+POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS="${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS:-30}"
 POSTGRES_BACKUP_REPLICATION_IMAGE="${POSTGRES_BACKUP_REPLICATION_IMAGE:-amazon/aws-cli:2.17.44}"
 USE_EXTERNAL_SECRETS="${USE_EXTERNAL_SECRETS:-0}"
 INSTALL_EXTERNAL_SECRETS_OPERATOR="${INSTALL_EXTERNAL_SECRETS_OPERATOR:-1}"
@@ -706,7 +717,46 @@ validate_storage_guard_config() {
   fi
 }
 
+validate_database_performance_config() {
+  if ! is_uint "$DATABASE_POOL_SIZE" || [ "$DATABASE_POOL_SIZE" -lt 1 ]; then
+    fail "DATABASE_POOL_SIZE must be an integer >= 1."
+  fi
+  if ! is_uint "$DATABASE_POOL_MAX_OVERFLOW"; then
+    fail "DATABASE_POOL_MAX_OVERFLOW must be an integer >= 0."
+  fi
+  if [ "$DATABASE_POOL_MAX_OVERFLOW" -lt 0 ]; then
+    fail "DATABASE_POOL_MAX_OVERFLOW must be an integer >= 0."
+  fi
+  if ! is_uint "$DATABASE_POOL_TIMEOUT_SECONDS" || [ "$DATABASE_POOL_TIMEOUT_SECONDS" -lt 1 ]; then
+    fail "DATABASE_POOL_TIMEOUT_SECONDS must be an integer >= 1."
+  fi
+  if ! is_uint "$DATABASE_POOL_RECYCLE_SECONDS" || [ "$DATABASE_POOL_RECYCLE_SECONDS" -lt 30 ]; then
+    fail "DATABASE_POOL_RECYCLE_SECONDS must be an integer >= 30."
+  fi
+  if ! is_uint "$DATABASE_STATEMENT_TIMEOUT_MS" || [ "$DATABASE_STATEMENT_TIMEOUT_MS" -lt 100 ]; then
+    fail "DATABASE_STATEMENT_TIMEOUT_MS must be an integer >= 100."
+  fi
+  if ! is_uint "$DATABASE_SLOW_QUERY_MS" || [ "$DATABASE_SLOW_QUERY_MS" -lt 1 ]; then
+    fail "DATABASE_SLOW_QUERY_MS must be an integer >= 1."
+  fi
+  if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+    if [ "$DATABASE_POOL_SIZE" -lt 5 ]; then
+      fail "DATABASE_POOL_SIZE must be >= 5 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$DATABASE_STATEMENT_TIMEOUT_MS" -lt 1000 ]; then
+      fail "DATABASE_STATEMENT_TIMEOUT_MS must be >= 1000 when PRODUCTION_PROFILE=1."
+    fi
+    if [ "$DATABASE_SLOW_QUERY_MS" -gt 2000 ]; then
+      fail "DATABASE_SLOW_QUERY_MS must be <= 2000 when PRODUCTION_PROFILE=1."
+    fi
+  fi
+}
+
 validate_vm_network_config() {
+  case "$KUBE_USE_KVM" in
+    0 | 1) ;;
+    *) fail "KUBE_USE_KVM must be either 0 or 1." ;;
+  esac
   case "$VM_NET_BACKEND" in
     tap-nat | user) ;;
     *) fail "VM_NET_BACKEND must be either tap-nat or user." ;;
@@ -721,6 +771,18 @@ validate_vm_network_config() {
   esac
   if ! is_uint "$VM_CONSOLE_TICKET_LENGTH" || [ "$VM_CONSOLE_TICKET_LENGTH" -lt 12 ] || [ "$VM_CONSOLE_TICKET_LENGTH" -gt 64 ]; then
     fail "VM_CONSOLE_TICKET_LENGTH must be an integer between 12 and 64."
+  fi
+  case "$VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED" in
+    0 | 1) ;;
+    *) fail "VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ "$VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED" -eq 1 ]; then
+    if [ -z "$VM_PRIVILEGED_NAMESPACE_PREFIX" ]; then
+      fail "VM_PRIVILEGED_NAMESPACE_PREFIX cannot be empty when VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED=1."
+    fi
+    if [[ ! "$VM_PRIVILEGED_NAMESPACE_PREFIX" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?-$ ]]; then
+      fail "VM_PRIVILEGED_NAMESPACE_PREFIX must be a DNS label prefix ending with '-' (example: labs-vm-priv-)."
+    fi
   fi
   case "$BACKEND_NODEPORT_ENABLED" in
     0 | 1) ;;
@@ -738,10 +800,14 @@ validate_vm_network_config() {
 }
 
 validate_orchestration_backend_config() {
+  local vm_needs_privileged_runtime=0
   case "$ORCHESTRATION_BACKEND" in
     db | dual | crd) ;;
     *) fail "ORCHESTRATION_BACKEND must be one of: db, dual, crd." ;;
   esac
+  if [ "$PRODUCTION_PROFILE" = "1" ] && [ "$ORCHESTRATION_BACKEND" = "db" ]; then
+    fail "ORCHESTRATION_BACKEND must be dual or crd when PRODUCTION_PROFILE=1."
+  fi
   case "$IMAGE_IMPORT_BACKEND" in
     db | dual | crd) ;;
     *) fail "IMAGE_IMPORT_BACKEND must be one of: db, dual, crd." ;;
@@ -800,6 +866,12 @@ validate_orchestration_backend_config() {
     fi
     if [[ ! "$TEAM_NAMESPACE_PREFIX" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?-$ ]]; then
       fail "TEAM_NAMESPACE_PREFIX must be a DNS label prefix ending with '-' (example: labs-team-)."
+    fi
+    if [ "$KUBE_USE_KVM" -eq 1 ] || [ "$VM_RUNNER_PRIVILEGED" -eq 1 ] || [ "$VM_NET_BACKEND" = "tap-nat" ]; then
+      vm_needs_privileged_runtime=1
+    fi
+    if [ "$vm_needs_privileged_runtime" -eq 1 ] && [ "$VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED" -ne 1 ]; then
+      fail "VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED must be 1 when privileged VM runners are required in per-team namespace mode."
     fi
   fi
 }
@@ -976,6 +1048,9 @@ validate_auth_and_cors_config() {
     if [ -z "$RUNNER_NODE_SELECTOR_VALUE" ]; then
       fail "RUNNER_NODE_SELECTOR_VALUE must be set when PRODUCTION_PROFILE=1."
     fi
+    if [ "$ENABLE_POSTGRES_BACKUP_REPLICATION" -ne 1 ]; then
+      fail "ENABLE_POSTGRES_BACKUP_REPLICATION must be 1 when PRODUCTION_PROFILE=1."
+    fi
     if [ "$TEAM_NAMESPACE_MODE" != "per_team" ]; then
       fail "TEAM_NAMESPACE_MODE must be per_team when PRODUCTION_PROFILE=1."
     fi
@@ -1035,6 +1110,23 @@ validate_postgres_config() {
     esac
     if [ "${POSTGRES_BACKUP_REPLICATION_SSE_MODE,,}" = "aws:kms" ] && [ -z "$POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID" ]; then
       fail "POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID is required when POSTGRES_BACKUP_REPLICATION_SSE_MODE=aws:kms."
+    fi
+    case "${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE,,}" in
+      "" | governance | compliance) ;;
+      *) fail "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE must be empty, GOVERNANCE, or COMPLIANCE." ;;
+    esac
+    if [ -n "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE" ]; then
+      if ! is_uint "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS" || [ "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS" -lt 1 ]; then
+        fail "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be an integer >= 1 when object lock mode is set."
+      fi
+    fi
+    if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
+      if [ -z "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE" ]; then
+        fail "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE must be set when PRODUCTION_PROFILE=1."
+      fi
+      if ! is_uint "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS" || [ "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS" -lt 7 ]; then
+        fail "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be >= 7 when PRODUCTION_PROFILE=1."
+      fi
     fi
   fi
 }
@@ -2541,6 +2633,7 @@ spec:
             severity: critical
           annotations:
             summary: VM launch SLO burn-rate is above ${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% over 15m.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#vm-launch-preflight-and-pending-triage
         - alert: BretterVmLaunchSloBurnRateSlow
           expr: |
             (
@@ -2562,6 +2655,7 @@ spec:
             severity: warning
           annotations:
             summary: VM launch SLO burn-rate is above ${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% over 1h.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#vm-launch-preflight-and-pending-triage
         - alert: BretterRdpReadinessSloBurnRateFast
           expr: |
             (
@@ -2583,6 +2677,7 @@ spec:
             severity: critical
           annotations:
             summary: RDP readiness SLO burn-rate is above ${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% over 15m.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#connect-issues-blank-page-proxy-error-delayed-connect
         - alert: BretterRdpReadinessSloBurnRateSlow
           expr: |
             (
@@ -2604,6 +2699,7 @@ spec:
             severity: warning
           annotations:
             summary: RDP readiness SLO burn-rate is above ${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% over 1h.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#connect-issues-blank-page-proxy-error-delayed-connect
         - alert: BretterUploadFinalizeSloBurnRateFast
           expr: |
             (
@@ -2625,6 +2721,7 @@ spec:
             severity: critical
           annotations:
             summary: Upload finalize SLO burn-rate is above ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% over 15m.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#upload-appears-stuck-at-100
         - alert: BretterUploadFinalizeSloBurnRateSlow
           expr: |
             (
@@ -2646,6 +2743,7 @@ spec:
             severity: warning
           annotations:
             summary: Upload finalize SLO burn-rate is above ${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% over 1h.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#upload-appears-stuck-at-100
         - alert: BretterImageImportQueueAgeSloBurnRateFast
           expr: |
             (
@@ -2709,6 +2807,7 @@ spec:
             severity: critical
           annotations:
             summary: RDP connect-latency SLO burn-rate is above ${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}% over 15m.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#connect-issues-blank-page-proxy-error-delayed-connect
         - alert: BretterRdpConnectLatencySloBurnRateSlow
           expr: |
             (
@@ -2730,6 +2829,7 @@ spec:
             severity: warning
           annotations:
             summary: RDP connect-latency SLO burn-rate is above ${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}% over 1h.
+            runbook_url: https://github.com/csufpsudocromis/bretter-labs/blob/main/docs/wiki/Operations-Runbook.md#connect-issues-blank-page-proxy-error-delayed-connect
 EOF
 }
 
@@ -2954,8 +3054,11 @@ render_manifest_template() {
   local uvicorn_workers
   local runner_node_selector_value
   local vm_storage_class backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
-  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model vm_net_backend vm_runner_privileged
+  local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
+  local kube_use_kvm vm_net_backend vm_runner_privileged vm_privileged_runtime_isolation_enabled vm_privileged_namespace_prefix
   local vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
+  local database_pool_size database_pool_max_overflow database_pool_timeout_seconds
+  local database_pool_recycle_seconds database_statement_timeout_ms database_slow_query_ms
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref
@@ -2986,11 +3089,20 @@ render_manifest_template() {
   linux_machine_type="$(escape_sed_replacement "$LINUX_MACHINE_TYPE")"
   linux_efi_enabled="$(escape_sed_replacement "$LINUX_EFI_ENABLED")"
   linux_cpu_model="$(escape_sed_replacement "$LINUX_CPU_MODEL")"
+  kube_use_kvm="$(escape_sed_replacement "$KUBE_USE_KVM")"
   vm_net_backend="$(escape_sed_replacement "$VM_NET_BACKEND")"
   vm_runner_privileged="$(escape_sed_replacement "$VM_RUNNER_PRIVILEGED")"
+  vm_privileged_runtime_isolation_enabled="$(escape_sed_replacement "$VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED")"
+  vm_privileged_namespace_prefix="$(escape_sed_replacement "$VM_PRIVILEGED_NAMESPACE_PREFIX")"
   vm_console_external_traffic_policy="$(escape_sed_replacement "$VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY")"
   vm_console_source_cidrs="$(escape_sed_replacement "$VM_CONSOLE_SOURCE_CIDRS")"
   vm_console_ticket_length="$(escape_sed_replacement "$VM_CONSOLE_TICKET_LENGTH")"
+  database_pool_size="$(escape_sed_replacement "$DATABASE_POOL_SIZE")"
+  database_pool_max_overflow="$(escape_sed_replacement "$DATABASE_POOL_MAX_OVERFLOW")"
+  database_pool_timeout_seconds="$(escape_sed_replacement "$DATABASE_POOL_TIMEOUT_SECONDS")"
+  database_pool_recycle_seconds="$(escape_sed_replacement "$DATABASE_POOL_RECYCLE_SECONDS")"
+  database_statement_timeout_ms="$(escape_sed_replacement "$DATABASE_STATEMENT_TIMEOUT_MS")"
+  database_slow_query_ms="$(escape_sed_replacement "$DATABASE_SLOW_QUERY_MS")"
   container_ingress_enabled="$(escape_sed_replacement "$CONTAINER_INGRESS_ENABLED")"
   container_ingress_class="$(escape_sed_replacement "$CONTAINER_INGRESS_CLASS")"
   container_ingress_base_domain="$(escape_sed_replacement "$CONTAINER_INGRESS_BASE_DOMAIN")"
@@ -3037,11 +3149,20 @@ render_manifest_template() {
     -e "s/__LINUX_MACHINE_TYPE__/${linux_machine_type}/g" \
     -e "s/__LINUX_EFI_ENABLED__/${linux_efi_enabled}/g" \
     -e "s/__LINUX_CPU_MODEL__/${linux_cpu_model}/g" \
+    -e "s/__KUBE_USE_KVM__/${kube_use_kvm}/g" \
     -e "s/__VM_NET_BACKEND__/${vm_net_backend}/g" \
     -e "s/__VM_RUNNER_PRIVILEGED__/${vm_runner_privileged}/g" \
+    -e "s/__VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED__/${vm_privileged_runtime_isolation_enabled}/g" \
+    -e "s/__VM_PRIVILEGED_NAMESPACE_PREFIX__/${vm_privileged_namespace_prefix}/g" \
     -e "s/__VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY__/${vm_console_external_traffic_policy}/g" \
     -e "s#__VM_CONSOLE_SOURCE_CIDRS__#${vm_console_source_cidrs}#g" \
     -e "s/__VM_CONSOLE_TICKET_LENGTH__/${vm_console_ticket_length}/g" \
+    -e "s/__DATABASE_POOL_SIZE__/${database_pool_size}/g" \
+    -e "s/__DATABASE_POOL_MAX_OVERFLOW__/${database_pool_max_overflow}/g" \
+    -e "s/__DATABASE_POOL_TIMEOUT_SECONDS__/${database_pool_timeout_seconds}/g" \
+    -e "s/__DATABASE_POOL_RECYCLE_SECONDS__/${database_pool_recycle_seconds}/g" \
+    -e "s/__DATABASE_STATEMENT_TIMEOUT_MS__/${database_statement_timeout_ms}/g" \
+    -e "s/__DATABASE_SLOW_QUERY_MS__/${database_slow_query_ms}/g" \
     -e "s/__CONTAINER_INGRESS_ENABLED__/${container_ingress_enabled}/g" \
     -e "s/__CONTAINER_INGRESS_CLASS__/${container_ingress_class}/g" \
     -e "s/__CONTAINER_INGRESS_BASE_DOMAIN__/${container_ingress_base_domain}/g" \
@@ -3089,7 +3210,10 @@ render_helm_values_override() {
   local labimageimport_controller_metrics_bind labimageimport_controller_metrics_port
   local team_namespace_mode team_namespace_prefix team_namespace_bootstrap_enabled
   local windows_machine_type windows_efi_enabled windows_cpu_model linux_machine_type linux_efi_enabled linux_cpu_model
-  local vm_net_backend vm_runner_privileged vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
+  local kube_use_kvm vm_net_backend vm_runner_privileged vm_privileged_runtime_isolation_enabled vm_privileged_namespace_prefix
+  local vm_console_external_traffic_policy vm_console_source_cidrs vm_console_ticket_length
+  local database_pool_size database_pool_max_overflow database_pool_timeout_seconds
+  local database_pool_recycle_seconds database_statement_timeout_ms database_slow_query_ms
   local backend_service_type backend_service_nodeport_line
   local container_ingress_enabled container_ingress_class container_ingress_base_domain container_ingress_annotations_json
   local container_image_prepull_enabled container_image_prepull_timeout_seconds
@@ -3100,6 +3224,7 @@ render_helm_values_override() {
   local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
   local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
   local vm_connect_insecure_tls container_connect_insecure_tls runtime_secrets_secret_name runtime_secrets_encryption_key_key secrets_encryption_key
+  local postgres_backup_replication_object_lock_mode postgres_backup_replication_object_lock_days
   local backend_data_hostpath golden_images_hostpath postgres_data_hostpath cdi_upload_proxy_url
   local admin_bootstrap_password
 
@@ -3149,11 +3274,20 @@ render_helm_values_override() {
   linux_machine_type="$(yaml_escape "$LINUX_MACHINE_TYPE")"
   linux_efi_enabled="$(yaml_escape "$LINUX_EFI_ENABLED")"
   linux_cpu_model="$(yaml_escape "$LINUX_CPU_MODEL")"
+  kube_use_kvm="$(yaml_escape "$KUBE_USE_KVM")"
   vm_net_backend="$(yaml_escape "$VM_NET_BACKEND")"
   vm_runner_privileged="$(yaml_escape "$VM_RUNNER_PRIVILEGED")"
+  vm_privileged_runtime_isolation_enabled="$(yaml_escape "$VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED")"
+  vm_privileged_namespace_prefix="$(yaml_escape "$VM_PRIVILEGED_NAMESPACE_PREFIX")"
   vm_console_external_traffic_policy="$(yaml_escape "$VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY")"
   vm_console_source_cidrs="$(yaml_escape "$VM_CONSOLE_SOURCE_CIDRS")"
   vm_console_ticket_length="$(yaml_escape "$VM_CONSOLE_TICKET_LENGTH")"
+  database_pool_size="$(yaml_escape "$DATABASE_POOL_SIZE")"
+  database_pool_max_overflow="$(yaml_escape "$DATABASE_POOL_MAX_OVERFLOW")"
+  database_pool_timeout_seconds="$(yaml_escape "$DATABASE_POOL_TIMEOUT_SECONDS")"
+  database_pool_recycle_seconds="$(yaml_escape "$DATABASE_POOL_RECYCLE_SECONDS")"
+  database_statement_timeout_ms="$(yaml_escape "$DATABASE_STATEMENT_TIMEOUT_MS")"
+  database_slow_query_ms="$(yaml_escape "$DATABASE_SLOW_QUERY_MS")"
   if [ "$BACKEND_NODEPORT_ENABLED" -eq 1 ]; then
     backend_service_type="NodePort"
     backend_service_nodeport_line="      nodePort: ${BACKEND_NODEPORT}"
@@ -3196,6 +3330,8 @@ render_helm_values_override() {
   runtime_secrets_secret_name="$(yaml_escape "$RUNTIME_SECRETS_SECRET_NAME")"
   runtime_secrets_encryption_key_key="$(yaml_escape "$RUNTIME_SECRETS_ENCRYPTION_KEY_KEY")"
   secrets_encryption_key="$(yaml_escape "$SECRETS_ENCRYPTION_KEY")"
+  postgres_backup_replication_object_lock_mode="$(yaml_escape "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE")"
+  postgres_backup_replication_object_lock_days="$(yaml_escape "$POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS")"
   backend_data_hostpath="$(yaml_escape "$BACKEND_DATA_HOSTPATH")"
   golden_images_hostpath="$(yaml_escape "$GOLDEN_IMAGES_HOSTPATH")"
   postgres_data_hostpath="$(yaml_escape "$POSTGRES_DATA_HOSTPATH")"
@@ -3251,11 +3387,20 @@ appTemplateValues:
   LINUX_MACHINE_TYPE: "${linux_machine_type}"
   LINUX_EFI_ENABLED: "${linux_efi_enabled}"
   LINUX_CPU_MODEL: "${linux_cpu_model}"
+  KUBE_USE_KVM: "${kube_use_kvm}"
   VM_NET_BACKEND: "${vm_net_backend}"
   VM_RUNNER_PRIVILEGED: "${vm_runner_privileged}"
+  VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED: "${vm_privileged_runtime_isolation_enabled}"
+  VM_PRIVILEGED_NAMESPACE_PREFIX: "${vm_privileged_namespace_prefix}"
   VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY: "${vm_console_external_traffic_policy}"
   VM_CONSOLE_SOURCE_CIDRS: "${vm_console_source_cidrs}"
   VM_CONSOLE_TICKET_LENGTH: "${vm_console_ticket_length}"
+  DATABASE_POOL_SIZE: "${database_pool_size}"
+  DATABASE_POOL_MAX_OVERFLOW: "${database_pool_max_overflow}"
+  DATABASE_POOL_TIMEOUT_SECONDS: "${database_pool_timeout_seconds}"
+  DATABASE_POOL_RECYCLE_SECONDS: "${database_pool_recycle_seconds}"
+  DATABASE_STATEMENT_TIMEOUT_MS: "${database_statement_timeout_ms}"
+  DATABASE_SLOW_QUERY_MS: "${database_slow_query_ms}"
   BACKEND_SERVICE_TYPE: "${backend_service_type}"
   BACKEND_SERVICE_NODEPORT_LINE: "${backend_service_nodeport_line}"
   CONTAINER_INGRESS_ENABLED: "${container_ingress_enabled}"
@@ -3291,6 +3436,8 @@ appTemplateValues:
   RUNTIME_SECRETS_SECRET_NAME: "${runtime_secrets_secret_name}"
   RUNTIME_SECRETS_ENCRYPTION_KEY_KEY: "${runtime_secrets_encryption_key_key}"
   SECRETS_ENCRYPTION_KEY: "${secrets_encryption_key}"
+  POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE: "${postgres_backup_replication_object_lock_mode}"
+  POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS: "${postgres_backup_replication_object_lock_days}"
   BACKEND_DATA_HOSTPATH: "${backend_data_hostpath}"
   GOLDEN_IMAGES_HOSTPATH: "${golden_images_hostpath}"
   POSTGRES_DATA_HOSTPATH: "${postgres_data_hostpath}"
@@ -3826,6 +3973,10 @@ spec:
                   value: "${POSTGRES_BACKUP_REPLICATION_SSE_MODE}"
                 - name: S3_SSE_KMS_KEY_ID
                   value: "${POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID}"
+                - name: S3_OBJECT_LOCK_MODE
+                  value: "${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE}"
+                - name: S3_OBJECT_LOCK_DAYS
+                  value: "${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS}"
                 - name: BACKUP_MOUNT_PATH
                   value: "${POSTGRES_BACKUP_MOUNT_PATH}"
               command:
@@ -3852,6 +4003,10 @@ spec:
                   fi
                   if [ "\$S3_SSE_MODE" = "aws:kms" ] && [ -n "\${S3_SSE_KMS_KEY_ID}" ]; then
                     set -- "\$@" --sse-kms-key-id "\$S3_SSE_KMS_KEY_ID"
+                  fi
+                  if [ -n "\${S3_OBJECT_LOCK_MODE}" ]; then
+                    retain_until="\$(date -u -d "+\${S3_OBJECT_LOCK_DAYS} days" +"%Y-%m-%dT%H:%M:%SZ")"
+                    set -- "\$@" --object-lock-mode "\$S3_OBJECT_LOCK_MODE" --object-lock-retain-until-date "\$retain_until"
                   fi
                   aws "\$@"
                   echo "backup_replicated path=\$target_path"
@@ -5818,7 +5973,7 @@ log_runtime_configuration() {
   log "Using backend data hostPath: $BACKEND_DATA_HOSTPATH"
   log "Using postgres data hostPath: $POSTGRES_DATA_HOSTPATH"
   log "Postgres backup automation: $ENABLE_POSTGRES_BACKUP_AUTOMATION (schedule: ${POSTGRES_BACKUP_SCHEDULE} retention: ${POSTGRES_BACKUP_RETENTION_DAYS}d pvc: ${POSTGRES_BACKUP_PVC_NAME} size: ${POSTGRES_BACKUP_PVC_SIZE} storageClass: ${POSTGRES_BACKUP_STORAGE_CLASS:-default})"
-  log "Postgres backup replication: $ENABLE_POSTGRES_BACKUP_REPLICATION (schedule: ${POSTGRES_BACKUP_REPLICATION_SCHEDULE} bucket: ${POSTGRES_BACKUP_REPLICATION_BUCKET:-unset} prefix: ${POSTGRES_BACKUP_REPLICATION_PREFIX} secret: ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY},${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY} sse: ${POSTGRES_BACKUP_REPLICATION_SSE_MODE})"
+  log "Postgres backup replication: $ENABLE_POSTGRES_BACKUP_REPLICATION (schedule: ${POSTGRES_BACKUP_REPLICATION_SCHEDULE} bucket: ${POSTGRES_BACKUP_REPLICATION_BUCKET:-unset} prefix: ${POSTGRES_BACKUP_REPLICATION_PREFIX} secret: ${POSTGRES_BACKUP_REPLICATION_SECRET_NAME}/${POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY},${POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY} sse: ${POSTGRES_BACKUP_REPLICATION_SSE_MODE} object-lock: ${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE:-off}/${POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS})"
   log "Using golden images hostPath: $GOLDEN_IMAGES_HOSTPATH"
   log "External Secrets enabled: $USE_EXTERNAL_SECRETS (store: $EXTERNAL_SECRETS_STORE_NAME)"
   if [ "$USE_EXTERNAL_SECRETS" -eq 1 ]; then
@@ -5834,8 +5989,11 @@ log_runtime_configuration() {
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Backend/frontend HPA min-max cpu-target: ${BACKEND_HPA_MIN_REPLICAS}-${BACKEND_HPA_MAX_REPLICAS}@${BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}% / ${FRONTEND_HPA_MIN_REPLICAS}-${FRONTEND_HPA_MAX_REPLICAS}@${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}%"
   log "Uvicorn workers per backend pod: ${UVICORN_WORKERS}"
+  log "DB pool/timeout config: size=${DATABASE_POOL_SIZE} overflow=${DATABASE_POOL_MAX_OVERFLOW} timeout=${DATABASE_POOL_TIMEOUT_SECONDS}s recycle=${DATABASE_POOL_RECYCLE_SECONDS}s stmt-timeout=${DATABASE_STATEMENT_TIMEOUT_MS}ms slow=${DATABASE_SLOW_QUERY_MS}ms"
+  log "VM KVM passthrough enabled: $KUBE_USE_KVM"
   log "Using VM network backend: $VM_NET_BACKEND"
   log "VM runner privileged override: $VM_RUNNER_PRIVILEGED"
+  log "VM privileged runtime isolation: ${VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED} (prefix: ${VM_PRIVILEGED_NAMESPACE_PREFIX})"
   log "VM console external traffic policy: $VM_CONSOLE_EXTERNAL_TRAFFIC_POLICY"
   log "VM console source CIDRs: ${VM_CONSOLE_SOURCE_CIDRS:-unrestricted}"
   log "VM console ticket length: $VM_CONSOLE_TICKET_LENGTH"
@@ -5976,6 +6134,7 @@ main() {
   validate_setup_phase_config
   validate_image_reference_policy
   validate_replica_config
+  validate_database_performance_config
   validate_preload_config
   validate_longhorn_tuning_config
   validate_autocleanup_config

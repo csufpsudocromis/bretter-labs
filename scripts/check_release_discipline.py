@@ -90,6 +90,7 @@ def main() -> int:
     setup_script_path = root / "scripts" / "setup.sh"
     publish_workflow_path = root / ".github" / "workflows" / "publish-and-pin-images.yml"
     deploy_production_workflow_path = root / ".github" / "workflows" / "deploy-production.yml"
+    promotion_workflow_path = root / ".github" / "workflows" / "promote-staging-to-production.yml"
     post_deploy_synthetic_workflow_path = root / ".github" / "workflows" / "post-deploy-synthetic.yml"
     nightly_restore_workflow_path = root / ".github" / "workflows" / "nightly-restore-drill.yml"
     deploy_userflow_workflow_path = root / ".github" / "workflows" / "deploy-userflow-smoke.yml"
@@ -203,6 +204,58 @@ def main() -> int:
                 f"for {key} (found {actual!r})"
             )
 
+    orchestration_backend = _extract_yaml_scalar(values_production, "ORCHESTRATION_BACKEND").strip().lower()
+    if orchestration_backend not in {"dual", "crd"}:
+        errors.append("deploy/helm/values-production.yaml must set ORCHESTRATION_BACKEND to dual or crd.")
+
+    kube_use_kvm = _extract_yaml_scalar(values_production, "KUBE_USE_KVM").strip().lower()
+    vm_runner_privileged = _extract_yaml_scalar(values_production, "VM_RUNNER_PRIVILEGED").strip().lower()
+    vm_net_backend = _extract_yaml_scalar(values_production, "VM_NET_BACKEND").strip().lower() or "user"
+    vm_privileged_runtime_isolation_enabled = (
+        _extract_yaml_scalar(values_production, "VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED").strip().lower()
+    )
+    vm_privileged_namespace_prefix = _extract_yaml_scalar(values_production, "VM_PRIVILEGED_NAMESPACE_PREFIX").strip()
+    if vm_privileged_runtime_isolation_enabled not in {"1", "true", "yes", "on"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must set VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED=1 when using per-team namespaces."
+        )
+    if _looks_placeholder(vm_privileged_namespace_prefix):
+        errors.append("deploy/helm/values-production.yaml must set VM_PRIVILEGED_NAMESPACE_PREFIX.")
+    elif not vm_privileged_namespace_prefix.endswith("-"):
+        errors.append("deploy/helm/values-production.yaml VM_PRIVILEGED_NAMESPACE_PREFIX must end with '-'.")
+    vm_needs_privileged_runtime = (
+        kube_use_kvm in {"1", "true", "yes", "on"}
+        or vm_runner_privileged in {"1", "true", "yes", "on"}
+        or vm_net_backend == "tap-nat"
+    )
+    if vm_needs_privileged_runtime and vm_privileged_runtime_isolation_enabled not in {"1", "true", "yes", "on"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must enable VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED when privileged VM runners are required."
+        )
+
+    for key in (
+        "DATABASE_POOL_SIZE",
+        "DATABASE_POOL_TIMEOUT_SECONDS",
+        "DATABASE_POOL_RECYCLE_SECONDS",
+        "DATABASE_STATEMENT_TIMEOUT_MS",
+        "DATABASE_SLOW_QUERY_MS",
+    ):
+        raw = _extract_yaml_scalar(values_production, key).strip()
+        if not raw:
+            errors.append(f"deploy/helm/values-production.yaml missing {key}.")
+            continue
+        if not re.match(r"^[0-9]+$", raw):
+            errors.append(f"deploy/helm/values-production.yaml {key} must be an integer (found {raw!r}).")
+    pool_size = _extract_yaml_scalar(values_production, "DATABASE_POOL_SIZE").strip()
+    if re.match(r"^[0-9]+$", pool_size) and int(pool_size) < 5:
+        errors.append("deploy/helm/values-production.yaml DATABASE_POOL_SIZE must be >= 5.")
+    statement_timeout = _extract_yaml_scalar(values_production, "DATABASE_STATEMENT_TIMEOUT_MS").strip()
+    if re.match(r"^[0-9]+$", statement_timeout) and int(statement_timeout) < 1000:
+        errors.append("deploy/helm/values-production.yaml DATABASE_STATEMENT_TIMEOUT_MS must be >= 1000.")
+    slow_query = _extract_yaml_scalar(values_production, "DATABASE_SLOW_QUERY_MS").strip()
+    if re.match(r"^[0-9]+$", slow_query) and int(slow_query) > 2000:
+        errors.append("deploy/helm/values-production.yaml DATABASE_SLOW_QUERY_MS must be <= 2000.")
+
     cors_allowed_origins = _extract_yaml_scalar(values_production, "CORS_ALLOWED_ORIGINS")
     if not cors_allowed_origins:
         errors.append("deploy/helm/values-production.yaml must set CORS_ALLOWED_ORIGINS for production.")
@@ -286,6 +339,50 @@ def main() -> int:
         errors.append(
             "deploy/helm/values-production.yaml must set USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0 for production."
         )
+
+    backup_replication_enabled = (
+        _extract_yaml_scalar(values_production, "ENABLE_POSTGRES_BACKUP_REPLICATION").strip().lower()
+    )
+    if backup_replication_enabled not in {"1", "true", "yes", "on"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must enable ENABLE_POSTGRES_BACKUP_REPLICATION for production."
+        )
+    for key in (
+        "POSTGRES_BACKUP_REPLICATION_BUCKET",
+        "POSTGRES_BACKUP_REPLICATION_SECRET_NAME",
+        "POSTGRES_BACKUP_REPLICATION_ACCESS_KEY_ID_KEY",
+        "POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY",
+    ):
+        value = _extract_yaml_scalar(values_production, key).strip()
+        if _looks_placeholder(value):
+            errors.append(f"deploy/helm/values-production.yaml must set {key} when backup replication is required.")
+    backup_sse_mode = _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_SSE_MODE").strip().lower()
+    if backup_sse_mode not in {"aes256", "aws:kms"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_SSE_MODE to AES256 or aws:kms."
+        )
+    if backup_sse_mode == "aws:kms":
+        kms_key = _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID").strip()
+        if _looks_placeholder(kms_key):
+            errors.append(
+                "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_SSE_KMS_KEY_ID when SSE mode is aws:kms."
+            )
+    backup_object_lock_mode = (
+        _extract_yaml_scalar(values_production, "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE").strip().lower()
+    )
+    if backup_object_lock_mode not in {"governance", "compliance"}:
+        errors.append(
+            "deploy/helm/values-production.yaml must set POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE to GOVERNANCE or COMPLIANCE."
+        )
+    backup_object_lock_days = _extract_yaml_scalar(
+        values_production, "POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS"
+    ).strip()
+    if not re.match(r"^[0-9]+$", backup_object_lock_days):
+        errors.append(
+            "deploy/helm/values-production.yaml POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be an integer."
+        )
+    elif int(backup_object_lock_days) < 7:
+        errors.append("deploy/helm/values-production.yaml POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS must be >= 7.")
 
     if values_site_template:
         for key in (
@@ -376,6 +473,26 @@ def main() -> int:
             if marker not in deploy_workflow:
                 errors.append(
                     ".github/workflows/deploy-production.yml must enforce post-deploy upload/finalize synthetic gate "
+                    f"(missing marker: {marker})."
+                )
+
+    if not promotion_workflow_path.exists():
+        errors.append(".github/workflows/promote-staging-to-production.yml is missing.")
+    else:
+        promotion_workflow = _read_text(promotion_workflow_path)
+        for marker in (
+            "staging-gate:",
+            "production-deploy:",
+            "needs: staging-gate",
+            "environment: staging",
+            "environment: production",
+            "scripts/deploy_preflight.sh",
+            "scripts/production_go_live_proof.sh",
+            "scripts/deploy_production_safe.sh",
+        ):
+            if marker not in promotion_workflow:
+                errors.append(
+                    ".github/workflows/promote-staging-to-production.yml must include staged promotion gate markers "
                     f"(missing marker: {marker})."
                 )
 

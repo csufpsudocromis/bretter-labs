@@ -35,6 +35,7 @@ from ..models import ContainerDependencyCheck
 from ..models import ContainerTemplate as ContainerTemplateView
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.kubernetes import ContainerPodRequest, PodStatus, kube
+from ..services.launch_admission import evaluate_node_launch_admission
 from ..services.multi_cluster import (
     PlacementError,
     kube_service_for_cluster,
@@ -2072,6 +2073,14 @@ def start_container_template(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_container_cluster(session, selected_cluster_id)
+    try:
+        ensure_team_runtime_namespace(runtime_kube, team=getattr(user, "team", None), namespace=runtime_namespace)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    node_admission_ok, node_admission_detail = evaluate_node_launch_admission(runtime_kube)
+    if not node_admission_ok:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=node_admission_detail)
 
     instance_id = str(uuid4())
     now = utc_now()

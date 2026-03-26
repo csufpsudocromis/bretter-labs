@@ -68,6 +68,60 @@ collect_value_files() {
   fi
 }
 
+load_backup_replication_settings_from_values() {
+  local merged
+  merged="$("$PYTHON_BIN" - "${VALUES_FILES[@]}" <<'PY'
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+def read_yaml(path: Path) -> dict[str, Any]:
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise RuntimeError(f"values file must contain a mapping: {path}")
+    return raw
+
+
+def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base)
+    for key, value in overlay.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+values: dict[str, Any] = {}
+for raw_path in sys.argv[1:]:
+    values = deep_merge(values, read_yaml(Path(raw_path)))
+app = values.get("appTemplateValues")
+if not isinstance(app, dict):
+    app = {}
+
+print(f"ENABLE_POSTGRES_BACKUP_REPLICATION={str(app.get('ENABLE_POSTGRES_BACKUP_REPLICATION', '0')).strip()}")
+print(
+    f"POSTGRES_BACKUP_REPLICATION_SECRET_NAME={str(app.get('POSTGRES_BACKUP_REPLICATION_SECRET_NAME', 'bretter-postgres-backup-replication')).strip()}"
+)
+print(
+    f"POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY={str(app.get('POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY', 'aws_secret_access_key')).strip()}"
+)
+PY
+  )"
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ENABLE_POSTGRES_BACKUP_REPLICATION) ENABLE_POSTGRES_BACKUP_REPLICATION="$value" ;;
+      POSTGRES_BACKUP_REPLICATION_SECRET_NAME) POSTGRES_BACKUP_REPLICATION_SECRET_NAME="$value" ;;
+      POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY) POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY="$value" ;;
+    esac
+  done <<<"$merged"
+}
+
 validate_toggle() {
   local name="$1"
   local value="$2"
@@ -254,6 +308,7 @@ validate_toggle "PREDEPLOY_VALIDATE_CRDS" "$PREDEPLOY_VALIDATE_CRDS"
 validate_toggle "ENABLE_POSTGRES_BACKUP_REPLICATION" "$ENABLE_POSTGRES_BACKUP_REPLICATION"
 validate_positive_int "PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS" "$PREDEPLOY_IMAGE_PULL_TIMEOUT_SECONDS"
 collect_value_files
+load_backup_replication_settings_from_values
 if [ "${#VALUES_FILES[@]}" -gt 0 ]; then
   log "Values files:"
   printf '  - %s\n' "${VALUES_FILES[@]}"

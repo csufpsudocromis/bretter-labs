@@ -340,7 +340,7 @@ Proof artifact and operator docs:
 | `POSTGRES_BACKUP_RETENTION_DAYS` | `7` | Retention window (days) for backup dump files |
 | `POSTGRES_BACKUP_PVC_NAME` | `bretter-postgres-backups` | PVC name used by backup automation |
 | `POSTGRES_BACKUP_PVC_SIZE` | `20Gi` | Backup PVC requested size |
-| `ENABLE_POSTGRES_BACKUP_REPLICATION` | `0` | Enable encrypted off-cluster replication of latest backup dump to S3-compatible storage |
+| `ENABLE_POSTGRES_BACKUP_REPLICATION` | `0` | Enable encrypted off-cluster replication of latest backup dump to S3-compatible storage (required when `PRODUCTION_PROFILE=1`) |
 | `POSTGRES_BACKUP_REPLICATION_BUCKET` | empty | Target S3 bucket for backup replication |
 | `POSTGRES_BACKUP_REPLICATION_SECRET_NAME` | `bretter-postgres-backup-replication` | Secret containing replication credentials (`aws_access_key_id`/`aws_secret_access_key`) |
 | `POSTGRES_BACKUP_REPLICATION_SSE_MODE` | `AES256` | Server-side encryption mode for replicated backups (`AES256` or `aws:kms`) |
@@ -543,6 +543,7 @@ Release workflow hardening:
 - Production digest auto-pin writes release-tagged digest refs (`<repo>:vX.Y.Z@sha256:...`) for runtime/admin/frontend/runner images.
 - Production deploy workflow gates rollout proof on authenticated synthetic checks for VM launch, Guacamole RDP frame render, and admin image upload/finalize/delete.
 - Production deploy workflow runs automatically only for release digest-promotion commits (or explicit workflow dispatch).
+- Staged promotion workflow (`.github/workflows/promote-staging-to-production.yml`) runs staging preflight + go-live proof before allowing production deployment.
 
 For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
 

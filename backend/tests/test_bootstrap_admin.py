@@ -21,8 +21,19 @@ def _set_valid_production_baseline(monkeypatch):
     monkeypatch.setattr(main_module.settings, "team_namespace_mode", "per_team")
     monkeypatch.setattr(main_module.settings, "team_namespace_prefix", "labs-team-")
     monkeypatch.setattr(main_module.settings, "team_namespace_bootstrap_enabled", True)
+    monkeypatch.setattr(main_module.settings, "orchestration_backend", "dual")
     monkeypatch.setattr(main_module.settings, "kube_node_selector_value", "cbekube2")
     monkeypatch.setattr(main_module.settings, "kube_vm_storage_class", "longhorn-r1")
+    monkeypatch.setattr(main_module.settings, "database_pool_size", 20)
+    monkeypatch.setattr(main_module.settings, "database_pool_timeout_seconds", 30)
+    monkeypatch.setattr(main_module.settings, "database_pool_recycle_seconds", 1800)
+    monkeypatch.setattr(main_module.settings, "database_statement_timeout_ms", 15000)
+    monkeypatch.setattr(main_module.settings, "database_slow_query_ms", 500)
+    monkeypatch.setattr(main_module.settings, "vm_privileged_runtime_isolation_enabled", True)
+    monkeypatch.setattr(main_module.settings, "vm_privileged_namespace_prefix", "labs-vm-priv-")
+    monkeypatch.setattr(main_module.settings, "kube_use_kvm", True)
+    monkeypatch.setattr(main_module.settings, "vm_runner_privileged", False)
+    monkeypatch.setattr(main_module.settings, "vm_net_backend", "user")
     monkeypatch.setattr(main_module.settings, "secrets_encryption_key", "A" * 32)
 
 
@@ -106,6 +117,13 @@ def test_startup_validation_requires_team_namespace_bootstrap_in_production(monk
     _set_valid_production_baseline(monkeypatch)
     monkeypatch.setattr(main_module.settings, "team_namespace_bootstrap_enabled", False)
     with pytest.raises(RuntimeError, match="BLABS_TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be true"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_rejects_db_orchestration_backend_in_production(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "orchestration_backend", "db")
+    with pytest.raises(RuntimeError, match="BLABS_ORCHESTRATION_BACKEND must be dual or crd"):
         main_module._validate_startup_config()
 
 

@@ -1,0 +1,253 @@
+name: Promote Staging To Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_namespace:
+        description: "Staging namespace"
+        required: false
+        default: "labs-staging"
+      production_namespace:
+        description: "Production namespace"
+        required: false
+        default: "labs"
+      release_name:
+        description: "Helm release name"
+        required: false
+        default: "bretter-labs"
+      run_production:
+        description: "Set false to run staging gate only"
+        required: false
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  staging-gate:
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      NAMESPACE: ${{ github.event.inputs.staging_namespace || 'labs-staging' }}
+      HELM_RELEASE_NAME: ${{ github.event.inputs.release_name || 'bretter-labs' }}
+      KUBECONFIG_B64: ${{ secrets.STAGING_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}
+      DEPLOY_VALUES_PROD_SITE_B64: ${{ secrets.STAGING_DEPLOY_VALUES_PROD_SITE_B64 || secrets.DEPLOY_VALUES_PROD_SITE_B64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml
+
+      - name: Setup Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.15.4
+
+      - name: Install kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o kubectl https://dl.k8s.io/release/v1.30.14/bin/linux/amd64/kubectl
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Install qemu-img
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-utils
+          qemu-img --version
+
+      - name: Build synthetic upload fixture
+        run: |
+          set -euo pipefail
+          qemu-img create -f qcow2 "${RUNNER_TEMP}/synthetic-upload.qcow2" 64M
+          ls -lh "${RUNNER_TEMP}/synthetic-upload.qcow2"
+
+      - name: Setup kubeconfig
+        run: |
+          set -euo pipefail
+          [ -n "${KUBECONFIG_B64}" ] || { echo "STAGING_KUBECONFIG_B64 (or KUBECONFIG_B64) secret is required." >&2; exit 1; }
+          mkdir -p "${HOME}/.kube"
+          printf '%s' "${KUBECONFIG_B64}" | base64 -d >"${HOME}/.kube/config"
+          chmod 600 "${HOME}/.kube/config"
+          kubectl -n "${NAMESPACE}" get ns "${NAMESPACE}" >/dev/null
+
+      - name: Materialize optional site values
+        run: |
+          set -euo pipefail
+          if [ -n "${DEPLOY_VALUES_PROD_SITE_B64}" ]; then
+            printf '%s' "${DEPLOY_VALUES_PROD_SITE_B64}" | base64 -d > deploy/helm/values-prod-site.staging.yaml
+          fi
+
+      - name: Staging deploy preflight
+        run: |
+          set -euo pipefail
+          if [ -f deploy/helm/values-prod-site.staging.yaml ]; then
+            NAMESPACE="${NAMESPACE}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.staging.yaml" \
+              REQUIRE_SITE_VALUES_FILE=1 \
+              ./scripts/deploy_preflight.sh
+          else
+            NAMESPACE="${NAMESPACE}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              REQUIRE_SITE_VALUES_FILE=0 \
+              ./scripts/deploy_preflight.sh
+          fi
+
+      - name: Staging go-live proof
+        run: |
+          set -euo pipefail
+          if [ -f deploy/helm/values-prod-site.staging.yaml ]; then
+            NAMESPACE="${NAMESPACE}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.staging.yaml" \
+              REQUIRE_SITE_VALUES_FILE=1 \
+              SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 \
+              SYNTHETIC_IMAGE_UPLOAD_FILE="${RUNNER_TEMP}/synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_NAME="synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=1200 \
+              ./scripts/production_go_live_proof.sh
+          else
+            NAMESPACE="${NAMESPACE}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              REQUIRE_SITE_VALUES_FILE=0 \
+              SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 \
+              SYNTHETIC_IMAGE_UPLOAD_FILE="${RUNNER_TEMP}/synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_NAME="synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=1200 \
+              ./scripts/production_go_live_proof.sh
+          fi
+
+      - name: Upload staging gate artifacts
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: staging-promotion-gate-reports
+          path: |
+            artifacts/go-live/
+          if-no-files-found: warn
+
+  production-deploy:
+    needs: staging-gate
+    if: ${{ github.event.inputs.run_production != 'false' }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      NAMESPACE: ${{ github.event.inputs.production_namespace || 'labs' }}
+      HELM_RELEASE_NAME: ${{ github.event.inputs.release_name || 'bretter-labs' }}
+      KUBECONFIG_B64: ${{ secrets.PRODUCTION_KUBECONFIG_B64 || secrets.KUBECONFIG_B64 }}
+      DEPLOY_VALUES_PROD_SITE_B64: ${{ secrets.DEPLOY_VALUES_PROD_SITE_B64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Setup Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python deps
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install pyyaml
+
+      - name: Setup Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.15.4
+
+      - name: Install kubectl
+        run: |
+          set -euo pipefail
+          curl -fsSL -o kubectl https://dl.k8s.io/release/v1.30.14/bin/linux/amd64/kubectl
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+          kubectl version --client
+
+      - name: Install qemu-img
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-utils
+          qemu-img --version
+
+      - name: Build synthetic upload fixture
+        run: |
+          set -euo pipefail
+          qemu-img create -f qcow2 "${RUNNER_TEMP}/synthetic-upload.qcow2" 64M
+          ls -lh "${RUNNER_TEMP}/synthetic-upload.qcow2"
+
+      - name: Setup kubeconfig
+        run: |
+          set -euo pipefail
+          [ -n "${KUBECONFIG_B64}" ] || { echo "PRODUCTION_KUBECONFIG_B64 (or KUBECONFIG_B64) secret is required." >&2; exit 1; }
+          mkdir -p "${HOME}/.kube"
+          printf '%s' "${KUBECONFIG_B64}" | base64 -d >"${HOME}/.kube/config"
+          chmod 600 "${HOME}/.kube/config"
+          kubectl -n "${NAMESPACE}" get ns "${NAMESPACE}" >/dev/null
+
+      - name: Materialize optional site values
+        run: |
+          set -euo pipefail
+          if [ -n "${DEPLOY_VALUES_PROD_SITE_B64}" ]; then
+            printf '%s' "${DEPLOY_VALUES_PROD_SITE_B64}" | base64 -d > deploy/helm/values-prod-site.ci.yaml
+          fi
+
+      - name: Safe deploy (atomic + proof + rollback)
+        run: |
+          set -euo pipefail
+          if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
+            NAMESPACE="${NAMESPACE}" \
+              HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              SITE_VALUES_FILE="$(pwd)/deploy/helm/values-prod-site.ci.yaml" \
+              REQUIRE_SITE_VALUES_FILE=1 \
+              SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 \
+              SYNTHETIC_IMAGE_UPLOAD_FILE="${RUNNER_TEMP}/synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_NAME="synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=1200 \
+              ROLLBACK_ON_PROOF_FAILURE=1 \
+              ./scripts/deploy_production_safe.sh
+          else
+            NAMESPACE="${NAMESPACE}" \
+              HELM_RELEASE_NAME="${HELM_RELEASE_NAME}" \
+              BASE_VALUES_FILE="$(pwd)/deploy/helm/values-production.yaml" \
+              REQUIRE_SITE_VALUES_FILE=0 \
+              SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK=1 \
+              SYNTHETIC_IMAGE_UPLOAD_FILE="${RUNNER_TEMP}/synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_NAME="synthetic-upload.qcow2" \
+              SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=1200 \
+              ROLLBACK_ON_PROOF_FAILURE=1 \
+              ./scripts/deploy_production_safe.sh
+          fi
+
+      - name: Check live config drift
+        run: |
+          set -euo pipefail
+          cmd=(python3 scripts/check_live_config_drift.py --namespace "${NAMESPACE}" -f deploy/helm/values.yaml -f deploy/helm/values-production.yaml)
+          if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
+            cmd+=(-f deploy/helm/values-prod-site.ci.yaml)
+          fi
+          "${cmd[@]}" | tee /tmp/deploy-production-drift.txt
+
+      - name: Upload deployment reports
+        if: always()
+        uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
+        with:
+          name: promotion-production-reports
+          path: |
+            artifacts/go-live/
+            /tmp/deploy-production-drift.txt
+          if-no-files-found: warn

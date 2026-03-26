@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from sqlmodel import Session
 
 from src.db import engine
@@ -5,6 +7,14 @@ from src.tables import ContainerImage, ContainerTemplate, Image, Template
 from src.time_utils import utc_now
 import src.routes.user as user_routes
 import src.routes.user_containers as user_container_routes
+
+
+class _FakeStorageApi:
+    def __init__(self, _api_client):
+        pass
+
+    def read_storage_class(self, name: str):
+        return {"metadata": {"name": name}}
 
 
 def _seed_vm_remote_template() -> None:
@@ -110,6 +120,19 @@ def test_vm_launch_uses_selected_remote_cluster(client, monkeypatch) -> None:
     _login(client, "alice", "password")
     _seed_vm_remote_template()
     monkeypatch.setattr(user_routes, "_kube_for_instance_cluster", lambda _session, _cluster_id: user_routes.kube)
+    monkeypatch.setattr(user_routes.k8s_client, "StorageV1Api", _FakeStorageApi)
+    monkeypatch.setattr(
+        user_routes.kube,
+        "resolve_vm_source_pvc",
+        lambda **_kwargs: (SimpleNamespace(spec=SimpleNamespace(storage_class_name="longhorn-r1")), "labs"),
+    )
+    monkeypatch.setattr(user_routes, "ensure_team_runtime_namespace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(user_routes, "evaluate_node_launch_admission", lambda _kube: (True, "ok"))
+    monkeypatch.setattr(
+        user_routes,
+        "evaluate_vm_storage_launch_admission",
+        lambda _kube, namespace: (True, f"ok ({namespace})"),
+    )
 
     response = client.post("/user/templates/tmpl-remote-vm-1/start")
     assert response.status_code == 201, response.text
@@ -127,8 +150,30 @@ def test_container_launch_uses_selected_remote_cluster(client, monkeypatch) -> N
         "_kube_for_container_cluster",
         lambda _session, _cluster_id: user_container_routes.kube,
     )
+    monkeypatch.setattr(user_container_routes, "evaluate_node_launch_admission", lambda _kube: (True, "ok"))
 
     response = client.post("/user/container-templates/tmpl-remote-ct-1/start")
     assert response.status_code == 201, response.text
     payload = response.json()
     assert payload["cluster_id"] == "edge-west-remote"
+
+
+def test_container_launch_blocks_when_node_admission_fails(client, monkeypatch) -> None:
+    _login(client, "admin", "admin")
+    _ensure_remote_cluster(client)
+    _login(client, "alice", "password")
+    _seed_container_remote_template()
+    monkeypatch.setattr(
+        user_container_routes,
+        "_kube_for_container_cluster",
+        lambda _session, _cluster_id: user_container_routes.kube,
+    )
+    monkeypatch.setattr(
+        user_container_routes,
+        "evaluate_node_launch_admission",
+        lambda _kube: (False, "runtime nodes are under pressure"),
+    )
+
+    response = client.post("/user/container-templates/tmpl-remote-ct-1/start")
+    assert response.status_code == 429, response.text
+    assert "runtime nodes are under pressure" in response.text

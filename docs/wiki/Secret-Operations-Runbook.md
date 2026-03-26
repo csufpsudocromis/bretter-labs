@@ -27,7 +27,7 @@ Use this runbook for production secret creation, validation, and rotation tasks.
   - Secret: `bretter-userflow-slo-api-auth` (recommended)
   - Keys (default): `username`, `password`
   - Used by `bretter-slo-rdp-connect-latency` CronJob
-- Off-cluster backup replication credentials (optional but recommended):
+- Off-cluster backup replication credentials (required for production profile):
   - Secret: `bretter-postgres-backup-replication` (example)
   - Keys (default): `aws_access_key_id`, `aws_secret_access_key`, `aws_session_token` (optional)
   - Used by `bretter-postgres-backup-replication` CronJob
@@ -91,7 +91,7 @@ kubectl -n labs create secret generic bretter-userflow-slo-api-auth \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Optional: create off-cluster backup replication secret:
+Create off-cluster backup replication secret:
 
 ```bash
 kubectl -n labs create secret generic bretter-postgres-backup-replication \

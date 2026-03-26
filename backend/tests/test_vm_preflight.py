@@ -91,6 +91,8 @@ def test_vm_template_preflight_reports_ready(login_user: TestClient, monkeypatch
     assert statuses["namespace"] == "ok"
     assert statuses["source_pvc"] == "ok"
     assert statuses["storage_class"] == "ok"
+    assert statuses["node_admission"] == "ok"
+    assert statuses["pvc_admission"] == "ok"
     assert statuses["runner_image"] == "ok"
 
 
@@ -112,6 +114,8 @@ def test_vm_template_preflight_blocks_on_runner_pull_failure(login_user: TestCli
     assert payload["ready"] is False
     assert "runner image pull failed" in str(payload["blocking_reason"])
     statuses = {entry["key"]: entry["status"] for entry in payload["checks"]}
+    assert statuses["node_admission"] == "ok"
+    assert statuses["pvc_admission"] == "ok"
     assert statuses["runner_image"] == "error"
 
 
@@ -130,6 +134,29 @@ def test_vm_template_preflight_returns_placement_error(login_user: TestClient, m
     assert payload["blocking_reason"] == "no runtime cluster available"
     assert payload["checks"][0]["key"] == "placement"
     assert payload["checks"][0]["status"] == "error"
+
+
+def test_start_vm_blocks_when_node_admission_fails(login_user: TestClient, monkeypatch) -> None:
+    _seed_vm_template()
+    fake_kube = _FakeKube(runner_pull_ok=True)
+    monkeypatch.setattr(user_routes.k8s_client, "StorageV1Api", _FakeStorageApi)
+    monkeypatch.setattr(
+        user_routes,
+        "select_cluster_for_launch",
+        lambda *args, **kwargs: PlacementDecision(cluster_id="local", reason="policy"),
+    )
+    monkeypatch.setattr(user_routes, "_kube_for_instance_cluster", lambda *_args, **_kwargs: fake_kube)
+    monkeypatch.setattr(user_routes, "ensure_team_runtime_namespace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(user_routes, "evaluate_node_launch_admission", lambda _kube: (False, "nodes unavailable"))
+    monkeypatch.setattr(
+        user_routes,
+        "evaluate_vm_storage_launch_admission",
+        lambda _kube, namespace: (True, f"ok ({namespace})"),
+    )
+
+    response = login_user.post("/user/templates/tmpl-preflight-1/start")
+    assert response.status_code == 409, response.text
+    assert "launch preflight failed: nodes unavailable" in response.text
 
 
 def test_status_feedback_maps_unbound_pvc_to_building_with_elapsed_hint() -> None:

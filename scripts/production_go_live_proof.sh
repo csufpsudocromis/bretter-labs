@@ -17,6 +17,7 @@ CRD_CANARY_RUNNING_SLO_SECONDS="${CRD_CANARY_RUNNING_SLO_SECONDS:-180}"
 CRD_CANARY_DELETE_WAIT_SECONDS="${CRD_CANARY_DELETE_WAIT_SECONDS:-180}"
 RUN_RESTORE_DRILL="${RUN_RESTORE_DRILL:-0}"
 RESTORE_DRILL_KEEP_DB="${RESTORE_DRILL_KEEP_DB:-0}"
+RUN_RESTORE_DRILL_CLEAN_NAMESPACE="${RUN_RESTORE_DRILL_CLEAN_NAMESPACE:-1}"
 POST_DEPLOY_AUTH_SECRET_NAME="${POST_DEPLOY_AUTH_SECRET_NAME:-bretter-postdeploy-auth}"
 POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admin_password}"
 POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
@@ -158,6 +159,9 @@ if not is_truthy(env_values.get("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED"
     errors.append("BLABS_CONTAINER_SIGNATURE_VERIFICATION_ENABLED is not enabled in backend deployment env.")
 if not str(env_values.get("BLABS_KUBE_VM_STORAGE_CLASS", "")).strip():
     errors.append("BLABS_KUBE_VM_STORAGE_CLASS is empty in backend deployment env.")
+orchestration_backend = str(env_values.get("BLABS_ORCHESTRATION_BACKEND", "")).strip().lower()
+if orchestration_backend not in {"dual", "crd"}:
+    errors.append("BLABS_ORCHESTRATION_BACKEND must be dual or crd in production deployment env.")
 
 cors_origins = env_values.get("BLABS_CORS_ALLOWED_ORIGINS", "")
 if not cors_origins:
@@ -175,6 +179,31 @@ if runtime_secret is None:
 signature_key_ref = env_values.get("BLABS_CONTAINER_SIGNATURE_KEY_REF", "")
 if not signature_key_ref:
     errors.append("BLABS_CONTAINER_SIGNATURE_KEY_REF is empty in backend deployment env.")
+
+for key in (
+    "BLABS_DATABASE_POOL_SIZE",
+    "BLABS_DATABASE_POOL_TIMEOUT_SECONDS",
+    "BLABS_DATABASE_POOL_RECYCLE_SECONDS",
+    "BLABS_DATABASE_STATEMENT_TIMEOUT_MS",
+    "BLABS_DATABASE_SLOW_QUERY_MS",
+):
+    raw = str(env_values.get(key, "")).strip()
+    if not raw:
+        errors.append(f"{key} is empty in backend deployment env.")
+        continue
+    if not raw.isdigit():
+        errors.append(f"{key} must be an integer in backend deployment env.")
+
+vm_requires_privileged_runtime = (
+    is_truthy(env_values.get("BLABS_KUBE_USE_KVM", "true"))
+    or is_truthy(env_values.get("BLABS_VM_RUNNER_PRIVILEGED", "false"))
+    or str(env_values.get("BLABS_VM_NET_BACKEND", "")).strip().lower() == "tap-nat"
+)
+vm_privileged_isolation_enabled = is_truthy(env_values.get("BLABS_VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED", "false"))
+if vm_requires_privileged_runtime and not vm_privileged_isolation_enabled:
+    errors.append("BLABS_VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED must be enabled when privileged VM runners are required.")
+if vm_privileged_isolation_enabled and not str(env_values.get("BLABS_VM_PRIVILEGED_NAMESPACE_PREFIX", "")).strip():
+    errors.append("BLABS_VM_PRIVILEGED_NAMESPACE_PREFIX is empty while privileged runtime isolation is enabled.")
 
 volume_secret_names: dict[str, str] = {}
 for vol in spec.get("volumes") or []:
@@ -272,6 +301,44 @@ esac
 
 if [ "$should_run_crd_canary" -eq 1 ]; then
   if [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
+    CRD_CANARY_TEMPLATE_ID="$(
+      python3 - "$NAMESPACE" <<'PY'
+import subprocess
+import sys
+
+namespace = str(sys.argv[1] if len(sys.argv) > 1 else "labs").strip() or "labs"
+pod = subprocess.check_output(
+    ["kubectl", "-n", namespace, "get", "pod", "-l", "app=bretter-postgres", "-o", "jsonpath={.items[0].metadata.name}"],
+    text=True,
+).strip()
+if not pod:
+    print("", end="")
+    raise SystemExit(0)
+query = "SELECT id FROM template WHERE enabled = 1 ORDER BY created_at ASC LIMIT 1;"
+out = subprocess.check_output(
+    [
+        "kubectl",
+        "-n",
+        namespace,
+        "exec",
+        pod,
+        "-c",
+        "postgres",
+        "--",
+        "sh",
+        "-c",
+        f"set -eu; export PGPASSWORD=\"$POSTGRES_PASSWORD\"; psql -U \"$POSTGRES_USER\" -d \"$POSTGRES_DB\" -Atc '{query}'",
+    ],
+    text=True,
+).strip()
+print(out, end="")
+PY
+    )" || true
+    if [ -n "$CRD_CANARY_TEMPLATE_ID" ]; then
+      log "Auto-selected CRD canary template id: ${CRD_CANARY_TEMPLATE_ID}"
+    fi
+  fi
+  if [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
     fail_check "operator LabInstance canary (missing CRD_CANARY_TEMPLATE_ID)"
   else
     run_check "operator LabInstance canary" \
@@ -285,6 +352,80 @@ if [ "$should_run_crd_canary" -eq 1 ]; then
   fi
 else
   log "CRD operator canary skipped (RUN_CRD_OPERATOR_CANARY=${RUN_CRD_OPERATOR_CANARY}, backend=${orchestration_backend:-db})."
+fi
+
+backup_replication_enabled="0"
+backup_replication_secret_name="bretter-postgres-backup-replication"
+backup_replication_secret_key="aws_secret_access_key"
+backup_replication_object_lock_mode=""
+backup_replication_object_lock_days="0"
+backup_meta="$(
+  python3 - "$BASE_VALUES_FILE" "$SITE_VALUES_FILE" <<'PY'
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+
+def read_yaml(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"values file must contain a top-level mapping: {path}")
+    return payload
+
+
+def merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = dict(base)
+    for key, value in overlay.items():
+        if isinstance(merged.get(key), dict) and isinstance(value, dict):
+            merged[key] = merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def is_truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+base_path = Path(sys.argv[1])
+site_path = Path(sys.argv[2]) if len(sys.argv) > 2 else None
+values = read_yaml(base_path)
+if site_path and site_path.exists():
+    values = merge(values, read_yaml(site_path))
+app = values.get("appTemplateValues")
+if not isinstance(app, dict):
+    app = {}
+
+enabled = "1" if is_truthy(app.get("ENABLE_POSTGRES_BACKUP_REPLICATION", "0")) else "0"
+secret_name = str(app.get("POSTGRES_BACKUP_REPLICATION_SECRET_NAME", "bretter-postgres-backup-replication") or "").strip()
+secret_key = str(app.get("POSTGRES_BACKUP_REPLICATION_SECRET_ACCESS_KEY_KEY", "aws_secret_access_key") or "").strip()
+object_lock_mode = str(app.get("POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_MODE", "") or "").strip()
+object_lock_days = str(app.get("POSTGRES_BACKUP_REPLICATION_OBJECT_LOCK_DAYS", "0") or "").strip()
+print(f"backup_replication_enabled={enabled}")
+print(f"backup_replication_secret_name={secret_name}")
+print(f"backup_replication_secret_key={secret_key}")
+print(f"backup_replication_object_lock_mode={object_lock_mode}")
+print(f"backup_replication_object_lock_days={object_lock_days}")
+PY
+)" || fail_check "backup replication values parse"
+if [ -n "$backup_meta" ]; then
+  while IFS='=' read -r key value; do
+    case "$key" in
+      backup_replication_enabled) backup_replication_enabled="$value" ;;
+      backup_replication_secret_name) backup_replication_secret_name="$value" ;;
+      backup_replication_secret_key) backup_replication_secret_key="$value" ;;
+      backup_replication_object_lock_mode) backup_replication_object_lock_mode="$value" ;;
+      backup_replication_object_lock_days) backup_replication_object_lock_days="$value" ;;
+    esac
+  done <<<"$backup_meta"
 fi
 
 if [ -n "$runtime_secret_name" ] && [ -n "$runtime_secret_key" ]; then
@@ -312,6 +453,78 @@ if [[ "$signature_key_ref" == /etc/bretter-signing/* ]]; then
   fi
 fi
 
+if [ "$backup_replication_enabled" != "1" ]; then
+  fail_check "backup replication enabled in merged values"
+elif [ -n "$backup_replication_secret_name" ] && [ -n "$backup_replication_secret_key" ]; then
+  backup_replication_secret_b64="$(secret_data_value_b64 "$NAMESPACE" "$backup_replication_secret_name" "$backup_replication_secret_key" 2>/dev/null || true)"
+  if [ -n "$backup_replication_secret_b64" ]; then
+    pass_check "backup replication secret exists with expected key"
+  else
+    fail_check "backup replication secret exists with expected key"
+  fi
+else
+  fail_check "backup replication secret exists with expected key"
+fi
+
+run_check "postgres backup replication cronjob present" \
+  kubectl -n "$NAMESPACE" get cronjob bretter-postgres-backup-replication
+run_check "backup replication object lock env policy" \
+  python3 - "$NAMESPACE" "$backup_replication_object_lock_mode" "$backup_replication_object_lock_days" <<'PY'
+import json
+import sys
+from datetime import UTC, datetime
+import subprocess
+
+namespace = str(sys.argv[1] if len(sys.argv) > 1 else "labs").strip() or "labs"
+required_mode = str(sys.argv[2] if len(sys.argv) > 2 else "").strip().upper()
+required_days_raw = str(sys.argv[3] if len(sys.argv) > 3 else "0").strip()
+try:
+    required_days = int(required_days_raw or "0")
+except ValueError:
+    required_days = 0
+if not required_mode:
+    raise SystemExit("required object lock mode is empty in merged production values")
+if required_days < 1:
+    raise SystemExit("required object lock days is invalid in merged production values")
+
+raw = subprocess.check_output(
+    ["kubectl", "-n", namespace, "get", "cronjob", "bretter-postgres-backup-replication", "-o", "json"],
+    text=True,
+)
+payload = json.loads(raw or "{}")
+containers = (
+    ((((payload or {}).get("spec") or {}).get("jobTemplate") or {}).get("spec") or {}
+).get("template", {}).get("spec", {}).get("containers", [])
+if not containers:
+    raise SystemExit("backup replication cronjob has no containers")
+container = containers[0]
+env_values: dict[str, str] = {}
+for item in container.get("env") or []:
+    name = str(item.get("name") or "").strip()
+    if not name:
+        continue
+    if "value" in item:
+        env_values[name] = str(item.get("value") or "").strip()
+
+mode = str(env_values.get("S3_OBJECT_LOCK_MODE", "")).strip().upper()
+days_raw = str(env_values.get("S3_OBJECT_LOCK_DAYS", "")).strip()
+if mode != required_mode:
+    raise SystemExit(f"S3_OBJECT_LOCK_MODE mismatch (expected {required_mode}, found {mode or '<empty>'})")
+if days_raw != str(required_days):
+    raise SystemExit(f"S3_OBJECT_LOCK_DAYS mismatch (expected {required_days}, found {days_raw or '<empty>'})")
+
+command_parts = [str(x or "") for x in (container.get("command") or [])]
+command_blob = "\n".join(command_parts)
+if "--object-lock-mode" not in command_blob or "--object-lock-retain-until-date" not in command_blob:
+    raise SystemExit("backup replication command does not include object lock arguments")
+
+if required_days < 7:
+    raise SystemExit("object lock retention is below production minimum (7 days)")
+
+print(f"object_lock_policy mode={mode} days={required_days}")
+print(f"checked_at={datetime.now(UTC).isoformat()}")
+PY
+
 postdeploy_admin_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY" 2>/dev/null || true)"
 if [ -n "$postdeploy_admin_b64" ]; then
   pass_check "postdeploy admin auth secret exists with password key"
@@ -332,6 +545,63 @@ if [ -n "$rdp_slo_auth_b64" ]; then
 else
   fail_check "rdp slo auth secret exists with password key"
 fi
+
+run_check "tenant namespace baseline resources" \
+  python3 - "$NAMESPACE" <<'PY'
+import json
+import subprocess
+import sys
+
+control_namespace = str(sys.argv[1] if len(sys.argv) > 1 else "labs").strip() or "labs"
+raw = subprocess.check_output(
+    ["kubectl", "get", "namespace", "-l", "labs.bretter.io/tenant=true", "-o", "json"],
+    text=True,
+)
+payload = json.loads(raw or "{}")
+items = (payload or {}).get("items") or []
+tenant_namespaces: list[str] = []
+for item in items:
+    name = str(((item or {}).get("metadata") or {}).get("name") or "").strip()
+    if not name:
+        continue
+    if name == control_namespace:
+        continue
+    tenant_namespaces.append(name)
+
+if not tenant_namespaces:
+    print("No tenant namespaces found; baseline namespace-object check skipped.")
+    sys.exit(0)
+
+required_objects = {
+    "resourcequota": ["bretter-tenant-quota"],
+    "limitrange": ["bretter-tenant-default-limits"],
+    "networkpolicy": [
+        "default-deny-ingress",
+        "default-deny-egress",
+        "allow-dns-egress",
+        "allow-same-namespace-traffic",
+    ],
+}
+
+errors: list[str] = []
+for namespace in sorted(set(tenant_namespaces)):
+    for kind, names in required_objects.items():
+        for name in names:
+            proc = subprocess.run(
+                ["kubectl", "-n", namespace, "get", kind, name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if proc.returncode != 0:
+                errors.append(f"{namespace}: missing {kind}/{name}")
+
+if errors:
+    for line in errors:
+        print(line, file=sys.stderr)
+    sys.exit(1)
+
+print(f"Validated tenant baseline resources in {len(set(tenant_namespaces))} tenant namespace(s).")
+PY
 run_check "rdp connect-latency cronjob present" \
   kubectl -n "$NAMESPACE" get cronjob bretter-slo-rdp-connect-latency
 
@@ -404,6 +674,22 @@ case "$(printf '%s' "$RUN_RESTORE_DRILL" | tr '[:upper:]' '[:lower:]')" in
       KEEP_RESTORE_DB="$RESTORE_DRILL_KEEP_DB" \
       REPORT_DIR="${REPORT_DIR}/restore-drill" \
       "$ROOT_DIR/scripts/restore_drill_postgres.sh"
+    case "$(printf '%s' "$RUN_RESTORE_DRILL_CLEAN_NAMESPACE" | tr '[:upper:]' '[:lower:]')" in
+      1 | true | yes | on)
+        run_check "clean-namespace restore drill" \
+          env \
+          SOURCE_NAMESPACE="$NAMESPACE" \
+          KEEP_RESTORE_NAMESPACE=0 \
+          REPORT_DIR="${REPORT_DIR}/restore-drill-clean-namespace" \
+          "$ROOT_DIR/scripts/restore_drill_clean_namespace.sh"
+        ;;
+      0 | false | no | off)
+        log "Clean-namespace restore drill skipped (RUN_RESTORE_DRILL_CLEAN_NAMESPACE=${RUN_RESTORE_DRILL_CLEAN_NAMESPACE})."
+        ;;
+      *)
+        fail_check "RUN_RESTORE_DRILL_CLEAN_NAMESPACE must be one of: 0, 1, true, false."
+        ;;
+    esac
     ;;
   0 | false | no | off)
     log "Postgres restore drill skipped (RUN_RESTORE_DRILL=${RUN_RESTORE_DRILL})."

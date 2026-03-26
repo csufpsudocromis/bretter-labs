@@ -17,6 +17,10 @@ on:
         description: "Fail when backup CronJob is missing (true/false)"
         required: false
         default: "true"
+      run_clean_namespace_restore_drill:
+        description: "Run clean-namespace restore verification (true/false)"
+        required: false
+        default: "true"
   schedule:
     - cron: "42 9 * * *"
 
@@ -29,6 +33,7 @@ jobs:
     env:
       NAMESPACE: ${{ github.event.inputs.namespace || 'labs' }}
       REQUIRE_BACKUP_CRONJOB: ${{ github.event.inputs.require_backup_cronjob || 'true' }}
+      RUN_CLEAN_NAMESPACE_RESTORE_DRILL: ${{ github.event.inputs.run_clean_namespace_restore_drill || 'true' }}
       KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
     steps:
       - name: Checkout
@@ -49,6 +54,20 @@ jobs:
           set -euo pipefail
           NAMESPACE="${NAMESPACE}" ./scripts/restore_drill_postgres.sh
 
+      - name: Run clean-namespace restore drill
+        run: |
+          set -euo pipefail
+          should_run=0
+          case "$(printf '%s' "${RUN_CLEAN_NAMESPACE_RESTORE_DRILL}" | tr '[:upper:]' '[:lower:]')" in
+            1 | true | yes | on) should_run=1 ;;
+            *) should_run=0 ;;
+          esac
+          if [ "$should_run" -eq 1 ]; then
+            SOURCE_NAMESPACE="${NAMESPACE}" ./scripts/restore_drill_clean_namespace.sh
+          else
+            echo "Skipping clean-namespace restore drill (RUN_CLEAN_NAMESPACE_RESTORE_DRILL=${RUN_CLEAN_NAMESPACE_RESTORE_DRILL})."
+          fi
+
       - name: Validate backup retention policy
         run: |
           set -euo pipefail
@@ -66,5 +85,6 @@ jobs:
           name: nightly-restore-drill-report
           path: |
             artifacts/restore-drill/
+            artifacts/restore-drill-clean-namespace/
             artifacts/backup-retention/
           if-no-files-found: warn

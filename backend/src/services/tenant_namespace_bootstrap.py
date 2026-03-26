@@ -17,6 +17,9 @@ _DEFAULT_DENY_INGRESS_NAME = "default-deny-ingress"
 _DEFAULT_DENY_EGRESS_NAME = "default-deny-egress"
 _ALLOW_DNS_EGRESS_NAME = "allow-dns-egress"
 _ALLOW_SAME_NS_NAME = "allow-same-namespace-traffic"
+_PSA_ENFORCE_KEY = "pod-security.kubernetes.io/enforce"
+_PSA_AUDIT_KEY = "pod-security.kubernetes.io/audit"
+_PSA_WARN_KEY = "pod-security.kubernetes.io/warn"
 
 
 def _control_namespace() -> str:
@@ -33,6 +36,20 @@ def _bootstrap_enabled() -> bool:
 
 def _safe_team_label(team: str | None) -> str:
     return normalize_team(team)
+
+
+def _pod_security_labels(*, privileged_runtime: bool) -> dict[str, str]:
+    if privileged_runtime:
+        return {
+            _PSA_ENFORCE_KEY: "privileged",
+            _PSA_AUDIT_KEY: "restricted",
+            _PSA_WARN_KEY: "restricted",
+        }
+    return {
+        _PSA_ENFORCE_KEY: "restricted",
+        _PSA_AUDIT_KEY: "restricted",
+        _PSA_WARN_KEY: "restricted",
+    }
 
 
 def _runtime_role() -> client.V1Role:
@@ -228,12 +245,20 @@ def _upsert_network_policies(networking_api: client.NetworkingV1Api, namespace: 
             networking_api.patch_namespaced_network_policy(name=name, namespace=namespace, body=policy)
 
 
-def _upsert_namespace(core_api: client.CoreV1Api, namespace: str, team: str | None) -> None:
+def _upsert_namespace(
+    core_api: client.CoreV1Api,
+    namespace: str,
+    team: str | None,
+    *,
+    privileged_runtime: bool,
+) -> None:
     labels = {
         "app.kubernetes.io/part-of": "bretter-labs",
         "labs.bretter.io/tenant": "true",
         "labs.bretter.io/team": _safe_team_label(team),
+        "labs.bretter.io/runtime-profile": "vm-privileged" if privileged_runtime else "restricted",
     }
+    labels.update(_pod_security_labels(privileged_runtime=privileged_runtime))
     body = client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace, labels=labels))
     try:
         core_api.create_namespace(body=body)
@@ -294,7 +319,13 @@ def _sync_configmap(core_api: client.CoreV1Api, *, source_namespace: str, target
         core_api.patch_namespaced_config_map(name=configmap_name, namespace=target_namespace, body=target)
 
 
-def ensure_team_runtime_namespace(kube_service, *, team: str | None, namespace: str) -> None:
+def ensure_team_runtime_namespace(
+    kube_service,
+    *,
+    team: str | None,
+    namespace: str,
+    privileged_runtime: bool = False,
+) -> None:
     if not _bootstrap_enabled():
         return
     if _mode() != "per_team":
@@ -309,7 +340,7 @@ def ensure_team_runtime_namespace(kube_service, *, team: str | None, namespace: 
     networking_api = kube_service._networking_client()
     rbac_api = client.RbacAuthorizationV1Api(core_api.api_client)
     try:
-        _upsert_namespace(core_api, target_namespace, team)
+        _upsert_namespace(core_api, target_namespace, team, privileged_runtime=privileged_runtime)
         _upsert_role(rbac_api, target_namespace)
         _upsert_role_binding(rbac_api, target_namespace, service_account_namespace=control_namespace)
         _upsert_resource_quota(core_api, target_namespace)

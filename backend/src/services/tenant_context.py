@@ -76,3 +76,39 @@ def tenant_namespace_for_team(team: str | None) -> str:
 
 def tenant_namespace_for_user(user: User) -> str:
     return tenant_namespace_for_team(getattr(user, "team", None))
+
+
+def vm_launch_requires_privileged_runtime() -> bool:
+    return bool(
+        getattr(settings, "vm_runner_privileged", False)
+        or getattr(settings, "kube_use_kvm", True)
+        or str(getattr(settings, "vm_net_backend", "user") or "user").strip().lower() == "tap-nat"
+    )
+
+
+def tenant_privileged_namespace_for_team(team: str | None) -> str:
+    mode = str(getattr(settings, "team_namespace_mode", "shared") or "shared").strip().lower()
+    if mode != "per_team":
+        return normalize_namespace(getattr(settings, "kube_namespace", None))
+    prefix = (
+        str(getattr(settings, "vm_privileged_namespace_prefix", "labs-vm-priv-") or "labs-vm-priv-").strip().lower()
+    )
+    if not prefix:
+        prefix = "labs-vm-priv-"
+    slug = _TEAM_SLUG_RE.sub("-", normalize_team(team)).strip("-")
+    if not slug:
+        slug = "default"
+    namespace = f"{prefix}{slug}"
+    namespace = re.sub(r"[^a-z0-9-]+", "-", namespace.lower()).strip("-")
+    if not namespace:
+        namespace = "labs-vm-priv"
+    return namespace[:63].rstrip("-")
+
+
+def vm_runtime_namespace_for_user(user: User) -> str:
+    base_namespace = tenant_namespace_for_user(user)
+    if not bool(getattr(settings, "vm_privileged_runtime_isolation_enabled", True)):
+        return base_namespace
+    if not vm_launch_requires_privileged_runtime():
+        return base_namespace
+    return tenant_privileged_namespace_for_team(getattr(user, "team", None))

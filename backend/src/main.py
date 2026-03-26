@@ -85,10 +85,28 @@ def _validate_startup_config() -> None:
         if not str(getattr(settings, "team_namespace_prefix", "") or "").strip():
             raise RuntimeError("BLABS_TEAM_NAMESPACE_PREFIX must be set when BLABS_TEAM_NAMESPACE_MODE=per_team.")
 
+    db_pool_size = max(0, int(getattr(settings, "database_pool_size", 0) or 0))
+    db_pool_timeout_seconds = max(0, int(getattr(settings, "database_pool_timeout_seconds", 0) or 0))
+    db_pool_recycle_seconds = max(0, int(getattr(settings, "database_pool_recycle_seconds", 0) or 0))
+    db_statement_timeout_ms = max(0, int(getattr(settings, "database_statement_timeout_ms", 0) or 0))
+    db_slow_query_ms = max(0, int(getattr(settings, "database_slow_query_ms", 0) or 0))
+    if db_pool_size < 1:
+        raise RuntimeError("BLABS_DATABASE_POOL_SIZE must be >= 1.")
+    if db_pool_timeout_seconds < 1:
+        raise RuntimeError("BLABS_DATABASE_POOL_TIMEOUT_SECONDS must be >= 1.")
+    if db_pool_recycle_seconds < 30:
+        raise RuntimeError("BLABS_DATABASE_POOL_RECYCLE_SECONDS must be >= 30.")
+    if db_statement_timeout_ms < 100:
+        raise RuntimeError("BLABS_DATABASE_STATEMENT_TIMEOUT_MS must be >= 100.")
+    if db_slow_query_ms < 1:
+        raise RuntimeError("BLABS_DATABASE_SLOW_QUERY_MS must be >= 1.")
+
     if not bool(getattr(settings, "production_profile", False)):
         return
 
     errors: list[str] = []
+    if orchestration_backend == "db":
+        errors.append("BLABS_ORCHESTRATION_BACKEND must be dual or crd when BLABS_PRODUCTION_PROFILE=true.")
     if str(getattr(settings, "public_scheme", "https") or "").strip().lower() != "https":
         errors.append("BLABS_PUBLIC_SCHEME must be https when BLABS_PRODUCTION_PROFILE=true.")
     if not bool(getattr(settings, "auth_cookie_secure", True)):
@@ -126,6 +144,32 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_KUBE_NODE_SELECTOR_VALUE must be set when BLABS_PRODUCTION_PROFILE=true.")
     if not str(getattr(settings, "kube_vm_storage_class", "") or "").strip():
         errors.append("BLABS_KUBE_VM_STORAGE_CLASS must be set when BLABS_PRODUCTION_PROFILE=true.")
+    if db_pool_size < 5:
+        errors.append("BLABS_DATABASE_POOL_SIZE must be >= 5 when BLABS_PRODUCTION_PROFILE=true.")
+    if db_statement_timeout_ms < 1000:
+        errors.append("BLABS_DATABASE_STATEMENT_TIMEOUT_MS must be >= 1000 when BLABS_PRODUCTION_PROFILE=true.")
+    if db_slow_query_ms > 2000:
+        errors.append("BLABS_DATABASE_SLOW_QUERY_MS must be <= 2000 when BLABS_PRODUCTION_PROFILE=true.")
+
+    vm_requires_privileged_runtime = bool(
+        getattr(settings, "vm_runner_privileged", False)
+        or getattr(settings, "kube_use_kvm", True)
+        or str(getattr(settings, "vm_net_backend", "user") or "user").strip().lower() == "tap-nat"
+    )
+    vm_privileged_runtime_isolation_enabled = bool(getattr(settings, "vm_privileged_runtime_isolation_enabled", True))
+    vm_privileged_namespace_prefix = str(getattr(settings, "vm_privileged_namespace_prefix", "") or "").strip()
+    if vm_requires_privileged_runtime and not vm_privileged_runtime_isolation_enabled:
+        errors.append(
+            "BLABS_VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED must be true when privileged VM runners are required."
+        )
+    if vm_privileged_runtime_isolation_enabled:
+        if not vm_privileged_namespace_prefix:
+            errors.append(
+                "BLABS_VM_PRIVILEGED_NAMESPACE_PREFIX must be set when BLABS_VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED=true."
+            )
+        elif not vm_privileged_namespace_prefix.endswith("-"):
+            errors.append("BLABS_VM_PRIVILEGED_NAMESPACE_PREFIX must end with '-' when configured.")
+
     secrets_encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
     if not secrets_encryption_key:
         errors.append("BLABS_SECRETS_ENCRYPTION_KEY must be set when BLABS_PRODUCTION_PROFILE=true.")

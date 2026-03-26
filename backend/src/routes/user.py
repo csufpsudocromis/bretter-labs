@@ -43,6 +43,7 @@ from ..services.labinstance_crd import (
     vm_orchestration_writes_crd,
 )
 from ..services.kubernetes import PodRequest, PodStatus, kube
+from ..services.launch_admission import evaluate_node_launch_admission, evaluate_vm_storage_launch_admission
 from ..services.multi_cluster import (
     PlacementError,
     kube_service_for_cluster,
@@ -52,7 +53,13 @@ from ..services.multi_cluster import (
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
-from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
+from ..services.tenant_context import (
+    GLOBAL_TENANT,
+    normalize_tenant,
+    tenant_namespace_for_user,
+    vm_launch_requires_privileged_runtime,
+    vm_runtime_namespace_for_user,
+)
 from ..services import ws_metrics
 from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
 from ..time_utils import utc_now
@@ -219,9 +226,11 @@ def _vm_preflight(
     *,
     runtime_kube,
     runtime_namespace: str,
+    privileged_runtime_namespace: bool,
     template: Template,
     image: Image,
     team: str | None,
+    include_runner_pull_check: bool = True,
 ) -> VMTemplateLaunchPreflight:
     checks: list[VMTemplateLaunchPreflightCheck] = []
     blocking_reason = ""
@@ -233,7 +242,12 @@ def _vm_preflight(
             blocking_reason = detail
 
     try:
-        ensure_team_runtime_namespace(runtime_kube, team=team, namespace=runtime_namespace)
+        ensure_team_runtime_namespace(
+            runtime_kube,
+            team=team,
+            namespace=runtime_namespace,
+            privileged_runtime=privileged_runtime_namespace,
+        )
         add_check("namespace", "ok", f"Runtime namespace {runtime_namespace} is ready.")
     except Exception as exc:
         add_check("namespace", "error", str(exc))
@@ -290,11 +304,20 @@ def _vm_preflight(
         except Exception as exc:
             add_check("storage_class", "error", f"StorageClass {desired_storage_class} check failed: {exc}")
 
-    pull_ok, pull_detail = runtime_kube.check_vm_runner_image_pullability(
-        namespace=runtime_namespace,
-        timeout_seconds=30,
-    )
-    add_check("runner_image", "ok" if pull_ok else "error", pull_detail)
+    node_ok, node_detail = evaluate_node_launch_admission(runtime_kube)
+    add_check("node_admission", "ok" if node_ok else "error", node_detail)
+
+    pvc_ok, pvc_detail = evaluate_vm_storage_launch_admission(runtime_kube, namespace=runtime_namespace)
+    add_check("pvc_admission", "ok" if pvc_ok else "error", pvc_detail)
+
+    if include_runner_pull_check:
+        pull_ok, pull_detail = runtime_kube.check_vm_runner_image_pullability(
+            namespace=runtime_namespace,
+            timeout_seconds=30,
+        )
+        add_check("runner_image", "ok" if pull_ok else "error", pull_detail)
+    else:
+        add_check("runner_image", "ok", "Runner image pullability probe skipped in launch fast-path.")
 
     selected_cluster_id = str(getattr(template, "cluster_id", "") or local_cluster_id())
     return VMTemplateLaunchPreflight(
@@ -421,7 +444,15 @@ def _attach_vm_connect_session_cookie(response: Response, request: Request, inst
 
 
 def _vm_runtime_namespace(user: User) -> str:
+    return vm_runtime_namespace_for_user(user)
+
+
+def _vm_quota_namespace(user: User) -> str:
     return tenant_namespace_for_user(user)
+
+
+def _vm_uses_privileged_runtime() -> bool:
+    return vm_launch_requires_privileged_runtime()
 
 
 def _instance_namespace(record: Instance, user: User | None = None) -> str:
@@ -636,8 +667,8 @@ def _tls_client_context() -> ssl.SSLContext:
 def list_available_templates(
     user: User = Depends(require_user), session: Session = Depends(get_session)
 ) -> list[VMTemplate]:
-    runtime_namespace = _vm_runtime_namespace(user)
-    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
+    quota_namespace = _vm_quota_namespace(user)
+    team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), quota_namespace)
     tenant_scope = {
         normalize_tenant(getattr(user, "team", None), default="default"),
         GLOBAL_TENANT,
@@ -685,6 +716,7 @@ def preflight_template_launch(
     session: Session = Depends(get_session),
 ) -> VMTemplateLaunchPreflight:
     runtime_namespace = _vm_runtime_namespace(user)
+    privileged_runtime = _vm_uses_privileged_runtime()
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(Template, template_id)
     if not template or not template.enabled:
@@ -725,6 +757,7 @@ def preflight_template_launch(
     result = _vm_preflight(
         runtime_kube=runtime_kube,
         runtime_namespace=runtime_namespace,
+        privileged_runtime_namespace=privileged_runtime,
         template=template,
         image=image,
         team=getattr(user, "team", None),
@@ -1310,6 +1343,8 @@ def start_vm(
     template_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
 ) -> VMInstance:
     runtime_namespace = _vm_runtime_namespace(user)
+    quota_namespace = _vm_quota_namespace(user)
+    privileged_runtime = _vm_uses_privileged_runtime()
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(Template, template_id)
     if not template or not template.enabled:
@@ -1372,7 +1407,7 @@ def start_vm(
     idle_minutes = enforce_team_quota_or_raise(
         session,
         team=getattr(user, "team", None),
-        namespace=runtime_namespace,
+        namespace=quota_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
         requested_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
@@ -1390,10 +1425,18 @@ def start_vm(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
-    try:
-        ensure_team_runtime_namespace(runtime_kube, team=getattr(user, "team", None), namespace=runtime_namespace)
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    preflight = _vm_preflight(
+        runtime_kube=runtime_kube,
+        runtime_namespace=runtime_namespace,
+        privileged_runtime_namespace=privileged_runtime,
+        template=template,
+        image=image,
+        team=getattr(user, "team", None),
+        include_runner_pull_check=False,
+    )
+    if not preflight.ready:
+        detail = str(preflight.blocking_reason or "VM launch preflight failed.").strip()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"launch preflight failed: {detail}")
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1578,7 +1621,9 @@ def restart_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    runtime_namespace = _instance_namespace(record, user)
+    runtime_namespace = _vm_runtime_namespace(user)
+    quota_namespace = _vm_quota_namespace(user)
+    privileged_runtime = _vm_uses_privileged_runtime()
     template = session.get(Template, record.template_id)
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
@@ -1615,7 +1660,7 @@ def restart_vm(
     idle_minutes = enforce_team_quota_or_raise(
         session,
         team=getattr(user, "team", None),
-        namespace=runtime_namespace,
+        namespace=quota_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
         requested_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
@@ -1635,7 +1680,12 @@ def restart_vm(
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
     try:
-        ensure_team_runtime_namespace(runtime_kube, team=getattr(user, "team", None), namespace=runtime_namespace)
+        ensure_team_runtime_namespace(
+            runtime_kube,
+            team=getattr(user, "team", None),
+            namespace=runtime_namespace,
+            privileged_runtime=privileged_runtime,
+        )
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
