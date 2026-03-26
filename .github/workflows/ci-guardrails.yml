@@ -51,16 +51,18 @@ jobs:
           docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < frontend-vite/Dockerfile
           docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < runner/Dockerfile
 
+      - name: Setup Trivy
+        uses: aquasecurity/setup-trivy@e6c2c5e321ed9123bda567646e2f96565e34abe1 # v0.2.4
+
       - name: Run Trivy filesystem scan
-        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
-        with:
-          scan-type: fs
-          scan-ref: .
-          scanners: vuln
-          skip-dirs: .venv,frontend-vite/node_modules
-          ignore-unfixed: true
-          severity: HIGH,CRITICAL
-          exit-code: "1"
+        run: |
+          trivy fs \
+            --scanners vuln \
+            --skip-dirs .venv,frontend-vite/node_modules \
+            --ignore-unfixed \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            .
 
       - name: Setup Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
