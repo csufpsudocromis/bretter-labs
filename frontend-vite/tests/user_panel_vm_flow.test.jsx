@@ -82,6 +82,9 @@ describe("UserPanel VM flow", () => {
     render(<UserPanel />);
 
     await screen.findByText("Windows Lab");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Start Lab" })).toBeEnabled();
+    });
     await user.click(screen.getByRole("button", { name: "Start Lab" }));
 
     const connectButton = await screen.findByRole("button", { name: "Connect" });
