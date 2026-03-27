@@ -14,6 +14,7 @@ class UserCreate(BaseModel):
     password: str = Field(..., min_length=1, max_length=128)
     role: Optional[str] = Field(default=None, min_length=1, max_length=64)
     team: str = Field(default="default", min_length=1, max_length=64)
+    namespace_scopes: list[str] = Field(default_factory=list)
     is_admin: bool = False
 
 
@@ -26,6 +27,7 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     role: Optional[str] = Field(default=None, min_length=1, max_length=64)
     team: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace_scopes: Optional[list[str]] = None
     is_admin: Optional[bool] = None
 
 
@@ -33,6 +35,7 @@ class UserOut(BaseModel):
     username: str
     role: str
     team: str
+    namespace_scopes: list[str] = Field(default_factory=list)
     is_admin: bool
     force_password_change: bool
     permissions: list[str] = Field(default_factory=list)
@@ -190,6 +193,7 @@ class ImageMeta(BaseModel):
     id: str
     name: str
     tenant: str = "global"
+    namespace: str = "labs"
     cluster_id: str = "local"
     checksum: str
     size_bytes: int
@@ -207,6 +211,7 @@ class ImageUploadTaskStatus(BaseModel):
     progress_percent: int | None = None
     original_filename: str
     filename: str
+    namespace: str = "labs"
     size_bytes: int
     detail: str = ""
     error: str | None = None
@@ -234,6 +239,7 @@ class ContainerImageCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     image_ref: str = Field(..., min_length=1, max_length=255)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
@@ -241,6 +247,7 @@ class ContainerImageUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     image_ref: Optional[str] = Field(default=None, min_length=1, max_length=255)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
@@ -249,6 +256,7 @@ class ContainerImageMeta(BaseModel):
     name: str
     image_ref: str
     tenant: str = "global"
+    namespace: str = "labs"
     cluster_id: str = "local"
     signature_warning: Optional[str] = None
     last_scan_at: Optional[datetime] = None
@@ -267,6 +275,7 @@ class ContainerDependencyCheck(BaseModel):
 class VMTemplateCreate(BaseModel):
     name: str
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     os_type: str = Field(default="windows", pattern="^(windows|linux)$")
@@ -288,6 +297,7 @@ class VMTemplateCreate(BaseModel):
 class VMTemplateUpdate(BaseModel):
     name: Optional[str] = None
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     os_type: Optional[str] = Field(default=None, pattern="^(windows|linux)$")
@@ -310,6 +320,7 @@ class VMTemplate(BaseModel):
     id: str
     name: str
     tenant: str = "global"
+    namespace: str = "labs"
     cluster_id: str = "local"
     description: Optional[str] = None
     os_type: str
@@ -347,6 +358,7 @@ class VMTemplateLaunchPreflight(BaseModel):
 class ContainerTemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     container_image_id: str
@@ -376,6 +388,7 @@ class ContainerTemplateUpdate(BaseModel):
     is_default: Optional[bool] = None
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     container_image_id: Optional[str] = None
@@ -408,6 +421,7 @@ class ContainerTemplate(BaseModel):
     is_default: bool = True
     name: str
     tenant: str = "global"
+    namespace: str = "labs"
     cluster_id: str = "local"
     description: Optional[str] = None
     container_image_id: str

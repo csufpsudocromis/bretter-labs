@@ -1,14 +1,15 @@
 import json
 import logging
 import re
+import sqlite3
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlmodel import Session, select
 
 from ..auth import require_permission, require_user
 from ..config import settings
-from ..db import get_session, session_scope
+from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
     ContainerDependencyCheck,
     ContainerImageCreate,
@@ -27,12 +28,16 @@ from ..services.kubernetes import kube
 from ..services.multi_cluster import local_cluster_id
 from ..services.tenant_context import (
     GLOBAL_TENANT,
+    actor_namespace_scopes,
     actor_tenant,
+    assert_actor_can_access_namespace,
     assert_actor_can_manage_tenant,
     is_platform_admin,
     normalize_tenant,
+    resolve_resource_namespace,
     resolve_resource_tenant,
 )
+from ..services.team_quotas import normalize_namespace
 from ..time_utils import utc_now
 from ..rbac import Permission
 
@@ -44,6 +49,42 @@ _IMAGE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,254}$")
 _TEMPLATE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 
 
+def _ensure_container_namespace_columns() -> None:
+    if not SQLITE_DB:
+        return
+    conn: sqlite3.Connection | None = None
+    try:
+        conn = sqlite3.connect(settings.database_path)
+        cur = conn.cursor()
+        tables = {row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "containerimage" in tables:
+            cols = {row[1] for row in cur.execute("PRAGMA table_info(containerimage)")}
+            if "namespace" not in cols:
+                cur.execute("ALTER TABLE containerimage ADD COLUMN namespace TEXT DEFAULT 'labs'")
+            cur.execute("UPDATE containerimage SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_containerimage_namespace ON containerimage(namespace)")
+        if "containertemplate" in tables:
+            cols = {row[1] for row in cur.execute("PRAGMA table_info(containertemplate)")}
+            if "namespace" not in cols:
+                cur.execute("ALTER TABLE containertemplate ADD COLUMN namespace TEXT DEFAULT 'labs'")
+            cur.execute(
+                "UPDATE containertemplate SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''"
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_containertemplate_namespace ON containertemplate(namespace)")
+        conn.commit()
+    except Exception:
+        logger.exception("Failed to ensure container namespace columns")
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+_ensure_container_namespace_columns()
+
+
 def _tenant_scope_for_actor(actor: User, *, include_global: bool = True) -> set[str] | None:
     if is_platform_admin(actor):
         return None
@@ -51,6 +92,38 @@ def _tenant_scope_for_actor(actor: User, *, include_global: bool = True) -> set[
     if include_global:
         scoped.add(GLOBAL_TENANT)
     return scoped
+
+
+def _namespace_scope_for_actor(actor: User) -> set[str] | None:
+    return actor_namespace_scopes(actor)
+
+
+def _record_namespace(record: object) -> str:
+    return (
+        normalize_namespace(getattr(record, "namespace", None))
+        or normalize_namespace(settings.kube_namespace)
+        or "labs"
+    )
+
+
+def _namespace_scoped_record(record: object, actor: User) -> bool:
+    if is_platform_admin(actor):
+        return True
+    scope = _namespace_scope_for_actor(actor)
+    if scope is None:
+        return True
+    return _record_namespace(record) in scope
+
+
+def _requested_namespace_hint(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    for header in ("x-bretter-namespace", "x-blabs-namespace"):
+        value = normalize_namespace(request.headers.get(header))
+        if value:
+            return value
+    query_value = normalize_namespace(request.query_params.get("namespace"))
+    return query_value or None
 
 
 def _normalize_container_image_ref(value: str) -> str:
@@ -259,6 +332,7 @@ def _image_out(record: ContainerImageTable, signature_warning: str | None = None
         name=record.name,
         image_ref=record.image_ref,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         signature_warning=signature_warning,
         last_scan_at=getattr(record, "last_scan_at", None),
@@ -296,6 +370,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         is_default=bool(getattr(record, "is_default", True)),
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         container_image_id=record.container_image_id,
@@ -357,13 +432,22 @@ def _instance_out(record: ContainerInstanceTable) -> ContainerInstanceView:
     dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
 )
 def list_container_instances(
+    request: Request,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> list[ContainerInstanceView]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
     stmt = select(ContainerInstanceTable)
     scope = _tenant_scope_for_actor(actor, include_global=False)
     if scope is not None:
         stmt = stmt.where(ContainerInstanceTable.tenant.in_(scope))
+    namespace_scope = _namespace_scope_for_actor(actor)
+    if namespace_scope is not None:
+        stmt = stmt.where(ContainerInstanceTable.namespace.in_(sorted(namespace_scope)))
+    if requested_namespace:
+        stmt = stmt.where(ContainerInstanceTable.namespace == requested_namespace)
     rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.started_at, reverse=True)
     return [_instance_out(row) for row in rows]
@@ -380,7 +464,7 @@ def stop_container_instance(
     actor: User = Depends(require_user),
 ) -> ContainerInstanceView:
     record = session.get(ContainerInstanceTable, instance_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
@@ -417,7 +501,7 @@ def delete_container_instance(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(ContainerInstanceTable, instance_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
@@ -439,11 +523,18 @@ def delete_container_instance(
 )
 def create_container_image(
     payload: ContainerImageCreate,
+    request: Request,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ContainerImageMeta:
     resource_tenant = resolve_resource_tenant(actor, payload.tenant)
+    resource_namespace = resolve_resource_namespace(
+        actor,
+        request=request,
+        requested_namespace=payload.namespace,
+        fallback_namespace=settings.kube_namespace,
+    )
     image_ref = _normalize_container_image_ref(payload.image_ref)
     _enforce_registry_policy(image_ref)
     signature_warning = _verify_image_signature(image_ref)
@@ -451,6 +542,7 @@ def create_container_image(
         select(ContainerImageTable)
         .where(ContainerImageTable.image_ref == image_ref)
         .where(ContainerImageTable.tenant == resource_tenant)
+        .where(ContainerImageTable.namespace == resource_namespace)
     ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
@@ -461,6 +553,7 @@ def create_container_image(
         name=name,
         image_ref=image_ref,
         tenant=resource_tenant,
+        namespace=resource_namespace,
         cluster_id=str(payload.cluster_id or local_cluster_id()),
         last_scan_at=utc_now() if settings.container_scan_enabled else None,
         last_scan_status="queued" if settings.container_scan_enabled else "never",
@@ -483,13 +576,22 @@ def create_container_image(
     dependencies=[Depends(require_permission(Permission.IMAGES_READ))],
 )
 def list_container_images(
+    request: Request,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> list[ContainerImageMeta]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
     stmt = select(ContainerImageTable)
     scope = _tenant_scope_for_actor(actor, include_global=True)
     if scope is not None:
         stmt = stmt.where(ContainerImageTable.tenant.in_(scope))
+    namespace_scope = _namespace_scope_for_actor(actor)
+    if namespace_scope is not None:
+        stmt = stmt.where(ContainerImageTable.namespace.in_(sorted(namespace_scope)))
+    if requested_namespace:
+        stmt = stmt.where(ContainerImageTable.namespace == requested_namespace)
     rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_image_out(row) for row in rows]
@@ -508,11 +610,14 @@ def update_container_image(
     actor: User = Depends(require_user),
 ) -> ContainerImageMeta:
     record = session.get(ContainerImageTable, image_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
     next_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    next_namespace = _record_namespace(record)
     if payload.tenant is not None:
         next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
+    if payload.namespace is not None:
+        next_namespace = assert_actor_can_access_namespace(actor, payload.namespace)
 
     updates = payload.model_dump(exclude_unset=True)
     signature_warning = None
@@ -530,6 +635,7 @@ def update_container_image(
             .where(ContainerImageTable.image_ref == image_ref)
             .where(ContainerImageTable.id != image_id)
             .where(ContainerImageTable.tenant == next_tenant)
+            .where(ContainerImageTable.namespace == next_namespace)
         ).first()
         if existing:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
@@ -541,6 +647,17 @@ def update_container_image(
     if "cluster_id" in updates:
         record.cluster_id = str(updates.get("cluster_id") or "").strip() or local_cluster_id()
     record.tenant = next_tenant
+    record.namespace = next_namespace
+    if "image_ref" not in updates and ("tenant" in updates or "namespace" in updates):
+        duplicate = session.exec(
+            select(ContainerImageTable)
+            .where(ContainerImageTable.image_ref == record.image_ref)
+            .where(ContainerImageTable.id != image_id)
+            .where(ContainerImageTable.tenant == next_tenant)
+            .where(ContainerImageTable.namespace == next_namespace)
+        ).first()
+        if duplicate:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="container image already exists")
 
     session.add(record)
     session.commit()
@@ -564,7 +681,7 @@ def delete_container_image(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(ContainerImageTable, image_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
     assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 
@@ -611,7 +728,7 @@ def prepull_container_image(
     actor: User = Depends(require_user),
 ) -> dict[str, str]:
     record = session.get(ContainerImageTable, image_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
     assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     background_tasks.add_task(_run_image_prepull, record.image_ref)
@@ -630,7 +747,7 @@ def scan_container_image(
     actor: User = Depends(require_user),
 ) -> ContainerImageMeta:
     record = session.get(ContainerImageTable, image_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
     assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     record.last_scan_at = utc_now()
@@ -651,19 +768,32 @@ def scan_container_image(
 )
 def create_container_template(
     payload: ContainerTemplateCreate,
+    request: Request,
     background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ContainerTemplate:
     resource_tenant = resolve_resource_tenant(actor, payload.tenant)
+    resource_namespace = resolve_resource_namespace(
+        actor,
+        request=request,
+        requested_namespace=payload.namespace,
+        fallback_namespace=settings.kube_namespace,
+    )
     image = session.get(ContainerImageTable, payload.container_image_id)
-    if not image:
+    if not image or not _namespace_scoped_record(image, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"container template tenant {resource_tenant} cannot use image tenant {image_tenant}",
+        )
+    image_namespace = _record_namespace(image)
+    if image_namespace != resource_namespace:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"container template namespace {resource_namespace} cannot use image namespace {image_namespace}",
         )
 
     args = [str(item).strip() for item in (payload.args or []) if str(item).strip()]
@@ -680,6 +810,7 @@ def create_container_template(
         is_default=True,
         name=(payload.name or "").strip(),
         tenant=resource_tenant,
+        namespace=resource_namespace,
         cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=(payload.description or "").strip(),
         container_image_id=payload.container_image_id,
@@ -719,13 +850,22 @@ def create_container_template(
     dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
 )
 def list_container_templates(
+    request: Request,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> list[ContainerTemplate]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
     stmt = select(ContainerTemplateTable).where(ContainerTemplateTable.is_default == True)  # noqa: E712
     scope = _tenant_scope_for_actor(actor, include_global=True)
     if scope is not None:
         stmt = stmt.where(ContainerTemplateTable.tenant.in_(scope))
+    namespace_scope = _namespace_scope_for_actor(actor)
+    if namespace_scope is not None:
+        stmt = stmt.where(ContainerTemplateTable.namespace.in_(sorted(namespace_scope)))
+    if requested_namespace:
+        stmt = stmt.where(ContainerTemplateTable.namespace == requested_namespace)
     rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
@@ -744,15 +884,18 @@ def update_container_template(
     actor: User = Depends(require_user),
 ) -> ContainerTemplate:
     record = session.get(ContainerTemplateTable, template_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
     next_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    next_namespace = _record_namespace(record)
 
     updates = payload.model_dump(exclude_unset=True)
     if not updates:
         return _template_out(record)
     if "tenant" in updates:
         next_tenant = assert_actor_can_manage_tenant(actor, updates.get("tenant"))
+    if "namespace" in updates:
+        next_namespace = assert_actor_can_access_namespace(actor, updates.get("namespace"))
 
     was_enabled = bool(record.enabled)
     previous_image_id = str(record.container_image_id or "").strip()
@@ -763,13 +906,19 @@ def update_container_template(
     image = None
     if image_changed:
         image = session.get(ContainerImageTable, image_id)
-        if not image:
+        if not image or not _namespace_scoped_record(image, actor):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
         image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
         if image_tenant not in {next_tenant, GLOBAL_TENANT}:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
+            )
+        image_namespace = _record_namespace(image)
+        if image_namespace != next_namespace:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"container template namespace {next_namespace} cannot use image namespace {image_namespace}",
             )
         _enforce_registry_policy(image.image_ref)
         _verify_image_signature(image.image_ref)
@@ -829,7 +978,7 @@ def update_container_template(
     if "is_default" in updates:
         # Versioning is disabled; keep this as an accepted no-op for old clients.
         record.is_default = True
-    if "tenant" in updates and not image_changed:
+    if ("tenant" in updates or "namespace" in updates) and not image_changed:
         image_for_tenant = session.get(ContainerImageTable, record.container_image_id)
         image_tenant = normalize_tenant(getattr(image_for_tenant, "tenant", None), default=GLOBAL_TENANT)
         if image_tenant not in {next_tenant, GLOBAL_TENANT}:
@@ -837,7 +986,14 @@ def update_container_template(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
+        image_namespace = _record_namespace(image_for_tenant)
+        if image_namespace != next_namespace:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"container template namespace {next_namespace} cannot use image namespace {image_namespace}",
+            )
     record.tenant = next_tenant
+    record.namespace = next_namespace
 
     session.add(record)
     session.commit()
@@ -862,7 +1018,7 @@ def delete_container_template(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(ContainerTemplateTable, template_id)
-    if not record:
+    if not record or not _namespace_scoped_record(record, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
     assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
 

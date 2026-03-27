@@ -49,7 +49,8 @@ export interface paths {
         get: operations["list_admin_audit_events_admin_audit_events_get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /** Clear Admin Audit Events */
+        delete: operations["clear_admin_audit_events_admin_audit_events_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1847,6 +1848,8 @@ export interface components {
             image_ref: string;
             /** Name */
             name: string;
+            /** Namespace */
+            namespace?: string | null;
             /** Tenant */
             tenant?: string | null;
         };
@@ -1880,6 +1883,11 @@ export interface components {
             last_scan_summary: string;
             /** Name */
             name: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Signature Warning */
             signature_warning?: string | null;
             /**
@@ -1896,6 +1904,8 @@ export interface components {
             image_ref?: string | null;
             /** Name */
             name?: string | null;
+            /** Namespace */
+            namespace?: string | null;
             /** Tenant */
             tenant?: string | null;
         };
@@ -2039,6 +2049,11 @@ export interface components {
             /** Name */
             name: string;
             /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
+            /**
              * Network Mode
              * @default bridge
              */
@@ -2151,6 +2166,8 @@ export interface components {
             memory_mb: number;
             /** Name */
             name: string;
+            /** Namespace */
+            namespace?: string | null;
             /**
              * Network Mode
              * @default bridge
@@ -2223,6 +2240,8 @@ export interface components {
             memory_mb?: number | null;
             /** Name */
             name?: string | null;
+            /** Namespace */
+            namespace?: string | null;
             /** Network Mode */
             network_mode?: string | null;
             /** Read Only Root Filesystem */
@@ -2355,6 +2374,11 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Size Bytes */
             size_bytes: number;
             /**
@@ -2393,6 +2417,11 @@ export interface components {
             id: string;
             /** Name */
             name: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Size Bytes */
             size_bytes: number;
             /**
@@ -2438,6 +2467,11 @@ export interface components {
              * @default 0
              */
             max_retries: number;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Next Retry At */
             next_retry_at?: string | null;
             /** Original Filename */
@@ -3428,6 +3462,8 @@ export interface components {
              * @default false
              */
             is_admin: boolean;
+            /** Namespace Scopes */
+            namespace_scopes?: string[];
             /** Password */
             password: string;
             /** Role */
@@ -3451,6 +3487,8 @@ export interface components {
             force_password_change: boolean;
             /** Is Admin */
             is_admin: boolean;
+            /** Namespace Scopes */
+            namespace_scopes?: string[];
             /** Permissions */
             permissions?: string[];
             /** Role */
@@ -3464,6 +3502,8 @@ export interface components {
         UserUpdate: {
             /** Is Admin */
             is_admin?: boolean | null;
+            /** Namespace Scopes */
+            namespace_scopes?: string[] | null;
             /** Password */
             password?: string | null;
             /** Role */
@@ -3557,6 +3597,11 @@ export interface components {
             /** Name */
             name: string;
             /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
+            /**
              * Network Mode
              * @default bridge
              */
@@ -3625,6 +3670,8 @@ export interface components {
             max_active_instances: number;
             /** Name */
             name: string;
+            /** Namespace */
+            namespace?: string | null;
             /**
              * Network Mode
              * @default bridge
@@ -3703,6 +3750,8 @@ export interface components {
             max_active_instances?: number | null;
             /** Name */
             name?: string | null;
+            /** Namespace */
+            namespace?: string | null;
             /** Network Mode */
             network_mode?: string | null;
             /** Os Type */
@@ -3824,6 +3873,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminAuditEventOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_admin_audit_events_admin_audit_events_delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: number;
+                    };
                 };
             };
             /** @description Validation Error */

@@ -978,6 +978,19 @@
             "title": "Name",
             "type": "string"
           },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
           "tenant": {
             "anyOf": [
               {
@@ -1043,6 +1056,11 @@
           },
           "name": {
             "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
             "type": "string"
           },
           "signature_warning": {
@@ -1111,6 +1129,19 @@
               }
             ],
             "title": "Name"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
           },
           "tenant": {
             "anyOf": [
@@ -1403,6 +1434,11 @@
             "title": "Name",
             "type": "string"
           },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
+          },
           "network_mode": {
             "default": "bridge",
             "title": "Network Mode",
@@ -1601,6 +1637,19 @@
             "minLength": 1,
             "title": "Name",
             "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
           },
           "network_mode": {
             "default": "bridge",
@@ -1905,6 +1954,19 @@
               }
             ],
             "title": "Name"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
           },
           "network_mode": {
             "anyOf": [
@@ -2213,6 +2275,11 @@
             "title": "Name",
             "type": "string"
           },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
+          },
           "size_bytes": {
             "title": "Size Bytes",
             "type": "integer"
@@ -2285,6 +2352,11 @@
           },
           "name": {
             "title": "Name",
+            "type": "string"
+          },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
             "type": "string"
           },
           "size_bytes": {
@@ -2393,6 +2465,11 @@
             "default": 0,
             "title": "Max Retries",
             "type": "integer"
+          },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
           },
           "next_retry_at": {
             "anyOf": [
@@ -4632,6 +4709,13 @@
             "title": "Is Admin",
             "type": "boolean"
           },
+          "namespace_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespace Scopes",
+            "type": "array"
+          },
           "password": {
             "maxLength": 128,
             "minLength": 1,
@@ -4687,6 +4771,13 @@
             "title": "Is Admin",
             "type": "boolean"
           },
+          "namespace_scopes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Namespace Scopes",
+            "type": "array"
+          },
           "permissions": {
             "items": {
               "type": "string"
@@ -4729,6 +4820,20 @@
               }
             ],
             "title": "Is Admin"
+          },
+          "namespace_scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace Scopes"
           },
           "password": {
             "anyOf": [
@@ -4941,6 +5046,11 @@
             "title": "Name",
             "type": "string"
           },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
+          },
           "network_mode": {
             "default": "bridge",
             "title": "Network Mode",
@@ -5072,6 +5182,19 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
           },
           "network_mode": {
             "default": "bridge",
@@ -5350,6 +5473,19 @@
             ],
             "title": "Name"
           },
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
           "network_mode": {
             "anyOf": [
               {
@@ -5605,6 +5741,57 @@
       }
     },
     "/admin/audit-events": {
+      "delete": {
+        "operationId": "clear_admin_audit_events_admin_audit_events_delete",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Clear Admin Audit Events Admin Audit Events Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Clear Admin Audit Events",
+        "tags": [
+          "admin"
+        ]
+      },
       "get": {
         "operationId": "list_admin_audit_events_admin_audit_events_get",
         "parameters": [
@@ -5613,8 +5800,8 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "default": 100,
-              "maximum": 500,
+              "default": 50,
+              "maximum": 50,
               "minimum": 1,
               "title": "Limit",
               "type": "integer"

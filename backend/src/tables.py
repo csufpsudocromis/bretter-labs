@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import BigInteger, Column, UniqueConstraint
+from sqlalchemy import BigInteger, Column, String, UniqueConstraint, text
 from sqlmodel import Field, SQLModel
 
 from .time_utils import utc_now
@@ -12,6 +12,10 @@ class User(SQLModel, table=True):
     password_hash: str
     role: str = Field(default="user", index=True)
     team: str = Field(default="default", index=True)
+    namespace_scopes_json: str = Field(
+        default="[]",
+        sa_column=Column(String(), nullable=False, server_default=text("'[]'")),
+    )
     is_admin: bool = False
     force_password_change: bool = False
 
@@ -47,6 +51,7 @@ class Image(SQLModel, table=True):
     name: str
     filename: str
     tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
     source_pvc: Optional[str] = None
     checksum: str
@@ -59,6 +64,7 @@ class ImageUploadTask(SQLModel, table=True):
     original_filename: str
     filename: str
     tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
     size_bytes: int = Field(default=0, sa_column=Column(BigInteger, nullable=False))
     status: str = "queued"
@@ -85,6 +91,7 @@ class Template(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
     tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
     description: str = ""
     os_type: str = "windows"
@@ -123,6 +130,7 @@ class ContainerImage(SQLModel, table=True):
     name: str
     image_ref: str
     tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
@@ -139,6 +147,7 @@ class ContainerTemplate(SQLModel, table=True):
     is_default: bool = True
     name: str
     tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
     description: str = ""
     container_image_id: str = Field(foreign_key="containerimage.id")

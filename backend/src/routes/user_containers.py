@@ -43,9 +43,14 @@ from ..services.multi_cluster import (
     select_cluster_for_launch,
 )
 from ..services.resource_guard import check_launch_headroom
-from ..services.team_quotas import enforce_team_quota, team_idle_timeout_cap
+from ..services.team_quotas import enforce_team_quota, normalize_namespace, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
-from ..services.tenant_context import GLOBAL_TENANT, normalize_tenant, tenant_namespace_for_user
+from ..services.tenant_context import (
+    GLOBAL_TENANT,
+    normalize_tenant,
+    resolve_resource_namespace,
+    tenant_namespace_for_user,
+)
 from ..services import ws_metrics
 from ..tables import Config
 from ..tables import ContainerImage as ContainerImageTable
@@ -178,7 +183,10 @@ def _container_access_url_for_target(node_port: int | None, ingress_host: str | 
     return f"http://{host}:{int(node_port)}/"
 
 
-def _container_runtime_namespace(user: User) -> str:
+def _container_runtime_namespace(user: User, *, namespace: str | None = None) -> str:
+    selected = normalize_namespace(namespace)
+    if selected:
+        return selected
     return tenant_namespace_for_user(user)
 
 
@@ -193,6 +201,22 @@ def _container_instance_namespace(record: ContainerInstanceTable, user: User | N
 
 def _container_instance_cluster_id(record: ContainerInstanceTable) -> str:
     return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
+
+
+def _container_template_namespace(record: ContainerTemplateTable) -> str:
+    return (
+        normalize_namespace(getattr(record, "namespace", None))
+        or normalize_namespace(settings.kube_namespace)
+        or "labs"
+    )
+
+
+def _container_image_namespace(record: ContainerImageTable) -> str:
+    return (
+        normalize_namespace(getattr(record, "namespace", None))
+        or normalize_namespace(settings.kube_namespace)
+        or "labs"
+    )
 
 
 def _kube_for_container_cluster(session: Session, cluster_id: str):
@@ -948,6 +972,7 @@ def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | Non
         is_default=bool(getattr(record, "is_default", True)),
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_container_template_namespace(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         container_image_id=record.container_image_id,
@@ -1702,10 +1727,12 @@ def _create_container_runtime(
 
 @router.get("/container-templates", response_model=list[ContainerTemplateView])
 def list_user_container_templates(
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerTemplateView]:
-    runtime_namespace = _container_runtime_namespace(user)
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    runtime_namespace = _container_runtime_namespace(user, namespace=selected_namespace)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
     tenant_scope = {
         "default",
@@ -1716,6 +1743,7 @@ def list_user_container_templates(
         .where(ContainerTemplateTable.enabled == True)  # noqa: E712
         .where(ContainerTemplateTable.is_default == True)  # noqa: E712
         .where(ContainerTemplateTable.tenant.in_(tenant_scope))
+        .where(ContainerTemplateTable.namespace == selected_namespace)
     ).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row, idle_timeout_cap=team_idle_cap) for row in rows]
@@ -1723,13 +1751,19 @@ def list_user_container_templates(
 
 @router.get("/containers", response_model=list[ContainerInstanceView])
 def list_user_containers(
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerInstanceView]:
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
     config = session.get(Config, 1) or Config()
     max_concurrency = int(config.max_concurrent_vms)
     active_count = _active_workload_count(session)
-    instances = session.exec(select(ContainerInstanceTable).where(ContainerInstanceTable.owner == user.username)).all()
+    instances = session.exec(
+        select(ContainerInstanceTable)
+        .where(ContainerInstanceTable.owner == user.username)
+        .where(ContainerInstanceTable.namespace == selected_namespace)
+    ).all()
     templates = {row.id: row for row in session.exec(select(ContainerTemplateTable)).all()}
     images = {row.id: row for row in session.exec(select(ContainerImageTable)).all()}
     changed = False
@@ -1983,7 +2017,9 @@ def list_user_containers(
             session.delete(row)
         session.commit()
         instances = session.exec(
-            select(ContainerInstanceTable).where(ContainerInstanceTable.owner == user.username)
+            select(ContainerInstanceTable)
+            .where(ContainerInstanceTable.owner == user.username)
+            .where(ContainerInstanceTable.namespace == selected_namespace)
         ).all()
 
     out: list[ContainerInstanceView] = []
@@ -2009,13 +2045,18 @@ def list_user_containers(
 )
 def start_container_template(
     template_id: str,
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ContainerInstanceView:
-    runtime_namespace = _container_runtime_namespace(user)
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    runtime_namespace = _container_runtime_namespace(user, namespace=selected_namespace)
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(ContainerTemplateTable, template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
+    template_namespace = _container_template_namespace(template)
+    if template_namespace != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -2023,6 +2064,11 @@ def start_container_template(
     image = session.get(ContainerImageTable, template.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
+    image_namespace = _container_image_namespace(image)
+    if image_namespace != template_namespace:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="container template image namespace scope is invalid"
+        )
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
         raise HTTPException(
@@ -2210,13 +2256,17 @@ def start_container_template(
 @router.post("/containers/{instance_id}/stop", response_model=ContainerInstanceView)
 def stop_container(
     instance_id: str,
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ContainerInstanceView:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
     instance_namespace = _container_instance_namespace(record, user)
+    if normalize_namespace(instance_namespace) != selected_namespace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     runtime_kube = _kube_for_container_cluster(session, _container_instance_cluster_id(record))
 
     if record.status != "queued":
@@ -2240,13 +2290,17 @@ def stop_container(
 @router.post("/containers/{instance_id}/start", response_model=ContainerInstanceView, status_code=status.HTTP_200_OK)
 def restart_container(
     instance_id: str,
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ContainerInstanceView:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
     runtime_namespace = _container_instance_namespace(record, user)
+    if normalize_namespace(runtime_namespace) != selected_namespace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     record.tenant = user_tenant
     record.namespace = runtime_namespace
@@ -2254,12 +2308,20 @@ def restart_container(
     template = session.get(ContainerTemplateTable, record.template_id)
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
+    template_namespace = _container_template_namespace(template)
+    if template_namespace != selected_namespace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     image = session.get(ContainerImageTable, template.container_image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
+    image_namespace = _container_image_namespace(image)
+    if image_namespace != template_namespace:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="container template image namespace scope is invalid"
+        )
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
         raise HTTPException(
@@ -2427,13 +2489,17 @@ def record_container_activity(
 @router.delete("/containers/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_container(
     instance_id: str,
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> None:
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
     instance_namespace = _container_instance_namespace(record, user)
+    if normalize_namespace(instance_namespace) != selected_namespace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
     runtime_kube = _kube_for_container_cluster(session, _container_instance_cluster_id(record))
 
     runtime_kube.delete_container_pod(instance_id, user.username, namespace=instance_namespace)

@@ -51,11 +51,12 @@ from ..services.multi_cluster import (
     select_cluster_for_launch,
 )
 from ..services.resource_guard import check_launch_headroom
-from ..services.team_quotas import enforce_team_quota_or_raise, team_idle_timeout_cap
+from ..services.team_quotas import enforce_team_quota_or_raise, normalize_namespace, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import (
     GLOBAL_TENANT,
     normalize_tenant,
+    resolve_resource_namespace,
     tenant_namespace_for_user,
     vm_launch_requires_privileged_runtime,
     vm_runtime_namespace_for_user,
@@ -438,11 +439,17 @@ def _attach_vm_connect_session_cookie(response: Response, request: Request, inst
     )
 
 
-def _vm_runtime_namespace(user: User) -> str:
+def _vm_runtime_namespace(user: User, *, namespace: str | None = None) -> str:
+    selected = normalize_namespace(namespace)
+    if selected:
+        return selected
     return vm_runtime_namespace_for_user(user)
 
 
-def _vm_quota_namespace(user: User) -> str:
+def _vm_quota_namespace(user: User, *, namespace: str | None = None) -> str:
+    selected = normalize_namespace(namespace)
+    if selected:
+        return selected
     return tenant_namespace_for_user(user)
 
 
@@ -509,6 +516,22 @@ def _instance_namespace(record: Instance, user: User | None = None) -> str:
 
 def _instance_cluster_id(record: Instance) -> str:
     return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
+
+
+def _template_namespace(record: Template) -> str:
+    return (
+        normalize_namespace(getattr(record, "namespace", None))
+        or normalize_namespace(settings.kube_namespace)
+        or "labs"
+    )
+
+
+def _image_namespace(record: Image) -> str:
+    return (
+        normalize_namespace(getattr(record, "namespace", None))
+        or normalize_namespace(settings.kube_namespace)
+        or "labs"
+    )
 
 
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
@@ -708,21 +731,28 @@ def _tls_client_context() -> ssl.SSLContext:
 
 @router.get("/templates", response_model=list[VMTemplate])
 def list_available_templates(
-    user: User = Depends(require_user), session: Session = Depends(get_session)
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
 ) -> list[VMTemplate]:
-    quota_namespace = _vm_quota_namespace(user)
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), quota_namespace)
     tenant_scope = {
         "default",
         GLOBAL_TENANT,
     }
     templates = session.exec(
-        select(Template).where(Template.enabled == True).where(Template.tenant.in_(tenant_scope))  # noqa: E712
+        select(Template)
+        .where(Template.enabled == True)  # noqa: E712
+        .where(Template.tenant.in_(tenant_scope))
+        .where(Template.namespace == selected_namespace)
     ).all()
     return [
         VMTemplate(
             id=record.id,
             name=record.name,
+            namespace=_template_namespace(record),
             cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
             description=record.description,
             os_type=record.os_type,
@@ -755,14 +785,19 @@ def list_available_templates(
 @router.get("/templates/{template_id}/preflight", response_model=VMTemplateLaunchPreflight)
 def preflight_template_launch(
     template_id: str,
+    request: Request,
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> VMTemplateLaunchPreflight:
-    runtime_namespace = _vm_runtime_namespace(user)
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(Template, template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    template_namespace = _template_namespace(template)
+    if template_namespace != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -770,6 +805,9 @@ def preflight_template_launch(
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    image_namespace = _image_namespace(image)
+    if image_namespace != template_namespace:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image namespace is invalid")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image tenant scope is invalid")
@@ -818,8 +856,15 @@ def preflight_template_launch(
 
 
 @router.get("/pods", response_model=list[VMInstance])
-def list_user_pods(user: User = Depends(require_user), session: Session = Depends(get_session)) -> list[VMInstance]:
-    instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
+def list_user_pods(
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> list[VMInstance]:
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    instances = session.exec(
+        select(Instance).where(Instance.owner == user.username).where(Instance.namespace == selected_namespace)
+    ).all()
     templates = {t.id: t for t in session.exec(select(Template)).all()}
     changed = False
     to_delete: list[Instance] = []
@@ -876,7 +921,9 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
             session.delete(rec)
         session.commit()
         # refresh instances list without deleted ones
-        instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
+        instances = session.exec(
+            select(Instance).where(Instance.owner == user.username).where(Instance.namespace == selected_namespace)
+        ).all()
 
     items: list[VMInstance] = []
     for record in instances:
@@ -904,10 +951,16 @@ def list_user_pods(user: User = Depends(require_user), session: Session = Depend
 
 @router.post("/pods/{instance_id}/activity", status_code=status.HTTP_204_NO_CONTENT)
 def record_vm_activity(
-    instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+    instance_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
 ) -> None:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     record.last_active_at = utc_now()
     session.add(record)
@@ -923,6 +976,9 @@ def issue_vm_connect_token(
 ) -> Response:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
@@ -1383,14 +1439,21 @@ def sso_settings(session: Session = Depends(get_session)) -> SSOSettings:
 
 @router.post("/templates/{template_id}/start", response_model=VMInstance, status_code=status.HTTP_201_CREATED)
 def start_vm(
-    template_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+    template_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
 ) -> VMInstance:
-    runtime_namespace = _vm_runtime_namespace(user)
-    quota_namespace = _vm_quota_namespace(user)
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
+    quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(Template, template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    template_namespace = _template_namespace(template)
+    if template_namespace != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -1398,6 +1461,9 @@ def start_vm(
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    image_namespace = _image_namespace(image)
+    if image_namespace != template_namespace:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image namespace is invalid")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image tenant scope is invalid")
@@ -1604,12 +1670,18 @@ def start_vm(
 
 @router.post("/pods/{instance_id}/stop", response_model=VMInstance)
 def stop_vm(
-    instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+    instance_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
 ) -> VMInstance:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
     instance_namespace = _instance_namespace(record, user)
+    if normalize_namespace(instance_namespace) != selected_namespace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
@@ -1657,16 +1729,25 @@ def stop_vm(
 
 @router.post("/pods/{instance_id}/start", response_model=VMInstance, status_code=status.HTTP_200_OK)
 def restart_vm(
-    instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)
+    instance_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
 ) -> VMInstance:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    runtime_namespace = _vm_runtime_namespace(user)
-    quota_namespace = _vm_quota_namespace(user)
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
+    quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
     template = session.get(Template, record.template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    template_namespace = _template_namespace(template)
+    if template_namespace != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
@@ -1675,6 +1756,9 @@ def restart_vm(
     image = session.get(Image, template.image_id)
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+    image_namespace = _image_namespace(image)
+    if image_namespace != template_namespace:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image namespace is invalid")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image tenant scope is invalid")
@@ -1850,9 +1934,17 @@ def restart_vm(
 
 
 @router.delete("/pods/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_vm(instance_id: str, user: User = Depends(require_user), session: Session = Depends(get_session)) -> None:
+def delete_vm(
+    instance_id: str,
+    request: Request,
+    user: User = Depends(require_user),
+    session: Session = Depends(get_session),
+) -> None:
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
+    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     instance_namespace = _instance_namespace(record, user)
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))

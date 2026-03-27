@@ -15,11 +15,11 @@ from pathlib import Path
 from urllib.parse import quote as urlquote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from pydantic import BaseModel
 import requests
 from sqlalchemy import text
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 from kubernetes import client
 from kubernetes.client import ApiException
 from kubernetes.stream import stream
@@ -103,12 +103,18 @@ from ..services.team_quotas import normalize_namespace, normalize_optional_limit
 from ..services.tenant_context import (
     GLOBAL_TENANT,
     actor_can_access_tenant,
+    actor_namespace_scopes,
     actor_tenant,
+    assert_actor_can_access_namespace,
     assert_actor_can_manage_tenant,
     is_platform_admin,
+    normalize_namespace_scopes,
     normalize_tenant,
+    resolve_resource_namespace,
     resolve_resource_tenant,
+    set_user_namespace_scopes,
     tenant_namespace_for_team,
+    user_namespace_scopes,
 )
 from ..secret_codec import encrypt_secret, secret_is_configured
 from ..tables import Config, Image, ImageUploadTask, Instance, ManagedNamespace, TeamQuota, Template, User
@@ -144,6 +150,7 @@ FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%
 ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
 ERROR_LOG_PAGE_SIZE = 50
 ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
+ADMIN_AUDIT_EVENT_MAX_PER_TENANT = 50
 RUNTIME_ENV_NAMES: dict[str, str] = {
     "storage_root": "BLABS_STORAGE_ROOT",
     "kube_namespace": "BLABS_KUBE_NAMESPACE",
@@ -234,6 +241,38 @@ def _tenant_scoped_record(record: object, actor: User, *, include_global: bool =
     tenant = normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT)
     scope = _tenant_scope_for_actor(actor, include_global=include_global) or set()
     return tenant in scope
+
+
+def _namespace_scope_for_actor(actor: User) -> set[str] | None:
+    return actor_namespace_scopes(actor)
+
+
+def _record_namespace(record: object) -> str:
+    return (
+        normalize_namespace(getattr(record, "namespace", None))
+        or normalize_namespace(settings.kube_namespace)
+        or "labs"
+    )
+
+
+def _namespace_scoped_record(record: object, actor: User) -> bool:
+    if is_platform_admin(actor):
+        return True
+    scope = _namespace_scope_for_actor(actor)
+    if scope is None:
+        return True
+    return _record_namespace(record) in scope
+
+
+def _requested_namespace_hint(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    for header in ("x-bretter-namespace", "x-blabs-namespace"):
+        value = normalize_namespace(request.headers.get(header))
+        if value:
+            return value
+    query_value = normalize_namespace(request.query_params.get("namespace"))
+    return query_value or None
 
 
 def _format_bytes(value: int) -> str:
@@ -1244,6 +1283,10 @@ def _fetch_alertmanager_alerts() -> tuple[list[AlertManagerAlert], str]:
             return True
         job_name = _to_str(labels.get("job_name")) or _to_str(labels.get("job")) or _to_str(labels.get("cronjob"))
         pod_name = _to_str(labels.get("pod"))
+        if not job_name and not pod_name:
+            # Alerts without workload labels (for example Watchdog) should still be
+            # suppressible by explicit alert name.
+            return True
         if job_name and job_name_re and job_name_re.search(job_name):
             return True
         if pod_name and pod_name_re and pod_name_re.search(pod_name):
@@ -1497,6 +1540,9 @@ def _ensure_template_columns() -> None:
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
+        tables = {row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "template" not in tables:
+            return
         cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
         to_add = []
         if "idle_timeout_minutes" not in cols:
@@ -1517,6 +1563,8 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN rdp_default_password TEXT DEFAULT ''")
         if "tenant" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "namespace" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN namespace TEXT DEFAULT 'labs'")
         if "cluster_id" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN cluster_id TEXT DEFAULT 'local'")
         for stmt in to_add:
@@ -1540,6 +1588,7 @@ def _ensure_template_columns() -> None:
             cur.execute("UPDATE template SET rdp_default_username = '' WHERE rdp_default_username IS NULL")
             cur.execute("UPDATE template SET rdp_default_password = '' WHERE rdp_default_password IS NULL")
             cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute("UPDATE template SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
             cur.execute("UPDATE template SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
             conn.commit()
         cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
@@ -1564,10 +1613,19 @@ def _ensure_template_columns() -> None:
         if "tenant" in cols:
             cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_template_tenant ON template(tenant)")
+        if "namespace" in cols:
+            cur.execute("UPDATE template SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_template_namespace ON template(namespace)")
         if "cluster_id" in cols:
             cur.execute("UPDATE template SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_template_cluster_id ON template(cluster_id)")
-        if "rdp_default_username" in cols or "rdp_default_password" in cols or "tenant" in cols or "cluster_id" in cols:
+        if (
+            "rdp_default_username" in cols
+            or "rdp_default_password" in cols
+            or "tenant" in cols
+            or "namespace" in cols
+            or "cluster_id" in cols
+        ):
             conn.commit()
     except Exception:
         logger.exception("Failed to ensure template columns")
@@ -1585,17 +1643,25 @@ def _ensure_image_columns() -> None:
     try:
         conn = sqlite3.connect(db_path)
         cur = conn.cursor()
+        tables = {row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "image" not in tables:
+            return
         cols = {row[1] for row in cur.execute("PRAGMA table_info(image)")}
         if "source_pvc" not in cols:
             cur.execute("ALTER TABLE image ADD COLUMN source_pvc TEXT")
         if "tenant" not in cols:
             cur.execute("ALTER TABLE image ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "namespace" not in cols:
+            cur.execute("ALTER TABLE image ADD COLUMN namespace TEXT DEFAULT 'labs'")
         if "cluster_id" not in cols:
             cur.execute("ALTER TABLE image ADD COLUMN cluster_id TEXT DEFAULT 'local'")
         cols = {row[1] for row in cur.execute("PRAGMA table_info(image)")}
         if "tenant" in {row[1] for row in cur.execute("PRAGMA table_info(image)")}:
             cur.execute("UPDATE image SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_image_tenant ON image(tenant)")
+        if "namespace" in cols:
+            cur.execute("UPDATE image SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_image_namespace ON image(namespace)")
         if "cluster_id" in cols:
             cur.execute("UPDATE image SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_image_cluster_id ON image(cluster_id)")
@@ -1686,6 +1752,8 @@ def _ensure_upload_task_columns() -> None:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_started_at TIMESTAMP")
         if "tenant" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN tenant TEXT DEFAULT 'global'")
+        if "namespace" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN namespace TEXT DEFAULT 'labs'")
         if "cluster_id" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN cluster_id TEXT DEFAULT 'local'")
         for stmt in to_add:
@@ -1708,6 +1776,9 @@ def _ensure_upload_task_columns() -> None:
         if "tenant" in cols:
             cur.execute("UPDATE imageuploadtask SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_imageuploadtask_tenant ON imageuploadtask(tenant)")
+        if "namespace" in cols:
+            cur.execute("UPDATE imageuploadtask SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_imageuploadtask_namespace ON imageuploadtask(namespace)")
         if "cluster_id" in cols:
             cur.execute(
                 "UPDATE imageuploadtask SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''"
@@ -1836,6 +1907,25 @@ def _record_admin_audit_event(
         created_at=utc_now(),
     )
     session.add(event)
+    _prune_admin_audit_events(session, tenant=normalized_tenant)
+
+
+def _prune_admin_audit_events(session: Session, *, tenant: str) -> None:
+    total_events = int(
+        session.exec(select(func.count()).select_from(AdminAuditEvent).where(AdminAuditEvent.tenant == tenant)).one()
+        or 0
+    )
+    overflow = total_events - ADMIN_AUDIT_EVENT_MAX_PER_TENANT
+    if overflow <= 0:
+        return
+    stale_rows = session.exec(
+        select(AdminAuditEvent)
+        .where(AdminAuditEvent.tenant == tenant)
+        .order_by(AdminAuditEvent.created_at.asc(), AdminAuditEvent.id.asc())
+        .limit(overflow)
+    ).all()
+    for row in stale_rows:
+        session.delete(row)
 
 
 def _retry_backoff_seconds(retry_count: int) -> int:
@@ -1901,6 +1991,7 @@ def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
         progress_percent=progress_percent,
         original_filename=task.original_filename,
         filename=task.filename,
+        namespace=_record_namespace(task),
         size_bytes=task.size_bytes,
         detail=task.detail or "",
         error=task.error_message,
@@ -2758,6 +2849,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         existing.name = task.filename
         existing.filename = task.filename
         existing.tenant = normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT)
+        existing.namespace = _record_namespace(task)
         existing.cluster_id = str(getattr(task, "cluster_id", "") or local_cluster_id())
         existing.source_pvc = task.source_pvc
         existing.checksum = task.checksum
@@ -2770,6 +2862,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         name=task.filename,
         filename=task.filename,
         tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(task),
         cluster_id=str(getattr(task, "cluster_id", "") or local_cluster_id()),
         source_pvc=task.source_pvc,
         checksum=task.checksum,
@@ -3652,12 +3745,27 @@ def _actor_can_assign_role(actor: User, target_role: str) -> bool:
     return can_non_platform_assign_role(target_role)
 
 
+def _effective_user_namespace_scopes(user: User, *, role: str | None = None) -> list[str]:
+    resolved_role = str(role or role_for_user(user)).strip().lower()
+    if resolved_role != Role.NAMESPACE_ADMIN:
+        return []
+    return user_namespace_scopes(user)
+
+
+def _normalize_user_namespace_scopes_payload(values: list[str] | None) -> list[str]:
+    try:
+        return normalize_namespace_scopes(values)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+
 def _user_out(user: User) -> UserOut:
     role = role_for_user(user)
     return UserOut(
         username=user.username,
         role=role,
         team=normalize_team("default"),
+        namespace_scopes=_effective_user_namespace_scopes(user, role=role),
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),
@@ -3938,6 +4046,9 @@ def add_user(
     team = normalize_team("default")
     if not _actor_can_assign_role(actor, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
+    namespace_scopes = _normalize_user_namespace_scopes_payload(payload.namespace_scopes)
+    if role != Role.NAMESPACE_ADMIN:
+        namespace_scopes = []
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
@@ -3946,6 +4057,7 @@ def add_user(
         is_admin=can_access_admin(role),
         force_password_change=False,
     )
+    set_user_namespace_scopes(user, namespace_scopes)
     session.add(user)
     _record_admin_audit_event(
         session,
@@ -3954,7 +4066,7 @@ def add_user(
         action="create",
         target_type="user",
         target_id=user.username,
-        detail=f"role={role} team={user.team}",
+        detail=f"role={role} team={user.team} namespace_scopes={','.join(namespace_scopes) if namespace_scopes else '-'}",
     )
     session.commit()
     session.refresh(user)
@@ -3973,6 +4085,12 @@ def list_users(session: Session = Depends(get_session), actor: User = Depends(re
         normalized_team = normalize_team("default")
         if getattr(user, "team", None) != normalized_team:
             user.team = normalized_team
+            session.add(user)
+            mutated = True
+        role = role_for_user(user)
+        scopes = user_namespace_scopes(user)
+        if role != Role.NAMESPACE_ADMIN and scopes:
+            set_user_namespace_scopes(user, [])
             session.add(user)
             mutated = True
     if mutated:
@@ -4012,6 +4130,7 @@ def update_user(
         user.password_hash = hash_password(payload.password)
         user.force_password_change = False
         revoke_tokens(session, username)
+    resulting_role = role_for_user(user)
     if payload.role is not None or payload.is_admin is not None:
         try:
             role = normalize_requested_role(payload.role, payload.is_admin)
@@ -4021,6 +4140,14 @@ def update_user(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
         user.role = role
         user.is_admin = can_access_admin(role)
+        resulting_role = role
+    if payload.namespace_scopes is None:
+        namespace_scopes = user_namespace_scopes(user)
+    else:
+        namespace_scopes = _normalize_user_namespace_scopes_payload(payload.namespace_scopes)
+    if resulting_role != Role.NAMESPACE_ADMIN:
+        namespace_scopes = []
+    set_user_namespace_scopes(user, namespace_scopes)
     if payload.team is not None:
         _ = payload.team
     user.team = normalize_team("default")
@@ -4033,7 +4160,10 @@ def update_user(
         action="update",
         target_type="user",
         target_id=user.username,
-        detail=f"role={user.role} team={user.team}",
+        detail=(
+            f"role={user.role} team={user.team} "
+            f"namespace_scopes={','.join(namespace_scopes) if namespace_scopes else '-'}"
+        ),
     )
     session.commit()
     session.refresh(user)
@@ -4261,6 +4391,7 @@ def delete_team_quota(
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
 def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
@@ -4334,6 +4465,7 @@ def upload_image(
         original_filename=Path(file.filename).name,
         filename=filename,
         tenant=resolve_resource_tenant(actor),
+        namespace=resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace),
         cluster_id=local_cluster_id(),
         size_bytes=size_bytes,
         status="finalizing",
@@ -4390,6 +4522,7 @@ def upload_image(
 )
 def start_direct_upload(
     payload: DirectUploadStart,
+    request: Request,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> DirectUploadSession:
@@ -4426,6 +4559,7 @@ def start_direct_upload(
         original_filename=filename,
         filename=filename,
         tenant=resolve_resource_tenant(actor),
+        namespace=resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace),
         cluster_id=local_cluster_id(),
         size_bytes=payload.size_bytes,
         status="uploading",
@@ -4489,7 +4623,7 @@ def get_upload_task(
     task = session.get(ImageUploadTask, task_id)
     if not task:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
-    if not _tenant_scoped_record(task, actor, include_global=False):
+    if not _tenant_scoped_record(task, actor, include_global=False) or not _namespace_scoped_record(task, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
     try:
         task = _refresh_upload_task(task, session)
@@ -4515,10 +4649,12 @@ def get_upload_task(
 )
 def import_image(
     payload: ImageImport,
+    request: Request,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ImageCreateResponse:
     resource_tenant = resolve_resource_tenant(actor)
+    resource_namespace = resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace)
     if not settings.kube_vm_storage_class:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -4547,7 +4683,10 @@ def import_image(
                 detail=f"converted image missing on storage: {converted_name}",
             )
     existing = session.exec(
-        select(Image).where(Image.filename == dest_path.name).where(Image.tenant == resource_tenant)
+        select(Image)
+        .where(Image.filename == dest_path.name)
+        .where(Image.tenant == resource_tenant)
+        .where(Image.namespace == resource_namespace)
     ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="image already registered")
@@ -4579,6 +4718,7 @@ def import_image(
         name=payload.name or dest_path.name,
         filename=dest_path.name,
         tenant=resource_tenant,
+        namespace=resource_namespace,
         cluster_id=local_cluster_id(),
         source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
@@ -4593,7 +4733,7 @@ def import_image(
         action="create",
         target_type="image",
         target_id=record.id,
-        detail=f"filename={record.filename} source_pvc={record.source_pvc or ''}",
+        detail=f"namespace={record.namespace} filename={record.filename} source_pvc={record.source_pvc or ''}",
     )
     session.commit()
     return ImageCreateResponse(
@@ -4601,6 +4741,7 @@ def import_image(
         name=record.name,
         filename=record.filename,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
@@ -4611,13 +4752,22 @@ def import_image(
 @router.get(
     "/images", response_model=list[ImageMeta], dependencies=[Depends(require_permission(Permission.IMAGES_READ))]
 )
-def list_images(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[ImageMeta]:
+def list_images(
+    request: Request,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[ImageMeta]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
     pvc_files = {item["name"]: item for item in _list_pvc_files()}
     existing_records = session.exec(select(Image)).all()
     if is_platform_admin(actor):
+        namespace_for_auto_rows = requested_namespace or normalize_namespace(settings.kube_namespace) or "labs"
         for fname, info in pvc_files.items():
             if any(
                 r.filename == fname
+                and _record_namespace(r) == namespace_for_auto_rows
                 and normalize_tenant(getattr(r, "tenant", None), default=GLOBAL_TENANT) == GLOBAL_TENANT
                 for r in existing_records
             ):
@@ -4627,6 +4777,7 @@ def list_images(session: Session = Depends(get_session), actor: User = Depends(r
                 name=fname,
                 filename=fname,
                 tenant=GLOBAL_TENANT,
+                namespace=namespace_for_auto_rows,
                 cluster_id=local_cluster_id(),
                 source_pvc=None,
                 checksum="",
@@ -4636,12 +4787,19 @@ def list_images(session: Session = Depends(get_session), actor: User = Depends(r
             session.add(record)
             existing_records.append(record)
         session.commit()
-    images = [record for record in existing_records if _tenant_scoped_record(record, actor, include_global=True)]
+    images = [
+        record
+        for record in existing_records
+        if _tenant_scoped_record(record, actor, include_global=True) and _namespace_scoped_record(record, actor)
+    ]
+    if requested_namespace:
+        images = [record for record in images if _record_namespace(record) == requested_namespace]
     return [
         ImageMeta(
             id=record.id,
             name=record.name,
             tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+            namespace=_record_namespace(record),
             cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
             checksum=record.checksum,
             size_bytes=record.size_bytes,
@@ -4662,7 +4820,11 @@ def delete_image(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(Image, image_id)
-    if not record or not _tenant_scoped_record(record, actor, include_global=True):
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     in_use_by_templates = session.exec(select(Template).where(Template.image_id == image_id)).all()
@@ -4721,7 +4883,7 @@ def delete_image(
         action="delete",
         target_type="image",
         target_id=record.id,
-        detail=f"filename={record.filename}",
+        detail=f"namespace={_record_namespace(record)} filename={record.filename}",
     )
     session.delete(record)
     session.commit()
@@ -4739,7 +4901,11 @@ def rename_image(
     actor: User = Depends(require_user),
 ) -> ImageMeta:
     record = session.get(Image, image_id)
-    if not record or not _tenant_scoped_record(record, actor, include_global=True):
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     new_name = payload.name or record.name
@@ -4747,7 +4913,12 @@ def rename_image(
     if Path(new_filename).suffix.lower() not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
     # Ensure no conflict
-    existing = session.exec(select(Image).where(Image.filename == new_filename).where(Image.id != image_id)).first()
+    existing = session.exec(
+        select(Image)
+        .where(Image.filename == new_filename)
+        .where(Image.namespace == _record_namespace(record))
+        .where(Image.id != image_id)
+    ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="filename already exists")
 
@@ -4784,7 +4955,7 @@ def rename_image(
         action="update",
         target_type="image",
         target_id=record.id,
-        detail=f"name={record.name} filename={record.filename}",
+        detail=f"namespace={_record_namespace(record)} name={record.name} filename={record.filename}",
     )
     session.commit()
     session.refresh(record)
@@ -4792,6 +4963,7 @@ def rename_image(
         id=record.id,
         name=record.name,
         tenant=managed_tenant,
+        namespace=_record_namespace(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
@@ -4808,6 +4980,7 @@ def _template_to_model(record: Template) -> VMTemplate:
         id=record.id,
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         os_type=record.os_type,
@@ -4836,18 +5009,35 @@ def _template_to_model(record: Template) -> VMTemplate:
 )
 def create_template(
     payload: VMTemplateCreate,
+    request: Request,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> VMTemplate:
     resource_tenant = resolve_resource_tenant(actor, payload.tenant)
+    resource_namespace = resolve_resource_namespace(
+        actor,
+        request=request,
+        requested_namespace=payload.namespace,
+        fallback_namespace=settings.kube_namespace,
+    )
     image = session.get(Image, payload.image_id)
-    if not image or not _tenant_scoped_record(image, actor, include_global=True):
+    if (
+        not image
+        or not _tenant_scoped_record(image, actor, include_global=True)
+        or not _namespace_scoped_record(image, actor)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"template tenant {resource_tenant} cannot use image tenant {image_tenant}",
+        )
+    image_namespace = _record_namespace(image)
+    if image_namespace != resource_namespace:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"template namespace {resource_namespace} cannot use image namespace {image_namespace}",
         )
     if not image.source_pvc:
         raise HTTPException(
@@ -4865,6 +5055,7 @@ def create_template(
         id=str(uuid4()),
         name=payload.name,
         tenant=resource_tenant,
+        namespace=resource_namespace,
         cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=payload.description or "",
         os_type=payload.os_type or "windows",
@@ -4895,7 +5086,7 @@ def create_template(
         action="create",
         target_type="template",
         target_id=record.id,
-        detail=f"name={record.name} image_id={record.image_id}",
+        detail=f"namespace={record.namespace} name={record.name} image_id={record.image_id}",
     )
     session.commit()
     session.refresh(record)
@@ -4907,11 +5098,23 @@ def create_template(
     response_model=list[VMTemplate],
     dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
 )
-def list_templates(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[VMTemplate]:
+def list_templates(
+    request: Request,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[VMTemplate]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
     stmt = select(Template)
     scope = _tenant_scope_for_actor(actor, include_global=True)
     if scope is not None:
         stmt = stmt.where(Template.tenant.in_(scope))
+    namespace_scope = _namespace_scope_for_actor(actor)
+    if namespace_scope is not None:
+        stmt = stmt.where(Template.namespace.in_(sorted(namespace_scope)))
+    if requested_namespace:
+        stmt = stmt.where(Template.namespace == requested_namespace)
     templates = session.exec(stmt).all()
     return [_template_to_model(record) for record in templates]
 
@@ -4928,12 +5131,19 @@ def update_template(
     actor: User = Depends(require_user),
 ) -> VMTemplate:
     record = session.get(Template, template_id)
-    if not record or not _tenant_scoped_record(record, actor, include_global=True):
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     next_tenant = managed_tenant
+    next_namespace = _record_namespace(record)
     if payload.tenant is not None:
         next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
+    if payload.namespace is not None:
+        next_namespace = assert_actor_can_access_namespace(actor, payload.namespace)
     if payload.name is not None:
         record.name = payload.name
     if payload.cluster_id is not None:
@@ -4944,7 +5154,11 @@ def update_template(
         record.os_type = payload.os_type
     if payload.image_id is not None:
         image = session.get(Image, payload.image_id)
-        if not image or not _tenant_scoped_record(image, actor, include_global=True):
+        if (
+            not image
+            or not _tenant_scoped_record(image, actor, include_global=True)
+            or not _namespace_scoped_record(image, actor)
+        ):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
         if not image.source_pvc:
             raise HTTPException(
@@ -4957,8 +5171,25 @@ def update_template(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
+        image_namespace = _record_namespace(image)
+        if image_namespace != next_namespace:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"template namespace {next_namespace} cannot use image namespace {image_namespace}",
+            )
         record.image_id = payload.image_id
+    elif payload.namespace is not None:
+        existing_image = session.get(Image, record.image_id)
+        if existing_image is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
+        image_namespace = _record_namespace(existing_image)
+        if image_namespace != next_namespace:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"template namespace {next_namespace} cannot use image namespace {image_namespace}",
+            )
     record.tenant = next_tenant
+    record.namespace = next_namespace
     if payload.cpu_cores is not None:
         record.cpu_cores = payload.cpu_cores
     if payload.ram_mb is not None:
@@ -5000,7 +5231,7 @@ def update_template(
         action="update",
         target_type="template",
         target_id=record.id,
-        detail=f"name={record.name} image_id={record.image_id} enabled={record.enabled}",
+        detail=f"namespace={record.namespace} name={record.name} image_id={record.image_id} enabled={record.enabled}",
     )
     session.commit()
     session.refresh(record)
@@ -5018,7 +5249,11 @@ def delete_template(
     actor: User = Depends(require_user),
 ) -> None:
     record = session.get(Template, template_id)
-    if not record or not _tenant_scoped_record(record, actor, include_global=True):
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     _record_admin_audit_event(
@@ -5028,7 +5263,7 @@ def delete_template(
         action="delete",
         target_type="template",
         target_id=record.id,
-        detail=f"name={record.name}",
+        detail=f"namespace={_record_namespace(record)} name={record.name}",
     )
     session.delete(record)
     session.commit()
@@ -5684,7 +5919,7 @@ def clear_alerts_error_log(
     dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
 )
 def list_admin_audit_events(
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=50),
     actor: str | None = Query(default=None),
     action: str | None = Query(default=None),
     session: Session = Depends(get_session),
@@ -5701,6 +5936,26 @@ def list_admin_audit_events(
         stmt = stmt.where(AdminAuditEvent.action == action_filter)
     rows = session.exec(stmt.order_by(AdminAuditEvent.created_at.desc())).all()[:limit]
     return [_admin_audit_event_out(row) for row in rows]
+
+
+@router.delete(
+    "/audit-events",
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def clear_admin_audit_events(
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+) -> dict[str, int]:
+    stmt = select(AdminAuditEvent)
+    if not is_platform_admin(user):
+        stmt = stmt.where(AdminAuditEvent.tenant == actor_tenant(user))
+    rows = session.exec(stmt).all()
+    deleted = 0
+    for row in rows:
+        session.delete(row)
+        deleted += 1
+    session.commit()
+    return {"deleted": deleted}
 
 
 @router.get(

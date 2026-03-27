@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { BrowserRouter, Link, Route, Routes, useNavigate } from "react-router-dom";
+import { BrowserRouter, Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
 import { api, AUTH_INVALID_EVENT } from "./api";
 import Login from "./components/Login.jsx";
@@ -65,6 +65,12 @@ const AppShell = () => {
   const [error, setError] = useState(null);
   const [site, setSite] = useState({ ...DEFAULT_SITE });
   const navigate = useNavigate();
+  const location = useLocation();
+
+  const namespaceMatch = String(location?.pathname || "").match(/^\/(?:ns|namespace)\/([^/]+)/i);
+  const namespacePrefix = namespaceMatch?.[1] ? `/ns/${namespaceMatch[1]}` : "";
+  const userRootPath = namespacePrefix || "/";
+  const adminRootPath = namespacePrefix ? `${namespacePrefix}/admin` : "/admin";
 
   useEffect(() => {
     const loadCurrentUser = async () => {
@@ -83,18 +89,18 @@ const AppShell = () => {
       const msg = event?.detail?.message || "Session expired. Please sign in again.";
       setUser(null);
       setError(msg);
-      navigate("/");
+      navigate(userRootPath);
     };
     window.addEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
     return () => window.removeEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
-  }, [navigate]);
+  }, [navigate, userRootPath]);
 
   const onLogin = async (username, password) => {
     try {
       const res = await api.post("/auth/login", { username, password });
       setUser(res.data.user);
       setError(null);
-      navigate("/");
+      navigate(userRootPath);
     } catch (err) {
       setError(err.response?.data?.detail || "Login failed");
       setUser(null);
@@ -181,7 +187,7 @@ const AppShell = () => {
       // Ignore logout transport issues and clear local state anyway.
     }
     setUser(null);
-    navigate("/");
+    navigate(userRootPath);
   };
 
   const authed = Boolean(user);
@@ -216,12 +222,20 @@ const AppShell = () => {
       {authed && (
         <>
           <nav className="nav">
-            <Link to="/">User</Link>
-            {canAccessAdmin && <Link to="/admin">Admin</Link>}
+            <Link to={userRootPath}>User</Link>
+            {canAccessAdmin && <Link to={adminRootPath}>Admin</Link>}
           </nav>
           <Routes>
             <Route
               path="/"
+              element={
+                <section className="card">
+                  <UserPanel />
+                </section>
+              }
+            />
+            <Route
+              path="/ns/:namespace"
               element={
                 <section className="card">
                   <UserPanel />
@@ -239,7 +253,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin"
+                  element={
+                    <section className="card">
+                      <AdminDashboard />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/users"
+                  element={
+                    <section className="card">
+                      <AdminUsers />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/users"
                   element={
                     <section className="card">
                       <AdminUsers />
@@ -255,7 +285,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/scaling-quotas"
+                  element={
+                    <section className="card">
+                      <AdminTeamQuotas />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/team-quotas"
+                  element={
+                    <section className="card">
+                      <AdminTeamQuotas />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/team-quotas"
                   element={
                     <section className="card">
                       <AdminTeamQuotas />
@@ -271,7 +317,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/templates"
+                  element={
+                    <section className="card">
+                      <AdminTemplates />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/images"
+                  element={
+                    <section className="card">
+                      <AdminImages />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/images"
                   element={
                     <section className="card">
                       <AdminImages />
@@ -287,7 +349,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/container-images"
+                  element={
+                    <section className="card">
+                      <AdminContainerImages />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/container-templates"
+                  element={
+                    <section className="card">
+                      <AdminContainerTemplates />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/container-templates"
                   element={
                     <section className="card">
                       <AdminContainerTemplates />
@@ -303,7 +381,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/pods"
+                  element={
+                    <section className="card">
+                      <AdminPods />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/resources"
+                  element={
+                    <section className="card">
+                      <AdminResources />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/resources"
                   element={
                     <section className="card">
                       <AdminResources />
@@ -319,7 +413,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/alerts-errors"
+                  element={
+                    <section className="card">
+                      <AdminAlertsErrors />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/audit-events"
+                  element={
+                    <section className="card">
+                      <AdminAuditEvents />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/audit-events"
                   element={
                     <section className="card">
                       <AdminAuditEvents />
@@ -335,7 +445,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/settings"
+                  element={
+                    <section className="card">
+                      <AdminSettingsLanding />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/settings/appearance"
+                  element={
+                    <section className="card">
+                      <AdminAppearanceSettings />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/settings/appearance"
                   element={
                     <section className="card">
                       <AdminAppearanceSettings />
@@ -351,7 +477,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/settings/storage"
+                  element={
+                    <section className="card">
+                      <AdminStorageSettings />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/settings/runtime"
+                  element={
+                    <section className="card">
+                      <AdminRuntimeSettings />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/settings/runtime"
                   element={
                     <section className="card">
                       <AdminRuntimeSettings />
@@ -367,6 +509,14 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/settings/namespaces"
+                  element={
+                    <section className="card">
+                      <AdminNamespacesSettings />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/settings/sso"
                   element={
                     <section className="card">
@@ -375,7 +525,23 @@ const AppShell = () => {
                   }
                 />
                 <Route
+                  path="/ns/:namespace/admin/settings/sso"
+                  element={
+                    <section className="card">
+                      <AdminSSOSettings />
+                    </section>
+                  }
+                />
+                <Route
                   path="/admin/settings/ldap"
+                  element={
+                    <section className="card">
+                      <AdminLDAPSettings />
+                    </section>
+                  }
+                />
+                <Route
+                  path="/ns/:namespace/admin/settings/ldap"
                   element={
                     <section className="card">
                       <AdminLDAPSettings />
