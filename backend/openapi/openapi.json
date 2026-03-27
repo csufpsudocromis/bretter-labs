@@ -4245,6 +4245,7 @@
             "type": "string"
           },
           "team": {
+            "default": "default",
             "maxLength": 64,
             "minLength": 1,
             "title": "Team",
@@ -4252,7 +4253,6 @@
           }
         },
         "required": [
-          "team",
           "namespace"
         ],
         "title": "TeamQuotaCreate",

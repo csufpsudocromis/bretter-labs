@@ -1,6 +1,6 @@
 # Scaling and Quotas
 
-Last reviewed: March 20, 2026.
+Last reviewed: March 27, 2026.
 
 ## Overview
 
@@ -16,7 +16,6 @@ Cluster component scaling is configured separately through Helm/setup values:
 UI behavior:
 
 - Namespace is selected from a dropdown populated from cluster namespaces and saved quota rows.
-- Team is editable in UI (defaults to `default`) and can be selected/typed for per-team quota rows.
 - Empty fields mean unlimited for that limit.
 
 ## Available limits
@@ -42,7 +41,7 @@ Possible outcomes:
 
 Typical quota detail message:
 
-- `team quota reached in namespace labs: max concurrent labs is <n>`
+- `namespace quota reached in labs: max concurrent labs is <n>`
 
 The one-active-lab rule is still enforced separately:
 
@@ -51,18 +50,21 @@ The one-active-lab rule is still enforced separately:
 ## Backing API routes
 
 - `GET /admin/quota-namespaces`
-- `GET /admin/quota-teams`
 - `GET /admin/team-quotas`
 - `POST /admin/team-quotas`
 - `PATCH /admin/team-quotas/{quota_id}`
 - `DELETE /admin/team-quotas/{quota_id}`
+
+Compatibility route:
+
+- `GET /admin/quota-teams` returns `["default"]` for legacy clients.
 
 ## Operational checks
 
 List configured quota rows from API:
 
 ```bash
-kubectl -n labs logs deploy/bretter-backend --tail=200 | rg -i 'team quota|quota reached|429'
+kubectl -n labs logs deploy/bretter-backend --tail=200 | rg -i 'namespace quota|quota reached|429'
 ```
 
 Check namespace hard limits:

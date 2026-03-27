@@ -118,7 +118,7 @@ Reference pages:
 - OpenAPI snapshot + frontend API type drift checks in CI guardrails
 - Explicit PostgreSQL Alembic migration gate in CI (`scripts/check_alembic_postgres.sh`)
 - Tenant isolation audit gate for values/RBAC/network policy posture (`scripts/audit_tenant_isolation.sh`)
-- Tenant namespace bootstrap script for per-team quota/policy scaffolding
+- Tenant namespace bootstrap script for namespace quota/policy scaffolding
 - Single-cluster multi-node runtime scheduling by default, with optional advanced multi-cluster APIs documented separately
 
 ## Architecture diagram

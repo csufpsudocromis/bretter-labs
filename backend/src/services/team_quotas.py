@@ -12,7 +12,6 @@ from ..tables import (
     Instance,
     TeamQuota,
     Template,
-    User,
 )
 
 DEFAULT_TEAM = "default"
@@ -57,25 +56,39 @@ def _estimate_vm_storage_gib(image: Image | None) -> int:
     return max(1, int(math.ceil(size_bytes / float(1024**3))))
 
 
-def _active_team_usage(
+def _select_namespace_quota(quota_rows: list[TeamQuota]) -> TeamQuota | None:
+    if not quota_rows:
+        return None
+    preferred = [row for row in quota_rows if normalize_team(getattr(row, "team", None)) == DEFAULT_TEAM]
+    ranked = preferred or quota_rows
+    ranked.sort(
+        key=lambda row: (
+            getattr(row, "updated_at", None) is not None,
+            getattr(row, "updated_at", None) or getattr(row, "created_at", None),
+            str(getattr(row, "id", "") or ""),
+        ),
+        reverse=True,
+    )
+    return ranked[0]
+
+
+def _namespace_quota(session: Session, *, namespace: str) -> TeamQuota | None:
+    rows = session.exec(
+        select(TeamQuota).where(TeamQuota.namespace == namespace).where(TeamQuota.enabled == True)  # noqa: E712
+    ).all()
+    return _select_namespace_quota(list(rows))
+
+
+def _active_namespace_usage(
     session: Session,
     *,
-    team: str,
     namespace: str | None = None,
     exclude_vm_instance_id: str | None = None,
     exclude_container_instance_id: str | None = None,
 ) -> tuple[int, int, int, int]:
     namespace_name = normalize_namespace(namespace)
-    usernames = session.exec(select(User.username).where(User.team == team)).all()
-    if not usernames:
-        return 0, 0, 0, 0
-    username_list = list(usernames)
-
     vm_rows = session.exec(
-        select(Instance)
-        .where(Instance.owner.in_(username_list))
-        .where(Instance.status.in_(ACTIVE_STATUSES))
-        .where(Instance.namespace == namespace_name)
+        select(Instance).where(Instance.status.in_(ACTIVE_STATUSES)).where(Instance.namespace == namespace_name)
     ).all()
     if exclude_vm_instance_id:
         vm_rows = [row for row in vm_rows if row.id != exclude_vm_instance_id]
@@ -93,7 +106,6 @@ def _active_team_usage(
 
     container_rows = session.exec(
         select(ContainerInstance)
-        .where(ContainerInstance.owner.in_(username_list))
         .where(ContainerInstance.status.in_(ACTIVE_STATUSES))
         .where(ContainerInstance.namespace == namespace_name)
     ).all()
@@ -138,14 +150,9 @@ def _active_team_usage(
 
 
 def team_idle_timeout_cap(session: Session, team: str | None, namespace: str | None) -> int | None:
-    team_name = normalize_team(team)
+    _ = normalize_team(team)
     namespace_name = normalize_namespace(namespace)
-    quota = session.exec(
-        select(TeamQuota)
-        .where(TeamQuota.team == team_name)
-        .where(TeamQuota.namespace == namespace_name)
-        .where(TeamQuota.enabled == True)  # noqa: E712
-    ).first()
+    quota = _namespace_quota(session, namespace=namespace_name)
     if not quota:
         return None
     return normalize_optional_limit(getattr(quota, "idle_timeout_minutes_cap", None))
@@ -164,16 +171,11 @@ def enforce_team_quota(
     exclude_vm_instance_id: str | None = None,
     exclude_container_instance_id: str | None = None,
 ) -> TeamQuotaCheckResult:
-    team_name = normalize_team(team)
+    _ = normalize_team(team)
     namespace_name = normalize_namespace(namespace)
     effective_idle = max(1, int(requested_idle_timeout_minutes or settings.idle_timeout_minutes))
 
-    quota = session.exec(
-        select(TeamQuota)
-        .where(TeamQuota.team == team_name)
-        .where(TeamQuota.namespace == namespace_name)
-        .where(TeamQuota.enabled == True)  # noqa: E712
-    ).first()
+    quota = _namespace_quota(session, namespace=namespace_name)
     if not quota:
         return TeamQuotaCheckResult(effective_idle_timeout_minutes=effective_idle, error_detail=None)
 
@@ -181,9 +183,8 @@ def enforce_team_quota(
     if idle_cap is not None:
         effective_idle = min(effective_idle, idle_cap)
 
-    active_labs, used_cpu_m, used_mem_mb, used_storage_gib = _active_team_usage(
+    active_labs, used_cpu_m, used_mem_mb, used_storage_gib = _active_namespace_usage(
         session,
-        team=team_name,
         namespace=namespace_name,
         exclude_vm_instance_id=exclude_vm_instance_id,
         exclude_container_instance_id=exclude_container_instance_id,
@@ -193,28 +194,28 @@ def enforce_team_quota(
     if max_labs is not None and active_labs + max(0, int(requested_labs or 0)) > max_labs:
         return TeamQuotaCheckResult(
             effective_idle_timeout_minutes=effective_idle,
-            error_detail=f"team quota reached in namespace {namespace_name}: max concurrent labs is {max_labs}",
+            error_detail=f"namespace quota reached in {namespace_name}: max concurrent labs is {max_labs}",
         )
 
     max_cpu = normalize_optional_limit(getattr(quota, "max_cpu_millicores", None))
     if max_cpu is not None and used_cpu_m + max(0, int(requested_cpu_millicores or 0)) > max_cpu:
         return TeamQuotaCheckResult(
             effective_idle_timeout_minutes=effective_idle,
-            error_detail=f"team quota reached in namespace {namespace_name}: CPU cap is {max_cpu} millicores",
+            error_detail=f"namespace quota reached in {namespace_name}: CPU cap is {max_cpu} millicores",
         )
 
     max_mem = normalize_optional_limit(getattr(quota, "max_memory_mb", None))
     if max_mem is not None and used_mem_mb + max(0, int(requested_memory_mb or 0)) > max_mem:
         return TeamQuotaCheckResult(
             effective_idle_timeout_minutes=effective_idle,
-            error_detail=f"team quota reached in namespace {namespace_name}: memory cap is {max_mem} MB",
+            error_detail=f"namespace quota reached in {namespace_name}: memory cap is {max_mem} MB",
         )
 
     max_storage = normalize_optional_limit(getattr(quota, "max_storage_gib", None))
     if max_storage is not None and used_storage_gib + max(0, int(requested_storage_gib or 0)) > max_storage:
         return TeamQuotaCheckResult(
             effective_idle_timeout_minutes=effective_idle,
-            error_detail=f"team quota reached in namespace {namespace_name}: storage cap is {max_storage} GiB",
+            error_detail=f"namespace quota reached in {namespace_name}: storage cap is {max_storage} GiB",
         )
 
     return TeamQuotaCheckResult(effective_idle_timeout_minutes=effective_idle, error_detail=None)

@@ -499,7 +499,7 @@ Typical causes:
 
 - Node resource pressure (CPU/memory/disk)
 - PVC/storage class scheduling failure
-- Namespace/team quota limits
+- Namespace quota limits
 
 ### Token/session auth failures (`invalid token`, `session expired`, repeated login loops)
 

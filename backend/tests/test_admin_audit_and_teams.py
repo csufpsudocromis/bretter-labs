@@ -11,7 +11,7 @@ from src.tables import Image, TeamQuota, User
 from src.time_utils import utc_now
 
 
-def test_quota_teams_lists_user_and_quota_teams(login_admin: TestClient) -> None:
+def test_quota_teams_lists_default_only_for_namespace_scoped_quotas(login_admin: TestClient) -> None:
     with Session(engine) as session:
         session.add(
             User(
@@ -37,8 +37,7 @@ def test_quota_teams_lists_user_and_quota_teams(login_admin: TestClient) -> None
 
     response = login_admin.get("/admin/quota-teams")
     assert response.status_code == 200, response.text
-    teams = set(response.json())
-    assert {"default", "red", "blue"}.issubset(teams)
+    assert response.json() == ["default"]
 
 
 def test_admin_audit_events_record_quota_and_settings_changes(login_admin: TestClient) -> None:

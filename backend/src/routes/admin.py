@@ -3637,7 +3637,8 @@ def _admin_audit_event_out(record: AdminAuditEvent) -> AdminAuditEventOut:
 def _team_quota_out(record: TeamQuota) -> TeamQuotaOut:
     return TeamQuotaOut(
         id=record.id,
-        team=normalize_team(record.team),
+        # Quotas are namespace-scoped; keep team field for API compatibility only.
+        team=normalize_team("default"),
         namespace=normalize_namespace(record.namespace),
         max_concurrent_labs=normalize_optional_limit(getattr(record, "max_concurrent_labs", None)),
         max_cpu_millicores=normalize_optional_limit(getattr(record, "max_cpu_millicores", None)),
@@ -3648,6 +3649,30 @@ def _team_quota_out(record: TeamQuota) -> TeamQuotaOut:
         created_at=record.created_at,
         updated_at=record.updated_at,
     )
+
+
+def _is_default_quota_team(team: str | None) -> bool:
+    return normalize_team(team) == normalize_team("default")
+
+
+def _canonical_namespace_quota_rows(rows: list[TeamQuota]) -> list[TeamQuota]:
+    selected: dict[str, TeamQuota] = {}
+    for row in rows:
+        namespace = normalize_namespace(getattr(row, "namespace", None))
+        current = selected.get(namespace)
+        if current is None:
+            selected[namespace] = row
+            continue
+        if _is_default_quota_team(getattr(row, "team", None)) and not _is_default_quota_team(
+            getattr(current, "team", None)
+        ):
+            selected[namespace] = row
+            continue
+        row_updated = getattr(row, "updated_at", None) or getattr(row, "created_at", None)
+        current_updated = getattr(current, "updated_at", None) or getattr(current, "created_at", None)
+        if row_updated and (current_updated is None or row_updated >= current_updated):
+            selected[namespace] = row
+    return [selected[name] for name in sorted(selected)]
 
 
 @router.get(
@@ -3687,17 +3712,8 @@ def list_quota_namespaces(
     response_model=list[str],
     dependencies=[Depends(require_permission(Permission.USERS_READ))],
 )
-def list_quota_teams(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[str]:
-    if not is_platform_admin(actor):
-        return [actor_tenant(actor)]
-    available: set[str] = {normalize_team("default")}
-    user_rows = session.exec(select(User.team)).all()
-    for row in user_rows:
-        available.add(normalize_team(row))
-    quota_rows = session.exec(select(TeamQuota.team)).all()
-    for row in quota_rows:
-        available.add(normalize_team(row))
-    return sorted([team for team in available if team])
+def list_quota_teams(_session: Session = Depends(get_session), _actor: User = Depends(require_user)) -> list[str]:
+    return [normalize_team("default")]
 
 
 @router.post(
@@ -3873,11 +3889,11 @@ def remove_user(
 def list_team_quotas(
     session: Session = Depends(get_session), actor: User = Depends(require_user)
 ) -> list[TeamQuotaOut]:
-    stmt = select(TeamQuota)
+    rows = session.exec(select(TeamQuota)).all()
     if not is_platform_admin(actor):
-        stmt = stmt.where(TeamQuota.team == actor_tenant(actor))
-    rows = session.exec(stmt).all()
-    rows.sort(key=lambda row: (normalize_namespace(row.namespace), normalize_team(row.team)))
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(actor.team))
+        rows = [row for row in rows if normalize_namespace(row.namespace) == expected_namespace]
+    rows = _canonical_namespace_quota_rows(list(rows))
     return [_team_quota_out(row) for row in rows]
 
 
@@ -3892,28 +3908,24 @@ def create_team_quota(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> TeamQuotaOut:
-    team = normalize_team(payload.team)
     namespace = normalize_namespace(payload.namespace)
     if not is_platform_admin(actor):
-        team = actor_tenant(actor)
-        expected_namespace = normalize_namespace(tenant_namespace_for_team(team))
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(actor.team))
         if namespace != expected_namespace:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"team quotas must target namespace {expected_namespace} for tenant {team}",
+                detail=f"namespace quotas must target namespace {expected_namespace}",
             )
-    existing = session.exec(
-        select(TeamQuota).where(TeamQuota.team == team).where(TeamQuota.namespace == namespace)
-    ).first()
+    existing = session.exec(select(TeamQuota).where(TeamQuota.namespace == namespace)).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"quota already exists for team '{team}' in namespace '{namespace}'",
+            detail=f"quota already exists for namespace '{namespace}'",
         )
     now = utc_now()
     row = TeamQuota(
         id=str(uuid4()),
-        team=team,
+        team=normalize_team("default"),
         namespace=namespace,
         max_concurrent_labs=normalize_optional_limit(payload.max_concurrent_labs),
         max_cpu_millicores=normalize_optional_limit(payload.max_cpu_millicores),
@@ -3928,11 +3940,11 @@ def create_team_quota(
     _record_admin_audit_event(
         session,
         actor=actor.username,
-        tenant=team,
+        tenant=(GLOBAL_TENANT if is_platform_admin(actor) else actor_tenant(actor)),
         action="create",
         target_type="team_quota",
         target_id=row.id,
-        detail=f"team={team} namespace={namespace}",
+        detail=f"namespace={namespace}",
     )
     session.commit()
     session.refresh(row)
@@ -3953,34 +3965,31 @@ def update_team_quota(
     row = session.get(TeamQuota, quota_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
-    if not is_platform_admin(actor) and normalize_team(row.team) != actor_tenant(actor):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+    if not is_platform_admin(actor):
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(actor.team))
+        if normalize_namespace(row.namespace) != expected_namespace:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
 
-    team = normalize_team(payload.team) if payload.team is not None else normalize_team(row.team)
     namespace = (
         normalize_namespace(payload.namespace) if payload.namespace is not None else normalize_namespace(row.namespace)
     )
     if not is_platform_admin(actor):
-        team = actor_tenant(actor)
-        expected_namespace = normalize_namespace(tenant_namespace_for_team(team))
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(actor.team))
         if namespace != expected_namespace:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"team quotas must target namespace {expected_namespace} for tenant {team}",
+                detail=f"namespace quotas must target namespace {expected_namespace}",
             )
     conflict = session.exec(
-        select(TeamQuota)
-        .where(TeamQuota.team == team)
-        .where(TeamQuota.namespace == namespace)
-        .where(TeamQuota.id != row.id)
+        select(TeamQuota).where(TeamQuota.namespace == namespace).where(TeamQuota.id != row.id)
     ).first()
     if conflict:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail=f"quota already exists for team '{team}' in namespace '{namespace}'",
+            detail=f"quota already exists for namespace '{namespace}'",
         )
 
-    row.team = team
+    row.team = normalize_team("default")
     row.namespace = namespace
     if payload.clear_max_concurrent_labs:
         row.max_concurrent_labs = None
@@ -4015,11 +4024,11 @@ def update_team_quota(
     _record_admin_audit_event(
         session,
         actor=actor.username,
-        tenant=normalize_team(row.team),
+        tenant=(GLOBAL_TENANT if is_platform_admin(actor) else actor_tenant(actor)),
         action="update",
         target_type="team_quota",
         target_id=row.id,
-        detail=f"team={row.team} namespace={row.namespace}",
+        detail=f"namespace={row.namespace}",
     )
     session.commit()
     session.refresh(row)
@@ -4039,16 +4048,18 @@ def delete_team_quota(
     row = session.get(TeamQuota, quota_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
-    if not is_platform_admin(actor) and normalize_team(row.team) != actor_tenant(actor):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
+    if not is_platform_admin(actor):
+        expected_namespace = normalize_namespace(tenant_namespace_for_team(actor.team))
+        if normalize_namespace(row.namespace) != expected_namespace:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="team quota not found")
     _record_admin_audit_event(
         session,
         actor=actor.username,
-        tenant=normalize_team(row.team),
+        tenant=(GLOBAL_TENANT if is_platform_admin(actor) else actor_tenant(actor)),
         action="delete",
         target_type="team_quota",
         target_id=row.id,
-        detail=f"team={row.team} namespace={row.namespace}",
+        detail=f"namespace={row.namespace}",
     )
     session.delete(row)
     session.commit()

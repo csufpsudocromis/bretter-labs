@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../../api";
 
-const DEFAULT_TEAM = "default";
-
 const emptyForm = {
-  team: DEFAULT_TEAM,
   namespace: "labs",
   max_concurrent_labs: "",
   max_cpu_millicores: "",
@@ -24,7 +21,6 @@ const normalizeNumber = (value) => {
 const AdminTeamQuotas = () => {
   const [quotas, setQuotas] = useState([]);
   const [namespaces, setNamespaces] = useState(["labs"]);
-  const [teams, setTeams] = useState([DEFAULT_TEAM]);
   const [form, setForm] = useState({ ...emptyForm });
   const [editingId, setEditingId] = useState("");
   const [message, setMessage] = useState("");
@@ -37,7 +33,7 @@ const AdminTeamQuotas = () => {
       loadedQuotas = res.data || [];
       setQuotas(loadedQuotas);
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to load team quotas");
+      setMessage(err.response?.data?.detail || "Failed to load namespace quotas");
     }
     try {
       const res = await api.get("/admin/quota-namespaces");
@@ -69,46 +65,6 @@ const AdminTeamQuotas = () => {
       );
       setNamespaces(Array.from(merged).filter(Boolean).sort());
     }
-    try {
-      const res = await api.get("/admin/quota-teams");
-      const values = Array.isArray(res.data) ? res.data : [];
-      const merged = new Set([
-        DEFAULT_TEAM,
-        String(form.team || "")
-          .trim()
-          .toLowerCase() || DEFAULT_TEAM,
-      ]);
-      values.forEach((item) =>
-        merged.add(
-          String(item || "")
-            .trim()
-            .toLowerCase()
-        )
-      );
-      loadedQuotas.forEach((row) =>
-        merged.add(
-          String(row.team || "")
-            .trim()
-            .toLowerCase()
-        )
-      );
-      setTeams(Array.from(merged).filter(Boolean).sort());
-    } catch {
-      const merged = new Set([
-        DEFAULT_TEAM,
-        String(form.team || "")
-          .trim()
-          .toLowerCase() || DEFAULT_TEAM,
-      ]);
-      loadedQuotas.forEach((row) =>
-        merged.add(
-          String(row.team || "")
-            .trim()
-            .toLowerCase()
-        )
-      );
-      setTeams(Array.from(merged).filter(Boolean).sort());
-    }
   };
 
   useEffect(() => {
@@ -124,22 +80,13 @@ const AdminTeamQuotas = () => {
   };
 
   const startEdit = (row) => {
-    const team =
-      String(row.team || DEFAULT_TEAM)
-        .trim()
-        .toLowerCase() || DEFAULT_TEAM;
     const namespace = row.namespace || "labs";
-    setTeams((prev) => {
-      const merged = new Set([...(prev || []), team]);
-      return Array.from(merged).filter(Boolean).sort();
-    });
     setNamespaces((prev) => {
       const merged = new Set([...(prev || []), namespace]);
       return Array.from(merged).filter(Boolean).sort();
     });
     setEditingId(row.id);
     setForm({
-      team,
       namespace,
       max_concurrent_labs: row.max_concurrent_labs ?? "",
       max_cpu_millicores: row.max_cpu_millicores ?? "",
@@ -152,12 +99,7 @@ const AdminTeamQuotas = () => {
   };
 
   const buildPayload = (forUpdate = false) => {
-    const normalizedTeam =
-      String(form.team || "")
-        .trim()
-        .toLowerCase() || DEFAULT_TEAM;
     const payload = {
-      team: normalizedTeam,
       namespace: String(form.namespace || "").trim() || "labs",
       enabled: Boolean(form.enabled),
     };
@@ -188,12 +130,7 @@ const AdminTeamQuotas = () => {
   };
 
   const save = async () => {
-    const team = String(form.team || "").trim();
     const namespace = String(form.namespace || "").trim();
-    if (!team) {
-      setMessage("Team is required");
-      return;
-    }
     if (!namespace) {
       setMessage("Namespace is required");
       return;
@@ -208,10 +145,10 @@ const AdminTeamQuotas = () => {
         setMessage("Quota created");
       }
       setEditingId("");
-      setForm({ ...emptyForm, team: team.toLowerCase(), namespace: namespace || "labs" });
+      setForm({ ...emptyForm, namespace: namespace || "labs" });
       await load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to save team quota");
+      setMessage(err.response?.data?.detail || "Failed to save namespace quota");
     } finally {
       setSaving(false);
     }
@@ -248,20 +185,6 @@ const AdminTeamQuotas = () => {
         <div>
           <h3>{editingId ? "Edit quota" : "Create quota"}</h3>
           <div className="form">
-            <label>
-              Team
-              <input
-                list="quota-teams"
-                value={form.team}
-                onChange={(e) => updateField("team", e.target.value)}
-                placeholder="default"
-              />
-              <datalist id="quota-teams">
-                {teams.map((teamName) => (
-                  <option key={teamName} value={teamName} />
-                ))}
-              </datalist>
-            </label>
             <label>
               Namespace
               <select value={form.namespace} onChange={(e) => updateField("namespace", e.target.value)}>
@@ -357,7 +280,6 @@ const AdminTeamQuotas = () => {
                     {row.enabled ? "Enabled" : "Disabled"}
                   </span>
                 </div>
-                <div className="small muted">Team: {row.team || DEFAULT_TEAM}</div>
                 <div className="small muted">Max labs: {limitLabel(row.max_concurrent_labs)}</div>
                 <div className="small muted">CPU cap: {limitLabel(row.max_cpu_millicores, "m")}</div>
                 <div className="small muted">RAM cap: {limitLabel(row.max_memory_mb, " MB")}</div>

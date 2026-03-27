@@ -40,7 +40,7 @@ class UserOut(BaseModel):
 
 
 class TeamQuotaCreate(BaseModel):
-    team: str = Field(..., min_length=1, max_length=64)
+    team: str = Field(default="default", min_length=1, max_length=64)
     namespace: str = Field(..., min_length=1, max_length=63)
     max_concurrent_labs: Optional[int] = Field(default=None, ge=1, le=5000)
     max_cpu_millicores: Optional[int] = Field(default=None, ge=100, le=1_000_000)

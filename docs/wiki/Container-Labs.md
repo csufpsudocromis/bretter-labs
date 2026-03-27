@@ -81,7 +81,7 @@ Connect button behavior:
 ## Safety controls
 
 - One-active-lab rule applies across VM + container workloads.
-- Namespace/team quotas can block starts with clear quota feedback.
+- Namespace quotas can block starts with clear quota feedback.
 - Idle timeout policy applies to running labs and connect views.
 
 ## Quick triage
