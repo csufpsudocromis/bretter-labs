@@ -25,7 +25,7 @@ def is_platform_admin(user: User) -> bool:
 
 
 def is_tenant_admin(user: User) -> bool:
-    return role_for_user(user) == Role.TENANT_ADMIN
+    return role_for_user(user) == Role.NAMESPACE_ADMIN
 
 
 def resolve_resource_tenant(actor: User, requested_tenant: str | None = None) -> str:

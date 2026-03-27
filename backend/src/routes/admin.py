@@ -47,6 +47,10 @@ from ..models import (
     OrchestrationParityItem,
     OrchestrationParityReport,
     RdpReadinessTelemetry,
+    RoleDefinitionCreate,
+    RoleDefinitionUpdate,
+    RoleCatalogOut,
+    RoleManagementCatalogOut,
     StorageSettingsRead,
     StorageSettingsUpdate,
     SiteBackgroundAsset,
@@ -72,11 +76,21 @@ from ..network_modes import normalize_vm_network_mode
 from ..rbac import (
     Permission,
     Role,
+    can_non_platform_assign_role,
     can_access_admin,
+    delete_role_definition,
     ensure_user_role_fields,
     list_permissions_for_role,
     normalize_requested_role,
+    permission_catalog,
+    role_description,
     role_for_user,
+    role_is_deletable,
+    role_is_editable,
+    role_label,
+    role_config_payload,
+    roles_catalog,
+    set_role_definition,
 )
 from ..services.labimageimport_crd import (
     image_import_writes_crd,
@@ -1434,6 +1448,8 @@ def _ensure_config_columns() -> None:
             to_add.append("ALTER TABLE config ADD COLUMN sso_default_role TEXT DEFAULT 'user'")
         if "sso_role_mappings_json" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN sso_role_mappings_json TEXT DEFAULT '{}'")
+        if "rbac_roles_json" not in cols:
+            to_add.append("ALTER TABLE config ADD COLUMN rbac_roles_json TEXT DEFAULT '{}'")
         if "sso_auto_create_users" not in cols:
             to_add.append("ALTER TABLE config ADD COLUMN sso_auto_create_users BOOLEAN DEFAULT 1")
         if "sso_sync_roles_on_login" not in cols:
@@ -3608,6 +3624,34 @@ class DirectUploadSession(BaseModel):
     upload_token: str
 
 
+def _role_catalog_rows() -> list[RoleCatalogOut]:
+    rows: list[RoleCatalogOut] = []
+    for role in roles_catalog():
+        rows.append(
+            RoleCatalogOut(
+                role=role,
+                label=role_label(role),
+                description=role_description(role),
+                permissions=list_permissions_for_role(role),
+                editable=role_is_editable(role),
+                deletable=role_is_deletable(role),
+            )
+        )
+    return rows
+
+
+def _save_role_definitions_config(session: Session) -> None:
+    cfg = _get_or_create_config(session)
+    cfg.rbac_roles_json = json.dumps(role_config_payload(), sort_keys=True, separators=(",", ":"))
+    session.add(cfg)
+
+
+def _actor_can_assign_role(actor: User, target_role: str) -> bool:
+    if is_platform_admin(actor):
+        return True
+    return can_non_platform_assign_role(target_role)
+
+
 def _user_out(user: User) -> UserOut:
     role = role_for_user(user)
     return UserOut(
@@ -3716,6 +3760,163 @@ def list_quota_teams(_session: Session = Depends(get_session), _actor: User = De
     return [normalize_team("default")]
 
 
+@router.get(
+    "/users/roles",
+    response_model=list[RoleCatalogOut],
+    dependencies=[Depends(require_permission(Permission.USERS_READ))],
+)
+def list_user_roles_catalog(_user: User = Depends(require_user)) -> list[RoleCatalogOut]:
+    return _role_catalog_rows()
+
+
+@router.get(
+    "/settings/roles",
+    response_model=RoleManagementCatalogOut,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_READ))],
+)
+def get_role_management_catalog(_user: User = Depends(require_user)) -> RoleManagementCatalogOut:
+    return RoleManagementCatalogOut(roles=_role_catalog_rows(), permission_catalog=permission_catalog())
+
+
+@router.post(
+    "/settings/roles",
+    response_model=RoleCatalogOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def create_role_definition(
+    payload: RoleDefinitionCreate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> RoleCatalogOut:
+    if not is_platform_admin(actor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform admin required")
+    role_id = str(payload.role or "").strip().lower()
+    if not role_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="role id is required")
+    existing = {row.role for row in _role_catalog_rows()}
+    if role_id in existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="role already exists")
+    try:
+        set_role_definition(
+            role=role_id,
+            label=str(payload.label or "").strip(),
+            description=str(payload.description or "").strip(),
+            permissions=list(payload.permissions or []),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    _save_role_definitions_config(session)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="create",
+        target_type="role",
+        target_id=role_id,
+        detail=f"permissions={','.join(list_permissions_for_role(role_id))}",
+    )
+    session.commit()
+    for row in _role_catalog_rows():
+        if row.role == role_id:
+            return row
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to create role")
+
+
+@router.patch(
+    "/settings/roles/{role_id}",
+    response_model=RoleCatalogOut,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def update_role_definition(
+    role_id: str,
+    payload: RoleDefinitionUpdate,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> RoleCatalogOut:
+    if not is_platform_admin(actor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform admin required")
+    try:
+        normalized_role = normalize_requested_role(role_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if not role_is_editable(normalized_role):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="role is not editable")
+
+    role_rows = {row.role: row for row in _role_catalog_rows()}
+    current = role_rows.get(normalized_role)
+    if current is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="role not found")
+
+    next_label = current.label if payload.label is None else str(payload.label or "").strip()
+    next_description = current.description if payload.description is None else str(payload.description or "").strip()
+    next_permissions = current.permissions if payload.permissions is None else list(payload.permissions or [])
+    try:
+        set_role_definition(
+            role=normalized_role,
+            label=next_label,
+            description=next_description,
+            permissions=next_permissions,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    _save_role_definitions_config(session)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="role",
+        target_id=normalized_role,
+        detail=f"permissions={','.join(list_permissions_for_role(normalized_role))}",
+    )
+    session.commit()
+    for row in _role_catalog_rows():
+        if row.role == normalized_role:
+            return row
+    raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="failed to update role")
+
+
+@router.delete(
+    "/settings/roles/{role_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def remove_role_definition(
+    role_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
+    if not is_platform_admin(actor):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform admin required")
+    try:
+        normalized_role = normalize_requested_role(role_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    if not role_is_deletable(normalized_role):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="role cannot be deleted")
+    assigned_users = session.exec(select(User).where(User.role == normalized_role)).all()
+    if assigned_users:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"role is in use by {len(assigned_users)} user(s); reassign users before deleting role",
+        )
+    try:
+        delete_role_definition(normalized_role)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    _save_role_definitions_config(session)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="delete",
+        target_type="role",
+        target_id=normalized_role,
+    )
+    session.commit()
+
+
 @router.post(
     "/users",
     response_model=UserOut,
@@ -3735,9 +3936,8 @@ def add_user(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     team = normalize_team("default")
-    if not is_platform_admin(actor):
-        if role in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
+    if not _actor_can_assign_role(actor, role):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
@@ -3794,9 +3994,8 @@ def update_user(
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-    if not is_platform_admin(actor):
-        if role_for_user(user) in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
+    if not _actor_can_assign_role(actor, role_for_user(user)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     new_username = payload.username or username
     if payload.username is not None and (len(payload.username) < 3 or len(payload.username) > 64):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid username length")
@@ -3818,7 +4017,7 @@ def update_user(
             role = normalize_requested_role(payload.role, payload.is_admin)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-        if not is_platform_admin(actor) and role in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
+        if not _actor_can_assign_role(actor, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
         user.role = role
         user.is_admin = can_access_admin(role)
@@ -3854,9 +4053,8 @@ def remove_user(
     user = session.get(User, username)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
-    if not is_platform_admin(actor):
-        if role_for_user(user) in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
+    if not _actor_can_assign_role(actor, role_for_user(user)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     if role_for_user(user) == Role.PLATFORM_ADMIN and username == settings.admin_default_username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot delete default admin")
     revoke_tokens(session, username)

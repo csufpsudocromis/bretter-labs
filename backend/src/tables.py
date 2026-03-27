@@ -220,6 +220,7 @@ class Config(SQLModel, table=True):
     sso_role_claim: str = "groups"
     sso_default_role: str = "user"
     sso_role_mappings_json: str = "{}"
+    rbac_roles_json: str = "{}"
     sso_auto_create_users: bool = True
     sso_sync_roles_on_login: bool = True
     ldap_enabled: bool = False

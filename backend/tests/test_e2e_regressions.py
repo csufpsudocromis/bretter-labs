@@ -113,32 +113,147 @@ def test_rbac_user_cannot_access_admin(client: TestClient):
     assert forbidden.status_code == 403
 
 
-def test_rbac_viewer_has_read_only_admin_access(client: TestClient):
+def test_rbac_lab_admin_has_expected_admin_access(client: TestClient):
     with Session(engine) as session:
         session.add(
             User(
-                username="viewer1",
+                username="labadmin1",
                 password_hash=hash_password("password"),
-                role=Role.VIEWER,
+                role=Role.LAB_ADMIN,
                 is_admin=True,
                 force_password_change=False,
             )
         )
         session.commit()
 
-    login = client.post("/auth/login", json={"username": "viewer1", "password": "password"})
+    login = client.post("/auth/login", json={"username": "labadmin1", "password": "password"})
     assert login.status_code == 200, login.text
     user = login.json()["user"]
-    assert user["role"] == Role.VIEWER
+    assert user["role"] == Role.LAB_ADMIN
     assert user["can_access_admin"] is True
     assert user["is_admin"] is True
 
-    site_read = client.get("/admin/settings/site")
-    assert site_read.status_code == 200, site_read.text
+    images_read = client.get("/admin/images")
+    assert images_read.status_code == 200, images_read.text
+
+    templates_read = client.get("/admin/templates")
+    assert templates_read.status_code == 200, templates_read.text
+
+    blocked_read = client.get("/admin/settings/site")
+    assert blocked_read.status_code == 403
+    assert "missing permission" in blocked_read.json()["detail"]
 
     blocked_write = client.post("/admin/settings/idle-timeout", json={"idle_timeout_minutes": 30})
     assert blocked_write.status_code == 403
     assert "missing permission" in blocked_write.json()["detail"]
+
+
+def test_admin_roles_catalog_exposes_canonical_roles(login_admin: TestClient):
+    response = login_admin.get("/admin/users/roles")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    roles = [item["role"] for item in payload]
+    assert roles == [Role.USER, Role.LAB_ADMIN, Role.NAMESPACE_ADMIN, Role.PLATFORM_ADMIN]
+    assert any(item["role"] == Role.LAB_ADMIN and "admin.images.write" in item["permissions"] for item in payload)
+
+
+def test_platform_admin_can_manage_custom_roles(login_admin: TestClient):
+    catalog = login_admin.get("/admin/settings/roles")
+    assert catalog.status_code == 200, catalog.text
+    body = catalog.json()
+    assert "admin.images.read" in body["permission_catalog"]
+    assert any(item["role"] == "platform_admin" and item["editable"] is False for item in body["roles"])
+
+    create = login_admin.post(
+        "/admin/settings/roles",
+        json={
+            "role": "support_admin",
+            "label": "Support Admin",
+            "description": "Can read and operate images/templates",
+            "permissions": ["admin.access", "admin.images.read", "admin.templates.read"],
+        },
+    )
+    assert create.status_code == 201, create.text
+    assert create.json()["role"] == "support_admin"
+    assert create.json()["deletable"] is True
+
+    update = login_admin.patch(
+        "/admin/settings/roles/support_admin",
+        json={
+            "description": "Updated description",
+            "permissions": ["admin.access", "admin.images.read", "admin.images.write"],
+        },
+    )
+    assert update.status_code == 200, update.text
+    assert update.json()["description"] == "Updated description"
+    assert "admin.images.write" in update.json()["permissions"]
+
+    delete = login_admin.delete("/admin/settings/roles/support_admin")
+    assert delete.status_code == 204, delete.text
+
+    with Session(engine) as session:
+        cfg = session.get(Config, 1)
+        assert cfg is not None
+        assert "support_admin" not in str(cfg.rbac_roles_json or "")
+
+
+def test_namespace_admin_cannot_assign_high_privilege_custom_role(client: TestClient):
+    admin_login = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert admin_login.status_code == 200, admin_login.text
+    create = client.post(
+        "/admin/settings/roles",
+        json={
+            "role": "security_admin",
+            "label": "Security Admin",
+            "description": "High-privilege role",
+            "permissions": ["admin.access", "admin.settings.write", "admin.users.write"],
+        },
+    )
+    assert create.status_code == 201, create.text
+
+    with Session(engine) as session:
+        session.add(
+            User(
+                username="nsadmin1",
+                password_hash=hash_password("password"),
+                role=Role.NAMESPACE_ADMIN,
+                is_admin=True,
+                force_password_change=False,
+            )
+        )
+        session.commit()
+
+    ns_login = client.post("/auth/login", json={"username": "nsadmin1", "password": "password"})
+    assert ns_login.status_code == 200, ns_login.text
+
+    assign = client.post(
+        "/admin/users",
+        json={"username": "role-test-user", "password": "password", "role": "security_admin", "is_admin": True},
+    )
+    assert assign.status_code == 403, assign.text
+
+
+def test_legacy_role_alias_normalizes_to_lab_admin(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            User(
+                username="legacy-ops",
+                password_hash=hash_password("password"),
+                role="lab_operator",
+                is_admin=True,
+                force_password_change=False,
+            )
+        )
+        session.commit()
+
+    login = client.post("/auth/login", json={"username": "legacy-ops", "password": "password"})
+    assert login.status_code == 200, login.text
+    assert login.json()["user"]["role"] == Role.LAB_ADMIN
+
+    with Session(engine) as session:
+        user = session.get(User, "legacy-ops")
+        assert user is not None
+        assert user.role == Role.LAB_ADMIN
 
 
 def test_admin_can_read_and_update_ldap_settings(login_admin: TestClient):
@@ -203,10 +318,10 @@ def test_admin_can_read_and_update_oidc_role_mapping_settings(login_admin: TestC
         "sso_userinfo_url": "https://idp.example.com/userinfo",
         "sso_redirect_url": "https://labs.example.com/auth/sso/callback",
         "sso_role_claim": "groups",
-        "sso_default_role": "viewer",
+        "sso_default_role": "lab_admin",
         "sso_role_mappings": {
             "admins": "platform_admin",
-            "ops": "lab_operator",
+            "ops": "lab_admin",
         },
         "sso_auto_create_users": True,
         "sso_sync_roles_on_login": True,
@@ -217,8 +332,8 @@ def test_admin_can_read_and_update_oidc_role_mapping_settings(login_admin: TestC
     assert body["sso_enabled"] is True
     assert body["sso_provider"] == "Keycloak"
     assert body["sso_role_claim"] == "groups"
-    assert body["sso_default_role"] == "viewer"
-    assert body["sso_role_mappings"] == {"admins": "platform_admin", "ops": "lab_operator"}
+    assert body["sso_default_role"] == "lab_admin"
+    assert body["sso_role_mappings"] == {"admins": "platform_admin", "ops": "lab_admin"}
     assert body["sso_auto_create_users"] is True
     assert body["sso_sync_roles_on_login"] is True
     assert body["sso_client_secret_configured"] is True
@@ -227,10 +342,10 @@ def test_admin_can_read_and_update_oidc_role_mapping_settings(login_admin: TestC
         cfg = session.get(Config, 1)
         assert cfg is not None
         assert cfg.sso_role_claim == "groups"
-        assert cfg.sso_default_role == "viewer"
+        assert cfg.sso_default_role == "lab_admin"
         assert cfg.sso_auto_create_users is True
         assert cfg.sso_sync_roles_on_login is True
-        assert cfg.sso_role_mappings_json == '{"admins":"platform_admin","ops":"lab_operator"}'
+        assert cfg.sso_role_mappings_json == '{"admins":"platform_admin","ops":"lab_admin"}'
 
 
 def test_login_rate_limit_blocks_repeated_failures(client: TestClient, monkeypatch):
@@ -347,7 +462,7 @@ def test_oidc_start_and_callback_issue_session_cookie(client: TestClient, monkey
         cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
         cfg.sso_role_claim = "groups"
         cfg.sso_default_role = "user"
-        cfg.sso_role_mappings_json = '{"admins":"platform_admin","ops":"lab_operator"}'
+        cfg.sso_role_mappings_json = '{"admins":"platform_admin","ops":"lab_admin"}'
         cfg.sso_auto_create_users = True
         cfg.sso_sync_roles_on_login = True
         session.add(cfg)
@@ -414,8 +529,8 @@ def test_oidc_role_mapping_assigns_highest_mapped_role(client: TestClient, monke
         cfg.sso_userinfo_url = "https://idp.example.com/oauth2/v2/userinfo"
         cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
         cfg.sso_role_claim = "groups"
-        cfg.sso_default_role = "viewer"
-        cfg.sso_role_mappings_json = '{"admins":"platform_admin","ops":"lab_operator","view":"viewer"}'
+        cfg.sso_default_role = "user"
+        cfg.sso_role_mappings_json = '{"admins":"platform_admin","ops":"lab_admin","view":"user"}'
         cfg.sso_auto_create_users = True
         cfg.sso_sync_roles_on_login = True
         session.add(cfg)
@@ -541,7 +656,7 @@ def test_oidc_role_mapping_syncs_existing_user_role_on_login(client: TestClient,
         cfg.sso_redirect_url = "https://10.68.49.250:30080/auth/sso/callback"
         cfg.sso_role_claim = "groups"
         cfg.sso_default_role = "user"
-        cfg.sso_role_mappings_json = '{"ops":"lab_operator"}'
+        cfg.sso_role_mappings_json = '{"ops":"lab_admin"}'
         cfg.sso_auto_create_users = False
         cfg.sso_sync_roles_on_login = True
         session.add(cfg)
@@ -583,7 +698,7 @@ def test_oidc_role_mapping_syncs_existing_user_role_on_login(client: TestClient,
     with Session(engine) as session:
         user = session.get(User, "oidc-existing")
         assert user is not None
-        assert user.role == Role.LAB_OPERATOR
+        assert user.role == Role.LAB_ADMIN
         assert user.is_admin is True
 
 

@@ -9,7 +9,7 @@ from ..auth import require_permission, require_user
 from ..config import settings
 from ..db import get_session
 from ..models import ManagedNamespaceCreate, ManagedNamespaceOut, ManagedNamespaceUpdate
-from ..rbac import Permission
+from ..rbac import Permission, Role, role_for_user
 from ..services.kubernetes import kube
 from ..services.team_quotas import normalize_namespace, normalize_team
 from ..services.tenant_context import GLOBAL_TENANT, actor_tenant, is_platform_admin, normalize_tenant
@@ -48,10 +48,10 @@ def _record_admin_audit_event(
     )
 
 
-def _require_platform_admin(user: User) -> None:
-    if is_platform_admin(user):
+def _require_namespace_admin(user: User) -> None:
+    if is_platform_admin(user) or role_for_user(user) == Role.NAMESPACE_ADMIN:
         return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform admin required")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="namespace admin required")
 
 
 def _normalize_namespace_name_or_raise(raw: str | None) -> str:
@@ -303,7 +303,7 @@ def create_managed_namespace(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ManagedNamespaceOut:
-    _require_platform_admin(actor)
+    _require_namespace_admin(actor)
     row = _apply_create_payload(payload)
     control_namespace = normalize_namespace(settings.kube_namespace)
     if row.namespace == control_namespace:
@@ -342,7 +342,7 @@ def update_managed_namespace(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ManagedNamespaceOut:
-    _require_platform_admin(actor)
+    _require_namespace_admin(actor)
     row = _get_managed_namespace_or_404(session, namespace)
     _apply_update_payload(row, payload)
     if row.enabled:
@@ -376,7 +376,7 @@ def reconcile_managed_namespace(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ManagedNamespaceOut:
-    _require_platform_admin(actor)
+    _require_namespace_admin(actor)
     row = _get_managed_namespace_or_404(session, namespace)
     if not row.enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="managed namespace is disabled")
@@ -411,7 +411,7 @@ def delete_managed_namespace(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> None:
-    _require_platform_admin(actor)
+    _require_namespace_admin(actor)
     row = _get_managed_namespace_or_404(session, namespace)
     vm_active, container_active = _active_namespace_counts(session, row.namespace)
     if vm_active + container_active > 0:

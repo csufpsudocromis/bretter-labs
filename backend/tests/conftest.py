@@ -43,7 +43,7 @@ from src.tables import (  # noqa: E402
     Token,
     User,
 )
-from src.rbac import Role  # noqa: E402
+from src.rbac import Role, reset_role_definitions  # noqa: E402
 
 
 class _FakeStorageApi:
@@ -123,6 +123,7 @@ def client(monkeypatch, reset_db):
 
 @pytest.fixture
 def reset_db():
+    reset_role_definitions()
     auth_routes._LOGIN_ATTEMPTS.clear()
     auth_routes._LOGIN_BLOCKED_UNTIL.clear()
     for path in SITE_ASSETS_DIR.glob("*"):

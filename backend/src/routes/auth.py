@@ -30,11 +30,13 @@ from ..config import settings
 from ..db import get_session
 from ..models import Credentials, UserOut
 from ..rbac import (
+    Permission,
     Role,
     can_access_admin,
     ensure_user_role_fields,
     list_permissions_for_role,
     normalize_role,
+    role_permissions,
     role_for_user,
 )
 from ..secret_codec import decrypt_secret
@@ -56,15 +58,21 @@ _USERNAME_CLEAN_RE = re.compile(r"[^a-zA-Z0-9._@-]+")
 _LOGIN_ATTEMPTS: dict[str, deque[float]] = {}
 _LOGIN_BLOCKED_UNTIL: dict[str, float] = {}
 _LOGIN_ATTEMPT_LOCK = threading.Lock()
-_OIDC_ROLE_PRIORITY: dict[str, int] = {
-    Role.USER: 0,
-    Role.VIEWER: 10,
-    Role.IMAGE_MANAGER: 20,
-    Role.TEMPLATE_MANAGER: 20,
-    Role.LAB_OPERATOR: 30,
-    Role.TENANT_ADMIN: 80,
-    Role.PLATFORM_ADMIN: 100,
-}
+
+
+def _oidc_role_priority(role: str) -> int:
+    normalized = normalize_role(role)
+    if normalized == Role.PLATFORM_ADMIN:
+        return 10000
+    perms = role_permissions(normalized)
+    score = len(perms)
+    if Permission.ADMIN_ACCESS in perms:
+        score += 250
+    if Permission.SETTINGS_WRITE in perms:
+        score += 150
+    if Permission.USERS_WRITE in perms:
+        score += 100
+    return score
 
 
 def _user_out(user: User) -> UserOut:
@@ -342,7 +350,7 @@ def _resolve_oidc_role(cfg: Config, claims: dict) -> str:
 
     if not matched_roles:
         return default_role
-    matched_roles.sort(key=lambda role: _OIDC_ROLE_PRIORITY.get(normalize_role(role), 0), reverse=True)
+    matched_roles.sort(key=_oidc_role_priority, reverse=True)
     return normalize_role(matched_roles[0])
 
 
@@ -438,6 +446,8 @@ def login(
 
     user = session.get(User, username)
     if user and verify_password(password, user.password_hash):
+        if ensure_user_role_fields(user):
+            session.add(user)
         _clear_login_failures(rate_key)
         token = issue_token(session, user.username)
         set_auth_cookie(response, token)
@@ -531,6 +541,8 @@ def login(
         session.commit()
         session.refresh(user)
 
+    if ensure_user_role_fields(user):
+        session.add(user)
     token = issue_token(session, user.username)
     set_auth_cookie(response, token)
     _clear_login_failures(rate_key)

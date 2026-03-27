@@ -6,6 +6,10 @@ const AdminSettingsLanding = () => (
     <h2>Settings</h2>
     <p>Select a settings section.</p>
     <div className="tiles">
+      <Link to="/admin/users" className="tile">
+        <h3>User Permissions</h3>
+        <p>Create users and assign role-based permissions.</p>
+      </Link>
       <Link to="/admin/scaling-quotas" className="tile">
         <h3>Scaling &amp; Quotas</h3>
         <p>Set namespace limits for max labs, CPU/RAM, storage, and idle caps.</p>

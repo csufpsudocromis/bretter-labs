@@ -682,6 +682,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/settings/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Role Management Catalog */
+        get: operations["get_role_management_catalog_admin_settings_roles_get"];
+        put?: never;
+        /** Create Role Definition */
+        post: operations["create_role_definition_admin_settings_roles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/settings/roles/{role_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Remove Role Definition */
+        delete: operations["remove_role_definition_admin_settings_roles__role_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Role Definition */
+        patch: operations["update_role_definition_admin_settings_roles__role_id__patch"];
+        trace?: never;
+    };
     "/admin/settings/runtime": {
         parameters: {
             query?: never;
@@ -872,6 +908,23 @@ export interface paths {
         put?: never;
         /** Add User */
         post: operations["add_user_admin_users_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List User Roles Catalog */
+        get: operations["list_user_roles_catalog_admin_users_roles_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2867,6 +2920,60 @@ export interface components {
              */
             warning_threshold: number;
         };
+        /** RoleCatalogOut */
+        RoleCatalogOut: {
+            /**
+             * Deletable
+             * @default false
+             */
+            deletable: boolean;
+            /** Description */
+            description: string;
+            /**
+             * Editable
+             * @default false
+             */
+            editable: boolean;
+            /** Label */
+            label: string;
+            /** Permissions */
+            permissions?: string[];
+            /** Role */
+            role: string;
+        };
+        /** RoleDefinitionCreate */
+        RoleDefinitionCreate: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /**
+             * Label
+             * @default
+             */
+            label: string;
+            /** Permissions */
+            permissions?: string[];
+            /** Role */
+            role: string;
+        };
+        /** RoleDefinitionUpdate */
+        RoleDefinitionUpdate: {
+            /** Description */
+            description?: string | null;
+            /** Label */
+            label?: string | null;
+            /** Permissions */
+            permissions?: string[] | null;
+        };
+        /** RoleManagementCatalogOut */
+        RoleManagementCatalogOut: {
+            /** Permission Catalog */
+            permission_catalog?: string[];
+            /** Roles */
+            roles?: components["schemas"]["RoleCatalogOut"][];
+        };
         /** RuntimeDriftItem */
         RuntimeDriftItem: {
             /** Configured Value */
@@ -3230,7 +3337,10 @@ export interface components {
             max_storage_gib?: number | null;
             /** Namespace */
             namespace: string;
-            /** Team */
+            /**
+             * Team
+             * @default default
+             */
             team: string;
         };
         /** TeamQuotaOut */
@@ -5431,6 +5541,140 @@ export interface operations {
             };
         };
     };
+    get_role_management_catalog_admin_settings_roles_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleManagementCatalogOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_role_definition_admin_settings_roles_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleDefinitionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleCatalogOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_role_definition_admin_settings_roles__role_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_role_definition_admin_settings_roles__role_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleDefinitionUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleCatalogOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_runtime_settings_admin_settings_runtime_get: {
         parameters: {
             query?: never;
@@ -6082,6 +6326,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_user_roles_catalog_admin_users_roles_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoleCatalogOut"][];
                 };
             };
             /** @description Validation Error */

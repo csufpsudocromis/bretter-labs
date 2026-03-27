@@ -13,7 +13,7 @@ from .auth import hash_password
 from .config import settings
 from .db import engine, init_db
 from .logging_utils import configure_capped_error_file_logging
-from .rbac import Role
+from .rbac import Role, configure_roles_from_json
 from .routes import admin, admin_containers, admin_multicluster, admin_namespaces, auth, user, user_containers
 from .services.kubernetes import kube
 from .services.multi_cluster import ensure_local_cluster, process_artifact_replication_queue
@@ -435,6 +435,7 @@ async def lifespan(_: FastAPI):
                 idle_timeout_minutes=settings.idle_timeout_minutes,
             )
             session.add(config)
+        configure_roles_from_json(getattr(config, "rbac_roles_json", ""))
         _apply_storage_overrides(config)
         admin_user = session.get(User, settings.admin_default_username)
         if not admin_user:

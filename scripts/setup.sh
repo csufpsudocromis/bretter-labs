@@ -249,6 +249,9 @@ USERFLOW_SLO_API_AUTH_PASSWORD_KEY="${USERFLOW_SLO_API_AUTH_PASSWORD_KEY:-passwo
 USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP="${USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP:-1}"
 ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL="${ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL:-1}"
 KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE="${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE:-*/5 * * * *}"
+SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT="${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT:-0}"
+SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT="${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT:-1}"
+SYSTEM_CRONJOB_TTL_SECONDS="${SYSTEM_CRONJOB_TTL_SECONDS:-900}"
 HELM_VERSION="${HELM_VERSION:-v3.15.4}"
 HELM_RELEASE_NAME="${HELM_RELEASE_NAME:-bretter-labs}"
 HELM_CHART_DIR="${HELM_CHART_DIR:-$ROOT_DIR/deploy/helm}"
@@ -587,6 +590,18 @@ validate_kubelet_serving_csr_autoapproval_config() {
   fi
   if [ -z "$KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE" ]; then
     fail "KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE cannot be empty when ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=1."
+  fi
+}
+
+validate_system_cronjob_retention_config() {
+  if ! is_uint "$SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT"; then
+    fail "SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT must be an integer >= 0."
+  fi
+  if ! is_uint "$SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT"; then
+    fail "SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT must be an integer >= 0."
+  fi
+  if ! is_uint "$SYSTEM_CRONJOB_TTL_SECONDS" || [ "$SYSTEM_CRONJOB_TTL_SECONDS" -lt 60 ]; then
+    fail "SYSTEM_CRONJOB_TTL_SECONDS must be an integer >= 60."
   fi
 }
 
@@ -4369,10 +4384,11 @@ metadata:
 spec:
   schedule: "${AUTOCLEANUP_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: OnFailure
@@ -4602,11 +4618,11 @@ metadata:
 spec:
   schedule: "${GHCR_ACCESS_HEALTHCHECK_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 1200
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: Never
@@ -4817,11 +4833,11 @@ metadata:
 spec:
   schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 1200
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: Never
@@ -4862,11 +4878,11 @@ metadata:
 spec:
   schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 1200
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: Never
@@ -4907,11 +4923,11 @@ metadata:
 spec:
   schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 1200
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: Never
@@ -4952,11 +4968,11 @@ metadata:
 spec:
   schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 1200
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: Never
@@ -5026,11 +5042,11 @@ metadata:
 spec:
   schedule: "${USERFLOW_SLO_PROBE_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 2
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 1200
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: Never
@@ -5122,11 +5138,11 @@ metadata:
 spec:
   schedule: "${KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 1
-  failedJobsHistoryLimit: 1
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
   jobTemplate:
     spec:
-      ttlSecondsAfterFinished: 600
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
           restartPolicy: OnFailure
@@ -6020,6 +6036,7 @@ log_runtime_configuration() {
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"
   log "Admission policies enabled: $ENABLE_ADMISSION_POLICIES (install Kyverno: $INSTALL_KYVERNO namespace: $KYVERNO_NAMESPACE release: $KYVERNO_RELEASE_NAME chart: ${KYVERNO_CHART_VERSION} signature-scope: ${KYVERNO_SIGNATURE_SCOPE} signature-images: ${KYVERNO_SIGNATURE_IMAGE_PATTERNS})"
   log "Kubelet-serving CSR auto-approval enabled: $ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL (schedule: $KUBELET_SERVING_CSR_AUTOAPPROVAL_SCHEDULE)"
+  log "System CronJob retention: success-history=${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT} failed-history=${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT} ttl=${SYSTEM_CRONJOB_TTL_SECONDS}s"
   log "Mutable image tags allowed: $ALLOW_MUTABLE_IMAGE_TAGS"
   log "Code-mount override escape hatch allowed: $ALLOW_CODE_MOUNT_OVERRIDES"
   log "Post-deploy API health check enabled: $RUN_POST_DEPLOY_API_HEALTH_CHECK (timeout: ${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS}s)"
@@ -6149,6 +6166,7 @@ main() {
   validate_metrics_server_config
   validate_admission_policy_config
   validate_kubelet_serving_csr_autoapproval_config
+  validate_system_cronjob_retention_config
   configure_admin_bootstrap_credentials
   validate_post_deploy_api_health_config
   validate_admin_api_smoke_check_config

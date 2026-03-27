@@ -39,6 +39,33 @@ class UserOut(BaseModel):
     can_access_admin: bool = False
 
 
+class RoleCatalogOut(BaseModel):
+    role: str
+    label: str
+    description: str
+    permissions: list[str] = Field(default_factory=list)
+    editable: bool = False
+    deletable: bool = False
+
+
+class RoleDefinitionCreate(BaseModel):
+    role: str = Field(..., min_length=2, max_length=64, pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    label: str = Field(default="", max_length=64)
+    description: str = Field(default="", max_length=256)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class RoleDefinitionUpdate(BaseModel):
+    label: Optional[str] = Field(default=None, max_length=64)
+    description: Optional[str] = Field(default=None, max_length=256)
+    permissions: Optional[list[str]] = None
+
+
+class RoleManagementCatalogOut(BaseModel):
+    roles: list[RoleCatalogOut] = Field(default_factory=list)
+    permission_catalog: list[str] = Field(default_factory=list)
+
+
 class TeamQuotaCreate(BaseModel):
     team: str = Field(default="default", min_length=1, max_length=64)
     namespace: str = Field(..., min_length=1, max_length=63)

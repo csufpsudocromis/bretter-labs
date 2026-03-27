@@ -1,12 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { api } from "../../api";
 
-const ROLE_OPTIONS = [
+const DEFAULT_ROLE_OPTIONS = [
   { value: "user", label: "User" },
-  { value: "viewer", label: "Viewer" },
-  { value: "image_manager", label: "Image Manager" },
-  { value: "template_manager", label: "Template Manager" },
-  { value: "lab_operator", label: "Lab Operator" },
+  { value: "lab_admin", label: "Lab Admin" },
+  { value: "namespace_admin", label: "Namespace Admin" },
   { value: "platform_admin", label: "Platform Admin" },
 ];
 
@@ -69,12 +67,35 @@ const AdminSSOSettings = () => {
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [roleOptions, setRoleOptions] = useState(DEFAULT_ROLE_OPTIONS);
 
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await api.get("/admin/settings/sso");
-        const payload = res.data || {};
+        const [settingsRes, rolesRes] = await Promise.all([
+          api.get("/admin/settings/sso"),
+          api.get("/admin/users/roles").catch(() => ({ data: [] })),
+        ]);
+        const payload = settingsRes.data || {};
+        const roleItems = Array.isArray(rolesRes.data) ? rolesRes.data : [];
+        const options = roleItems
+          .map((item) => ({
+            value: String(item?.role || "")
+              .trim()
+              .toLowerCase(),
+            label: String(item?.label || item?.role || "").trim() || "Unknown Role",
+          }))
+          .filter((item) => item.value);
+        const mergedOptions = options.length > 0 ? options : DEFAULT_ROLE_OPTIONS;
+        if (!mergedOptions.some((item) => item.value === payload.sso_default_role)) {
+          mergedOptions.push({
+            value: String(payload.sso_default_role || "user")
+              .trim()
+              .toLowerCase(),
+            label: String(payload.sso_default_role || "user").replace(/_/g, " "),
+          });
+        }
+        setRoleOptions(mergedOptions);
         const roleMappings =
           payload.sso_role_mappings && typeof payload.sso_role_mappings === "object" ? payload.sso_role_mappings : {};
         setData({
@@ -220,7 +241,7 @@ const AdminSSOSettings = () => {
               value={data.sso_default_role}
               onChange={(e) => setData({ ...data, sso_default_role: e.target.value })}
             >
-              {ROLE_OPTIONS.map((roleOption) => (
+              {roleOptions.map((roleOption) => (
                 <option key={roleOption.value} value={roleOption.value}>
                   {roleOption.label}
                 </option>
@@ -253,7 +274,7 @@ const AdminSSOSettings = () => {
               rows={8}
               value={mappingsInput}
               onChange={(e) => setMappingsInput(e.target.value)}
-              placeholder={"admins=platform_admin\nops=lab_operator\nviewers=viewer"}
+              placeholder={"admins=platform_admin\nops=lab_admin\nfaculty=namespace_admin"}
             />
           </label>
           <p className="muted small">
