@@ -3,6 +3,7 @@ import axios from "axios";
 const defaultApiBase = typeof window !== "undefined" ? `${window.location.origin}/api` : "http://127.0.0.1/api";
 
 export const AUTH_INVALID_EVENT = "blabs-auth-invalid";
+export const NAMESPACE_FORBIDDEN_EVENT = "blabs-namespace-forbidden";
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || defaultApiBase,
@@ -50,6 +51,17 @@ api.interceptors.response.use(
       window.dispatchEvent(
         new CustomEvent(AUTH_INVALID_EVENT, {
           detail: { message: "Session expired. Please sign in again." },
+        })
+      );
+    }
+    if (status === 403 && typeof window !== "undefined") {
+      const namespace = namespaceFromPath();
+      const fallback = namespace
+        ? `Access denied for namespace "${namespace}".`
+        : "Access denied for the requested namespace or action.";
+      window.dispatchEvent(
+        new CustomEvent(NAMESPACE_FORBIDDEN_EVENT, {
+          detail: { message: error?.response?.data?.detail || fallback, namespace },
         })
       );
     }

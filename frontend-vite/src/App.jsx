@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { BrowserRouter, Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 
-import { api, AUTH_INVALID_EVENT } from "./api";
+import { api, AUTH_INVALID_EVENT, NAMESPACE_FORBIDDEN_EVENT } from "./api";
 import Login from "./components/Login.jsx";
 import UserPanel from "./components/UserPanel.jsx";
 import AdminDashboard from "./components/admin/AdminDashboard.jsx";
@@ -60,6 +60,26 @@ const roleDisplay = (user) => {
   return raw.replace(/_/g, " ");
 };
 
+const normalizeNamespace = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const namespacePath = (namespace) => {
+  const normalized = normalizeNamespace(namespace);
+  if (!normalized) return "";
+  return `/ns/${encodeURIComponent(normalized)}`;
+};
+
+const withNamespacePath = (pathname, namespace) => {
+  const base = namespacePath(namespace);
+  if (!base) return pathname || "/";
+  const rawPath = String(pathname || "/");
+  const stripped = rawPath.replace(/^\/(?:ns|namespace)\/[^/]+/i, "") || "/";
+  if (stripped === "/") return base;
+  return `${base}${stripped.startsWith("/") ? stripped : `/${stripped}`}`;
+};
+
 const AppShell = () => {
   const [user, setUser] = useState(null);
   const [error, setError] = useState(null);
@@ -68,9 +88,20 @@ const AppShell = () => {
   const location = useLocation();
 
   const namespaceMatch = String(location?.pathname || "").match(/^\/(?:ns|namespace)\/([^/]+)/i);
-  const namespacePrefix = namespaceMatch?.[1] ? `/ns/${namespaceMatch[1]}` : "";
+  const pathNamespace = normalizeNamespace(namespaceMatch?.[1]);
+  const userNamespaceScopes = useMemo(() => {
+    if (!Array.isArray(user?.namespace_scopes)) return [];
+    return [...new Set(user.namespace_scopes.map((ns) => normalizeNamespace(ns)).filter(Boolean))];
+  }, [user]);
+  const preferredUserNamespace = userNamespaceScopes[0] || "";
+  const activeNamespace = pathNamespace || preferredUserNamespace;
+  const namespacePrefix = namespacePath(activeNamespace);
   const userRootPath = namespacePrefix || "/";
   const adminRootPath = namespacePrefix ? `${namespacePrefix}/admin` : "/admin";
+  const namespaceLabel = activeNamespace || "unscoped";
+  const namespaceOptions =
+    userNamespaceScopes.length > 0 ? userNamespaceScopes : activeNamespace ? [activeNamespace] : [];
+  const canSwitchNamespace = namespaceOptions.length > 1;
 
   useEffect(() => {
     const loadCurrentUser = async () => {
@@ -91,21 +122,55 @@ const AppShell = () => {
       setError(msg);
       navigate(userRootPath);
     };
+    const handleNamespaceForbidden = (event) => {
+      const eventNamespace = normalizeNamespace(event?.detail?.namespace || activeNamespace);
+      const detail = String(event?.detail?.message || "").trim();
+      const reason = eventNamespace
+        ? `Namespace access denied for "${eventNamespace}". ${detail || "Check your assigned namespace scopes."}`
+        : detail || "Namespace access denied.";
+      setError(reason);
+    };
     window.addEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
-    return () => window.removeEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
-  }, [navigate, userRootPath]);
+    window.addEventListener(NAMESPACE_FORBIDDEN_EVENT, handleNamespaceForbidden);
+    return () => {
+      window.removeEventListener(AUTH_INVALID_EVENT, handleAuthInvalid);
+      window.removeEventListener(NAMESPACE_FORBIDDEN_EVENT, handleNamespaceForbidden);
+    };
+  }, [navigate, userRootPath, activeNamespace]);
 
   const onLogin = async (username, password) => {
     try {
       const res = await api.post("/auth/login", { username, password });
-      setUser(res.data.user);
+      const nextUser = res?.data?.user || null;
+      const nextRole = String(nextUser?.role || "")
+        .trim()
+        .toLowerCase();
+      const nextScopes = Array.isArray(nextUser?.namespace_scopes)
+        ? nextUser.namespace_scopes.map((ns) => normalizeNamespace(ns)).filter(Boolean)
+        : [];
+      setUser(nextUser);
       setError(null);
-      navigate(userRootPath);
+      if (nextRole === "namespace_admin" && nextScopes.length > 0) {
+        navigate(withNamespacePath(location.pathname, nextScopes[0]));
+      } else {
+        navigate(userRootPath);
+      }
     } catch (err) {
       setError(err.response?.data?.detail || "Login failed");
       setUser(null);
     }
   };
+
+  useEffect(() => {
+    if (!user) return;
+    const role = String(user?.role || "")
+      .trim()
+      .toLowerCase();
+    if (role !== "namespace_admin") return;
+    if (!preferredUserNamespace) return;
+    if (pathNamespace === preferredUserNamespace) return;
+    navigate(withNamespacePath(location.pathname, preferredUserNamespace), { replace: true });
+  }, [user, preferredUserNamespace, pathNamespace, location.pathname, navigate]);
 
   useEffect(() => {
     const loadSite = async () => {
@@ -190,6 +255,13 @@ const AppShell = () => {
     navigate(userRootPath);
   };
 
+  const switchNamespace = (nextNamespace) => {
+    const next = normalizeNamespace(nextNamespace);
+    if (!next) return;
+    setError(null);
+    navigate(withNamespacePath(location.pathname, next));
+  };
+
   const authed = Boolean(user);
   const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
 
@@ -205,6 +277,16 @@ const AppShell = () => {
             <span>
               {user.username} {canAccessAdmin ? `(${roleDisplay(user)})` : ""}
             </span>
+            <span className="badge">Namespace: {namespaceLabel}</span>
+            {canSwitchNamespace && (
+              <select value={activeNamespace} onChange={(e) => switchNamespace(e.target.value)}>
+                {namespaceOptions.map((entry) => (
+                  <option key={entry} value={entry}>
+                    {entry}
+                  </option>
+                ))}
+              </select>
+            )}
             <button onClick={logout} className="ghost">
               Logout
             </button>
@@ -221,6 +303,7 @@ const AppShell = () => {
 
       {authed && (
         <>
+          {error && <div className="error">Error: {error}</div>}
           <nav className="nav">
             <Link to={userRootPath}>User</Link>
             {canAccessAdmin && <Link to={adminRootPath}>Admin</Link>}

@@ -122,6 +122,8 @@ LABIMAGEIMPORT_CONTROLLER_METRICS_PORT="${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT
 TEAM_NAMESPACE_MODE="${TEAM_NAMESPACE_MODE:-shared}"
 TEAM_NAMESPACE_PREFIX="${TEAM_NAMESPACE_PREFIX:-labs-team-}"
 TEAM_NAMESPACE_BOOTSTRAP_ENABLED="${TEAM_NAMESPACE_BOOTSTRAP_ENABLED:-1}"
+ENABLE_NAMESPACE_RECONCILER="${ENABLE_NAMESPACE_RECONCILER:-1}"
+NAMESPACE_RECONCILER_SCHEDULE="${NAMESPACE_RECONCILER_SCHEDULE:-*/15 * * * *}"
 REQUIRE_SCHEMA_READY="${REQUIRE_SCHEMA_READY:-1}"
 EXPECTED_ALEMBIC_REVISION="${EXPECTED_ALEMBIC_REVISION:-}"
 CORS_ENTERPRISE_PROFILE="${CORS_ENTERPRISE_PROFILE:-0}"
@@ -875,6 +877,13 @@ validate_orchestration_backend_config() {
     0 | 1) ;;
     *) fail "TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be either 0 or 1." ;;
   esac
+  case "$ENABLE_NAMESPACE_RECONCILER" in
+    0 | 1) ;;
+    *) fail "ENABLE_NAMESPACE_RECONCILER must be either 0 or 1." ;;
+  esac
+  if [ "$ENABLE_NAMESPACE_RECONCILER" -eq 1 ] && [ -z "$NAMESPACE_RECONCILER_SCHEDULE" ]; then
+    fail "NAMESPACE_RECONCILER_SCHEDULE cannot be empty when ENABLE_NAMESPACE_RECONCILER=1."
+  fi
   if [ "$TEAM_NAMESPACE_MODE" = "per_team" ]; then
     if [ -z "$TEAM_NAMESPACE_PREFIX" ]; then
       fail "TEAM_NAMESPACE_PREFIX cannot be empty when TEAM_NAMESPACE_MODE=per_team."
@@ -2876,11 +2885,12 @@ apply_backend_metrics_servicemonitor() {
   tls_config_block=""
   if [ "$TLS_ENABLED" -eq 1 ]; then
     metrics_scheme="https"
-    tls_config_block="$(cat <<'EOF'
+    tls_config_block="$(
+      cat <<'EOF'
       tlsConfig:
         insecureSkipVerify: true
 EOF
-)"
+    )"
   fi
 
   log "Applying backend metrics ServiceMonitor..."
@@ -5098,6 +5108,52 @@ spec:
 EOF
 }
 
+apply_namespace_reconciler() {
+  if [ "$ENABLE_NAMESPACE_RECONCILER" -ne 1 ]; then
+    log "Skipping namespace reconciler CronJob (ENABLE_NAMESPACE_RECONCILER=0)."
+    kubectl -n "$NAMESPACE" delete cronjob bretter-namespace-reconciler --ignore-not-found=true >/dev/null 2>&1 || true
+    return
+  fi
+
+  log "Applying namespace reconciler CronJob (schedule: $NAMESPACE_RECONCILER_SCHEDULE)"
+  kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: bretter-namespace-reconciler
+  namespace: ${NAMESPACE}
+spec:
+  schedule: "${NAMESPACE_RECONCILER_SCHEDULE}"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: ${SYSTEM_CRONJOB_SUCCESS_HISTORY_LIMIT}
+  failedJobsHistoryLimit: ${SYSTEM_CRONJOB_FAILED_HISTORY_LIMIT}
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
+      template:
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-creds
+          containers:
+            - name: namespace-reconciler
+              image: ${BACKEND_IMAGE}
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: BLABS_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: bretter-postgres
+                      key: BLABS_DATABASE_URL
+                - name: BLABS_KUBE_NAMESPACE
+                  value: "${NAMESPACE}"
+              command:
+                - /bin/bash
+                - -lc
+                - "set -euo pipefail; PYTHONPATH=/app/backend python3 /app/backend/src/tools/tenant_namespace_reconciler.py"
+EOF
+}
+
 apply_kubelet_serving_csr_autoapproval() {
   if [ "$ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL" -ne 1 ]; then
     log "Skipping kubelet-serving CSR auto-approval automation (ENABLE_KUBELET_SERVING_CSR_AUTOAPPROVAL=0)."
@@ -5361,6 +5417,7 @@ apply_manifests() {
   prune_bootstrap_admin_env
   apply_ghcr_access_healthcheck
   apply_userflow_slo_probes
+  apply_namespace_reconciler
 }
 
 prune_bootstrap_admin_env() {
@@ -6013,6 +6070,7 @@ log_runtime_configuration() {
   log "Orchestration backends (vm/image): ${ORCHESTRATION_BACKEND} / ${IMAGE_IMPORT_BACKEND}"
   log "LabImageImport controller enabled: ${LABIMAGEIMPORT_CONTROLLER_ENABLED} (poll=${LABIMAGEIMPORT_CONTROLLER_POLL_SECONDS}s metrics=${LABIMAGEIMPORT_CONTROLLER_METRICS_BIND}:${LABIMAGEIMPORT_CONTROLLER_METRICS_PORT} leader-election=${LABIMAGEIMPORT_CONTROLLER_LEADER_ELECTION_ENABLED})"
   log "Team namespace mode: ${TEAM_NAMESPACE_MODE} (prefix=${TEAM_NAMESPACE_PREFIX} bootstrap=${TEAM_NAMESPACE_BOOTSTRAP_ENABLED})"
+  log "Namespace reconciler enabled: ${ENABLE_NAMESPACE_RECONCILER} (schedule: ${NAMESPACE_RECONCILER_SCHEDULE})"
   log "Backend/frontend replicas: ${BACKEND_REPLICAS}/${FRONTEND_REPLICAS}"
   log "Backend/frontend HPA min-max cpu-target: ${BACKEND_HPA_MIN_REPLICAS}-${BACKEND_HPA_MAX_REPLICAS}@${BACKEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}% / ${FRONTEND_HPA_MIN_REPLICAS}-${FRONTEND_HPA_MAX_REPLICAS}@${FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT}%"
   log "Uvicorn workers per backend pod: ${UVICORN_WORKERS}"

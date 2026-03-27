@@ -23,12 +23,15 @@ const DEFAULT_FORM = {
   rdp_default_username: "",
   rdp_default_password: "",
   rdp_default_password_configured: false,
+  enabled_namespaces: [],
   enabled: false,
 };
 
 const AdminTemplates = () => {
   const [templates, setTemplates] = useState([]);
   const [images, setImages] = useState([]);
+  const [namespaceOptions, setNamespaceOptions] = useState([]);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
@@ -40,9 +43,33 @@ const AdminTemplates = () => {
 
   const load = async () => {
     try {
-      const [tmplRes, imgRes] = await Promise.all([api.get("/admin/templates"), api.get("/admin/images")]);
+      const [tmplRes, imgRes, nsRes, meRes] = await Promise.all([
+        api.get("/admin/templates"),
+        api.get("/admin/images"),
+        api.get("/admin/template-namespaces"),
+        api.get("/auth/me"),
+      ]);
       setTemplates(tmplRes.data);
       setImages(imgRes.data);
+      const options = Array.isArray(nsRes.data)
+        ? [
+            ...new Set(
+              nsRes.data
+                .map((value) =>
+                  String(value || "")
+                    .trim()
+                    .toLowerCase()
+                )
+                .filter(Boolean)
+            ),
+          ]
+        : [];
+      setNamespaceOptions(options);
+      setIsPlatformAdmin(
+        String(meRes?.data?.role || "")
+          .trim()
+          .toLowerCase() === "platform_admin"
+      );
     } catch (err) {
       setMessage(err.response?.data?.detail || "Failed to load templates/images");
     }
@@ -104,6 +131,7 @@ const AdminTemplates = () => {
       preclone_pool_size: tmpl.preclone_pool_size || 0,
       preclone_pool_max: tmpl.preclone_pool_max ?? tmpl.preclone_pool_size ?? 0,
       enabled: tmpl.enabled,
+      enabled_namespaces: Array.isArray(tmpl.enabled_namespaces) ? tmpl.enabled_namespaces : [],
       network_mode: tmpl.network_mode || "bridge",
       console_provider: tmpl.console_provider || "spice",
       rdp_default_username: tmpl.rdp_default_username || "",
@@ -135,6 +163,20 @@ const AdminTemplates = () => {
   const cancelEdit = () => {
     setEditingId(null);
     resetForm();
+  };
+
+  const toggleNamespaceSelection = (namespace) => {
+    const target = String(namespace || "")
+      .trim()
+      .toLowerCase();
+    if (!target) return;
+    setForm((prev) => {
+      const current = Array.isArray(prev.enabled_namespaces) ? prev.enabled_namespaces : [];
+      if (current.includes(target)) {
+        return { ...prev, enabled_namespaces: current.filter((item) => item !== target) };
+      }
+      return { ...prev, enabled_namespaces: [...current, target].sort() };
+    });
   };
 
   return (
@@ -254,6 +296,23 @@ const AdminTemplates = () => {
               </select>
             </label>
             <label>
+              Enabled namespaces
+              <div className="namespace-scope-list">
+                {namespaceOptions.length === 0 && <div className="muted small">No namespace options available.</div>}
+                {namespaceOptions.map((namespace) => (
+                  <label key={namespace} className="permission-row">
+                    <input
+                      type="checkbox"
+                      checked={(form.enabled_namespaces || []).includes(namespace)}
+                      onChange={() => toggleNamespaceSelection(namespace)}
+                    />
+                    <span className="permission-id">{namespace}</span>
+                  </label>
+                ))}
+              </div>
+              <span className="muted small">Select the namespaces where this template can be launched.</span>
+            </label>
+            <label>
               Console provider
               <select
                 value={form.console_provider}
@@ -291,7 +350,7 @@ const AdminTemplates = () => {
                 </label>
               </>
             )}
-            {editingId && (
+            {editingId && isPlatformAdmin && (
               <label>
                 Enabled
                 <select
@@ -345,12 +404,20 @@ const AdminTemplates = () => {
                     {t.rdp_default_password_configured ? "password configured" : "no password"}
                   </div>
                 )}
+                <div className="muted small">
+                  Enabled namespaces:{" "}
+                  {Array.isArray(t.enabled_namespaces) && t.enabled_namespaces.length > 0
+                    ? t.enabled_namespaces.join(", ")
+                    : "-"}
+                </div>
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">
-                  <button className="ghost" onClick={() => toggle(t.id, !t.enabled)}>
-                    {t.enabled ? "Disable" : "Enable"}
-                  </button>
+                  {isPlatformAdmin && (
+                    <button className="ghost" onClick={() => toggle(t.id, !t.enabled)}>
+                      {t.enabled ? "Disable" : "Enable"}
+                    </button>
+                  )}
                   <button className="ghost" onClick={() => startEdit(t)}>
                     Edit
                   </button>

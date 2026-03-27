@@ -50,11 +50,13 @@ from ..services.multi_cluster import (
     local_cluster_id,
     select_cluster_for_launch,
 )
+from ..services.namespace_policies import get_namespace_runtime_policy
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota_or_raise, normalize_namespace, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import (
     GLOBAL_TENANT,
+    normalize_namespace_scopes,
     normalize_tenant,
     resolve_resource_namespace,
     tenant_namespace_for_user,
@@ -514,6 +516,23 @@ def _instance_namespace(record: Instance, user: User | None = None) -> str:
     return str(settings.kube_namespace or "labs").strip() or "labs"
 
 
+def _instance_visible_in_namespace(
+    record: Instance,
+    *,
+    selected_namespace: str,
+    template: Template | None = None,
+) -> bool:
+    selected = normalize_namespace(selected_namespace)
+    if not selected:
+        return False
+    instance_ns = normalize_namespace(getattr(record, "namespace", None))
+    if instance_ns == selected:
+        return True
+    if template is not None and _template_enabled_for_namespace(template, selected):
+        return True
+    return False
+
+
 def _instance_cluster_id(record: Instance) -> str:
     return str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
 
@@ -524,6 +543,51 @@ def _template_namespace(record: Template) -> str:
         or normalize_namespace(settings.kube_namespace)
         or "labs"
     )
+
+
+def _template_enabled_namespaces(record: Template) -> list[str]:
+    raw = getattr(record, "enabled_namespaces_json", "[]")
+    payload: list[str] = []
+    if isinstance(raw, list):
+        payload = [str(item) for item in raw]
+    else:
+        try:
+            decoded = json.loads(str(raw or "[]"))
+            if isinstance(decoded, list):
+                payload = [str(item) for item in decoded]
+        except Exception:
+            payload = []
+    try:
+        normalized = normalize_namespace_scopes(payload)
+    except ValueError:
+        normalized = []
+    if normalized:
+        return normalized
+    fallback = _template_namespace(record)
+    return [fallback] if fallback else []
+
+
+def _template_enabled_for_namespace(record: Template, namespace: str) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return False
+    return selected in set(_template_enabled_namespaces(record))
+
+
+def _namespace_vm_idle_timeout_minutes(session: Session, namespace: str, template: Template | None) -> int:
+    policy = get_namespace_runtime_policy(session, namespace)
+    template_minutes = int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or 0)
+    if template_minutes <= 0:
+        template_minutes = int(settings.idle_timeout_minutes or 30)
+    return max(1, min(template_minutes, int(policy.idle_timeout_minutes_default)))
+
+
+def _namespace_vm_auto_delete_minutes(session: Session, namespace: str, template: Template | None) -> int:
+    policy = get_namespace_runtime_policy(session, namespace)
+    template_minutes = int(getattr(template, "auto_delete_minutes", 60) or 0)
+    if template_minutes <= 0:
+        return max(1, int(policy.vm_auto_delete_minutes_default))
+    return max(1, min(template_minutes, int(policy.vm_auto_delete_minutes_default)))
 
 
 def _image_namespace(record: Image) -> str:
@@ -735,7 +799,9 @@ def list_available_templates(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[VMTemplate]:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), quota_namespace)
     tenant_scope = {
@@ -743,16 +809,15 @@ def list_available_templates(
         GLOBAL_TENANT,
     }
     templates = session.exec(
-        select(Template)
-        .where(Template.enabled == True)  # noqa: E712
-        .where(Template.tenant.in_(tenant_scope))
-        .where(Template.namespace == selected_namespace)
+        select(Template).where(Template.enabled == True).where(Template.tenant.in_(tenant_scope))  # noqa: E712
     ).all()
+    templates = [record for record in templates if _template_enabled_for_namespace(record, selected_namespace)]
     return [
         VMTemplate(
             id=record.id,
             name=record.name,
             namespace=_template_namespace(record),
+            enabled_namespaces=_template_enabled_namespaces(record),
             cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
             description=record.description,
             os_type=record.os_type,
@@ -761,13 +826,7 @@ def list_available_templates(
             ram_mb=record.ram_mb,
             auto_delete_minutes=record.auto_delete_minutes,
             idle_timeout_minutes=min(
-                max(
-                    1,
-                    int(
-                        getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes)
-                        or settings.idle_timeout_minutes
-                    ),
-                ),
+                _namespace_vm_idle_timeout_minutes(session, selected_namespace, record),
                 team_idle_cap if team_idle_cap is not None else 1440,
             ),
             preclone_pool_size=getattr(record, "preclone_pool_size", 0),
@@ -789,7 +848,9 @@ def preflight_template_launch(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> VMTemplateLaunchPreflight:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
@@ -797,7 +858,7 @@ def preflight_template_launch(
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_namespace = _template_namespace(template)
-    if template_namespace != selected_namespace:
+    if not _template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -861,11 +922,18 @@ def list_user_pods(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[VMInstance]:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
-    instances = session.exec(
-        select(Instance).where(Instance.owner == user.username).where(Instance.namespace == selected_namespace)
-    ).all()
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     templates = {t.id: t for t in session.exec(select(Template)).all()}
+    instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
+    instances = [
+        record
+        for record in instances
+        if _instance_visible_in_namespace(
+            record, selected_namespace=selected_namespace, template=templates.get(record.template_id)
+        )
+    ]
     changed = False
     to_delete: list[Instance] = []
     feedback: dict[str, tuple[str, str]] = {}
@@ -905,7 +973,7 @@ def list_user_pods(
             changed = True
         # Auto-delete stopped/completed instances based on template setting.
         if tmpl and record.status in {"stopped", "completed"}:
-            cutoff = utc_now() - timedelta(minutes=tmpl.auto_delete_minutes)
+            cutoff = utc_now() - timedelta(minutes=_namespace_vm_auto_delete_minutes(session, selected_namespace, tmpl))
             if record.last_active_at < cutoff:
                 try:
                     runtime_kube.delete_pod(
@@ -921,9 +989,14 @@ def list_user_pods(
             session.delete(rec)
         session.commit()
         # refresh instances list without deleted ones
-        instances = session.exec(
-            select(Instance).where(Instance.owner == user.username).where(Instance.namespace == selected_namespace)
-        ).all()
+        instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
+        instances = [
+            record
+            for record in instances
+            if _instance_visible_in_namespace(
+                record, selected_namespace=selected_namespace, template=templates.get(record.template_id)
+            )
+        ]
 
     items: list[VMInstance] = []
     for record in instances:
@@ -959,8 +1032,11 @@ def record_vm_activity(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
-    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    template = session.get(Template, record.template_id)
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     record.last_active_at = utc_now()
     session.add(record)
@@ -977,16 +1053,15 @@ def issue_vm_connect_token(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
-    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    template = session.get(Template, record.template_id)
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
-    template = session.get(Template, record.template_id)
-    idle_minutes = max(
-        1,
-        int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
-    )
+    idle_minutes = _namespace_vm_idle_timeout_minutes(session, selected_namespace, template)
     instance_namespace = _instance_namespace(record, user)
     idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
     if idle_cap is not None:
@@ -1107,13 +1182,7 @@ async def proxy_vm_console(
     normalized_path = proxy_path.strip("/")
     if not normalized_path:
         template = session.get(Template, record.template_id)
-        idle_minutes = max(
-            1,
-            int(
-                getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes)
-                or settings.idle_timeout_minutes
-            ),
-        )
+        idle_minutes = _namespace_vm_idle_timeout_minutes(session, instance_namespace, template)
         idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
         if idle_cap is not None:
             idle_minutes = min(idle_minutes, idle_cap)
@@ -1444,7 +1513,9 @@ def start_vm(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> VMInstance:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
@@ -1453,7 +1524,7 @@ def start_vm(
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_namespace = _template_namespace(template)
-    if template_namespace != selected_namespace:
+    if not _template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -1521,7 +1592,7 @@ def start_vm(
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
         requested_memory_mb=max(1, int(template.ram_mb or 512)) + max(0, int(settings.vm_memory_overhead_mb or 0)),
         requested_storage_gib=_vm_storage_request_gib(image),
-        requested_idle_timeout_minutes=template.idle_timeout_minutes or settings.idle_timeout_minutes,
+        requested_idle_timeout_minutes=_namespace_vm_idle_timeout_minutes(session, selected_namespace, template),
     )
     try:
         placement = select_cluster_for_launch(
@@ -1678,9 +1749,12 @@ def stop_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    template = session.get(Template, record.template_id)
     instance_namespace = _instance_namespace(record, user)
-    if normalize_namespace(instance_namespace) != selected_namespace:
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
@@ -1737,17 +1811,19 @@ def restart_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
-    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    template = session.get(Template, record.template_id)
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
-    template = session.get(Template, record.template_id)
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_namespace = _template_namespace(template)
-    if template_namespace != selected_namespace:
+    if not _template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
@@ -1943,8 +2019,11 @@ def delete_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
-    if normalize_namespace(_instance_namespace(record, user)) != selected_namespace:
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    template = session.get(Template, record.template_id)
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     instance_namespace = _instance_namespace(record, user)
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))

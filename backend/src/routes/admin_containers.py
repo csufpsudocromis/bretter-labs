@@ -33,6 +33,7 @@ from ..services.tenant_context import (
     assert_actor_can_access_namespace,
     assert_actor_can_manage_tenant,
     is_platform_admin,
+    normalize_namespace_scopes,
     normalize_tenant,
     resolve_resource_namespace,
     resolve_resource_tenant,
@@ -67,8 +68,13 @@ def _ensure_container_namespace_columns() -> None:
             cols = {row[1] for row in cur.execute("PRAGMA table_info(containertemplate)")}
             if "namespace" not in cols:
                 cur.execute("ALTER TABLE containertemplate ADD COLUMN namespace TEXT DEFAULT 'labs'")
+            if "enabled_namespaces_json" not in cols:
+                cur.execute("ALTER TABLE containertemplate ADD COLUMN enabled_namespaces_json TEXT DEFAULT '[]'")
             cur.execute(
                 "UPDATE containertemplate SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''"
+            )
+            cur.execute(
+                "UPDATE containertemplate SET enabled_namespaces_json = '[]' WHERE enabled_namespaces_json IS NULL OR trim(enabled_namespaces_json) = ''"
             )
             cur.execute("CREATE INDEX IF NOT EXISTS ix_containertemplate_namespace ON containertemplate(namespace)")
         conn.commit()
@@ -362,6 +368,51 @@ def _parse_json_map(raw: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in data.items()}
 
 
+def _template_enabled_namespaces(record: ContainerTemplateTable) -> list[str]:
+    raw = getattr(record, "enabled_namespaces_json", "[]")
+    payload: list[str] = []
+    if isinstance(raw, list):
+        payload = [str(item) for item in raw]
+    else:
+        try:
+            decoded = json.loads(str(raw or "[]"))
+            if isinstance(decoded, list):
+                payload = [str(item) for item in decoded]
+        except Exception:
+            payload = []
+    try:
+        normalized = normalize_namespace_scopes(payload)
+    except ValueError:
+        normalized = []
+    if normalized:
+        return normalized
+    fallback = _record_namespace(record)
+    return [fallback] if fallback else []
+
+
+def _template_enabled_namespaces_json(namespaces: list[str]) -> str:
+    return json.dumps(normalize_namespace_scopes(namespaces), separators=(",", ":"))
+
+
+def _assert_actor_can_manage_template_namespaces(actor: User, namespaces: list[str]) -> None:
+    if is_platform_admin(actor):
+        return
+    scope = _namespace_scope_for_actor(actor) or set()
+    denied = sorted({name for name in namespaces if name not in scope})
+    if denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"namespace enablement access denied: {', '.join(denied)}",
+        )
+
+
+def _template_enabled_for_namespace(record: ContainerTemplateTable, namespace: str) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return False
+    return selected in set(_template_enabled_namespaces(record))
+
+
 def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
     return ContainerTemplate(
         id=record.id,
@@ -371,6 +422,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         namespace=_record_namespace(record),
+        enabled_namespaces=_template_enabled_namespaces(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         container_image_id=record.container_image_id,
@@ -795,6 +847,10 @@ def create_container_template(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"container template namespace {resource_namespace} cannot use image namespace {image_namespace}",
         )
+    enabled_namespaces = normalize_namespace_scopes(payload.enabled_namespaces)
+    if not enabled_namespaces:
+        enabled_namespaces = [resource_namespace]
+    _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
 
     args = [str(item).strip() for item in (payload.args or []) if str(item).strip()]
     env = _validate_env(payload.env or {})
@@ -811,6 +867,7 @@ def create_container_template(
         name=(payload.name or "").strip(),
         tenant=resource_tenant,
         namespace=resource_namespace,
+        enabled_namespaces_json=_template_enabled_namespaces_json(enabled_namespaces),
         cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=(payload.description or "").strip(),
         container_image_id=payload.container_image_id,
@@ -862,10 +919,8 @@ def list_container_templates(
     if scope is not None:
         stmt = stmt.where(ContainerTemplateTable.tenant.in_(scope))
     namespace_scope = _namespace_scope_for_actor(actor)
-    if namespace_scope is not None:
+    if namespace_scope is not None and not requested_namespace:
         stmt = stmt.where(ContainerTemplateTable.namespace.in_(sorted(namespace_scope)))
-    if requested_namespace:
-        stmt = stmt.where(ContainerTemplateTable.namespace == requested_namespace)
     rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
@@ -883,19 +938,42 @@ def update_container_template(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> ContainerTemplate:
+    updates = payload.model_dump(exclude_unset=True)
+    namespace_enable_only = set(updates).issubset({"enabled_namespaces"})
+
     record = session.get(ContainerTemplateTable, template_id)
-    if not record or not _namespace_scoped_record(record, actor):
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
+    if not _namespace_scoped_record(record, actor) and not namespace_enable_only:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
     next_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     next_namespace = _record_namespace(record)
+    enabled_namespaces = _template_enabled_namespaces(record)
+    has_explicit_enabled_namespaces = bool(str(getattr(record, "enabled_namespaces_json", "") or "").strip())
 
-    updates = payload.model_dump(exclude_unset=True)
     if not updates:
         return _template_out(record)
+    if not is_platform_admin(actor) and "enabled" in updates:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can change global template enabled state",
+        )
     if "tenant" in updates:
         next_tenant = assert_actor_can_manage_tenant(actor, updates.get("tenant"))
     if "namespace" in updates:
         next_namespace = assert_actor_can_access_namespace(actor, updates.get("namespace"))
+    if "enabled_namespaces" in updates:
+        enabled_namespaces = normalize_namespace_scopes(updates.get("enabled_namespaces") or [])
+        _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
+    elif "namespace" in updates and not has_explicit_enabled_namespaces:
+        enabled_namespaces = [next_namespace]
+        _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
+
+    if updates.get("enabled") is True and not enabled_namespaces:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="enabled template must include at least one enabled namespace",
+        )
 
     was_enabled = bool(record.enabled)
     previous_image_id = str(record.container_image_id or "").strip()
@@ -994,6 +1072,7 @@ def update_container_template(
             )
     record.tenant = next_tenant
     record.namespace = next_namespace
+    record.enabled_namespaces_json = _template_enabled_namespaces_json(enabled_namespaces)
 
     session.add(record)
     session.commit()

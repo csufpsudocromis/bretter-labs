@@ -581,6 +581,7 @@ required_objects = {
         "default-deny-egress",
         "allow-dns-egress",
         "allow-same-namespace-traffic",
+        "allow-control-plane-ingress",
     ],
 }
 

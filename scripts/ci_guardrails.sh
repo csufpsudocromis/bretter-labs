@@ -49,10 +49,15 @@ fi
   scripts/export_openapi_schema.py \
   scripts/post_deploy_synthetic_check.py \
   scripts/check_live_config_drift.py \
+  scripts/namespace_config_backup.py \
   scripts/backfill_labinstances_from_db.py \
   scripts/bump_version.py \
   scripts/validate_production_profile.py \
   scripts/update_production_image_digests.py
+
+PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q \
+  backend/tests/test_namespace_authz_matrix.py \
+  backend/tests/test_namespace_scoping.py
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 

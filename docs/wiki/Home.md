@@ -26,6 +26,7 @@ Last reviewed: March 26, 2026.
 - CRD evolution: [Operator CRD Versioning Plan](Operator-CRD-Versioning-Plan)
 - API contract checks: [API Contract and Drift Guardrails](API-Contract-and-Drift-Guardrails)
 - Tenant isolation: [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
+- Namespace lifecycle/recovery: [Namespace Lifecycle and Recovery](Namespace-Lifecycle-and-Recovery)
 - Multi-cluster operations: [Multi-Cluster Operations](Multi-Cluster-Operations)
 
 ## Core pages
@@ -46,6 +47,7 @@ Last reviewed: March 26, 2026.
 - [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
+- [Namespace Lifecycle and Recovery](Namespace-Lifecycle-and-Recovery)
 - [Multi-Cluster Operations](Multi-Cluster-Operations)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)

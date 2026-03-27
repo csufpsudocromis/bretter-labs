@@ -25,6 +25,11 @@
             "title": "Id",
             "type": "string"
           },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
+          },
           "target_id": {
             "title": "Target Id",
             "type": "string"
@@ -1385,6 +1390,13 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "enabled_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Namespaces",
+            "type": "array"
+          },
           "env": {
             "additionalProperties": {
               "type": "string"
@@ -1584,6 +1596,13 @@
             "default": false,
             "title": "Enabled",
             "type": "boolean"
+          },
+          "enabled_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Namespaces",
+            "type": "array"
           },
           "env": {
             "additionalProperties": {
@@ -1840,6 +1859,20 @@
               }
             ],
             "title": "Enabled"
+          },
+          "enabled_namespaces": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled Namespaces"
           },
           "env": {
             "anyOf": [
@@ -2668,8 +2701,49 @@
         "title": "LDAPSettingsUpdate",
         "type": "object"
       },
+      "ManagedNamespaceCleanupStepOut": {
+        "properties": {
+          "affected": {
+            "default": 0,
+            "title": "Affected",
+            "type": "integer"
+          },
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "warning",
+              "error",
+              "skipped"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step": {
+            "title": "Step",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step",
+          "status"
+        ],
+        "title": "ManagedNamespaceCleanupStepOut",
+        "type": "object"
+      },
       "ManagedNamespaceCreate": {
         "properties": {
+          "container_auto_delete_minutes_default": {
+            "default": 60,
+            "maximum": 10080.0,
+            "minimum": 1.0,
+            "title": "Container Auto Delete Minutes Default",
+            "type": "integer"
+          },
           "enabled": {
             "default": true,
             "title": "Enabled",
@@ -2679,6 +2753,13 @@
             "default": true,
             "title": "Enforce Network Policies",
             "type": "boolean"
+          },
+          "idle_timeout_minutes_default": {
+            "default": 30,
+            "maximum": 1440.0,
+            "minimum": 1.0,
+            "title": "Idle Timeout Minutes Default",
+            "type": "integer"
           },
           "limit_default_cpu": {
             "default": "2",
@@ -2777,6 +2858,13 @@
             "title": "Namespace",
             "type": "string"
           },
+          "queue_max_pending": {
+            "default": 25,
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Queue Max Pending",
+            "type": "integer"
+          },
           "requests_cpu": {
             "default": "8",
             "maxLength": 32,
@@ -2814,12 +2902,169 @@
             "minLength": 1,
             "title": "Team Label",
             "type": "string"
+          },
+          "upload_max_bytes": {
+            "default": 64424509440,
+            "maximum": 2199023255552.0,
+            "minimum": 1.0,
+            "title": "Upload Max Bytes",
+            "type": "integer"
+          },
+          "vm_auto_delete_minutes_default": {
+            "default": 60,
+            "maximum": 10080.0,
+            "minimum": 1.0,
+            "title": "Vm Auto Delete Minutes Default",
+            "type": "integer"
           }
         },
         "required": [
           "namespace"
         ],
         "title": "ManagedNamespaceCreate",
+        "type": "object"
+      },
+      "ManagedNamespaceDecommissionOut": {
+        "properties": {
+          "blocked": {
+            "default": false,
+            "title": "Blocked",
+            "type": "boolean"
+          },
+          "delete_cluster_namespace": {
+            "default": true,
+            "title": "Delete Cluster Namespace",
+            "type": "boolean"
+          },
+          "deleted_cluster_resources": {
+            "default": 0,
+            "title": "Deleted Cluster Resources",
+            "type": "integer"
+          },
+          "deleted_database_records": {
+            "default": 0,
+            "title": "Deleted Database Records",
+            "type": "integer"
+          },
+          "finished_at": {
+            "format": "date-time",
+            "title": "Finished At",
+            "type": "string"
+          },
+          "force_cleanup": {
+            "default": false,
+            "title": "Force Cleanup",
+            "type": "boolean"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/ManagedNamespaceCleanupStepOut"
+            },
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "namespace",
+          "finished_at"
+        ],
+        "title": "ManagedNamespaceDecommissionOut",
+        "type": "object"
+      },
+      "ManagedNamespaceObservabilityOut": {
+        "properties": {
+          "active_container_instances": {
+            "default": 0,
+            "title": "Active Container Instances",
+            "type": "integer"
+          },
+          "active_vm_instances": {
+            "default": 0,
+            "title": "Active Vm Instances",
+            "type": "integer"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "failed_total_instances": {
+            "default": 0,
+            "title": "Failed Total Instances",
+            "type": "integer"
+          },
+          "image_upload_tasks_failed": {
+            "default": 0,
+            "title": "Image Upload Tasks Failed",
+            "type": "integer"
+          },
+          "image_upload_tasks_pending": {
+            "default": 0,
+            "title": "Image Upload Tasks Pending",
+            "type": "integer"
+          },
+          "last_reconciled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Reconciled At"
+          },
+          "limit_range_present": {
+            "default": false,
+            "title": "Limit Range Present",
+            "type": "boolean"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "network_policy_count": {
+            "default": 0,
+            "title": "Network Policy Count",
+            "type": "integer"
+          },
+          "present_in_cluster": {
+            "default": false,
+            "title": "Present In Cluster",
+            "type": "boolean"
+          },
+          "queued_container_instances": {
+            "default": 0,
+            "title": "Queued Container Instances",
+            "type": "integer"
+          },
+          "required_network_policies_missing": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Required Network Policies Missing",
+            "type": "array"
+          },
+          "resource_quota_present": {
+            "default": false,
+            "title": "Resource Quota Present",
+            "type": "boolean"
+          },
+          "running_total_instances": {
+            "default": 0,
+            "title": "Running Total Instances",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "namespace"
+        ],
+        "title": "ManagedNamespaceObservabilityOut",
         "type": "object"
       },
       "ManagedNamespaceOut": {
@@ -2839,6 +3084,11 @@
             "title": "Active Vm Instances",
             "type": "integer"
           },
+          "container_auto_delete_minutes_default": {
+            "default": 60,
+            "title": "Container Auto Delete Minutes Default",
+            "type": "integer"
+          },
           "created_at": {
             "format": "date-time",
             "title": "Created At",
@@ -2855,6 +3105,11 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "idle_timeout_minutes_default": {
+            "default": 30,
+            "title": "Idle Timeout Minutes Default",
+            "type": "integer"
           },
           "last_reconciled_at": {
             "anyOf": [
@@ -2929,6 +3184,11 @@
             "title": "Present In Cluster",
             "type": "boolean"
           },
+          "queue_max_pending": {
+            "default": 25,
+            "title": "Queue Max Pending",
+            "type": "integer"
+          },
           "requests_cpu": {
             "title": "Requests Cpu",
             "type": "string"
@@ -2958,6 +3218,16 @@
             "format": "date-time",
             "title": "Updated At",
             "type": "string"
+          },
+          "upload_max_bytes": {
+            "default": 64424509440,
+            "title": "Upload Max Bytes",
+            "type": "integer"
+          },
+          "vm_auto_delete_minutes_default": {
+            "default": 60,
+            "title": "Vm Auto Delete Minutes Default",
+            "type": "integer"
           }
         },
         "required": [
@@ -2991,6 +3261,19 @@
       },
       "ManagedNamespaceUpdate": {
         "properties": {
+          "container_auto_delete_minutes_default": {
+            "anyOf": [
+              {
+                "maximum": 10080.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Container Auto Delete Minutes Default"
+          },
           "enabled": {
             "anyOf": [
               {
@@ -3012,6 +3295,19 @@
               }
             ],
             "title": "Enforce Network Policies"
+          },
+          "idle_timeout_minutes_default": {
+            "anyOf": [
+              {
+                "maximum": 1440.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idle Timeout Minutes Default"
           },
           "limit_default_cpu": {
             "anyOf": [
@@ -3182,6 +3478,19 @@
             ],
             "title": "Max Services"
           },
+          "queue_max_pending": {
+            "anyOf": [
+              {
+                "maximum": 5000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queue Max Pending"
+          },
           "requests_cpu": {
             "anyOf": [
               {
@@ -3249,6 +3558,32 @@
               }
             ],
             "title": "Team Label"
+          },
+          "upload_max_bytes": {
+            "anyOf": [
+              {
+                "maximum": 2199023255552.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Max Bytes"
+          },
+          "vm_auto_delete_minutes_default": {
+            "anyOf": [
+              {
+                "maximum": 10080.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vm Auto Delete Minutes Default"
           }
         },
         "title": "ManagedNamespaceUpdate",
@@ -5025,6 +5360,13 @@
             "title": "Enabled",
             "type": "boolean"
           },
+          "enabled_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Namespaces",
+            "type": "array"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -5160,6 +5502,13 @@
             "default": false,
             "title": "Enabled",
             "type": "boolean"
+          },
+          "enabled_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Namespaces",
+            "type": "array"
           },
           "idle_timeout_minutes": {
             "default": 30,
@@ -5424,6 +5773,20 @@
               }
             ],
             "title": "Enabled"
+          },
+          "enabled_namespaces": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled Namespaces"
           },
           "idle_timeout_minutes": {
             "anyOf": [
@@ -5840,6 +6203,54 @@
             }
           },
           {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -5883,6 +6294,145 @@
           }
         },
         "summary": "List Admin Audit Events",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/audit-events/export": {
+      "get": {
+        "operationId": "export_admin_audit_events_admin_audit_events_export_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 2000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "actor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Actor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Action"
+            }
+          },
+          {
+            "in": "query",
+            "name": "resource",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Resource"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target"
+            }
+          },
+          {
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Namespace"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Admin Audit Events",
         "tags": [
           "admin"
         ]
@@ -8436,6 +8986,110 @@
         ]
       }
     },
+    "/admin/settings/namespaces/observability": {
+      "get": {
+        "operationId": "list_managed_namespace_observability_admin_settings_namespaces_observability_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManagedNamespaceObservabilityOut"
+                  },
+                  "title": "Response List Managed Namespace Observability Admin Settings Namespaces Observability Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Managed Namespace Observability",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/namespaces/reconcile-all": {
+      "post": {
+        "operationId": "reconcile_all_managed_namespaces_admin_settings_namespaces_reconcile_all_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Reconcile All Managed Namespaces Admin Settings Namespaces Reconcile All Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Reconcile All Managed Namespaces",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/settings/namespaces/{namespace}": {
       "delete": {
         "operationId": "delete_managed_namespace_admin_settings_namespaces__namespace__delete",
@@ -8460,6 +9114,16 @@
             }
           },
           {
+            "in": "query",
+            "name": "force_cleanup",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force Cleanup",
+              "type": "boolean"
+            }
+          },
+          {
             "in": "header",
             "name": "authorization",
             "required": false,
@@ -8477,7 +9141,14 @@
           }
         ],
         "responses": {
-          "204": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedNamespaceDecommissionOut"
+                }
+              }
+            },
             "description": "Successful Response"
           },
           "422": {
@@ -8558,6 +9229,84 @@
           }
         },
         "summary": "Update Managed Namespace",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/namespaces/{namespace}/decommission": {
+      "post": {
+        "operationId": "decommission_managed_namespace_admin_settings_namespaces__namespace__decommission_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "namespace",
+            "required": true,
+            "schema": {
+              "title": "Namespace",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "delete_cluster_namespace",
+            "required": false,
+            "schema": {
+              "default": true,
+              "title": "Delete Cluster Namespace",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "force_cleanup",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Force Cleanup",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedNamespaceDecommissionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decommission Managed Namespace",
         "tags": [
           "admin"
         ]
@@ -9860,6 +10609,59 @@
           }
         },
         "summary": "Update Team Quota",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/template-namespaces": {
+      "get": {
+        "operationId": "list_template_namespaces_admin_template_namespaces_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Response List Template Namespaces Admin Template Namespaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Template Namespaces",
         "tags": [
           "admin"
         ]

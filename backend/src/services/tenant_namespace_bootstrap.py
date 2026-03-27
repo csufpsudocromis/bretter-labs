@@ -9,6 +9,7 @@ from sqlmodel import select
 from ..config import settings
 from ..db import session_scope
 from ..tables import ManagedNamespace
+from ..time_utils import utc_now
 from .team_quotas import normalize_namespace, normalize_team
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ _DEFAULT_DENY_INGRESS_NAME = "default-deny-ingress"
 _DEFAULT_DENY_EGRESS_NAME = "default-deny-egress"
 _ALLOW_DNS_EGRESS_NAME = "allow-dns-egress"
 _ALLOW_SAME_NS_NAME = "allow-same-namespace-traffic"
+_ALLOW_CONTROL_PLANE_INGRESS_NAME = "allow-control-plane-ingress"
 _PSA_ENFORCE_KEY = "pod-security.kubernetes.io/enforce"
 _PSA_AUDIT_KEY = "pod-security.kubernetes.io/audit"
 _PSA_WARN_KEY = "pod-security.kubernetes.io/warn"
@@ -48,6 +50,13 @@ class NamespaceBootstrapPolicy:
     limit_default_memory: str = "2Gi"
     limit_max_cpu: str = "8"
     limit_max_memory: str = "16Gi"
+
+
+@dataclass(frozen=True)
+class NamespaceReconcileResult:
+    namespace: str
+    ok: bool
+    detail: str = ""
 
 
 def _control_namespace() -> str:
@@ -100,6 +109,10 @@ def _policy_from_managed_namespace(row: ManagedNamespace) -> NamespaceBootstrapP
         limit_max_cpu=str(getattr(row, "limit_max_cpu", "") or "8").strip(),
         limit_max_memory=str(getattr(row, "limit_max_memory", "") or "16Gi").strip(),
     )
+
+
+def managed_namespace_policy(row: ManagedNamespace) -> NamespaceBootstrapPolicy:
+    return _policy_from_managed_namespace(row)
 
 
 def _managed_namespace_policy(namespace: str) -> NamespaceBootstrapPolicy | None:
@@ -216,7 +229,8 @@ def _limit_range(policy: NamespaceBootstrapPolicy) -> client.V1LimitRange:
     )
 
 
-def _default_network_policies() -> list[client.V1NetworkPolicy]:
+def _default_network_policies(control_namespace: str) -> list[client.V1NetworkPolicy]:
+    control_ns = normalize_namespace(control_namespace) or "labs"
     return [
         client.V1NetworkPolicy(
             metadata=client.V1ObjectMeta(name=_DEFAULT_DENY_INGRESS_NAME),
@@ -269,6 +283,25 @@ def _default_network_policies() -> list[client.V1NetworkPolicy]:
                 egress=[
                     client.V1NetworkPolicyEgressRule(
                         to=[client.V1NetworkPolicyPeer(pod_selector=client.V1LabelSelector(match_labels={}))]
+                    )
+                ],
+            ),
+        ),
+        client.V1NetworkPolicy(
+            metadata=client.V1ObjectMeta(name=_ALLOW_CONTROL_PLANE_INGRESS_NAME),
+            spec=client.V1NetworkPolicySpec(
+                pod_selector=client.V1LabelSelector(match_labels={}),
+                policy_types=["Ingress"],
+                ingress=[
+                    client.V1NetworkPolicyIngressRule(
+                        _from=[
+                            client.V1NetworkPolicyPeer(
+                                namespace_selector=client.V1LabelSelector(
+                                    match_labels={"kubernetes.io/metadata.name": control_ns}
+                                ),
+                                pod_selector=client.V1LabelSelector(match_labels={"app": "bretter-backend"}),
+                            )
+                        ]
                     )
                 ],
             ),
@@ -334,6 +367,7 @@ def _upsert_network_policies(
             _DEFAULT_DENY_EGRESS_NAME,
             _ALLOW_DNS_EGRESS_NAME,
             _ALLOW_SAME_NS_NAME,
+            _ALLOW_CONTROL_PLANE_INGRESS_NAME,
         ):
             try:
                 networking_api.delete_namespaced_network_policy(name=name, namespace=namespace)
@@ -341,7 +375,7 @@ def _upsert_network_policies(
                 if exc.status != 404:
                     raise
         return
-    for netpol in _default_network_policies():
+    for netpol in _default_network_policies(_control_namespace()):
         name = str(netpol.metadata.name)
         try:
             networking_api.create_namespaced_network_policy(namespace=namespace, body=netpol)
@@ -487,3 +521,36 @@ def ensure_team_runtime_namespace(
     except ApiException as exc:
         detail = exc.reason or str(exc.status)
         raise RuntimeError(f"failed to bootstrap tenant runtime namespace {target_namespace}: {detail}") from exc
+
+
+def reconcile_managed_namespace(kube_service, row: ManagedNamespace) -> None:
+    policy = _policy_from_managed_namespace(row)
+    privileged_runtime = str(policy.security_profile or "").strip().lower() == "privileged"
+    ensure_team_runtime_namespace(
+        kube_service,
+        team=getattr(row, "team_label", "default"),
+        namespace=str(getattr(row, "namespace", "") or ""),
+        privileged_runtime=privileged_runtime,
+        policy=policy,
+        enforce_per_team_mode=False,
+    )
+
+
+def reconcile_all_managed_namespaces(kube_service) -> list[NamespaceReconcileResult]:
+    results: list[NamespaceReconcileResult] = []
+    with session_scope() as session:
+        rows = session.exec(select(ManagedNamespace).where(ManagedNamespace.enabled == True)).all()  # noqa: E712
+        for row in rows:
+            namespace = normalize_namespace(getattr(row, "namespace", None))
+            if not namespace:
+                continue
+            try:
+                reconcile_managed_namespace(kube_service, row)
+                row.last_reconciled_at = utc_now()
+                row.updated_at = row.last_reconciled_at
+                session.add(row)
+                results.append(NamespaceReconcileResult(namespace=namespace, ok=True, detail="reconciled"))
+            except Exception as exc:
+                results.append(NamespaceReconcileResult(namespace=namespace, ok=False, detail=str(exc)))
+        session.commit()
+    return results

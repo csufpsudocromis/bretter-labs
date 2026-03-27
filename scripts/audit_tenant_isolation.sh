@@ -64,6 +64,10 @@ if ! has_pattern 'name:[[:space:]]*allow-same-namespace-traffic' "$ROOT_DIR/scri
   echo "ERROR: tenant bootstrap script is missing allow-same-namespace-traffic policy." >&2
   exit 1
 fi
+if ! has_pattern 'name:[[:space:]]*allow-control-plane-ingress' "$ROOT_DIR/scripts/bootstrap_team_namespace.sh"; then
+  echo "ERROR: tenant bootstrap script is missing allow-control-plane-ingress policy." >&2
+  exit 1
+fi
 
 rendered="$(mktemp /tmp/bretter-tenant-audit.XXXXXX.yaml)"
 trap 'rm -f "$rendered"' EXIT

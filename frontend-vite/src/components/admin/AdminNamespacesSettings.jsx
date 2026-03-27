@@ -21,6 +21,11 @@ const DEFAULT_FORM = {
   limit_default_memory: "2Gi",
   limit_max_cpu: "8",
   limit_max_memory: "16Gi",
+  idle_timeout_minutes_default: 30,
+  vm_auto_delete_minutes_default: 60,
+  container_auto_delete_minutes_default: 60,
+  queue_max_pending: 25,
+  upload_max_bytes: 60 * 1024 * 1024 * 1024,
   enabled: true,
 };
 
@@ -50,11 +55,17 @@ const FIELD_HELP = {
   limit_default_memory: "Default memory limit applied when a container omits limits.",
   limit_max_cpu: "Maximum CPU a single container can request/limit (LimitRange max).",
   limit_max_memory: "Maximum memory a single container can request/limit (LimitRange max).",
+  idle_timeout_minutes_default: "Namespace default/cap for lab idle timeout (auto-stop).",
+  vm_auto_delete_minutes_default: "Namespace default/cap for VM auto-delete after stop/completion.",
+  container_auto_delete_minutes_default: "Namespace default/cap for container auto-delete after stop/completion.",
+  queue_max_pending: "Maximum queued container launches allowed in this namespace.",
+  upload_max_bytes: "Maximum VM image upload size allowed in this namespace (bytes).",
   enabled: "Disable to keep config without reconciliation; enable to enforce in-cluster resources.",
 };
 
 const AdminNamespacesSettings = () => {
   const [rows, setRows] = useState([]);
+  const [observabilityRows, setObservabilityRows] = useState([]);
   const [editingNamespace, setEditingNamespace] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [message, setMessage] = useState("");
@@ -64,6 +75,8 @@ const AdminNamespacesSettings = () => {
     try {
       const res = await api.get("/admin/settings/namespaces");
       setRows(Array.isArray(res.data) ? res.data : []);
+      const obs = await api.get("/admin/settings/namespaces/observability");
+      setObservabilityRows(Array.isArray(obs.data) ? obs.data : []);
     } catch (err) {
       setMessage(err.response?.data?.detail || "Failed to load managed namespaces");
     }
@@ -102,6 +115,11 @@ const AdminNamespacesSettings = () => {
       limit_default_memory: String(row.limit_default_memory || "2Gi"),
       limit_max_cpu: String(row.limit_max_cpu || "8"),
       limit_max_memory: String(row.limit_max_memory || "16Gi"),
+      idle_timeout_minutes_default: Number(row.idle_timeout_minutes_default || 30),
+      vm_auto_delete_minutes_default: Number(row.vm_auto_delete_minutes_default || 60),
+      container_auto_delete_minutes_default: Number(row.container_auto_delete_minutes_default || 60),
+      queue_max_pending: Number(row.queue_max_pending || 25),
+      upload_max_bytes: Number(row.upload_max_bytes || 60 * 1024 * 1024 * 1024),
       enabled: Boolean(row.enabled),
     });
     setMessage("");
@@ -128,6 +146,11 @@ const AdminNamespacesSettings = () => {
     limit_default_memory: String(form.limit_default_memory || "").trim() || "2Gi",
     limit_max_cpu: String(form.limit_max_cpu || "").trim() || "8",
     limit_max_memory: String(form.limit_max_memory || "").trim() || "16Gi",
+    idle_timeout_minutes_default: Math.max(1, Number(form.idle_timeout_minutes_default || 30)),
+    vm_auto_delete_minutes_default: Math.max(1, Number(form.vm_auto_delete_minutes_default || 60)),
+    container_auto_delete_minutes_default: Math.max(1, Number(form.container_auto_delete_minutes_default || 60)),
+    queue_max_pending: Math.max(1, Number(form.queue_max_pending || 25)),
+    upload_max_bytes: Math.max(1, Number(form.upload_max_bytes || 60 * 1024 * 1024 * 1024)),
     enabled: Boolean(form.enabled),
   });
 
@@ -170,30 +193,94 @@ const AdminNamespacesSettings = () => {
     }
   };
 
+  const reconcileAll = async () => {
+    setSaving(true);
+    try {
+      const res = await api.post("/admin/settings/namespaces/reconcile-all");
+      const summary = res?.data || {};
+      setMessage(
+        `Reconciled namespaces: total=${Number(summary.total || 0)} succeeded=${Number(
+          summary.succeeded || 0
+        )} failed=${Number(summary.failed || 0)}.`
+      );
+      await load();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || "Failed to reconcile all namespaces");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const remove = async (namespace) => {
     if (!window.confirm(`Delete managed namespace ${namespace}? This blocks when active labs are present.`)) {
       return;
     }
     setSaving(true);
     try {
-      await api.delete(`/admin/settings/namespaces/${encodeURIComponent(namespace)}`);
+      const res = await api.delete(`/admin/settings/namespaces/${encodeURIComponent(namespace)}`);
+      const report = res?.data || {};
       if (editingNamespace === namespace) {
         resetForm();
       }
-      setMessage(`Deleted managed namespace ${namespace}.`);
+      setMessage(
+        `Decommissioned ${namespace}. DB records deleted: ${Number(
+          report.deleted_database_records || 0
+        )}, cluster resources deleted: ${Number(report.deleted_cluster_resources || 0)}.`
+      );
       await load();
     } catch (err) {
+      if (Number(err?.response?.status || 0) === 409) {
+        const detail = String(err.response?.data?.detail || "");
+        const force = window.confirm(
+          `${detail || "Namespace has active labs."}\n\nForce cleanup and decommission anyway?`
+        );
+        if (force) {
+          try {
+            const res = await api.post(
+              `/admin/settings/namespaces/${encodeURIComponent(namespace)}/decommission`,
+              null,
+              {
+                params: { force_cleanup: "true" },
+              }
+            );
+            const report = res?.data || {};
+            if (editingNamespace === namespace) {
+              resetForm();
+            }
+            setMessage(
+              `Forced decommission completed for ${namespace}. DB records deleted: ${Number(
+                report.deleted_database_records || 0
+              )}, cluster resources deleted: ${Number(report.deleted_cluster_resources || 0)}.`
+            );
+            await load();
+            return;
+          } catch (forceErr) {
+            setMessage(forceErr.response?.data?.detail || "Failed to force decommission namespace");
+            return;
+          }
+        }
+      }
       setMessage(err.response?.data?.detail || "Failed to delete managed namespace");
     } finally {
       setSaving(false);
     }
   };
 
+  const obsByNamespace = new Map(observabilityRows.map((row) => [String(row.namespace || ""), row]));
+
   return (
     <div>
       <h2>Managed Namespaces</h2>
       <p>Add or remove runtime namespaces and tune namespace-scoped resource/security controls.</p>
       {message && <div className="info">{message}</div>}
+      <div className="actions" style={{ marginBottom: "0.75rem" }}>
+        <button type="button" className="ghost" onClick={load} disabled={saving}>
+          Refresh
+        </button>
+        <button type="button" className="ghost" onClick={reconcileAll} disabled={saving}>
+          Reconcile All
+        </button>
+      </div>
       <div className="grid">
         <div>
           <h3>{editingNamespace ? "Edit managed namespace" : "Add managed namespace"}</h3>
@@ -326,6 +413,56 @@ const AdminNamespacesSettings = () => {
               <span className="muted small">{FIELD_HELP.limit_max_memory}</span>
             </label>
             <label>
+              Idle timeout default (minutes)
+              <input
+                type="number"
+                min="1"
+                value={form.idle_timeout_minutes_default}
+                onChange={(e) => updateField("idle_timeout_minutes_default", Number(e.target.value))}
+              />
+              <span className="muted small">{FIELD_HELP.idle_timeout_minutes_default}</span>
+            </label>
+            <label>
+              VM auto-delete default (minutes)
+              <input
+                type="number"
+                min="1"
+                value={form.vm_auto_delete_minutes_default}
+                onChange={(e) => updateField("vm_auto_delete_minutes_default", Number(e.target.value))}
+              />
+              <span className="muted small">{FIELD_HELP.vm_auto_delete_minutes_default}</span>
+            </label>
+            <label>
+              Container auto-delete default (minutes)
+              <input
+                type="number"
+                min="1"
+                value={form.container_auto_delete_minutes_default}
+                onChange={(e) => updateField("container_auto_delete_minutes_default", Number(e.target.value))}
+              />
+              <span className="muted small">{FIELD_HELP.container_auto_delete_minutes_default}</span>
+            </label>
+            <label>
+              Queue max pending
+              <input
+                type="number"
+                min="1"
+                value={form.queue_max_pending}
+                onChange={(e) => updateField("queue_max_pending", Number(e.target.value))}
+              />
+              <span className="muted small">{FIELD_HELP.queue_max_pending}</span>
+            </label>
+            <label>
+              Upload max bytes
+              <input
+                type="number"
+                min="1"
+                value={form.upload_max_bytes}
+                onChange={(e) => updateField("upload_max_bytes", Number(e.target.value))}
+              />
+              <span className="muted small">{FIELD_HELP.upload_max_bytes}</span>
+            </label>
+            <label>
               Enabled
               <select
                 value={form.enabled ? "yes" : "no"}
@@ -366,8 +503,27 @@ const AdminNamespacesSettings = () => {
                   {row.active_total_instances}
                 </div>
                 <div className="small muted">
+                  Defaults: idle {row.idle_timeout_minutes_default}m | VM delete {row.vm_auto_delete_minutes_default}m |
+                  CT delete {row.container_auto_delete_minutes_default}m
+                </div>
+                <div className="small muted">
+                  Queue cap: {row.queue_max_pending} | Upload cap: {Number(row.upload_max_bytes || 0).toLocaleString()}{" "}
+                  bytes
+                </div>
+                <div className="small muted">
                   VM active: {row.active_vm_instances} | Container active: {row.active_container_instances}
                 </div>
+                {obsByNamespace.get(row.namespace) ? (
+                  <div className="small muted">
+                    Health: quota {obsByNamespace.get(row.namespace).resource_quota_present ? "ok" : "missing"} | limit{" "}
+                    {obsByNamespace.get(row.namespace).limit_range_present ? "ok" : "missing"} | netpol{" "}
+                    {Number(obsByNamespace.get(row.namespace).network_policy_count || 0)}
+                    {Array.isArray(obsByNamespace.get(row.namespace).required_network_policies_missing) &&
+                    obsByNamespace.get(row.namespace).required_network_policies_missing.length
+                      ? ` (missing: ${obsByNamespace.get(row.namespace).required_network_policies_missing.join(", ")})`
+                      : ""}
+                  </div>
+                ) : null}
                 <div className="actions" style={{ marginTop: "0.75rem" }}>
                   <button type="button" className="ghost" onClick={() => startEdit(row)} disabled={saving}>
                     Edit
@@ -387,6 +543,39 @@ const AdminNamespacesSettings = () => {
               </div>
             ))}
           </div>
+          {observabilityRows.length > 0 && (
+            <div className="card" style={{ marginTop: "1rem" }}>
+              <h4>Namespace Observability</h4>
+              <div className="tile-grid">
+                {observabilityRows.map((item) => (
+                  <div key={`obs-${item.namespace}`} className="tile template-tile">
+                    <div className="tile-header">
+                      <h4>{item.namespace}</h4>
+                      <span className={`badge ${item.present_in_cluster ? "success" : "warn"}`}>
+                        {item.present_in_cluster ? "Present" : "Missing"}
+                      </span>
+                    </div>
+                    <div className="small muted">
+                      Running: {item.running_total_instances} | Failed: {item.failed_total_instances} | Queued CT:{" "}
+                      {item.queued_container_instances}
+                    </div>
+                    <div className="small muted">
+                      Upload tasks pending: {item.image_upload_tasks_pending} | failed: {item.image_upload_tasks_failed}
+                    </div>
+                    <div className="small muted">
+                      Quota: {item.resource_quota_present ? "ok" : "missing"} | LimitRange:{" "}
+                      {item.limit_range_present ? "ok" : "missing"} | Netpol: {item.network_policy_count}
+                    </div>
+                    {item.required_network_policies_missing?.length > 0 && (
+                      <div className="small muted">
+                        Missing policies: {item.required_network_policies_missing.join(", ")}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -67,6 +67,11 @@ def tenant_namespace_for_team(team: str | None) -> str:
 
 
 def tenant_namespace_for_user(user: User) -> str:
+    if role_for_user(user) == Role.NAMESPACE_ADMIN:
+        scopes = user_namespace_scopes(user)
+        if scopes:
+            return scopes[0]
+        return ""
     scopes = user_namespace_scopes(user)
     if scopes:
         return scopes[0]
@@ -140,9 +145,13 @@ def set_user_namespace_scopes(user: User, values: list[str] | None) -> list[str]
 def actor_namespace_scopes(actor: User) -> set[str] | None:
     if is_platform_admin(actor):
         return None
+    role = role_for_user(actor)
     scopes = set(user_namespace_scopes(actor))
-    if not scopes:
-        scopes.add(tenant_namespace_for_team(getattr(actor, "team", None)))
+    if role == Role.NAMESPACE_ADMIN:
+        return {normalize_namespace(item) for item in scopes if normalize_namespace(item)}
+    if scopes:
+        return {normalize_namespace(item) for item in scopes if normalize_namespace(item)}
+    scopes.add(tenant_namespace_for_team(getattr(actor, "team", None)))
     scopes.add(default_namespace())
     return {normalize_namespace(item) for item in scopes if normalize_namespace(item)}
 
@@ -173,6 +182,12 @@ def resolve_resource_namespace(
     requested_namespace: str | None = None,
     fallback_namespace: str | None = None,
 ) -> str:
+    role = role_for_user(actor)
+    if role == Role.NAMESPACE_ADMIN and not user_namespace_scopes(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="namespace admin account has no namespace scopes configured",
+        )
     default_ns = fallback_namespace or tenant_namespace_for_user(actor)
     if requested_namespace is not None and str(requested_namespace).strip():
         chosen = normalize_namespace(requested_namespace)

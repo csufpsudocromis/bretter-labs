@@ -16,6 +16,7 @@
 - [Secret Operations Runbook](Secret-Operations-Runbook)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
+- [Namespace Lifecycle and Recovery](Namespace-Lifecycle-and-Recovery)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)

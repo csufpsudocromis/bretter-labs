@@ -118,6 +118,63 @@ def test_admin_audit_events_can_be_cleared(login_admin: TestClient) -> None:
     assert events.json() == []
 
 
+def test_admin_audit_events_support_namespace_and_resource_filters(login_admin: TestClient) -> None:
+    with Session(engine) as session:
+        admin_routes._record_admin_audit_event(
+            session,
+            actor="admin",
+            action="create",
+            target_type="template",
+            target_id="tmpl-a",
+            namespace="labs-a",
+            detail="namespace=labs-a",
+        )
+        admin_routes._record_admin_audit_event(
+            session,
+            actor="admin",
+            action="create",
+            target_type="template",
+            target_id="tmpl-b",
+            namespace="labs-b",
+            detail="namespace=labs-b",
+        )
+        session.commit()
+
+    filtered = login_admin.get(
+        "/admin/audit-events",
+        params={"limit": 50, "namespace": "labs-a", "resource": "template", "action": "create"},
+    )
+    assert filtered.status_code == 200, filtered.text
+    rows = filtered.json()
+    assert len(rows) == 1
+    assert rows[0]["target_id"] == "tmpl-a"
+    assert rows[0]["namespace"] == "labs-a"
+
+
+def test_admin_audit_events_export_csv_honors_filters(login_admin: TestClient) -> None:
+    with Session(engine) as session:
+        admin_routes._record_admin_audit_event(
+            session,
+            actor="admin",
+            action="update",
+            target_type="managed_namespace",
+            target_id="labs-export",
+            namespace="labs-export",
+            detail="namespace=labs-export profile=baseline",
+        )
+        session.commit()
+
+    exported = login_admin.get(
+        "/admin/audit-events/export",
+        params={"limit": 50, "namespace": "labs-export", "resource": "managed_namespace"},
+    )
+    assert exported.status_code == 200, exported.text
+    assert "text/csv" in str(exported.headers.get("content-type", "")).lower()
+    body = exported.text
+    assert "namespace,action,resource,target,detail" in body
+    assert "labs-export" in body
+
+
 def test_admin_image_upload_finalize_smoke(login_admin: TestClient, monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(admin_routes, "_image_dir", lambda: tmp_path)
 

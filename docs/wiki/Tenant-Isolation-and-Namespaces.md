@@ -63,6 +63,7 @@ What this applies:
 - Default-deny ingress + egress
 - DNS egress allow policy
 - Same-namespace east-west allow policy
+- Control-plane backend ingress allow policy (`allow-control-plane-ingress`)
 
 ## Verification
 
@@ -78,3 +79,5 @@ kubectl -n labs-team-physics get networkpolicy
 - Keep per-team namespaces non-overlapping and deterministic.
 - Prefer team-scoped quota updates through GitOps/PR-reviewed YAML or the bootstrap script rerun.
 - Keep cross-namespace connectivity blocked by default; add explicit allow rules only for required dependencies.
+- Use `scripts/namespace_config_backup.py` to export namespace policy/binding state before major changes.
+- Use `POST /admin/settings/namespaces/<namespace>/decommission` for ordered cleanup with status reporting.

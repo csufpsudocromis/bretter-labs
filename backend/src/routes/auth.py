@@ -76,6 +76,17 @@ def _oidc_role_priority(role: str) -> int:
     return score
 
 
+def _ensure_namespace_admin_scopes_or_raise(user: User) -> None:
+    if role_for_user(user) != Role.NAMESPACE_ADMIN:
+        return
+    if user_namespace_scopes(user):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="namespace admin account has no namespace scopes configured",
+    )
+
+
 def _user_out(user: User) -> UserOut:
     role = role_for_user(user)
     namespace_scopes = user_namespace_scopes(user) if role == Role.NAMESPACE_ADMIN else []
@@ -451,6 +462,9 @@ def login(
     if user and verify_password(password, user.password_hash):
         if ensure_user_role_fields(user):
             session.add(user)
+            session.commit()
+            session.refresh(user)
+        _ensure_namespace_admin_scopes_or_raise(user)
         _clear_login_failures(rate_key)
         token = issue_token(session, user.username)
         set_auth_cookie(response, token)
@@ -546,6 +560,9 @@ def login(
 
     if ensure_user_role_fields(user):
         session.add(user)
+        session.commit()
+        session.refresh(user)
+    _ensure_namespace_admin_scopes_or_raise(user)
     token = issue_token(session, user.username)
     set_auth_cookie(response, token)
     _clear_login_failures(rate_key)
@@ -696,6 +713,7 @@ def sso_callback(
         session.add(user)
         session.commit()
         session.refresh(user)
+    _ensure_namespace_admin_scopes_or_raise(user)
     token = issue_token(session, user.username)
     response = RedirectResponse(url=return_to or _sanitize_return_to("/", request), status_code=status.HTTP_302_FOUND)
     set_auth_cookie(response, token)

@@ -112,7 +112,13 @@ jobs:
         run: ./scripts/check_alembic_postgres.sh
 
       - name: Check Python formatting
-        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py scripts/check_openapi_drift.py scripts/export_openapi_schema.py scripts/post_deploy_synthetic_check.py scripts/check_live_config_drift.py
+        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py scripts/check_openapi_drift.py scripts/export_openapi_schema.py scripts/post_deploy_synthetic_check.py scripts/check_live_config_drift.py scripts/namespace_config_backup.py
+
+      - name: Run namespace authz regression gate
+        run: |
+          PYTHONPATH=backend .venv/bin/pytest -q \
+            backend/tests/test_namespace_authz_matrix.py \
+            backend/tests/test_namespace_scoping.py
 
       - name: Run pip-audit
         run: |

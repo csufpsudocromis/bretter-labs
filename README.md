@@ -616,6 +616,23 @@ Tenant namespace scaffold:
 TEAM=physics TEAM_NAMESPACE_PREFIX=labs-team- ./scripts/bootstrap_team_namespace.sh
 ```
 
+Namespace config backup/restore:
+
+```bash
+PYTHONPATH=backend python3 scripts/namespace_config_backup.py export \
+  --output backups/namespaces-$(date +%Y%m%d).json
+PYTHONPATH=backend python3 scripts/namespace_config_backup.py import \
+  --input backups/namespaces-YYYYMMDD.json --dry-run
+```
+
+Lifecycle-safe managed namespace decommission (API):
+
+```bash
+curl -k -X POST \
+  "https://<host>/admin/settings/namespaces/<namespace>/decommission?force_cleanup=true&delete_cluster_namespace=true" \
+  -H "Cookie: auth=<session>"
+```
+
 Common issues:
 
 - Pending labs: cluster waiting on available CPU/memory/storage.
@@ -675,6 +692,7 @@ Token hygiene:
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - Operator CRD versioning plan: [docs/wiki/Operator-CRD-Versioning-Plan.md](docs/wiki/Operator-CRD-Versioning-Plan.md)
 - Tenant isolation runbook: [docs/wiki/Tenant-Isolation-and-Namespaces.md](docs/wiki/Tenant-Isolation-and-Namespaces.md)
+- Namespace lifecycle/recovery runbook: [docs/wiki/Namespace-Lifecycle-and-Recovery.md](docs/wiki/Namespace-Lifecycle-and-Recovery.md)
 - Restore drill SOP: [docs/wiki/Restore-Drill-and-Backup-SOP.md](docs/wiki/Restore-Drill-and-Backup-SOP.md)
 - API contract guardrails: [docs/wiki/API-Contract-and-Drift-Guardrails.md](docs/wiki/API-Contract-and-Drift-Guardrails.md)
 - Upgrade procedure: [docs/upgrade-path.md](docs/upgrade-path.md)

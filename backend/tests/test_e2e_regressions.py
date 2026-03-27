@@ -217,6 +217,7 @@ def test_namespace_admin_cannot_assign_high_privilege_custom_role(client: TestCl
                 username="nsadmin1",
                 password_hash=hash_password("password"),
                 role=Role.NAMESPACE_ADMIN,
+                namespace_scopes_json='["labs"]',
                 is_admin=True,
                 force_password_change=False,
             )
@@ -285,6 +286,161 @@ def test_namespace_admin_scopes_reject_invalid_namespace(login_admin: TestClient
     )
     assert create.status_code == 422, create.text
     assert "invalid namespace scope" in create.json()["detail"]
+
+
+def test_namespace_admin_login_returns_namespace_scopes(client: TestClient) -> None:
+    admin_login = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert admin_login.status_code == 200, admin_login.text
+
+    create = client.post(
+        "/admin/users",
+        json={
+            "username": "ns-login-check",
+            "password": "password",
+            "role": "namespace_admin",
+            "is_admin": True,
+            "namespace_scopes": ["test-namespace"],
+        },
+    )
+    assert create.status_code == 201, create.text
+
+    login = client.post("/auth/login", json={"username": "ns-login-check", "password": "password"})
+    assert login.status_code == 200, login.text
+    payload = login.json()["user"]
+    assert payload["role"] == "namespace_admin"
+    assert payload["namespace_scopes"] == ["test-namespace"]
+
+
+def test_namespace_admin_login_rejects_empty_namespace_scopes(client: TestClient) -> None:
+    admin_login = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert admin_login.status_code == 200, admin_login.text
+
+    create = client.post(
+        "/admin/users",
+        json={
+            "username": "ns-login-empty-scope",
+            "password": "password",
+            "role": "namespace_admin",
+            "is_admin": True,
+            "namespace_scopes": [],
+        },
+    )
+    assert create.status_code == 201, create.text
+
+    login = client.post("/auth/login", json={"username": "ns-login-empty-scope", "password": "password"})
+    assert login.status_code == 403, login.text
+    assert "namespace scopes" in str(login.json().get("detail", "")).lower()
+
+
+def test_namespace_admin_can_only_manage_vm_template_enablement_within_scope(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-enable-vm-1",
+                name="Enable VM Image",
+                filename="enable-vm.qcow2",
+                checksum="sha256:enable-vm",
+                size_bytes=2048,
+                source_pvc="golden-images-vm",
+                namespace="labs",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-enable-vm-1",
+                name="Enable VM Template",
+                description="scope enforcement",
+                os_type="windows",
+                image_id="img-enable-vm-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=True,
+                namespace="labs",
+                enabled_namespaces_json='["labs"]',
+            )
+        )
+        session.add(
+            User(
+                username="ns-enable-admin",
+                password_hash=hash_password("password"),
+                role=Role.NAMESPACE_ADMIN,
+                is_admin=True,
+                namespace_scopes_json='["labs-team-red"]',
+            )
+        )
+        session.commit()
+
+    ns_login = client.post("/auth/login", json={"username": "ns-enable-admin", "password": "password"})
+    assert ns_login.status_code == 200, ns_login.text
+
+    allowed = client.patch("/admin/templates/tmpl-enable-vm-1", json={"enabled_namespaces": ["labs-team-red"]})
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["enabled_namespaces"] == ["labs-team-red"]
+
+    denied = client.patch("/admin/templates/tmpl-enable-vm-1", json={"enabled_namespaces": ["labs"]})
+    assert denied.status_code == 403, denied.text
+    assert "namespace enablement access denied" in denied.json()["detail"]
+
+
+def test_namespace_admin_can_only_manage_container_template_enablement_within_scope(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            ContainerImage(
+                id="img-enable-ct-1",
+                name="Enable CT Image",
+                image_ref="docker.io/library/nginx:stable",
+                namespace="labs",
+            )
+        )
+        session.add(
+            ContainerTemplate(
+                id="tmpl-enable-ct-1",
+                template_key="enable-ct",
+                version=1,
+                is_default=True,
+                name="Enable CT Template",
+                description="scope enforcement",
+                container_image_id="img-enable-ct-1",
+                cpu_millicores=500,
+                memory_mb=512,
+                container_port=80,
+                healthcheck_protocol="tcp",
+                healthcheck_path="/",
+                startup_timeout_seconds=300,
+                expose_strategy="nodeport",
+                network_mode="bridge",
+                enabled=True,
+                namespace="labs",
+                enabled_namespaces_json='["labs"]',
+                idle_timeout_minutes=30,
+            )
+        )
+        session.add(
+            User(
+                username="ns-enable-admin-ct",
+                password_hash=hash_password("password"),
+                role=Role.NAMESPACE_ADMIN,
+                is_admin=True,
+                namespace_scopes_json='["labs-team-red"]',
+            )
+        )
+        session.commit()
+
+    ns_login = client.post("/auth/login", json={"username": "ns-enable-admin-ct", "password": "password"})
+    assert ns_login.status_code == 200, ns_login.text
+
+    allowed = client.patch(
+        "/admin/container-templates/tmpl-enable-ct-1",
+        json={"enabled_namespaces": ["labs-team-red"]},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert allowed.json()["enabled_namespaces"] == ["labs-team-red"]
+
+    denied = client.patch("/admin/container-templates/tmpl-enable-ct-1", json={"enabled_namespaces": ["labs"]})
+    assert denied.status_code == 403, denied.text
+    assert "namespace enablement access denied" in denied.json()["detail"]
 
 
 def test_legacy_role_alias_normalizes_to_lab_admin(client: TestClient):

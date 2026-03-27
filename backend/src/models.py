@@ -131,6 +131,11 @@ class ManagedNamespaceCreate(BaseModel):
     limit_default_memory: str = Field(default="2Gi", min_length=1, max_length=32)
     limit_max_cpu: str = Field(default="8", min_length=1, max_length=32)
     limit_max_memory: str = Field(default="16Gi", min_length=1, max_length=32)
+    idle_timeout_minutes_default: int = Field(default=30, ge=1, le=1440)
+    vm_auto_delete_minutes_default: int = Field(default=60, ge=1, le=10080)
+    container_auto_delete_minutes_default: int = Field(default=60, ge=1, le=10080)
+    queue_max_pending: int = Field(default=25, ge=1, le=5000)
+    upload_max_bytes: int = Field(default=60 * 1024 * 1024 * 1024, ge=1, le=2 * 1024 * 1024 * 1024 * 1024)
     enabled: bool = True
 
 
@@ -154,6 +159,11 @@ class ManagedNamespaceUpdate(BaseModel):
     limit_default_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
     limit_max_cpu: Optional[str] = Field(default=None, min_length=1, max_length=32)
     limit_max_memory: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    idle_timeout_minutes_default: Optional[int] = Field(default=None, ge=1, le=1440)
+    vm_auto_delete_minutes_default: Optional[int] = Field(default=None, ge=1, le=10080)
+    container_auto_delete_minutes_default: Optional[int] = Field(default=None, ge=1, le=10080)
+    queue_max_pending: Optional[int] = Field(default=None, ge=1, le=5000)
+    upload_max_bytes: Optional[int] = Field(default=None, ge=1, le=2 * 1024 * 1024 * 1024 * 1024)
     enabled: Optional[bool] = None
 
 
@@ -179,6 +189,11 @@ class ManagedNamespaceOut(BaseModel):
     limit_default_memory: str
     limit_max_cpu: str
     limit_max_memory: str
+    idle_timeout_minutes_default: int = 30
+    vm_auto_delete_minutes_default: int = 60
+    container_auto_delete_minutes_default: int = 60
+    queue_max_pending: int = 25
+    upload_max_bytes: int = 60 * 1024 * 1024 * 1024
     enabled: bool
     present_in_cluster: bool = False
     active_vm_instances: int = 0
@@ -187,6 +202,42 @@ class ManagedNamespaceOut(BaseModel):
     last_reconciled_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
+
+
+class ManagedNamespaceCleanupStepOut(BaseModel):
+    step: str
+    status: Literal["ok", "warning", "error", "skipped"]
+    detail: str = ""
+    affected: int = 0
+
+
+class ManagedNamespaceDecommissionOut(BaseModel):
+    namespace: str
+    delete_cluster_namespace: bool = True
+    force_cleanup: bool = False
+    blocked: bool = False
+    deleted_database_records: int = 0
+    deleted_cluster_resources: int = 0
+    steps: list[ManagedNamespaceCleanupStepOut] = Field(default_factory=list)
+    finished_at: datetime
+
+
+class ManagedNamespaceObservabilityOut(BaseModel):
+    namespace: str
+    enabled: bool = True
+    present_in_cluster: bool = False
+    active_vm_instances: int = 0
+    active_container_instances: int = 0
+    queued_container_instances: int = 0
+    failed_total_instances: int = 0
+    running_total_instances: int = 0
+    image_upload_tasks_pending: int = 0
+    image_upload_tasks_failed: int = 0
+    resource_quota_present: bool = False
+    limit_range_present: bool = False
+    network_policy_count: int = 0
+    required_network_policies_missing: list[str] = Field(default_factory=list)
+    last_reconciled_at: Optional[datetime] = None
 
 
 class ImageMeta(BaseModel):
@@ -228,6 +279,7 @@ class AdminAuditEventOut(BaseModel):
     id: str
     actor: str
     tenant: str = "global"
+    namespace: str = "labs"
     action: str
     target_type: str
     target_id: str
@@ -276,6 +328,7 @@ class VMTemplateCreate(BaseModel):
     name: str
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     os_type: str = Field(default="windows", pattern="^(windows|linux)$")
@@ -298,6 +351,7 @@ class VMTemplateUpdate(BaseModel):
     name: Optional[str] = None
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    enabled_namespaces: Optional[list[str]] = None
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     os_type: Optional[str] = Field(default=None, pattern="^(windows|linux)$")
@@ -321,6 +375,7 @@ class VMTemplate(BaseModel):
     name: str
     tenant: str = "global"
     namespace: str = "labs"
+    enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: str = "local"
     description: Optional[str] = None
     os_type: str
@@ -359,6 +414,7 @@ class ContainerTemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
     container_image_id: str
@@ -389,6 +445,7 @@ class ContainerTemplateUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    enabled_namespaces: Optional[list[str]] = None
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
     container_image_id: Optional[str] = None
@@ -422,6 +479,7 @@ class ContainerTemplate(BaseModel):
     name: str
     tenant: str = "global"
     namespace: str = "labs"
+    enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: str = "local"
     description: Optional[str] = None
     container_image_id: str

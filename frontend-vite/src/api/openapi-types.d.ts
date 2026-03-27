@@ -56,6 +56,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/audit-events/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Export Admin Audit Events */
+        get: operations["export_admin_audit_events_admin_audit_events_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/container-images": {
         parameters: {
             query?: never;
@@ -596,6 +613,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/settings/namespaces/reconcile-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reconcile All Managed Namespaces */
+        post: operations["reconcile_all_managed_namespaces_admin_settings_namespaces_reconcile_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/settings/namespaces/{namespace}": {
         parameters: {
             query?: never;
@@ -859,6 +893,23 @@ export interface paths {
         head?: never;
         /** Update Team Quota */
         patch: operations["update_team_quota_admin_team_quotas__quota_id__patch"];
+        trace?: never;
+    };
+    "/admin/template-namespaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Template Namespaces */
+        get: operations["list_template_namespaces_admin_template_namespaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/templates": {
@@ -1431,6 +1482,11 @@ export interface components {
             detail: string;
             /** Id */
             id: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
             /** Target Id */
             target_id: string;
             /** Target Type */
@@ -2008,6 +2064,8 @@ export interface components {
              * @default false
              */
             enabled: boolean;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[];
             /** Env */
             env?: {
                 [key: string]: string;
@@ -2130,6 +2188,8 @@ export interface components {
              * @default false
              */
             enabled: boolean;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[];
             /** Env */
             env?: {
                 [key: string]: string;
@@ -2220,6 +2280,8 @@ export interface components {
             description?: string | null;
             /** Enabled */
             enabled?: boolean | null;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[] | null;
             /** Env */
             env?: {
                 [key: string]: string;
@@ -2582,6 +2644,11 @@ export interface components {
         /** ManagedNamespaceCreate */
         ManagedNamespaceCreate: {
             /**
+             * Container Auto Delete Minutes Default
+             * @default 60
+             */
+            container_auto_delete_minutes_default: number;
+            /**
              * Enabled
              * @default true
              */
@@ -2591,6 +2658,11 @@ export interface components {
              * @default true
              */
             enforce_network_policies: boolean;
+            /**
+             * Idle Timeout Minutes Default
+             * @default 30
+             */
+            idle_timeout_minutes_default: number;
             /**
              * Limit Default Cpu
              * @default 2
@@ -2659,6 +2731,11 @@ export interface components {
             /** Namespace */
             namespace: string;
             /**
+             * Queue Max Pending
+             * @default 25
+             */
+            queue_max_pending: number;
+            /**
              * Requests Cpu
              * @default 8
              */
@@ -2684,6 +2761,16 @@ export interface components {
              * @default default
              */
             team_label: string;
+            /**
+             * Upload Max Bytes
+             * @default 64424509440
+             */
+            upload_max_bytes: number;
+            /**
+             * Vm Auto Delete Minutes Default
+             * @default 60
+             */
+            vm_auto_delete_minutes_default: number;
         };
         /** ManagedNamespaceOut */
         ManagedNamespaceOut: {
@@ -2703,6 +2790,11 @@ export interface components {
              */
             active_vm_instances: number;
             /**
+             * Container Auto Delete Minutes Default
+             * @default 60
+             */
+            container_auto_delete_minutes_default: number;
+            /**
              * Created At
              * Format: date-time
              */
@@ -2713,6 +2805,11 @@ export interface components {
             enforce_network_policies: boolean;
             /** Id */
             id: string;
+            /**
+             * Idle Timeout Minutes Default
+             * @default 30
+             */
+            idle_timeout_minutes_default: number;
             /** Last Reconciled At */
             last_reconciled_at?: string | null;
             /** Limit Default Cpu */
@@ -2748,6 +2845,11 @@ export interface components {
              * @default false
              */
             present_in_cluster: boolean;
+            /**
+             * Queue Max Pending
+             * @default 25
+             */
+            queue_max_pending: number;
             /** Requests Cpu */
             requests_cpu: string;
             /** Requests Memory */
@@ -2766,13 +2868,27 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+            /**
+             * Upload Max Bytes
+             * @default 64424509440
+             */
+            upload_max_bytes: number;
+            /**
+             * Vm Auto Delete Minutes Default
+             * @default 60
+             */
+            vm_auto_delete_minutes_default: number;
         };
         /** ManagedNamespaceUpdate */
         ManagedNamespaceUpdate: {
+            /** Container Auto Delete Minutes Default */
+            container_auto_delete_minutes_default?: number | null;
             /** Enabled */
             enabled?: boolean | null;
             /** Enforce Network Policies */
             enforce_network_policies?: boolean | null;
+            /** Idle Timeout Minutes Default */
+            idle_timeout_minutes_default?: number | null;
             /** Limit Default Cpu */
             limit_default_cpu?: string | null;
             /** Limit Default Memory */
@@ -2799,6 +2915,8 @@ export interface components {
             max_pods?: string | null;
             /** Max Services */
             max_services?: string | null;
+            /** Queue Max Pending */
+            queue_max_pending?: number | null;
             /** Requests Cpu */
             requests_cpu?: string | null;
             /** Requests Memory */
@@ -2809,6 +2927,10 @@ export interface components {
             security_profile?: ("restricted" | "baseline" | "privileged") | null;
             /** Team Label */
             team_label?: string | null;
+            /** Upload Max Bytes */
+            upload_max_bytes?: number | null;
+            /** Vm Auto Delete Minutes Default */
+            vm_auto_delete_minutes_default?: number | null;
         };
         /** OrchestrationParityItem */
         OrchestrationParityItem: {
@@ -3583,6 +3705,8 @@ export interface components {
             description?: string | null;
             /** Enabled */
             enabled: boolean;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[];
             /** Id */
             id: string;
             /** Idle Timeout Minutes */
@@ -3656,6 +3780,8 @@ export interface components {
              * @default false
              */
             enabled: boolean;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[];
             /**
              * Idle Timeout Minutes
              * @default 30
@@ -3742,6 +3868,8 @@ export interface components {
             description?: string | null;
             /** Enabled */
             enabled?: boolean | null;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[] | null;
             /** Idle Timeout Minutes */
             idle_timeout_minutes?: number | null;
             /** Image Id */
@@ -3857,6 +3985,9 @@ export interface operations {
                 limit?: number;
                 actor?: string | null;
                 action?: string | null;
+                resource?: string | null;
+                target?: string | null;
+                namespace?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -3906,6 +4037,44 @@ export interface operations {
                     "application/json": {
                         [key: string]: number;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_admin_audit_events_admin_audit_events_export_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                actor?: string | null;
+                action?: string | null;
+                resource?: string | null;
+                target?: string | null;
+                namespace?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -5386,6 +5555,39 @@ export interface operations {
             };
         };
     };
+    reconcile_all_managed_namespaces_admin_settings_namespaces_reconcile_all_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_managed_namespace_admin_settings_namespaces__namespace__delete: {
         parameters: {
             query?: {
@@ -6208,6 +6410,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TeamQuotaOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_template_namespaces_admin_template_namespaces_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
                 };
             };
             /** @description Validation Error */

@@ -5,6 +5,7 @@ TEAM="${TEAM:-${1:-}}"
 TEAM_NAMESPACE_MODE="${TEAM_NAMESPACE_MODE:-per_team}"
 TEAM_NAMESPACE_PREFIX="${TEAM_NAMESPACE_PREFIX:-labs-team-}"
 TENANT_NAMESPACE="${TENANT_NAMESPACE:-}"
+CONTROL_NAMESPACE="${CONTROL_NAMESPACE:-${BLABS_KUBE_NAMESPACE:-labs}}"
 CPU_REQUESTS="${CPU_REQUESTS:-8}"
 CPU_LIMITS="${CPU_LIMITS:-16}"
 MEMORY_REQUESTS="${MEMORY_REQUESTS:-16Gi}"
@@ -170,6 +171,24 @@ spec:
   egress:
     - to:
         - podSelector: {}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-control-plane-ingress
+  namespace: ${TENANT_NAMESPACE}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ${CONTROL_NAMESPACE}
+          podSelector:
+            matchLabels:
+              app: bretter-backend
 EOF
 
 echo "PASS: tenant namespace bootstrap applied."

@@ -93,6 +93,10 @@ class Template(SQLModel, table=True):
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
+    enabled_namespaces_json: str = Field(
+        default="[]",
+        sa_column=Column(String(), nullable=False, server_default=text("'[]'")),
+    )
     description: str = ""
     os_type: str = "windows"
     image_id: str = Field(foreign_key="image.id")
@@ -149,6 +153,10 @@ class ContainerTemplate(SQLModel, table=True):
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
+    enabled_namespaces_json: str = Field(
+        default="[]",
+        sa_column=Column(String(), nullable=False, server_default=text("'[]'")),
+    )
     description: str = ""
     container_image_id: str = Field(foreign_key="containerimage.id")
     cpu_millicores: int = 500
@@ -284,6 +292,11 @@ class ManagedNamespace(SQLModel, table=True):
     limit_default_memory: str = "2Gi"
     limit_max_cpu: str = "8"
     limit_max_memory: str = "16Gi"
+    idle_timeout_minutes_default: int = 30
+    vm_auto_delete_minutes_default: int = 60
+    container_auto_delete_minutes_default: int = 60
+    queue_max_pending: int = 25
+    upload_max_bytes: int = Field(default=60 * 1024 * 1024 * 1024, sa_column=Column(BigInteger, nullable=False))
     enabled: bool = True
     last_reconciled_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
@@ -356,6 +369,7 @@ class AdminAuditEvent(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     actor: str = Field(default="unknown", index=True)
     tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
     action: str = Field(index=True)
     target_type: str = Field(index=True)
     target_id: str = Field(default="")

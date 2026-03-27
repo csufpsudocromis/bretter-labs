@@ -23,6 +23,7 @@ const DEFAULT_FORM = {
   env_text: "",
   auto_delete_minutes: 60,
   idle_timeout_minutes: 30,
+  enabled_namespaces: [],
   enabled: false,
 };
 
@@ -81,6 +82,8 @@ const toMillicores = (cores) => Math.max(1, parseInt(cores, 10) || 1) * 1000;
 const AdminContainerTemplates = () => {
   const [templates, setTemplates] = useState([]);
   const [images, setImages] = useState([]);
+  const [namespaceOptions, setNamespaceOptions] = useState([]);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
@@ -88,12 +91,33 @@ const AdminContainerTemplates = () => {
 
   const load = async () => {
     try {
-      const [tmplRes, imgRes] = await Promise.all([
+      const [tmplRes, imgRes, nsRes, meRes] = await Promise.all([
         api.get("/admin/container-templates"),
         api.get("/admin/container-images"),
+        api.get("/admin/template-namespaces"),
+        api.get("/auth/me"),
       ]);
       setTemplates(tmplRes.data || []);
       setImages(imgRes.data || []);
+      const options = Array.isArray(nsRes.data)
+        ? [
+            ...new Set(
+              nsRes.data
+                .map((value) =>
+                  String(value || "")
+                    .trim()
+                    .toLowerCase()
+                )
+                .filter(Boolean)
+            ),
+          ]
+        : [];
+      setNamespaceOptions(options);
+      setIsPlatformAdmin(
+        String(meRes?.data?.role || "")
+          .trim()
+          .toLowerCase() === "platform_admin"
+      );
       setError("");
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to load container templates");
@@ -128,6 +152,7 @@ const AdminContainerTemplates = () => {
     env: parseEnv(source.env_text),
     auto_delete_minutes: Number(source.auto_delete_minutes) || 60,
     idle_timeout_minutes: Math.max(1, Number(source.idle_timeout_minutes) || 30),
+    enabled_namespaces: Array.isArray(source.enabled_namespaces) ? source.enabled_namespaces : [],
     enabled: Boolean(source.enabled),
   });
 
@@ -189,6 +214,7 @@ const AdminContainerTemplates = () => {
       env_text: formatEnv(tmpl.env || {}),
       auto_delete_minutes: tmpl.auto_delete_minutes || 60,
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
+      enabled_namespaces: Array.isArray(tmpl.enabled_namespaces) ? tmpl.enabled_namespaces : [],
       enabled: Boolean(tmpl.enabled),
     });
     setMessage("");
@@ -215,6 +241,20 @@ const AdminContainerTemplates = () => {
   };
 
   const imageRef = (imageId) => images.find((img) => img.id === imageId)?.image_ref || "-";
+  const toggleNamespaceSelection = (namespace) => {
+    const target = String(namespace || "")
+      .trim()
+      .toLowerCase();
+    if (!target) return;
+    setForm((prev) => {
+      const current = Array.isArray(prev.enabled_namespaces) ? prev.enabled_namespaces : [];
+      if (current.includes(target)) {
+        return { ...prev, enabled_namespaces: current.filter((item) => item !== target) };
+      }
+      return { ...prev, enabled_namespaces: [...current, target].sort() };
+    });
+  };
+
   return (
     <div className="container-templates-page">
       <h2>Container Templates</h2>
@@ -307,6 +347,23 @@ const AdminContainerTemplates = () => {
                 <option value="unrestricted">Unrestricted (no policy)</option>
               </select>
             </label>
+            <div className="span-2 form-field">
+              <span>Enabled namespaces</span>
+              <div className="namespace-scope-list">
+                {namespaceOptions.length === 0 && <div className="muted small">No namespace options available.</div>}
+                {namespaceOptions.map((namespace) => (
+                  <label key={namespace} className="permission-row">
+                    <input
+                      type="checkbox"
+                      checked={(form.enabled_namespaces || []).includes(namespace)}
+                      onChange={() => toggleNamespaceSelection(namespace)}
+                    />
+                    <span className="permission-id">{namespace}</span>
+                  </label>
+                ))}
+              </div>
+              <span className="muted small">Select the namespaces where this template can be launched.</span>
+            </div>
             <label>
               Healthcheck protocol
               <select
@@ -428,7 +485,7 @@ const AdminContainerTemplates = () => {
                 }
               />
             </label>
-            {editingId && (
+            {editingId && isPlatformAdmin && (
               <label>
                 Enabled
                 <select
@@ -474,10 +531,18 @@ const AdminContainerTemplates = () => {
                   <span>Port {tmpl.container_port || 80}</span>
                 </div>
                 <div className="muted small template-image-ref">Image: {imageRef(tmpl.container_image_id)}</div>
+                <div className="muted small">
+                  Enabled namespaces:{" "}
+                  {Array.isArray(tmpl.enabled_namespaces) && tmpl.enabled_namespaces.length > 0
+                    ? tmpl.enabled_namespaces.join(", ")
+                    : "-"}
+                </div>
                 <div className="actions">
-                  <button className="ghost" onClick={() => toggle(tmpl.id, !tmpl.enabled)}>
-                    {tmpl.enabled ? "Disable" : "Enable"}
-                  </button>
+                  {isPlatformAdmin && (
+                    <button className="ghost" onClick={() => toggle(tmpl.id, !tmpl.enabled)}>
+                      {tmpl.enabled ? "Disable" : "Enable"}
+                    </button>
+                  )}
                   <button className="ghost" onClick={() => startEdit(tmpl)}>
                     Edit
                   </button>

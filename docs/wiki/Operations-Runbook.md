@@ -405,6 +405,19 @@ kubectl -n labs-team-physics get resourcequota bretter-tenant-quota
 kubectl -n labs-team-physics get networkpolicy
 ```
 
+Managed namespace lifecycle operations:
+
+- Observability endpoint: `GET /admin/settings/namespaces/observability`
+- Ordered cleanup endpoint: `POST /admin/settings/namespaces/{namespace}/decommission`
+- Compatibility delete endpoint: `DELETE /admin/settings/namespaces/{namespace}`
+
+Namespace configuration backup/restore:
+
+```bash
+PYTHONPATH=backend python3 scripts/namespace_config_backup.py export --output backups/namespaces-$(date +%Y%m%d).json
+PYTHONPATH=backend python3 scripts/namespace_config_backup.py import --input backups/namespaces-YYYYMMDD.json --dry-run
+```
+
 ## Common incidents and triage
 
 ### Dev-only unsigned image exception flow

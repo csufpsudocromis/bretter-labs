@@ -1,4 +1,6 @@
+import csv
 import hashlib
+import io
 import json
 import logging
 import math
@@ -15,7 +17,7 @@ from pathlib import Path
 from urllib.parse import quote as urlquote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from pydantic import BaseModel
 import requests
 from sqlalchemy import text
@@ -99,6 +101,7 @@ from ..services.labimageimport_crd import (
 )
 from ..services.kubernetes import kube
 from ..services.multi_cluster import local_cluster_id
+from ..services.namespace_policies import get_namespace_runtime_policy
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
 from ..services.tenant_context import (
     GLOBAL_TENANT,
@@ -150,6 +153,7 @@ FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%
 ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
 ERROR_LOG_PAGE_SIZE = 50
 ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
+AUDIT_NAMESPACE_DETAIL_RE = re.compile(r"(?:^|[\s,;])namespace=([a-z0-9]([-a-z0-9]*[a-z0-9])?)")
 ADMIN_AUDIT_EVENT_MAX_PER_TENANT = 50
 RUNTIME_ENV_NAMES: dict[str, str] = {
     "storage_root": "BLABS_STORAGE_ROOT",
@@ -1567,6 +1571,8 @@ def _ensure_template_columns() -> None:
             to_add.append("ALTER TABLE template ADD COLUMN namespace TEXT DEFAULT 'labs'")
         if "cluster_id" not in cols:
             to_add.append("ALTER TABLE template ADD COLUMN cluster_id TEXT DEFAULT 'local'")
+        if "enabled_namespaces_json" not in cols:
+            to_add.append("ALTER TABLE template ADD COLUMN enabled_namespaces_json TEXT DEFAULT '[]'")
         for stmt in to_add:
             try:
                 cur.execute(stmt)
@@ -1590,6 +1596,9 @@ def _ensure_template_columns() -> None:
             cur.execute("UPDATE template SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("UPDATE template SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
             cur.execute("UPDATE template SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
+            cur.execute(
+                "UPDATE template SET enabled_namespaces_json = '[]' WHERE enabled_namespaces_json IS NULL OR trim(enabled_namespaces_json) = ''"
+            )
             conn.commit()
         cols = {row[1] for row in cur.execute("PRAGMA table_info(template)")}
         if "console_provider" in cols:
@@ -1619,12 +1628,17 @@ def _ensure_template_columns() -> None:
         if "cluster_id" in cols:
             cur.execute("UPDATE template SET cluster_id = 'local' WHERE cluster_id IS NULL OR trim(cluster_id) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_template_cluster_id ON template(cluster_id)")
+        if "enabled_namespaces_json" in cols:
+            cur.execute(
+                "UPDATE template SET enabled_namespaces_json = '[]' WHERE enabled_namespaces_json IS NULL OR trim(enabled_namespaces_json) = ''"
+            )
         if (
             "rdp_default_username" in cols
             or "rdp_default_password" in cols
             or "tenant" in cols
             or "namespace" in cols
             or "cluster_id" in cols
+            or "enabled_namespaces_json" in cols
         ):
             conn.commit()
     except Exception:
@@ -1807,6 +1821,7 @@ def _ensure_admin_audit_table() -> None:
                     id TEXT PRIMARY KEY,
                     actor TEXT NOT NULL DEFAULT 'unknown',
                     tenant TEXT NOT NULL DEFAULT 'global',
+                    namespace TEXT NOT NULL DEFAULT 'labs',
                     action TEXT NOT NULL,
                     target_type TEXT NOT NULL,
                     target_id TEXT NOT NULL DEFAULT '',
@@ -1818,9 +1833,20 @@ def _ensure_admin_audit_table() -> None:
             cols = {row[1] for row in cur.execute("PRAGMA table_info(adminauditevent)")}
             if "tenant" not in cols:
                 cur.execute("ALTER TABLE adminauditevent ADD COLUMN tenant TEXT NOT NULL DEFAULT 'global'")
+            if "namespace" not in cols:
+                cur.execute(
+                    "ALTER TABLE adminauditevent ADD COLUMN namespace TEXT NOT NULL DEFAULT '"
+                    + (normalize_namespace(settings.kube_namespace) or "labs")
+                    + "'"
+                )
             cur.execute("UPDATE adminauditevent SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
+            cur.execute(
+                "UPDATE adminauditevent SET namespace = ? WHERE namespace IS NULL OR trim(namespace) = ''",
+                (normalize_namespace(settings.kube_namespace) or "labs",),
+            )
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_tenant ON adminauditevent(tenant)")
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_namespace ON adminauditevent(namespace)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_adminauditevent_created_at ON adminauditevent(created_at)")
@@ -1835,6 +1861,7 @@ def _ensure_admin_audit_table() -> None:
                         id TEXT PRIMARY KEY,
                         actor VARCHAR(128) NOT NULL DEFAULT 'unknown',
                         tenant VARCHAR(64) NOT NULL DEFAULT 'global',
+                        namespace VARCHAR(63) NOT NULL DEFAULT 'labs',
                         action VARCHAR(128) NOT NULL,
                         target_type VARCHAR(64) NOT NULL,
                         target_id VARCHAR(128) NOT NULL DEFAULT '',
@@ -1849,9 +1876,20 @@ def _ensure_admin_audit_table() -> None:
                     "ALTER TABLE adminauditevent ADD COLUMN IF NOT EXISTS tenant VARCHAR(64) NOT NULL DEFAULT 'global'"
                 )
             )
+            session.exec(
+                text(
+                    "ALTER TABLE adminauditevent ADD COLUMN IF NOT EXISTS namespace VARCHAR(63) "
+                    "NOT NULL DEFAULT 'labs'"
+                )
+            )
             session.exec(text("UPDATE adminauditevent SET tenant = 'global' WHERE tenant IS NULL OR tenant = ''"))
+            session.exec(
+                text("UPDATE adminauditevent SET namespace = :namespace " "WHERE namespace IS NULL OR namespace = ''"),
+                {"namespace": normalize_namespace(settings.kube_namespace) or "labs"},
+            )
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)"))
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_tenant ON adminauditevent(tenant)"))
+            session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_namespace ON adminauditevent(namespace)"))
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_action ON adminauditevent(action)"))
             session.exec(
                 text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_target_type ON adminauditevent(target_type)")
@@ -1878,11 +1916,42 @@ _ensure_upload_task_columns()
 _ensure_admin_audit_table()
 
 
+def _audit_namespace_from_detail(detail: str | None) -> str:
+    text_value = str(detail or "").strip().lower()
+    if not text_value:
+        return ""
+    match = AUDIT_NAMESPACE_DETAIL_RE.search(text_value)
+    if not match:
+        return ""
+    return normalize_namespace(match.group(1))
+
+
+def _resolve_audit_namespace(
+    *,
+    namespace: str | None,
+    target_type: str | None,
+    target_id: str | None,
+    detail: str | None,
+) -> str:
+    explicit = normalize_namespace(namespace)
+    if explicit:
+        return explicit
+    if str(target_type or "").strip().lower() in {"managed_namespace", "namespace"}:
+        candidate = normalize_namespace(target_id)
+        if candidate:
+            return candidate
+    from_detail = _audit_namespace_from_detail(detail)
+    if from_detail:
+        return from_detail
+    return normalize_namespace(settings.kube_namespace) or "labs"
+
+
 def _record_admin_audit_event(
     session: Session,
     *,
     actor: str | None,
     tenant: str | None = None,
+    namespace: str | None = None,
     action: str,
     target_type: str,
     target_id: str | None = None,
@@ -1900,6 +1969,12 @@ def _record_admin_audit_event(
         id=str(uuid4()),
         actor=(str(actor or "").strip() or "unknown")[:128],
         tenant=normalized_tenant,
+        namespace=_resolve_audit_namespace(
+            namespace=namespace,
+            target_type=target_type,
+            target_id=target_id,
+            detail=detail,
+        ),
         action=(str(action or "").strip() or "unknown")[:128],
         target_type=(str(target_type or "").strip() or "unknown")[:64],
         target_id=(str(target_id or "").strip())[:128],
@@ -3778,6 +3853,7 @@ def _admin_audit_event_out(record: AdminAuditEvent) -> AdminAuditEventOut:
         id=record.id,
         actor=record.actor,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=normalize_namespace(getattr(record, "namespace", None)) or "labs",
         action=record.action,
         target_type=record.target_type,
         target_id=record.target_id,
@@ -3837,6 +3913,9 @@ def list_quota_namespaces(
     actor: User = Depends(require_user),
 ) -> list[str]:
     if not is_platform_admin(actor):
+        scope = sorted(_namespace_scope_for_actor(actor) or [])
+        if scope:
+            return scope
         return [normalize_namespace(tenant_namespace_for_team(actor.team))]
     available: set[str] = set()
     configured = normalize_namespace(settings.kube_namespace)
@@ -3856,6 +3935,39 @@ def list_quota_namespaces(
                 available.add(name)
     except Exception as exc:
         logger.warning("Failed to list namespaces for quota selector: %s", exc)
+    return sorted(available)
+
+
+@router.get(
+    "/template-namespaces",
+    response_model=list[str],
+    dependencies=[Depends(require_permission(Permission.TEMPLATES_READ))],
+)
+def list_template_namespaces(
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[str]:
+    scope = _namespace_scope_for_actor(actor)
+    if scope is not None:
+        return sorted(scope)
+    available: set[str] = set()
+    configured = normalize_namespace(settings.kube_namespace)
+    if configured:
+        available.add(configured)
+    quota_rows = session.exec(select(TeamQuota.namespace)).all()
+    for row in quota_rows:
+        available.add(normalize_namespace(row))
+    managed_rows = session.exec(select(ManagedNamespace.namespace)).all()
+    for row in managed_rows:
+        available.add(normalize_namespace(row))
+    try:
+        core = kube._client()
+        for ns in core.list_namespace().items:
+            name = normalize_namespace(getattr(ns.metadata, "name", None))
+            if name:
+                available.add(name)
+    except Exception as exc:
+        logger.warning("Failed to list namespaces for template selector: %s", exc)
     return sorted(available)
 
 
@@ -4406,6 +4518,9 @@ def upload_image(
     suffix = Path(file.filename).suffix.lower()
     if suffix not in ALLOWED_SUFFIXES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
+    resource_namespace = resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace)
+    namespace_policy = get_namespace_runtime_policy(session, resource_namespace)
+    upload_max_bytes = max(1, int(getattr(namespace_policy, "upload_max_bytes", MAX_UPLOAD_BYTES) or MAX_UPLOAD_BYTES))
     size_bytes = 0
     filename = Path(file.filename).name
     task_id = str(uuid4())
@@ -4417,10 +4532,10 @@ def upload_image(
             while chunk := file.file.read(1024 * 1024):
                 _ensure_free_space(MIN_FREE_UPLOAD_BYTES + len(chunk), context="upload")
                 written += len(chunk)
-                if written > MAX_UPLOAD_BYTES:
+                if written > upload_max_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail="image too large (max 60GB)",
+                        detail=f"image too large for namespace {resource_namespace} (max {upload_max_bytes} bytes)",
                     )
                 buffer.write(chunk)
         return written
@@ -4465,7 +4580,7 @@ def upload_image(
         original_filename=Path(file.filename).name,
         filename=filename,
         tenant=resolve_resource_tenant(actor),
-        namespace=resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace),
+        namespace=resource_namespace,
         cluster_id=local_cluster_id(),
         size_bytes=size_bytes,
         status="finalizing",
@@ -4975,12 +5090,58 @@ def _normalized_template_rdp_username(value: str | None) -> str:
     return str(value or "").strip()[:128]
 
 
+def _template_enabled_namespaces(record: Template) -> list[str]:
+    raw = getattr(record, "enabled_namespaces_json", "[]")
+    payload: list[str] = []
+    if isinstance(raw, list):
+        payload = [str(item) for item in raw]
+    else:
+        try:
+            decoded = json.loads(str(raw or "[]"))
+            if isinstance(decoded, list):
+                payload = [str(item) for item in decoded]
+        except Exception:
+            payload = []
+    try:
+        normalized = normalize_namespace_scopes(payload)
+    except ValueError:
+        normalized = []
+    if normalized:
+        return normalized
+    fallback_namespace = _record_namespace(record)
+    return [fallback_namespace] if fallback_namespace else []
+
+
+def _template_enabled_namespaces_json(namespaces: list[str]) -> str:
+    return json.dumps(normalize_namespace_scopes(namespaces), separators=(",", ":"))
+
+
+def _assert_actor_can_manage_template_namespaces(actor: User, namespaces: list[str]) -> None:
+    if is_platform_admin(actor):
+        return
+    scope = _namespace_scope_for_actor(actor) or set()
+    denied = sorted({name for name in namespaces if name not in scope})
+    if denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"namespace enablement access denied: {', '.join(denied)}",
+        )
+
+
+def _template_enabled_for_namespace(record: Template, namespace: str) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return False
+    return selected in set(_template_enabled_namespaces(record))
+
+
 def _template_to_model(record: Template) -> VMTemplate:
     return VMTemplate(
         id=record.id,
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         namespace=_record_namespace(record),
+        enabled_namespaces=_template_enabled_namespaces(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         os_type=record.os_type,
@@ -5044,6 +5205,10 @@ def create_template(
             status_code=status.HTTP_409_CONFLICT,
             detail="image is not ready for clone-based launch; re-import or re-upload the image",
         )
+    enabled_namespaces = normalize_namespace_scopes(payload.enabled_namespaces)
+    if not enabled_namespaces:
+        enabled_namespaces = [resource_namespace]
+    _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
     pool_min = int(payload.preclone_pool_size or 0)
     pool_max = int(payload.preclone_pool_max or 0)
     if pool_max < pool_min:
@@ -5056,6 +5221,7 @@ def create_template(
         name=payload.name,
         tenant=resource_tenant,
         namespace=resource_namespace,
+        enabled_namespaces_json=_template_enabled_namespaces_json(enabled_namespaces),
         cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=payload.description or "",
         os_type=payload.os_type or "windows",
@@ -5086,7 +5252,10 @@ def create_template(
         action="create",
         target_type="template",
         target_id=record.id,
-        detail=f"namespace={record.namespace} name={record.name} image_id={record.image_id}",
+        detail=(
+            f"namespace={record.namespace} enabled_namespaces={','.join(enabled_namespaces)} "
+            f"name={record.name} image_id={record.image_id}"
+        ),
     )
     session.commit()
     session.refresh(record)
@@ -5111,10 +5280,8 @@ def list_templates(
     if scope is not None:
         stmt = stmt.where(Template.tenant.in_(scope))
     namespace_scope = _namespace_scope_for_actor(actor)
-    if namespace_scope is not None:
+    if namespace_scope is not None and not requested_namespace:
         stmt = stmt.where(Template.namespace.in_(sorted(namespace_scope)))
-    if requested_namespace:
-        stmt = stmt.where(Template.namespace == requested_namespace)
     templates = session.exec(stmt).all()
     return [_template_to_model(record) for record in templates]
 
@@ -5130,20 +5297,43 @@ def update_template(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> VMTemplate:
+    updates = payload.model_dump(exclude_unset=True)
+    namespace_enable_only = set(updates).issubset({"enabled_namespaces"})
+
     record = session.get(Template, template_id)
-    if (
-        not record
-        or not _tenant_scoped_record(record, actor, include_global=True)
-        or not _namespace_scoped_record(record, actor)
-    ):
+    if not record or not _tenant_scoped_record(record, actor, include_global=True):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    if not _namespace_scoped_record(record, actor) and not namespace_enable_only:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     next_tenant = managed_tenant
     next_namespace = _record_namespace(record)
+    enabled_namespaces = _template_enabled_namespaces(record)
+    has_explicit_enabled_namespaces = bool(str(getattr(record, "enabled_namespaces_json", "") or "").strip())
+
+    if not is_platform_admin(actor) and payload.enabled is not None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can change global template enabled state",
+        )
+
     if payload.tenant is not None:
         next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
     if payload.namespace is not None:
         next_namespace = assert_actor_can_access_namespace(actor, payload.namespace)
+    if payload.enabled_namespaces is not None:
+        enabled_namespaces = normalize_namespace_scopes(payload.enabled_namespaces)
+        _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
+    elif payload.namespace is not None and not has_explicit_enabled_namespaces:
+        enabled_namespaces = [next_namespace]
+        _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
+
+    if payload.enabled is True and not enabled_namespaces:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="enabled template must include at least one enabled namespace",
+        )
+
     if payload.name is not None:
         record.name = payload.name
     if payload.cluster_id is not None:
@@ -5223,6 +5413,7 @@ def update_template(
         record.rdp_default_username = _normalized_template_rdp_username(payload.rdp_default_username)
     if payload.rdp_default_password is not None and str(payload.rdp_default_password).strip():
         record.rdp_default_password = encrypt_secret(str(payload.rdp_default_password).strip())
+    record.enabled_namespaces_json = _template_enabled_namespaces_json(enabled_namespaces)
     session.add(record)
     _record_admin_audit_event(
         session,
@@ -5231,7 +5422,10 @@ def update_template(
         action="update",
         target_type="template",
         target_id=record.id,
-        detail=f"namespace={record.namespace} name={record.name} image_id={record.image_id} enabled={record.enabled}",
+        detail=(
+            f"namespace={record.namespace} enabled_namespaces={','.join(enabled_namespaces) if enabled_namespaces else '-'} "
+            f"name={record.name} image_id={record.image_id} enabled={record.enabled}"
+        ),
     )
     session.commit()
     session.refresh(record)
@@ -5922,20 +6116,92 @@ def list_admin_audit_events(
     limit: int = Query(50, ge=1, le=50),
     actor: str | None = Query(default=None),
     action: str | None = Query(default=None),
+    resource: str | None = Query(default=None),
+    target: str | None = Query(default=None),
+    namespace: str | None = Query(default=None),
     session: Session = Depends(get_session),
     user: User = Depends(require_user),
 ) -> list[AdminAuditEventOut]:
     stmt = select(AdminAuditEvent)
     actor_filter = str(actor or "").strip()
     action_filter = str(action or "").strip()
+    resource_filter = str(resource or "").strip()
+    target_filter = str(target or "").strip()
+    namespace_raw = str(namespace or "").strip()
+    namespace_filter = normalize_namespace(namespace_raw) if namespace_raw else ""
+    if namespace_raw and not namespace_filter:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid namespace filter")
+
+    namespace_scope = _namespace_scope_for_actor(user)
     if not is_platform_admin(user):
         stmt = stmt.where(AdminAuditEvent.tenant == actor_tenant(user))
+        scope = sorted(namespace_scope or [])
+        if not scope:
+            return []
+        stmt = stmt.where(AdminAuditEvent.namespace.in_(scope))
+
+    if namespace_filter:
+        if not is_platform_admin(user):
+            assert_actor_can_access_namespace(user, namespace_filter)
+        stmt = stmt.where(AdminAuditEvent.namespace == namespace_filter)
     if actor_filter:
         stmt = stmt.where(AdminAuditEvent.actor == actor_filter)
     if action_filter:
         stmt = stmt.where(AdminAuditEvent.action == action_filter)
+    if resource_filter:
+        stmt = stmt.where(AdminAuditEvent.target_type == resource_filter)
+    if target_filter:
+        stmt = stmt.where(AdminAuditEvent.target_id == target_filter)
     rows = session.exec(stmt.order_by(AdminAuditEvent.created_at.desc())).all()[:limit]
     return [_admin_audit_event_out(row) for row in rows]
+
+
+@router.get(
+    "/audit-events/export",
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
+def export_admin_audit_events(
+    limit: int = Query(50, ge=1, le=2000),
+    actor: str | None = Query(default=None),
+    action: str | None = Query(default=None),
+    resource: str | None = Query(default=None),
+    target: str | None = Query(default=None),
+    namespace: str | None = Query(default=None),
+    session: Session = Depends(get_session),
+    user: User = Depends(require_user),
+) -> Response:
+    rows = list_admin_audit_events(
+        limit=limit,
+        actor=actor,
+        action=action,
+        resource=resource,
+        target=target,
+        namespace=namespace,
+        session=session,
+        user=user,
+    )
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["id", "created_at", "actor", "namespace", "action", "resource", "target", "detail"])
+    for row in rows:
+        writer.writerow(
+            [
+                row.id,
+                row.created_at.isoformat(),
+                row.actor,
+                row.namespace,
+                row.action,
+                row.target_type,
+                row.target_id,
+                row.detail,
+            ]
+        )
+    filename = f"admin-audit-events-{utc_now().strftime('%Y%m%dT%H%M%SZ')}.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.delete(
@@ -5949,6 +6215,10 @@ def clear_admin_audit_events(
     stmt = select(AdminAuditEvent)
     if not is_platform_admin(user):
         stmt = stmt.where(AdminAuditEvent.tenant == actor_tenant(user))
+        scope = sorted(_namespace_scope_for_actor(user) or [])
+        if not scope:
+            return {"deleted": 0}
+        stmt = stmt.where(AdminAuditEvent.namespace.in_(scope))
     rows = session.exec(stmt).all()
     deleted = 0
     for row in rows:

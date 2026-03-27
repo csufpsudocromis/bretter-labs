@@ -9,7 +9,8 @@ from sqlmodel import Session, select
 
 from .config import settings
 from .db import get_session
-from .rbac import Permission, ensure_user_role_fields, has_permission
+from .rbac import Permission, Role, ensure_user_role_fields, has_permission, role_for_user
+from .services.tenant_context import user_namespace_scopes
 from .tables import ConnectToken, Token, User
 from .time_utils import utc_now
 
@@ -148,6 +149,17 @@ def _is_auth_token_expired(token: Token) -> bool:
     return issued_at + timedelta(seconds=ttl_seconds) <= utc_now()
 
 
+def _assert_namespace_admin_scope(user: User) -> None:
+    if role_for_user(user) != Role.NAMESPACE_ADMIN:
+        return
+    if user_namespace_scopes(user):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="namespace admin account has no namespace scopes configured",
+    )
+
+
 def issue_connect_token(
     session: Session,
     *,
@@ -245,6 +257,12 @@ def require_user(
         session.add(user)
         session.commit()
         session.refresh(user)
+    try:
+        _assert_namespace_admin_scope(user)
+    except HTTPException:
+        session.delete(token)
+        session.commit()
+        raise
     return user
 
 

@@ -18,7 +18,7 @@ import websockets
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, WebSocket, status
 from fastapi.responses import RedirectResponse
 from kubernetes.client import ApiException
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 from urllib3.exceptions import InsecureRequestWarning
 
 from ..auth import (
@@ -42,11 +42,13 @@ from ..services.multi_cluster import (
     local_cluster_id,
     select_cluster_for_launch,
 )
+from ..services.namespace_policies import get_namespace_runtime_policy
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, normalize_namespace, team_idle_timeout_cap
 from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
 from ..services.tenant_context import (
     GLOBAL_TENANT,
+    normalize_namespace_scopes,
     normalize_tenant,
     resolve_resource_namespace,
     tenant_namespace_for_user,
@@ -81,6 +83,26 @@ _HOP_BY_HOP_HEADERS = {
 _TLS_LIKELY_PORTS = {443, 8443, 9443, 6901, 4902}
 _CONNECT_READINESS_CACHE_LOCK = threading.Lock()
 _CONNECT_READINESS_CACHE: dict[str, tuple[float, bool, str]] = {}
+
+
+def _namespace_container_idle_timeout_minutes(
+    session: Session, namespace: str, template: ContainerTemplateTable | None
+) -> int:
+    policy = get_namespace_runtime_policy(session, namespace)
+    template_minutes = int(getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or 0)
+    if template_minutes <= 0:
+        template_minutes = int(settings.idle_timeout_minutes or 30)
+    return max(1, min(template_minutes, int(policy.idle_timeout_minutes_default)))
+
+
+def _namespace_container_auto_delete_minutes(
+    session: Session, namespace: str, template: ContainerTemplateTable | None
+) -> int:
+    policy = get_namespace_runtime_policy(session, namespace)
+    template_minutes = int(getattr(template, "auto_delete_minutes", 60) or 0)
+    if template_minutes <= 0:
+        return max(1, int(policy.container_auto_delete_minutes_default))
+    return max(1, min(template_minutes, int(policy.container_auto_delete_minutes_default)))
 
 
 def _phase_to_status(phase: str) -> str:
@@ -209,6 +231,35 @@ def _container_template_namespace(record: ContainerTemplateTable) -> str:
         or normalize_namespace(settings.kube_namespace)
         or "labs"
     )
+
+
+def _container_template_enabled_namespaces(record: ContainerTemplateTable) -> list[str]:
+    raw = getattr(record, "enabled_namespaces_json", "[]")
+    payload: list[str] = []
+    if isinstance(raw, list):
+        payload = [str(item) for item in raw]
+    else:
+        try:
+            decoded = json.loads(str(raw or "[]"))
+            if isinstance(decoded, list):
+                payload = [str(item) for item in decoded]
+        except Exception:
+            payload = []
+    try:
+        normalized = normalize_namespace_scopes(payload)
+    except ValueError:
+        normalized = []
+    if normalized:
+        return normalized
+    fallback = _container_template_namespace(record)
+    return [fallback] if fallback else []
+
+
+def _container_template_enabled_for_namespace(record: ContainerTemplateTable, namespace: str) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return False
+    return selected in set(_container_template_enabled_namespaces(record))
 
 
 def _container_image_namespace(record: ContainerImageTable) -> str:
@@ -958,13 +1009,21 @@ def _parse_env(raw: str) -> dict[str, str]:
     return {str(key): str(value) for key, value in data.items()}
 
 
-def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | None = None) -> ContainerTemplateView:
+def _template_out(
+    record: ContainerTemplateTable,
+    *,
+    idle_timeout_cap: int | None = None,
+    auto_delete_cap: int | None = None,
+) -> ContainerTemplateView:
     template_idle = max(
         1,
         int(getattr(record, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes),
     )
     if idle_timeout_cap is not None:
         template_idle = min(template_idle, max(1, int(idle_timeout_cap)))
+    template_auto_delete = max(1, int(getattr(record, "auto_delete_minutes", 60) or 60))
+    if auto_delete_cap is not None:
+        template_auto_delete = min(template_auto_delete, max(1, int(auto_delete_cap)))
     return ContainerTemplateView(
         id=record.id,
         template_key=str(getattr(record, "template_key", record.id) or record.id),
@@ -973,6 +1032,7 @@ def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | Non
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         namespace=_container_template_namespace(record),
+        enabled_namespaces=_container_template_enabled_namespaces(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
         container_image_id=record.container_image_id,
@@ -992,7 +1052,7 @@ def _template_out(record: ContainerTemplateTable, *, idle_timeout_cap: int | Non
         command=record.command,
         args=_parse_args(record.args_json),
         env=_parse_env(record.env_json),
-        auto_delete_minutes=record.auto_delete_minutes,
+        auto_delete_minutes=template_auto_delete,
         idle_timeout_minutes=template_idle,
         enabled=record.enabled,
         created_at=record.created_at,
@@ -1037,6 +1097,21 @@ def _active_workload_count(session: Session) -> int:
         select(ContainerInstanceTable).where(ContainerInstanceTable.status.in_(["pending", "running"]))
     ).all()
     return len(total_vm_active) + len(total_container_active)
+
+
+def _queued_container_count_for_namespace(session: Session, namespace: str) -> int:
+    normalized_namespace = normalize_namespace(namespace)
+    if not normalized_namespace:
+        return 0
+    return int(
+        session.exec(
+            select(func.count())
+            .select_from(ContainerInstanceTable)
+            .where(ContainerInstanceTable.namespace == normalized_namespace)
+            .where(ContainerInstanceTable.status == "queued")
+        ).one()
+        or 0
+    )
 
 
 def _active_container_template_count(
@@ -1731,8 +1806,11 @@ def list_user_container_templates(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerTemplateView]:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     runtime_namespace = _container_runtime_namespace(user, namespace=selected_namespace)
+    namespace_policy = get_namespace_runtime_policy(session, selected_namespace)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
     tenant_scope = {
         "default",
@@ -1743,10 +1821,22 @@ def list_user_container_templates(
         .where(ContainerTemplateTable.enabled == True)  # noqa: E712
         .where(ContainerTemplateTable.is_default == True)  # noqa: E712
         .where(ContainerTemplateTable.tenant.in_(tenant_scope))
-        .where(ContainerTemplateTable.namespace == selected_namespace)
     ).all()
+    rows = [row for row in rows if _container_template_enabled_for_namespace(row, selected_namespace)]
     rows.sort(key=lambda item: item.created_at, reverse=True)
-    return [_template_out(row, idle_timeout_cap=team_idle_cap) for row in rows]
+    effective_idle_cap = (
+        min(team_idle_cap, namespace_policy.idle_timeout_minutes_default)
+        if team_idle_cap
+        else int(namespace_policy.idle_timeout_minutes_default)
+    )
+    return [
+        _template_out(
+            row,
+            idle_timeout_cap=effective_idle_cap,
+            auto_delete_cap=namespace_policy.container_auto_delete_minutes_default,
+        )
+        for row in rows
+    ]
 
 
 @router.get("/containers", response_model=list[ContainerInstanceView])
@@ -1755,7 +1845,9 @@ def list_user_containers(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerInstanceView]:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     config = session.get(Config, 1) or Config()
     max_concurrency = int(config.max_concurrent_vms)
     active_count = _active_workload_count(session)
@@ -2001,7 +2093,9 @@ def list_user_containers(
             changed = True
 
         if tmpl and record.status in {"stopped", "completed"}:
-            cutoff = utc_now() - timedelta(minutes=max(1, int(tmpl.auto_delete_minutes or 60)))
+            cutoff = utc_now() - timedelta(
+                minutes=_namespace_container_auto_delete_minutes(session, selected_namespace, tmpl)
+            )
             if record.last_active_at < cutoff:
                 try:
                     runtime_kube.delete_container_pod(record.id, record.owner, namespace=record_namespace)
@@ -2049,14 +2143,16 @@ def start_container_template(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ContainerInstanceView:
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     runtime_namespace = _container_runtime_namespace(user, namespace=selected_namespace)
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(ContainerTemplateTable, template_id)
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     template_namespace = _container_template_namespace(template)
-    if template_namespace != selected_namespace:
+    if not _container_template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -2094,6 +2190,7 @@ def start_container_template(
         select(ContainerInstanceTable).where(ContainerInstanceTable.status.in_(["pending", "running"]))
     ).all()
     cluster_full = len(total_vm_active) + len(total_container_active) >= int(config.max_concurrent_vms)
+    namespace_policy = get_namespace_runtime_policy(session, selected_namespace)
     template_limit = _template_limit(template)
     template_active_count = _active_container_template_count(session, template.id)
     template_limit_reached = template_limit and template_active_count >= template_limit
@@ -2106,9 +2203,7 @@ def start_container_template(
         requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
         requested_memory_mb=max(1, int(getattr(template, "memory_mb", 512) or 512)),
         requested_storage_gib=max(1, int(getattr(template, "storage_gib", 1) or 1)),
-        requested_idle_timeout_minutes=int(
-            getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
-        ),
+        requested_idle_timeout_minutes=_namespace_container_idle_timeout_minutes(session, selected_namespace, template),
     )
     try:
         placement = select_cluster_for_launch(
@@ -2132,6 +2227,8 @@ def start_container_template(
 
     instance_id = str(uuid4())
     now = utc_now()
+    namespace_queue_depth = _queued_container_count_for_namespace(session, runtime_namespace)
+    queue_limit_reached = namespace_queue_depth >= int(namespace_policy.queue_max_pending)
     queue_reason: str | None = None
     if template_limit_reached:
         queue_reason = f"Template concurrency limit reached ({template_limit})."
@@ -2143,6 +2240,14 @@ def start_container_template(
         queue_reason = "Cluster concurrency limit reached. Waiting for available resources."
 
     if queue_reason and settings.container_start_queue_enabled:
+        if queue_limit_reached:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"namespace queue limit reached ({namespace_policy.queue_max_pending}); "
+                    "wait for queued launches to drain"
+                ),
+            )
         record = ContainerInstanceTable(
             id=instance_id,
             template_id=template.id,
@@ -2263,7 +2368,9 @@ def stop_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     instance_namespace = _container_instance_namespace(record, user)
     if normalize_namespace(instance_namespace) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
@@ -2297,7 +2404,9 @@ def restart_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     runtime_namespace = _container_instance_namespace(record, user)
     if normalize_namespace(runtime_namespace) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
@@ -2309,7 +2418,7 @@ def restart_container(
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     template_namespace = _container_template_namespace(template)
-    if template_namespace != selected_namespace:
+    if not _container_template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found or disabled")
     template_tenant = normalize_tenant(getattr(template, "tenant", None), default=GLOBAL_TENANT)
     if template_tenant not in {user_tenant, GLOBAL_TENANT}:
@@ -2328,6 +2437,7 @@ def restart_container(
             status_code=status.HTTP_409_CONFLICT, detail="container template image tenant scope is invalid"
         )
     config = session.get(Config, 1) or Config()
+    namespace_policy = get_namespace_runtime_policy(session, selected_namespace)
     active_count = _active_workload_count(session)
     is_already_active = str(record.status or "").lower() in {"queued", "pending", "running"}
     cluster_full = (not is_already_active) and active_count >= int(config.max_concurrent_vms)
@@ -2344,6 +2454,14 @@ def restart_container(
             detail=f"template concurrency limit reached ({template_limit})",
         )
     if cluster_full and settings.container_start_queue_enabled:
+        if _queued_container_count_for_namespace(session, runtime_namespace) >= int(namespace_policy.queue_max_pending):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"namespace queue limit reached ({namespace_policy.queue_max_pending}); "
+                    "wait for queued launches to drain"
+                ),
+            )
         record.status = "queued"
         record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
         record.queue_reason = _humanize_queue_reason(
@@ -2372,9 +2490,7 @@ def restart_container(
         requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
         requested_memory_mb=max(1, int(getattr(template, "memory_mb", 512) or 512)),
         requested_storage_gib=max(1, int(getattr(template, "storage_gib", 1) or 1)),
-        requested_idle_timeout_minutes=int(
-            getattr(template, "idle_timeout_minutes", settings.idle_timeout_minutes) or settings.idle_timeout_minutes
-        ),
+        requested_idle_timeout_minutes=_namespace_container_idle_timeout_minutes(session, selected_namespace, template),
         exclude_container_instance_id=record.id,
     )
     try:
@@ -2390,6 +2506,14 @@ def restart_container(
     runtime_kube = _kube_for_container_cluster(session, selected_cluster_id)
 
     if quota_check.error_detail and settings.container_start_queue_enabled:
+        if _queued_container_count_for_namespace(session, runtime_namespace) >= int(namespace_policy.queue_max_pending):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"namespace queue limit reached ({namespace_policy.queue_max_pending}); "
+                    "wait for queued launches to drain"
+                ),
+            )
         record.status = "queued"
         record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
         record.queue_reason = quota_check.error_detail[:255]
@@ -2410,6 +2534,14 @@ def restart_container(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=quota_check.error_detail)
     headroom_error = _container_headroom_error(template)
     if headroom_error and settings.container_start_queue_enabled:
+        if _queued_container_count_for_namespace(session, runtime_namespace) >= int(namespace_policy.queue_max_pending):
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"namespace queue limit reached ({namespace_policy.queue_max_pending}); "
+                    "wait for queued launches to drain"
+                ),
+            )
         record.status = "queued"
         record.queue_attempts = max(0, int(getattr(record, "queue_attempts", 0) or 0))
         record.queue_reason = _humanize_queue_reason(headroom_error)
@@ -2496,7 +2628,9 @@ def delete_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
-    selected_namespace = resolve_resource_namespace(user, request=request, fallback_namespace=settings.kube_namespace)
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
     instance_namespace = _container_instance_namespace(record, user)
     if normalize_namespace(instance_namespace) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
