@@ -23,7 +23,14 @@ permissions:
 
 jobs:
   deploy:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.actor == 'github-actions[bot]' && startsWith(github.event.head_commit.message, 'chore(release): pin production image digests for v')) }}
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.actor == 'github-actions[bot]' &&
+          startsWith(github.event.head_commit.message || '', 'chore(release): pin production image digests for v')
+        )
+      }}
     runs-on: ubuntu-latest
     env:
       NAMESPACE: ${{ github.event.inputs.namespace || 'labs' }}
