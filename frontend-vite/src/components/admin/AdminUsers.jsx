@@ -103,6 +103,7 @@ const AdminUsers = () => {
   const [users, setUsers] = useState([]);
   const [roleCatalog, setRoleCatalog] = useState(FALLBACK_ROLE_CATALOG);
   const [permissionCatalog, setPermissionCatalog] = useState(FALLBACK_PERMISSION_CATALOG);
+  const [availableNamespaces, setAvailableNamespaces] = useState(["labs"]);
   const [roleDrafts, setRoleDrafts] = useState({});
   const [newRoleId, setNewRoleId] = useState("");
   const [newRoleLabel, setNewRoleLabel] = useState("");
@@ -111,10 +112,12 @@ const AdminUsers = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
+  const [namespaceScopes, setNamespaceScopes] = useState([]);
   const [editingUser, setEditingUser] = useState(null);
   const [editPassword, setEditPassword] = useState("");
   const [editUsername, setEditUsername] = useState("");
   const [editRole, setEditRole] = useState("user");
+  const [editNamespaceScopes, setEditNamespaceScopes] = useState([]);
   const [message, setMessage] = useState("");
 
   const roleMetaMap = useMemo(() => {
@@ -178,22 +181,48 @@ const AdminUsers = () => {
     }
   };
 
+  const loadNamespaceOptions = async () => {
+    try {
+      const res = await api.get("/admin/quota-namespaces");
+      const options = Array.isArray(res.data)
+        ? [
+            ...new Set(
+              res.data
+                .map((entry) =>
+                  String(entry || "")
+                    .trim()
+                    .toLowerCase()
+                )
+                .filter(Boolean)
+            ),
+          ]
+        : [];
+      setAvailableNamespaces(options.length > 0 ? options : ["labs"]);
+    } catch (_err) {
+      setAvailableNamespaces(["labs"]);
+    }
+  };
+
   useEffect(() => {
     loadUsers();
     loadRoleCatalog();
+    loadNamespaceOptions();
   }, []);
 
   const create = async () => {
+    const selectedScopes = role === "namespace_admin" ? namespaceScopes : [];
     try {
       await api.post("/admin/users", {
         username,
         password,
         role,
         is_admin: role !== "user",
+        namespace_scopes: selectedScopes,
       });
       setUsername("");
       setPassword("");
       setRole("user");
+      setNamespaceScopes([]);
       setMessage("User created");
       loadUsers();
     } catch (err) {
@@ -209,20 +238,38 @@ const AdminUsers = () => {
     setEditUsername(user.username);
     setEditPassword("");
     setEditRole(selectedRole || "user");
+    setEditNamespaceScopes(
+      Array.isArray(user.namespace_scopes)
+        ? [
+            ...new Set(
+              user.namespace_scopes
+                .map((entry) =>
+                  String(entry || "")
+                    .trim()
+                    .toLowerCase()
+                )
+                .filter(Boolean)
+            ),
+          ]
+        : []
+    );
     setMessage("");
   };
 
   const saveUser = async () => {
+    const selectedScopes = editRole === "namespace_admin" ? editNamespaceScopes : [];
     try {
       await api.patch(`/admin/users/${editingUser}`, {
         username: editUsername,
         password: editPassword || undefined,
         role: editRole,
         is_admin: editRole !== "user",
+        namespace_scopes: selectedScopes,
       });
       setMessage("User updated");
       setEditingUser(null);
       setEditPassword("");
+      setEditNamespaceScopes([]);
       loadUsers();
     } catch (err) {
       setMessage(err.response?.data?.detail || "Failed to update user");
@@ -300,6 +347,14 @@ const AdminUsers = () => {
 
   const selectedRoleMeta = roleMetaMap.get(editRole) || roleMetaMap.get("user") || FALLBACK_ROLE_CATALOG[0];
 
+  const toggleNamespace = (setter, values, namespace) => {
+    if (values.includes(namespace)) {
+      setter(values.filter((entry) => entry !== namespace));
+      return;
+    }
+    setter([...values, namespace].sort());
+  };
+
   return (
     <div>
       <h2>Users &amp; Permissions</h2>
@@ -307,16 +362,17 @@ const AdminUsers = () => {
         Assign one role per user. Permissions are role-based and applied immediately after save.
       </p>
       {message && <div className="info">{message}</div>}
-      <div className="card" style={{ marginBottom: "1rem" }}>
+      <div className="card admin-users-role-editor" style={{ marginBottom: "1rem" }}>
         <h3>Role editor</h3>
         <p className="muted small">Edit built-in roles, create new roles, and toggle permissions with checkboxes.</p>
         <div className="tile-grid">
           {roleCatalog.map((entry) => (
-            <div key={entry.role} className="tile">
+            <div key={entry.role} className="tile admin-users-role-tile">
               <div className="tile-header">
-                <h4>{entry.role}</h4>
+                <h4>{entry.label}</h4>
                 <span className="badge">{entry.role}</span>
               </div>
+              {entry.description && <div className="muted small">{entry.description}</div>}
               <div className="form">
                 <label>
                   Label
@@ -337,10 +393,7 @@ const AdminUsers = () => {
                 <div className="muted small">Permissions</div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem" }}>
                   {permissionCatalog.map((permission) => (
-                    <label
-                      key={`${entry.role}-${permission}`}
-                      style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}
-                    >
+                    <label key={`${entry.role}-${permission}`} className="permission-row">
                       <input
                         type="checkbox"
                         checked={(roleDrafts[entry.role]?.permissions || entry.permissions).includes(permission)}
@@ -354,7 +407,7 @@ const AdminUsers = () => {
                           })
                         }
                       />
-                      <span>{permission}</span>
+                      <span className="permission-id">{permission}</span>
                     </label>
                   ))}
                 </div>
@@ -395,13 +448,13 @@ const AdminUsers = () => {
             <div className="muted small">Permissions</div>
             <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
               {permissionCatalog.map((permission) => (
-                <label key={`new-role-${permission}`} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <label key={`new-role-${permission}`} className="permission-row">
                   <input
                     type="checkbox"
                     checked={newRolePermissions.includes(permission)}
                     onChange={() => setNewRolePermissions((prev) => togglePermission(prev, permission))}
                   />
-                  <span>{permission}</span>
+                  <span className="permission-id">{permission}</span>
                 </label>
               ))}
             </div>
@@ -431,6 +484,23 @@ const AdminUsers = () => {
                 ))}
               </select>
             </label>
+            {role === "namespace_admin" && (
+              <div>
+                <div className="muted small">Allowed namespaces</div>
+                <div className="namespace-scope-list">
+                  {availableNamespaces.map((namespace) => (
+                    <label key={`create-ns-${namespace}`} className="permission-row">
+                      <input
+                        type="checkbox"
+                        checked={namespaceScopes.includes(namespace)}
+                        onChange={() => toggleNamespace(setNamespaceScopes, namespaceScopes, namespace)}
+                      />
+                      <span className="permission-id">{namespace}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
             <label>
               Password
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
@@ -450,6 +520,11 @@ const AdminUsers = () => {
                   <h4>{u.username}</h4>
                   <span className="badge">{roleLabel(u.role || (u.is_admin ? "platform_admin" : "user"))}</span>
                 </div>
+                {String(u.role || "").toLowerCase() === "namespace_admin" && Array.isArray(u.namespace_scopes) && (
+                  <div className="muted small">
+                    Namespaces: {u.namespace_scopes.length > 0 ? u.namespace_scopes.join(", ") : "-"}
+                  </div>
+                )}
               </button>
             ))}
           </div>
@@ -471,6 +546,23 @@ const AdminUsers = () => {
                     ))}
                   </select>
                 </label>
+                {editRole === "namespace_admin" && (
+                  <div>
+                    <div className="muted small">Allowed namespaces</div>
+                    <div className="namespace-scope-list">
+                      {availableNamespaces.map((namespace) => (
+                        <label key={`edit-ns-${namespace}`} className="permission-row">
+                          <input
+                            type="checkbox"
+                            checked={editNamespaceScopes.includes(namespace)}
+                            onChange={() => toggleNamespace(setEditNamespaceScopes, editNamespaceScopes, namespace)}
+                          />
+                          <span className="permission-id">{namespace}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 <div className="muted small">
                   <strong>Effective permissions:</strong>{" "}
                   {selectedRoleMeta.permissions.length > 0 ? selectedRoleMeta.permissions.join(", ") : "none"}

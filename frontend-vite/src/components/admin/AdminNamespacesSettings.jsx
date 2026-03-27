@@ -3,7 +3,6 @@ import { api } from "../../api";
 
 const DEFAULT_FORM = {
   namespace: "",
-  team_label: "default",
   security_profile: "baseline",
   enforce_network_policies: true,
   max_pods: "200",
@@ -30,6 +29,29 @@ const profileOptions = [
   { value: "baseline", label: "Baseline" },
   { value: "privileged", label: "Privileged" },
 ];
+
+const FIELD_HELP = {
+  namespace: "Kubernetes namespace to manage. Use lowercase DNS-style names.",
+  security_profile: "Pod Security Admission profile applied as enforce/audit/warn labels.",
+  enforce_network_policies: "When enabled, applies default-deny plus same-namespace and DNS allow policies.",
+  max_pods: "Maximum number of pods allowed in this namespace.",
+  max_services: "Maximum number of services allowed in this namespace.",
+  max_persistent_volume_claims: "Maximum number of PVCs allowed in this namespace.",
+  requests_cpu: "Total CPU requests quota across all workloads in this namespace.",
+  limits_cpu: "Total CPU limits quota across all workloads in this namespace.",
+  requests_memory: "Total memory requests quota across all workloads in this namespace.",
+  limits_memory: "Total memory limits quota across all workloads in this namespace.",
+  requests_storage: "Total requested persistent storage quota (across PVCs).",
+  limit_min_cpu: "Minimum CPU a container can request/limit (LimitRange min).",
+  limit_min_memory: "Minimum memory a container can request/limit (LimitRange min).",
+  limit_default_request_cpu: "Default CPU request applied when a container omits requests.",
+  limit_default_request_memory: "Default memory request applied when a container omits requests.",
+  limit_default_cpu: "Default CPU limit applied when a container omits limits.",
+  limit_default_memory: "Default memory limit applied when a container omits limits.",
+  limit_max_cpu: "Maximum CPU a single container can request/limit (LimitRange max).",
+  limit_max_memory: "Maximum memory a single container can request/limit (LimitRange max).",
+  enabled: "Disable to keep config without reconciliation; enable to enforce in-cluster resources.",
+};
 
 const AdminNamespacesSettings = () => {
   const [rows, setRows] = useState([]);
@@ -62,7 +84,6 @@ const AdminNamespacesSettings = () => {
     setEditingNamespace(String(row.namespace || ""));
     setForm({
       namespace: String(row.namespace || ""),
-      team_label: String(row.team_label || "default"),
       security_profile: String(row.security_profile || "baseline"),
       enforce_network_policies: Boolean(row.enforce_network_policies),
       max_pods: String(row.max_pods || "200"),
@@ -87,7 +108,6 @@ const AdminNamespacesSettings = () => {
   };
 
   const buildPayload = () => ({
-    team_label: String(form.team_label || "").trim() || "default",
     security_profile: String(form.security_profile || "baseline")
       .trim()
       .toLowerCase(),
@@ -186,10 +206,7 @@ const AdminNamespacesSettings = () => {
                 placeholder="labs-team-default"
                 disabled={Boolean(editingNamespace)}
               />
-            </label>
-            <label>
-              Team label
-              <input value={form.team_label} onChange={(e) => updateField("team_label", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.namespace}</span>
             </label>
             <label>
               Security profile
@@ -200,6 +217,7 @@ const AdminNamespacesSettings = () => {
                   </option>
                 ))}
               </select>
+              <span className="muted small">{FIELD_HELP.security_profile}</span>
             </label>
             <label>
               Enforce default network policies
@@ -210,14 +228,17 @@ const AdminNamespacesSettings = () => {
                 <option value="yes">Enabled</option>
                 <option value="no">Disabled</option>
               </select>
+              <span className="muted small">{FIELD_HELP.enforce_network_policies}</span>
             </label>
             <label>
               Pod quota
               <input value={form.max_pods} onChange={(e) => updateField("max_pods", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.max_pods}</span>
             </label>
             <label>
               Service quota
               <input value={form.max_services} onChange={(e) => updateField("max_services", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.max_services}</span>
             </label>
             <label>
               PVC quota
@@ -225,34 +246,42 @@ const AdminNamespacesSettings = () => {
                 value={form.max_persistent_volume_claims}
                 onChange={(e) => updateField("max_persistent_volume_claims", e.target.value)}
               />
+              <span className="muted small">{FIELD_HELP.max_persistent_volume_claims}</span>
             </label>
             <label>
               Requests CPU
               <input value={form.requests_cpu} onChange={(e) => updateField("requests_cpu", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.requests_cpu}</span>
             </label>
             <label>
               Limits CPU
               <input value={form.limits_cpu} onChange={(e) => updateField("limits_cpu", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.limits_cpu}</span>
             </label>
             <label>
               Requests memory
               <input value={form.requests_memory} onChange={(e) => updateField("requests_memory", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.requests_memory}</span>
             </label>
             <label>
               Limits memory
               <input value={form.limits_memory} onChange={(e) => updateField("limits_memory", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.limits_memory}</span>
             </label>
             <label>
               Requests storage
               <input value={form.requests_storage} onChange={(e) => updateField("requests_storage", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.requests_storage}</span>
             </label>
             <label>
               Min CPU
               <input value={form.limit_min_cpu} onChange={(e) => updateField("limit_min_cpu", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.limit_min_cpu}</span>
             </label>
             <label>
               Min memory
               <input value={form.limit_min_memory} onChange={(e) => updateField("limit_min_memory", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.limit_min_memory}</span>
             </label>
             <label>
               Default request CPU
@@ -260,6 +289,7 @@ const AdminNamespacesSettings = () => {
                 value={form.limit_default_request_cpu}
                 onChange={(e) => updateField("limit_default_request_cpu", e.target.value)}
               />
+              <span className="muted small">{FIELD_HELP.limit_default_request_cpu}</span>
             </label>
             <label>
               Default request memory
@@ -267,6 +297,7 @@ const AdminNamespacesSettings = () => {
                 value={form.limit_default_request_memory}
                 onChange={(e) => updateField("limit_default_request_memory", e.target.value)}
               />
+              <span className="muted small">{FIELD_HELP.limit_default_request_memory}</span>
             </label>
             <label>
               Default CPU limit
@@ -274,6 +305,7 @@ const AdminNamespacesSettings = () => {
                 value={form.limit_default_cpu}
                 onChange={(e) => updateField("limit_default_cpu", e.target.value)}
               />
+              <span className="muted small">{FIELD_HELP.limit_default_cpu}</span>
             </label>
             <label>
               Default memory limit
@@ -281,14 +313,17 @@ const AdminNamespacesSettings = () => {
                 value={form.limit_default_memory}
                 onChange={(e) => updateField("limit_default_memory", e.target.value)}
               />
+              <span className="muted small">{FIELD_HELP.limit_default_memory}</span>
             </label>
             <label>
               Max CPU
               <input value={form.limit_max_cpu} onChange={(e) => updateField("limit_max_cpu", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.limit_max_cpu}</span>
             </label>
             <label>
               Max memory
               <input value={form.limit_max_memory} onChange={(e) => updateField("limit_max_memory", e.target.value)} />
+              <span className="muted small">{FIELD_HELP.limit_max_memory}</span>
             </label>
             <label>
               Enabled
@@ -299,6 +334,7 @@ const AdminNamespacesSettings = () => {
                 <option value="yes">Enabled</option>
                 <option value="no">Disabled</option>
               </select>
+              <span className="muted small">{FIELD_HELP.enabled}</span>
             </label>
             <div className="actions">
               {editingNamespace && (
@@ -324,7 +360,6 @@ const AdminNamespacesSettings = () => {
                     {row.enabled ? "Enabled" : "Disabled"}
                   </span>
                 </div>
-                <div className="small muted">Team label: {row.team_label}</div>
                 <div className="small muted">Security profile: {row.security_profile}</div>
                 <div className="small muted">
                   Cluster status: {row.present_in_cluster ? "Present" : "Missing"} | Active labs:{" "}

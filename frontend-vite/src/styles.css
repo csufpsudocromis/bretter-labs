@@ -310,6 +310,104 @@ button:disabled {
   box-sizing: border-box;
 }
 
+.admin-users-role-editor .tile,
+.admin-users-role-editor .form label {
+  min-width: 0;
+}
+
+.admin-users-role-editor .tile-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+}
+
+.admin-users-role-editor .tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.admin-users-role-editor .tile-header {
+  align-items: flex-start;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.admin-users-role-editor .tile-header h4,
+.admin-users-role-editor .permission-id,
+.admin-users-role-editor .badge {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.admin-users-role-editor .tile-header h4 {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.admin-users-role-editor .form {
+  max-width: none;
+  min-width: 0;
+}
+
+.admin-users-role-editor .form input,
+.admin-users-role-editor .form select,
+.admin-users-role-editor .form textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.admin-users-role-editor .badge {
+  white-space: normal;
+  line-height: 1.2;
+}
+
+.admin-users-role-editor .permission-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.admin-users-role-editor .permission-id {
+  display: block;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.namespace-scope-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0.5rem;
+  max-height: 12rem;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.namespace-scope-list .permission-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.namespace-scope-list .permission-row input[type="checkbox"] {
+  margin: 0;
+  flex: 0 0 auto;
+}
+
+.namespace-scope-list .permission-id {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .container-templates-page .actions {
   flex-wrap: wrap;
 }

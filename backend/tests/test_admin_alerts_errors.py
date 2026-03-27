@@ -174,3 +174,33 @@ def test_fetch_alertmanager_alerts_keeps_actionable_kubejobfailed_alerts(monkeyp
     assert err == ""
     assert len(alerts) == 1
     assert alerts[0].name == "KubeJobFailed"
+
+
+def test_fetch_alertmanager_alerts_suppresses_watchdog_by_name_without_labels(monkeypatch):
+    class FakeResp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "labels": {
+                        "alertname": "Watchdog",
+                        "severity": "none",
+                    },
+                    "annotations": {"summary": "always firing"},
+                    "status": {"state": "active"},
+                    "startsAt": "2026-03-26T00:00:00Z",
+                    "generatorURL": "http://prometheus",
+                }
+            ]
+
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_api_url", "http://example-alertmanager")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_alert_names", "Watchdog")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_job_name_regex", r"^bretter-slo-")
+    monkeypatch.setattr(admin_routes.settings, "alertmanager_suppressed_pod_regex", r"^bretter-slo-")
+    monkeypatch.setattr(admin_routes.requests, "get", lambda url, timeout: FakeResp())
+
+    alerts, err = admin_routes._fetch_alertmanager_alerts()
+    assert err == ""
+    assert alerts == []

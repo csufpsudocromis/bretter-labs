@@ -233,6 +233,60 @@ def test_namespace_admin_cannot_assign_high_privilege_custom_role(client: TestCl
     assert assign.status_code == 403, assign.text
 
 
+def test_namespace_admin_scopes_can_be_assigned_and_updated(login_admin: TestClient):
+    create = login_admin.post(
+        "/admin/users",
+        json={
+            "username": "ns-owner",
+            "password": "password",
+            "role": "namespace_admin",
+            "is_admin": True,
+            "namespace_scopes": ["labs", "labs-team-red", "LABS"],
+        },
+    )
+    assert create.status_code == 201, create.text
+    created = create.json()
+    assert created["role"] == "namespace_admin"
+    assert created["namespace_scopes"] == ["labs", "labs-team-red"]
+
+    updated = login_admin.patch(
+        "/admin/users/ns-owner",
+        json={
+            "role": "namespace_admin",
+            "is_admin": True,
+            "namespace_scopes": ["labs-team-blue", "labs-team-green"],
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["namespace_scopes"] == ["labs-team-blue", "labs-team-green"]
+
+    demoted = login_admin.patch(
+        "/admin/users/ns-owner",
+        json={
+            "role": "user",
+            "is_admin": False,
+        },
+    )
+    assert demoted.status_code == 200, demoted.text
+    assert demoted.json()["role"] == "user"
+    assert demoted.json()["namespace_scopes"] == []
+
+
+def test_namespace_admin_scopes_reject_invalid_namespace(login_admin: TestClient):
+    create = login_admin.post(
+        "/admin/users",
+        json={
+            "username": "ns-owner-invalid",
+            "password": "password",
+            "role": "namespace_admin",
+            "is_admin": True,
+            "namespace_scopes": ["bad namespace"],
+        },
+    )
+    assert create.status_code == 422, create.text
+    assert "invalid namespace scope" in create.json()["detail"]
+
+
 def test_legacy_role_alias_normalizes_to_lab_admin(client: TestClient):
     with Session(engine) as session:
         session.add(

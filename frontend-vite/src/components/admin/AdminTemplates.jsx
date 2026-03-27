@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 
 const consoleProviderLabel = (provider) => {
@@ -32,6 +32,7 @@ const AdminTemplates = () => {
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
+  const formCardRef = useRef(null);
 
   const resetForm = () => {
     setForm({ ...DEFAULT_FORM });
@@ -109,6 +110,9 @@ const AdminTemplates = () => {
       rdp_default_password: "",
       rdp_default_password_configured: !!tmpl.rdp_default_password_configured,
     });
+    window.requestAnimationFrame(() => {
+      formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   const saveEdit = async () => {
@@ -139,6 +143,7 @@ const AdminTemplates = () => {
       {message && <div className="info">{message}</div>}
       <div className="grid">
         <div>
+          <div ref={formCardRef} />
           <h3>{editingId ? "Edit template" : "Create template"}</h3>
           <div className="form">
             <label>

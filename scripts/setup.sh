@@ -2871,6 +2871,18 @@ apply_backend_metrics_servicemonitor() {
     return
   fi
 
+  local metrics_scheme tls_config_block
+  metrics_scheme="http"
+  tls_config_block=""
+  if [ "$TLS_ENABLED" -eq 1 ]; then
+    metrics_scheme="https"
+    tls_config_block="$(cat <<'EOF'
+      tlsConfig:
+        insecureSkipVerify: true
+EOF
+)"
+  fi
+
   log "Applying backend metrics ServiceMonitor..."
   kubectl -n "$MONITORING_NAMESPACE" apply -f - <<EOF
 apiVersion: monitoring.coreos.com/v1
@@ -2889,8 +2901,10 @@ spec:
       app: bretter-backend
   endpoints:
     - port: http
+      scheme: ${metrics_scheme}
       path: /metrics
       interval: 30s
+${tls_config_block}
 EOF
 }
 

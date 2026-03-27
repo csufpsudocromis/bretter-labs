@@ -46,6 +46,7 @@ from ..services.ldap_auth import (
     missing_required_fields as ldap_missing_required_fields,
 )
 from ..services.team_quotas import normalize_team
+from ..services.tenant_context import user_namespace_scopes
 from ..tables import Config, OIDCLoginState, User
 from ..time_utils import utc_now
 
@@ -77,10 +78,12 @@ def _oidc_role_priority(role: str) -> int:
 
 def _user_out(user: User) -> UserOut:
     role = role_for_user(user)
+    namespace_scopes = user_namespace_scopes(user) if role == Role.NAMESPACE_ADMIN else []
     return UserOut(
         username=user.username,
         role=role,
         team=normalize_team("default"),
+        namespace_scopes=namespace_scopes,
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),

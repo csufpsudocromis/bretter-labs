@@ -37,9 +37,9 @@ spec:
     services.nodeports: "120"
     persistentvolumeclaims: "400"
     requests.cpu: "32"
-    requests.memory: 64Gi
+    requests.memory: 48Gi
     limits.cpu: "64"
-    limits.memory: 128Gi
+    limits.memory: 96Gi
     requests.storage: 10Ti
 ---
 apiVersion: rbac.authorization.k8s.io/v1

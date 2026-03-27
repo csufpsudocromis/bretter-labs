@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlmodel import Session
+from sqlmodel import Session, func, select
 
 from src.auth import hash_password
 from src.db import engine
@@ -65,6 +65,57 @@ def test_admin_audit_events_record_quota_and_settings_changes(login_admin: TestC
     assert any(item["target_type"] == "team_quota" and item["action"] == "create" for item in payload)
     assert any(item["target_type"] == "settings_idle_timeout" and item["action"] == "update" for item in payload)
     assert any(item["actor"] == "admin" for item in payload)
+
+
+def test_admin_audit_events_are_capped_to_50_per_tenant(login_admin: TestClient) -> None:
+    with Session(engine) as session:
+        for idx in range(60):
+            admin_routes._record_admin_audit_event(
+                session,
+                actor="admin",
+                tenant="default",
+                action="test",
+                target_type="unit_test",
+                target_id=f"evt-{idx}",
+                detail=f"event-{idx}",
+            )
+        session.commit()
+        total = int(
+            session.exec(
+                select(func.count())
+                .select_from(admin_routes.AdminAuditEvent)
+                .where(admin_routes.AdminAuditEvent.tenant == "global")
+            ).one()
+            or 0
+        )
+    assert total == 50
+
+    events = login_admin.get("/admin/audit-events", params={"limit": 50})
+    assert events.status_code == 200, events.text
+    assert len(events.json()) == 50
+
+
+def test_admin_audit_events_can_be_cleared(login_admin: TestClient) -> None:
+    with Session(engine) as session:
+        for idx in range(5):
+            admin_routes._record_admin_audit_event(
+                session,
+                actor="admin",
+                tenant="default",
+                action="test_clear",
+                target_type="unit_test",
+                target_id=f"clear-{idx}",
+                detail="to-clear",
+            )
+        session.commit()
+
+    cleared = login_admin.delete("/admin/audit-events")
+    assert cleared.status_code == 200, cleared.text
+    assert int(cleared.json()["deleted"]) >= 5
+
+    events = login_admin.get("/admin/audit-events", params={"limit": 50})
+    assert events.status_code == 200, events.text
+    assert events.json() == []
 
 
 def test_admin_image_upload_finalize_smoke(login_admin: TestClient, monkeypatch, tmp_path: Path) -> None:

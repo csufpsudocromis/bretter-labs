@@ -155,7 +155,7 @@ class Settings(BaseSettings):
         "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
     )
     alertmanager_timeout_seconds: int = 5
-    alertmanager_suppressed_alert_names: str = "KubeJobFailed,KubePodNotReady"
+    alertmanager_suppressed_alert_names: str = "KubeJobFailed,KubePodNotReady,Watchdog"
     alertmanager_suppressed_job_name_regex: str = (
         r"^bretter-(slo-|cleanup-|ghcr-access-check-|kubelet-serving-csr-approver-)"
     )

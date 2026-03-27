@@ -57,6 +57,7 @@ from ..db import get_session
 
 router = APIRouter(dependencies=[Depends(require_permission(Permission.ADMIN_ACCESS))])
 logger = logging.getLogger(__name__)
+_ADMIN_AUDIT_EVENT_MAX_PER_TENANT = 50
 
 
 def _record_admin_audit_event(
@@ -69,11 +70,12 @@ def _record_admin_audit_event(
     detail: str,
     tenant: str = GLOBAL_TENANT,
 ) -> None:
+    normalized_tenant = normalize_tenant(tenant, default=GLOBAL_TENANT)
     session.add(
         AdminAuditEvent(
             id=str(uuid4()),
             actor=actor,
-            tenant=normalize_tenant(tenant, default=GLOBAL_TENANT),
+            tenant=normalized_tenant,
             action=action,
             target_type=target_type,
             target_id=target_id,
@@ -81,6 +83,25 @@ def _record_admin_audit_event(
             created_at=utc_now(),
         )
     )
+    _prune_admin_audit_events(session, tenant=normalized_tenant)
+
+
+def _prune_admin_audit_events(session: Session, *, tenant: str) -> None:
+    total_events = int(
+        session.exec(select(func.count()).select_from(AdminAuditEvent).where(AdminAuditEvent.tenant == tenant)).one()
+        or 0
+    )
+    overflow = total_events - _ADMIN_AUDIT_EVENT_MAX_PER_TENANT
+    if overflow <= 0:
+        return
+    stale_rows = session.exec(
+        select(AdminAuditEvent)
+        .where(AdminAuditEvent.tenant == tenant)
+        .order_by(AdminAuditEvent.created_at.asc(), AdminAuditEvent.id.asc())
+        .limit(overflow)
+    ).all()
+    for row in stale_rows:
+        session.delete(row)
 
 
 def _require_platform_admin(user: User) -> None:
