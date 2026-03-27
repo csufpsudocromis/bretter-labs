@@ -1884,8 +1884,9 @@ def _ensure_admin_audit_table() -> None:
             )
             session.exec(text("UPDATE adminauditevent SET tenant = 'global' WHERE tenant IS NULL OR tenant = ''"))
             session.exec(
-                text("UPDATE adminauditevent SET namespace = :namespace " "WHERE namespace IS NULL OR namespace = ''"),
-                {"namespace": normalize_namespace(settings.kube_namespace) or "labs"},
+                text(
+                    "UPDATE adminauditevent SET namespace = :namespace WHERE namespace IS NULL OR namespace = ''"
+                ).bindparams(namespace=normalize_namespace(settings.kube_namespace) or "labs")
             )
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_actor ON adminauditevent(actor)"))
             session.exec(text("CREATE INDEX IF NOT EXISTS ix_adminauditevent_tenant ON adminauditevent(tenant)"))
