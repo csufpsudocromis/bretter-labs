@@ -131,8 +131,8 @@ def _validate_startup_config() -> None:
             )
     if not bool(getattr(settings, "cors_enterprise_profile", False)):
         errors.append("BLABS_CORS_ENTERPRISE_PROFILE must be true when BLABS_PRODUCTION_PROFILE=true.")
-    if team_namespace_mode != "per_team":
-        errors.append("BLABS_TEAM_NAMESPACE_MODE must be per_team when BLABS_PRODUCTION_PROFILE=true.")
+    if team_namespace_mode not in {"shared", "per_team"}:
+        errors.append("BLABS_TEAM_NAMESPACE_MODE must be shared or per_team when BLABS_PRODUCTION_PROFILE=true.")
     if not bool(getattr(settings, "team_namespace_bootstrap_enabled", True)):
         errors.append("BLABS_TEAM_NAMESPACE_BOOTSTRAP_ENABLED must be true when BLABS_PRODUCTION_PROFILE=true.")
     if not _configured_cors_origins():

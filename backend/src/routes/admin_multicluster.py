@@ -589,9 +589,10 @@ def explain_team_placement_policy(
     user: User = Depends(require_user),
 ) -> PlacementExplainOut:
     _require_platform_admin(user)
+    _ = team
     explanation = explain_cluster_selection(
         session,
-        team=team,
+        team="default",
         workload_kind=workload_kind,
         template_cluster_id=template_cluster_id,
     )
@@ -621,9 +622,8 @@ def upsert_team_placement_policy(
     user: User = Depends(require_user),
 ) -> TeamPlacementPolicyOut:
     _require_platform_admin(user)
-    normalized_team = str(team or "").strip().lower()
-    if not normalized_team:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="team is required")
+    _ = team
+    normalized_team = "default"
     preferred_cluster = _normalize_cluster_id(payload.preferred_cluster_id)
     if preferred_cluster and not _cluster_exists(session, preferred_cluster):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="preferred_cluster_id not found")
@@ -657,7 +657,7 @@ def upsert_team_placement_policy(
         actor=user.username,
         action="upsert",
         target_type="team_placement_policy",
-        target_id=normalized_team,
+        target_id="default",
         detail=f"preferred_cluster_id={row.preferred_cluster_id or ''} hard_pin_cluster={row.hard_pin_cluster}",
     )
     session.commit()
@@ -676,7 +676,8 @@ def delete_team_placement_policy(
     user: User = Depends(require_user),
 ) -> None:
     _require_platform_admin(user)
-    normalized_team = str(team or "").strip().lower()
+    _ = team
+    normalized_team = "default"
     row = session.exec(select(TeamPlacementPolicy).where(TeamPlacementPolicy.team == normalized_team)).first()
     if not row:
         return
@@ -686,7 +687,7 @@ def delete_team_placement_policy(
         actor=user.username,
         action="delete",
         target_type="team_placement_policy",
-        target_id=normalized_team,
+        target_id="default",
         detail="deleted",
     )
     session.commit()
@@ -712,8 +713,6 @@ def list_artifact_replications(
         stmt = stmt.where(ArtifactReplication.target_cluster_id == _normalize_cluster_id(target_cluster_id))
     if status_filter:
         stmt = stmt.where(ArtifactReplication.status == str(status_filter).strip().lower())
-    if not is_platform_admin(user):
-        stmt = stmt.where(ArtifactReplication.tenant == actor_tenant(user))
     rows = session.exec(stmt.order_by(ArtifactReplication.updated_at.desc())).all()[:limit]
     return [_replication_out(row) for row in rows]
 
@@ -736,10 +735,6 @@ def enqueue_artifact_replication(
 
     artifact_tenant = _validate_artifact_exists(session, payload.artifact_type, payload.artifact_id)
     requested_tenant = normalize_tenant(payload.tenant, default=artifact_tenant)
-    if not is_platform_admin(user):
-        actor_scope = actor_tenant(user)
-        if requested_tenant != actor_scope:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant scope violation")
 
     target_ids = []
     for cluster_id in payload.target_cluster_ids:
@@ -844,9 +839,6 @@ def update_artifact_replication(
     row = session.get(ArtifactReplication, replication_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="replication record not found")
-    if not is_platform_admin(user):
-        if normalize_tenant(getattr(row, "tenant", None), default=GLOBAL_TENANT) != actor_tenant(user):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="tenant scope violation")
     row.status = payload.status
     row.detail = str(payload.detail or "").strip()
     row.last_attempt_at = utc_now()

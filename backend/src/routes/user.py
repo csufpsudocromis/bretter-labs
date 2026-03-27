@@ -718,7 +718,7 @@ def list_available_templates(
     quota_namespace = _vm_quota_namespace(user)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), quota_namespace)
     tenant_scope = {
-        normalize_tenant(getattr(user, "team", None), default="default"),
+        "default",
         GLOBAL_TENANT,
     }
     templates = session.exec(
@@ -781,7 +781,7 @@ def preflight_template_launch(
     try:
         placement = select_cluster_for_launch(
             session,
-            team=getattr(user, "team", None),
+            team="default",
             workload_kind="vm",
             template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
         )
@@ -808,7 +808,7 @@ def preflight_template_launch(
         privileged_runtime_namespace=privileged_runtime,
         template=template,
         image=image,
-        team=getattr(user, "team", None),
+        team="default",
     )
     result.checks.insert(
         0,
@@ -1454,7 +1454,7 @@ def start_vm(
 
     idle_minutes = enforce_team_quota_or_raise(
         session,
-        team=getattr(user, "team", None),
+        team="default",
         namespace=quota_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
@@ -1465,7 +1465,7 @@ def start_vm(
     try:
         placement = select_cluster_for_launch(
             session,
-            team=getattr(user, "team", None),
+            team="default",
             workload_kind="vm",
             template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
         )
@@ -1480,7 +1480,7 @@ def start_vm(
         privileged_runtime_namespace=privileged_runtime,
         template=template,
         image=image,
-        team=getattr(user, "team", None),
+        team="default",
         include_runner_pull_check=False,
     )
     if not preflight.ready:
@@ -1708,7 +1708,7 @@ def restart_vm(
 
     idle_minutes = enforce_team_quota_or_raise(
         session,
-        team=getattr(user, "team", None),
+        team="default",
         namespace=quota_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(template.cpu_cores or 1)) * 1000,
@@ -1720,7 +1720,7 @@ def restart_vm(
     try:
         placement = select_cluster_for_launch(
             session,
-            team=getattr(user, "team", None),
+            team="default",
             workload_kind="vm",
             template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
         )
@@ -1732,7 +1732,7 @@ def restart_vm(
     try:
         ensure_team_runtime_namespace(
             runtime_kube,
-            team=getattr(user, "team", None),
+            team="default",
             namespace=runtime_namespace,
             privileged_runtime=privileged_runtime,
         )

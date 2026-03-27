@@ -17,12 +17,10 @@ const AdminUsers = () => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("user");
-  const [team, setTeam] = useState("default");
   const [editingUser, setEditingUser] = useState(null);
   const [editPassword, setEditPassword] = useState("");
   const [editUsername, setEditUsername] = useState("");
   const [editRole, setEditRole] = useState("user");
-  const [editTeam, setEditTeam] = useState("default");
   const [message, setMessage] = useState("");
 
   const load = async () => {
@@ -44,13 +42,11 @@ const AdminUsers = () => {
         username,
         password,
         role,
-        team,
         is_admin: role !== "user",
       });
       setUsername("");
       setPassword("");
       setRole("user");
-      setTeam("default");
       setMessage("User created");
       load();
     } catch (err) {
@@ -63,7 +59,6 @@ const AdminUsers = () => {
     setEditUsername(user.username);
     setEditPassword("");
     setEditRole(user.role || (user.is_admin ? "platform_admin" : "user"));
-    setEditTeam(user.team || "default");
     setMessage("");
   };
 
@@ -73,7 +68,6 @@ const AdminUsers = () => {
         username: editUsername,
         password: editPassword || undefined,
         role: editRole,
-        team: editTeam,
         is_admin: editRole !== "user",
       });
       setMessage("User updated");
@@ -108,10 +102,6 @@ const AdminUsers = () => {
               </select>
             </label>
             <label>
-              Team
-              <input value={team} onChange={(e) => setTeam(e.target.value)} placeholder="default" />
-            </label>
-            <label>
               Password
               <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
             </label>
@@ -130,7 +120,6 @@ const AdminUsers = () => {
                   <h4>{u.username}</h4>
                   <span className="badge">{roleLabel(u.role || (u.is_admin ? "platform_admin" : "user"))}</span>
                 </div>
-                <div className="small muted">Team: {u.team || "default"}</div>
               </button>
             ))}
           </div>
@@ -151,10 +140,6 @@ const AdminUsers = () => {
                       </option>
                     ))}
                   </select>
-                </label>
-                <label>
-                  Team
-                  <input value={editTeam} onChange={(e) => setEditTeam(e.target.value)} placeholder="default" />
                 </label>
                 <label>
                   Password (leave blank to keep)

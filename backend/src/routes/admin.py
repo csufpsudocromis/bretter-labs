@@ -208,7 +208,7 @@ def _to_str(value: object) -> str:
 def _tenant_scope_for_actor(actor: User, *, include_global: bool = True) -> set[str] | None:
     if is_platform_admin(actor):
         return None
-    scoped = {actor_tenant(actor)}
+    scoped = {actor_tenant(actor), "default"}
     if include_global:
         scoped.add(GLOBAL_TENANT)
     return scoped
@@ -3613,7 +3613,7 @@ def _user_out(user: User) -> UserOut:
     return UserOut(
         username=user.username,
         role=role,
-        team=normalize_team(getattr(user, "team", None)),
+        team=normalize_team("default"),
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),
@@ -3734,9 +3734,8 @@ def add_user(
         role = normalize_requested_role(payload.role, payload.is_admin)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    team = normalize_team(payload.team)
+    team = normalize_team("default")
     if not is_platform_admin(actor):
-        team = actor_tenant(actor)
         if role in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
     user = User(
@@ -3765,15 +3764,13 @@ def add_user(
 @router.get("/users", response_model=list[UserOut], dependencies=[Depends(require_permission(Permission.USERS_READ))])
 def list_users(session: Session = Depends(get_session), actor: User = Depends(require_user)) -> list[UserOut]:
     stmt = select(User)
-    if not is_platform_admin(actor):
-        stmt = stmt.where(User.team == actor_tenant(actor))
     users = session.exec(stmt).all()
     mutated = False
     for user in users:
         if ensure_user_role_fields(user):
             session.add(user)
             mutated = True
-        normalized_team = normalize_team(getattr(user, "team", None))
+        normalized_team = normalize_team("default")
         if getattr(user, "team", None) != normalized_team:
             user.team = normalized_team
             session.add(user)
@@ -3798,8 +3795,6 @@ def update_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
     if not is_platform_admin(actor):
-        if normalize_team(user.team) != actor_tenant(actor):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
         if role_for_user(user) in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     new_username = payload.username or username
@@ -3828,10 +3823,8 @@ def update_user(
         user.role = role
         user.is_admin = can_access_admin(role)
     if payload.team is not None:
-        next_team = normalize_team(payload.team)
-        if not is_platform_admin(actor) and next_team != actor_tenant(actor):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient team assignment scope")
-        user.team = next_team
+        _ = payload.team
+    user.team = normalize_team("default")
     user.username = new_username
     session.add(user)
     _record_admin_audit_event(
@@ -3862,8 +3855,6 @@ def remove_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
     if not is_platform_admin(actor):
-        if normalize_team(user.team) != actor_tenant(actor):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
         if role_for_user(user) in {Role.PLATFORM_ADMIN, Role.TENANT_ADMIN}:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     if role_for_user(user) == Role.PLATFORM_ADMIN and username == settings.admin_default_username:

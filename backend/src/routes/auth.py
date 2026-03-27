@@ -72,7 +72,7 @@ def _user_out(user: User) -> UserOut:
     return UserOut(
         username=user.username,
         role=role,
-        team=normalize_team(getattr(user, "team", None)),
+        team=normalize_team("default"),
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),

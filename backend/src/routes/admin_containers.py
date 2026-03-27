@@ -47,7 +47,7 @@ _TEMPLATE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,63}$")
 def _tenant_scope_for_actor(actor: User, *, include_global: bool = True) -> set[str] | None:
     if is_platform_admin(actor):
         return None
-    scoped = {actor_tenant(actor)}
+    scoped = {actor_tenant(actor), "default"}
     if include_global:
         scoped.add(GLOBAL_TENANT)
     return scoped

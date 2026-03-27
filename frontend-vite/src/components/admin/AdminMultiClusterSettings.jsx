@@ -24,7 +24,6 @@ const defaultClusterForm = {
 };
 
 const defaultPolicyForm = {
-  team: "default",
   preferred_cluster_id: "",
   hard_pin_cluster: false,
   required_regions_csv: "",
@@ -41,7 +40,6 @@ const defaultReplicationForm = {
 };
 
 const defaultExplainForm = {
-  team: "default",
   workload_kind: "vm",
   template_cluster_id: "",
 };
@@ -159,14 +157,14 @@ const AdminMultiClusterSettings = () => {
     setError("");
     setMessage("");
     try {
-      await api.put(`/admin/settings/placement-policies/${encodeURIComponent(policyForm.team)}`, {
+      await api.put("/admin/settings/placement-policies/default", {
         preferred_cluster_id: policyForm.preferred_cluster_id || null,
         hard_pin_cluster: Boolean(policyForm.hard_pin_cluster),
         required_regions: parseCsv(policyForm.required_regions_csv),
         required_compliance_tags: parseCsv(policyForm.required_compliance_tags_csv),
         allowed_cluster_ids: parseCsv(policyForm.allowed_cluster_ids_csv),
       });
-      setMessage(`Placement policy saved for team ${policyForm.team}.`);
+      setMessage("Placement policy saved.");
       await load();
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to save placement policy.");
@@ -175,22 +173,21 @@ const AdminMultiClusterSettings = () => {
 
   const editPolicy = (policy) => {
     setPolicyForm({
-      team: String(policy.team || "default"),
       preferred_cluster_id: String(policy.preferred_cluster_id || ""),
       hard_pin_cluster: Boolean(policy.hard_pin_cluster),
       required_regions_csv: (policy.required_regions || []).join(","),
       required_compliance_tags_csv: (policy.required_compliance_tags || []).join(","),
       allowed_cluster_ids_csv: (policy.allowed_cluster_ids || []).join(","),
     });
-    setMessage(`Loaded policy for team ${policy.team}.`);
+    setMessage("Loaded policy.");
   };
 
-  const deletePolicy = async (team) => {
+  const deletePolicy = async () => {
     setError("");
     setMessage("");
     try {
-      await api.delete(`/admin/settings/placement-policies/${encodeURIComponent(team)}`);
-      setMessage(`Placement policy deleted for team ${team}.`);
+      await api.delete("/admin/settings/placement-policies/default");
+      setMessage("Placement policy deleted.");
       await load();
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to delete placement policy.");
@@ -255,7 +252,6 @@ const AdminMultiClusterSettings = () => {
     try {
       const res = await api.get("/admin/settings/placement-policies/explain", {
         params: {
-          team: explainForm.team || "default",
           workload_kind: explainForm.workload_kind || "vm",
           template_cluster_id: explainForm.template_cluster_id || undefined,
         },
@@ -439,12 +435,6 @@ const AdminMultiClusterSettings = () => {
         <div className="row" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
           <input
             className="input"
-            placeholder="team"
-            value={policyForm.team}
-            onChange={(e) => setPolicyForm((prev) => ({ ...prev, team: e.target.value }))}
-          />
-          <input
-            className="input"
             placeholder="preferred cluster id"
             value={policyForm.preferred_cluster_id}
             onChange={(e) => setPolicyForm((prev) => ({ ...prev, preferred_cluster_id: e.target.value }))}
@@ -486,7 +476,7 @@ const AdminMultiClusterSettings = () => {
           {(policies || []).map((policy) => (
             <div key={policy.id} className="tile template-tile">
               <div className="tile-header">
-                <h4>{policy.team}</h4>
+                <h4>default</h4>
                 <span className="badge">{policy.preferred_cluster_id || "no preferred cluster"}</span>
               </div>
               <div className="muted small">Hard pin: {policy.hard_pin_cluster ? "yes" : "no"}</div>
@@ -503,7 +493,7 @@ const AdminMultiClusterSettings = () => {
                 <button className="ghost" onClick={() => editPolicy(policy)}>
                   Edit
                 </button>
-                <button className="ghost" onClick={() => deletePolicy(policy.team)}>
+                <button className="ghost" onClick={() => deletePolicy()}>
                   Delete
                 </button>
               </div>
@@ -515,12 +505,6 @@ const AdminMultiClusterSettings = () => {
       <div className="card" style={{ marginBottom: "1rem" }}>
         <h3>Placement Explain</h3>
         <div className="row" style={{ gap: "0.75rem", flexWrap: "wrap" }}>
-          <input
-            className="input"
-            placeholder="team"
-            value={explainForm.team}
-            onChange={(e) => setExplainForm((prev) => ({ ...prev, team: e.target.value }))}
-          />
           <select
             className="input"
             value={explainForm.workload_kind}

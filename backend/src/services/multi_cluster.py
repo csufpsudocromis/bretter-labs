@@ -302,8 +302,19 @@ def list_clusters_for_scheduling(session: Session) -> list[Cluster]:
 
 
 def _team_policy(session: Session, team: str | None) -> TeamPlacementPolicy | None:
-    normalized_team = _normalize_token(team, default="default")
-    return session.exec(select(TeamPlacementPolicy).where(TeamPlacementPolicy.team == normalized_team)).first()
+    _ = team
+    rows = session.exec(select(TeamPlacementPolicy).where(TeamPlacementPolicy.team.in_(["default", "global"]))).all()
+    if not rows:
+        return None
+    rows.sort(
+        key=lambda row: (
+            str(getattr(row, "team", "") or "") == "default",
+            getattr(row, "updated_at", None) or getattr(row, "created_at", None),
+            str(getattr(row, "id", "") or ""),
+        ),
+        reverse=True,
+    )
+    return rows[0]
 
 
 def _cluster_compliance_tags(cluster: Cluster) -> set[str]:
@@ -363,7 +374,7 @@ def select_cluster_for_launch(
         narrowed = [cluster for cluster in filtered if _normalize_token(cluster.id) == template_cluster]
         if not narrowed:
             raise PlacementError(
-                f"Template requires cluster '{template_cluster}', but it is not currently schedulable for this tenant."
+                f"Template requires cluster '{template_cluster}', but it is not currently schedulable for current policy."
             )
         filtered = narrowed
         return PlacementDecision(cluster_id=filtered[0].id, reason="template-cluster-pin")
@@ -376,7 +387,7 @@ def select_cluster_for_launch(
             return PlacementDecision(cluster_id=preferred[0].id, reason="tenant-preferred-cluster")
         if hard_pin:
             raise PlacementError(
-                f"Tenant policy hard-pins cluster '{preferred_cluster}', but it is not currently schedulable."
+                f"Placement policy hard-pins cluster '{preferred_cluster}', but it is not currently schedulable."
             )
 
     chosen = sorted(filtered, key=_cluster_sort_key, reverse=True)[0]
@@ -391,7 +402,8 @@ def explain_cluster_selection(
     template_cluster_id: str | None = None,
 ) -> PlacementExplanation:
     ensure_local_cluster(session)
-    normalized_team = _normalize_token(team, default="default")
+    _ = team
+    normalized_team = "default"
     normalized_workload = _normalize_token(workload_kind, default="vm") or "vm"
     normalized_template_cluster = _normalize_token(template_cluster_id) or None
     policy = _team_policy(session, normalized_team)
@@ -412,7 +424,7 @@ def explain_cluster_selection(
         if normalized_template_cluster and _normalize_token(cluster.id) != normalized_template_cluster:
             reasons.append("template pins a different cluster")
         if hard_pin and preferred_cluster and _normalize_token(cluster.id) != preferred_cluster:
-            reasons.append("tenant hard-pins a different cluster")
+            reasons.append("policy hard-pins a different cluster")
         if cluster_kubeconfig_source(cluster) == "none" and not bool(getattr(cluster, "is_local", False)):
             reasons.append("runtime kubeconfig not configured")
         candidates.append(PlacementCandidate(cluster_id=cluster.id, allowed=(len(reasons) == 0), reasons=reasons))

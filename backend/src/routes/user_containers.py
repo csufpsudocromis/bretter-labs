@@ -1708,7 +1708,7 @@ def list_user_container_templates(
     runtime_namespace = _container_runtime_namespace(user)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
     tenant_scope = {
-        normalize_tenant(getattr(user, "team", None), default="default"),
+        "default",
         GLOBAL_TENANT,
     }
     rows = session.exec(
@@ -1810,7 +1810,7 @@ def list_user_containers(
                         pod_status, access_url, _ = _create_container_runtime(
                             instance_id=record.id,
                             owner=record.owner,
-                            team=getattr(record, "tenant", None),
+                            team="default",
                             namespace=record_namespace,
                             runtime_kube=runtime_kube,
                             template=tmpl,
@@ -2054,7 +2054,7 @@ def start_container_template(
     headroom_error = _container_headroom_error(template)
     quota_check = enforce_team_quota(
         session,
-        team=getattr(user, "team", None),
+        team="default",
         namespace=runtime_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
@@ -2067,7 +2067,7 @@ def start_container_template(
     try:
         placement = select_cluster_for_launch(
             session,
-            team=getattr(user, "team", None),
+            team="default",
             workload_kind="container",
             template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
         )
@@ -2076,7 +2076,7 @@ def start_container_template(
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_container_cluster(session, selected_cluster_id)
     try:
-        ensure_team_runtime_namespace(runtime_kube, team=getattr(user, "team", None), namespace=runtime_namespace)
+        ensure_team_runtime_namespace(runtime_kube, team="default", namespace=runtime_namespace)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
@@ -2140,7 +2140,7 @@ def start_container_template(
         pod_status, access_url, container_port = _create_container_runtime(
             instance_id=instance_id,
             owner=user.username,
-            team=getattr(user, "team", None),
+            team="default",
             namespace=runtime_namespace,
             runtime_kube=runtime_kube,
             template=template,
@@ -2304,7 +2304,7 @@ def restart_container(
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="cluster concurrency limit reached")
     quota_check = enforce_team_quota(
         session,
-        team=getattr(user, "team", None),
+        team="default",
         namespace=runtime_namespace,
         requested_labs=1,
         requested_cpu_millicores=max(1, int(getattr(template, "cpu_millicores", 500) or 500)),
@@ -2318,7 +2318,7 @@ def restart_container(
     try:
         placement = select_cluster_for_launch(
             session,
-            team=getattr(user, "team", None),
+            team="default",
             workload_kind="container",
             template_cluster_id=str(getattr(template, "cluster_id", "") or ""),
         )
@@ -2376,7 +2376,7 @@ def restart_container(
     pod_status, access_url, container_port = _create_container_runtime(
         instance_id=record.id,
         owner=user.username,
-        team=getattr(user, "team", None),
+        team="default",
         namespace=runtime_namespace,
         runtime_kube=runtime_kube,
         template=template,

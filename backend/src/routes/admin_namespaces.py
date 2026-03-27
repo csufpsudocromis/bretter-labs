@@ -286,8 +286,6 @@ def list_managed_namespaces(
     actor: User = Depends(require_user),
 ) -> list[ManagedNamespaceOut]:
     stmt = select(ManagedNamespace)
-    if not is_platform_admin(actor):
-        stmt = stmt.where(ManagedNamespace.team_label == actor_tenant(actor))
     rows = session.exec(stmt).all()
     rows.sort(key=lambda item: item.namespace)
     present_names = _list_cluster_namespaces()

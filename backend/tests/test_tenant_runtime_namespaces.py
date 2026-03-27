@@ -15,7 +15,7 @@ def test_vm_runtime_namespace_uses_privileged_prefix_when_required(monkeypatch):
     monkeypatch.setattr(tenant_context.settings, "vm_runner_privileged", False)
     monkeypatch.setattr(tenant_context.settings, "vm_net_backend", "user")
 
-    assert tenant_context.vm_runtime_namespace_for_user(_user("math")) == "labs-vm-priv-math"
+    assert tenant_context.vm_runtime_namespace_for_user(_user("math")) == "labs-vm-priv-default"
 
 
 def test_vm_runtime_namespace_falls_back_to_team_namespace_when_not_privileged(monkeypatch):
@@ -27,7 +27,7 @@ def test_vm_runtime_namespace_falls_back_to_team_namespace_when_not_privileged(m
     monkeypatch.setattr(tenant_context.settings, "vm_runner_privileged", False)
     monkeypatch.setattr(tenant_context.settings, "vm_net_backend", "user")
 
-    assert tenant_context.vm_runtime_namespace_for_user(_user("science")) == "labs-team-science"
+    assert tenant_context.vm_runtime_namespace_for_user(_user("science")) == "labs-team-default"
 
 
 def test_vm_runtime_namespace_respects_isolation_toggle(monkeypatch):
@@ -39,4 +39,4 @@ def test_vm_runtime_namespace_respects_isolation_toggle(monkeypatch):
     monkeypatch.setattr(tenant_context.settings, "vm_runner_privileged", False)
     monkeypatch.setattr(tenant_context.settings, "vm_net_backend", "user")
 
-    assert tenant_context.vm_runtime_namespace_for_user(_user("design")) == "labs-team-design"
+    assert tenant_context.vm_runtime_namespace_for_user(_user("design")) == "labs-team-default"
