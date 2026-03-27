@@ -9,7 +9,6 @@ const UserPanel = () => {
   const [containerTemplates, setContainerTemplates] = useState([]);
   const [containerInstances, setContainerInstances] = useState([]);
   const [containerConnectReadiness, setContainerConnectReadiness] = useState({});
-  const [vmPreflight, setVmPreflight] = useState({});
   const [message, setMessage] = useState("");
   const [polling, setPolling] = useState(null);
   const [showIdlePrompt, setShowIdlePrompt] = useState(false);
@@ -33,8 +32,6 @@ const UserPanel = () => {
   const latestVmInstanceIdsRef = useRef([]);
   const latestContainerInstanceIdsRef = useRef([]);
   const stickyLimitMessageRef = useRef(false);
-  const vmPreflightInFlightRef = useRef(new Set());
-  const vmPreflightCheckedAtRef = useRef({});
   const containerConnectReadinessInFlightRef = useRef(new Set());
   const containerConnectReadinessCheckedAtRef = useRef({});
   const [sessionEnded, setSessionEnded] = useState(false);
@@ -42,7 +39,6 @@ const UserPanel = () => {
 
   const DEFAULT_IDLE_MINUTES = 30;
   const PROMPT_COUNTDOWN_SECONDS = 300; // 5 minutes
-  const VM_PREFLIGHT_CACHE_MS = 60000;
   const CONTAINER_CONNECT_READINESS_CACHE_MS = 10000;
   const VM_PRESENCE_GRACE_MS = 10000;
   const ACTIVITY_STORAGE_KEY = "blabs:last-activity-at";
@@ -187,57 +183,6 @@ const UserPanel = () => {
     }
   };
 
-  const fetchVmPreflight = async (templateId, force = false) => {
-    const key = String(templateId || "").trim();
-    if (!key) return null;
-    const now = Date.now();
-    const checkedAt = Number(vmPreflightCheckedAtRef.current[key] || 0);
-    if (!force && checkedAt && now - checkedAt < VM_PREFLIGHT_CACHE_MS) {
-      return vmPreflight[key] || null;
-    }
-    if (vmPreflightInFlightRef.current.has(key)) {
-      return vmPreflight[key] || null;
-    }
-    vmPreflightInFlightRef.current.add(key);
-    setVmPreflight((prev) => ({
-      ...prev,
-      [key]: {
-        ready: false,
-        checks: Array.isArray(prev[key]?.checks) ? prev[key].checks : [],
-        blocking_reason: String(prev[key]?.blocking_reason || "").trim(),
-        loading: true,
-      },
-    }));
-    try {
-      const response = await api.get(`/user/templates/${key}/preflight`);
-      const payload = response?.data || {};
-      const normalized = {
-        template_id: key,
-        ready: Boolean(payload.ready),
-        blocking_reason: payload.blocking_reason || "",
-        checks: Array.isArray(payload.checks) ? payload.checks : [],
-        loading: false,
-      };
-      vmPreflightCheckedAtRef.current[key] = Date.now();
-      setVmPreflight((prev) => ({ ...prev, [key]: normalized }));
-      return normalized;
-    } catch (err) {
-      const detail = err.response?.data?.detail || "Launch preflight failed";
-      const failed = {
-        template_id: key,
-        ready: false,
-        blocking_reason: detail,
-        checks: [{ key: "preflight", status: "error", detail }],
-        loading: false,
-      };
-      vmPreflightCheckedAtRef.current[key] = Date.now();
-      setVmPreflight((prev) => ({ ...prev, [key]: failed }));
-      return failed;
-    } finally {
-      vmPreflightInFlightRef.current.delete(key);
-    }
-  };
-
   useEffect(() => {
     refresh();
     const handle = setInterval(refresh, 5000);
@@ -294,12 +239,6 @@ const UserPanel = () => {
 
   const start = async (templateId) => {
     try {
-      const preflight = await fetchVmPreflight(templateId, true);
-      if (!preflight?.ready) {
-        const detail = preflight?.blocking_reason || "Launch preflight failed";
-        setMessage(detail);
-        return;
-      }
       await api.post(`/user/templates/${templateId}/start`);
       setMessage("");
       refresh();
@@ -509,19 +448,6 @@ const UserPanel = () => {
 
   const templateName = (templateId) => templates.find((t) => t.id === templateId)?.name || "VM";
   const podName = (instance) => `vm-${instance.owner}-${instance.id.slice(0, 8)}`;
-  const vmPreflightState = (templateId) => vmPreflight[String(templateId || "").trim()] || null;
-  const vmTemplateCanStart = (templateId) => {
-    const state = vmPreflightState(templateId);
-    if (state?.loading) return false;
-    return true;
-  };
-  const vmTemplateStartHint = (templateId) => {
-    const state = vmPreflightState(templateId);
-    if (!state) return "";
-    if (state.loading) return "Checking launch readiness...";
-    if (state.ready) return "Ready";
-    return String(state.blocking_reason || "Launch preflight failed");
-  };
   const effectiveStatus = (instance) => instance?.status_stage || instance?.status || "unknown";
   const statusLabel = (instance) => {
     const status = effectiveStatus(instance);
@@ -1326,13 +1252,8 @@ const UserPanel = () => {
                   <h4>{t.name}</h4>
                 </div>
                 {t.description && <div className="muted small">{t.description}</div>}
-                <div className="muted small" style={{ marginTop: "0.5rem" }}>
-                  {vmTemplateStartHint(t.id)}
-                </div>
                 <div style={{ marginTop: "0.75rem" }}>
-                  <button onClick={() => start(t.id)} disabled={!vmTemplateCanStart(t.id)}>
-                    {vmPreflightState(t.id)?.loading ? "Checking..." : "Start Lab"}
-                  </button>
+                  <button onClick={() => start(t.id)}>Start Lab</button>
                 </div>
               </div>
             ))}

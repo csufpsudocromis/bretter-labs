@@ -203,11 +203,6 @@ def _status_feedback(
 
 
 def _require_clone_ready(image: Image) -> None:
-    if not settings.kube_vm_storage_class:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="clone-based VM launch is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
-        )
     if not image.source_pvc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1474,18 +1469,15 @@ def start_vm(
     selected_cluster_id = str(placement.cluster_id or local_cluster_id()).strip() or local_cluster_id()
     runtime_kube = _kube_for_instance_cluster(session, selected_cluster_id)
     runtime_namespace = _resolve_vm_runtime_namespace_for_image(runtime_kube, runtime_namespace, image)
-    preflight = _vm_preflight(
-        runtime_kube=runtime_kube,
-        runtime_namespace=runtime_namespace,
-        privileged_runtime_namespace=privileged_runtime,
-        template=template,
-        image=image,
-        team="default",
-        include_runner_pull_check=False,
-    )
-    if not preflight.ready:
-        detail = str(preflight.blocking_reason or "VM launch preflight failed.").strip()
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"launch preflight failed: {detail}")
+    try:
+        ensure_team_runtime_namespace(
+            runtime_kube,
+            team="default",
+            namespace=runtime_namespace,
+            privileged_runtime=privileged_runtime,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
