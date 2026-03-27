@@ -162,7 +162,7 @@ if [ ! -s "$tmp_dump_file" ]; then
 fi
 
 log "Uploading logical dump into temporary namespace..."
-cat "$tmp_dump_file" | kubectl -n "$temp_namespace" exec -i "$restore_pod_name" -- sh -c 'cat > /tmp/restore.dump'
+kubectl -n "$temp_namespace" exec -i "$restore_pod_name" -- sh -c 'cat > /tmp/restore.dump' <"$tmp_dump_file"
 
 log "Restoring dump into temporary postgres..."
 kubectl -n "$temp_namespace" exec "$restore_pod_name" -- sh -s "$restore_db" <<'SH'
