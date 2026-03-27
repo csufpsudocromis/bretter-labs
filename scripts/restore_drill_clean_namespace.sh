@@ -152,6 +152,7 @@ if ! kubectl -n "$temp_namespace" wait --for=condition=Ready "pod/${restore_pod_
 fi
 
 log "Creating logical dump from source postgres..."
+# shellcheck disable=SC2016
 if ! kubectl -n "$SOURCE_NAMESPACE" exec "$source_postgres_pod" -c "$POSTGRES_CONTAINER" -- sh -c \
   'set -eu; export PGPASSWORD="$POSTGRES_PASSWORD"; pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' >"$tmp_dump_file"; then
   fail "Failed to create logical dump from source postgres pod."
