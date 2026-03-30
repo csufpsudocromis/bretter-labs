@@ -392,7 +392,7 @@ const AppShell = () => {
             <Link to={userRootPath}>User</Link>
             {canAccessAdmin && <Link to={adminRootPath}>Admin</Link>}
           </nav>
-          <Routes>
+          <Routes key={activeNamespace || "unscoped"}>
             <Route path="/" element={<NamespaceDirectory namespaces={namespaceOptions} />} />
             <Route
               path="/ns/:namespace"
