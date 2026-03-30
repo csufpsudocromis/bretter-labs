@@ -8,7 +8,7 @@ from src.tables import ContainerImage, ContainerTemplate, Image, Instance, Templ
 from src.time_utils import utc_now
 
 
-def _seed_vm_template(*, image_id: str, template_id: str, namespace: str) -> None:
+def _seed_vm_template(*, image_id: str, template_id: str, namespace: str, shared_catalog: bool = False) -> None:
     with Session(engine) as session:
         session.add(
             Image(
@@ -38,6 +38,7 @@ def _seed_vm_template(*, image_id: str, template_id: str, namespace: str) -> Non
                 ram_mb=2048,
                 auto_delete_minutes=30,
                 idle_timeout_minutes=30,
+                shared_catalog=shared_catalog,
                 enabled=True,
                 created_at=utc_now(),
             )
@@ -51,6 +52,7 @@ def _seed_container_template(
     template_id: str,
     namespace: str,
     enabled_namespaces_json: str = "[]",
+    shared_catalog: bool = False,
 ) -> None:
     with Session(engine) as session:
         session.add(
@@ -74,6 +76,7 @@ def _seed_container_template(
                 tenant="global",
                 namespace=namespace,
                 enabled_namespaces_json=enabled_namespaces_json,
+                shared_catalog=shared_catalog,
                 cluster_id="local",
                 container_image_id=image_id,
                 cpu_millicores=500,
@@ -160,6 +163,7 @@ def test_user_container_templates_list_honors_enabled_namespace_allowlist(login_
         template_id="ct-scope-a",
         namespace="labs-a",
         enabled_namespaces_json='["labs-b"]',
+        shared_catalog=True,
     )
     with Session(engine) as session:
         user = session.get(User, "alice")
@@ -180,7 +184,7 @@ def test_user_container_templates_list_honors_enabled_namespace_allowlist(login_
 def test_user_running_labs_include_template_enabled_namespace_even_with_runtime_namespace_fallback(
     login_user: TestClient,
 ) -> None:
-    _seed_vm_template(image_id="img-vm-visible", template_id="tmpl-vm-visible", namespace="labs")
+    _seed_vm_template(image_id="img-vm-visible", template_id="tmpl-vm-visible", namespace="labs", shared_catalog=True)
     with Session(engine) as session:
         user = session.get(User, "alice")
         assert user is not None

@@ -115,6 +115,12 @@ run_failure "reject invalid postgres backup PVC size" \
 run_failure "reject invalid image-import queue age threshold" \
   env SETUP_DRY_RUN=1 ENABLE_USERFLOW_SLO_PROBES=1 USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES=0 "$SETUP_SCRIPT"
 
+run_failure "reject invalid namespace-scoped alertmanager webhook route syntax" \
+  env SETUP_DRY_RUN=1 ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES=invalid-route "$SETUP_SCRIPT"
+
+run_success "allow valid namespace-scoped alertmanager webhook route syntax" \
+  env SETUP_DRY_RUN=1 ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES=labs-team-a=am-tenant-a/url "$SETUP_SCRIPT"
+
 run_failure "reject rdp connect latency probe without secret wiring" \
   env SETUP_DRY_RUN=1 ENABLE_USERFLOW_SLO_PROBES=1 ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE=1 USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0 USERFLOW_SLO_API_PASSWORD=smoke-rdp-probe-secret "$SETUP_SCRIPT"
 

@@ -358,6 +358,7 @@ def test_namespace_admin_can_only_manage_vm_template_enablement_within_scope(cli
                 idle_timeout_minutes=30,
                 enabled=True,
                 namespace="labs",
+                shared_catalog=True,
                 enabled_namespaces_json='["labs"]',
             )
         )
@@ -413,6 +414,7 @@ def test_namespace_admin_can_only_manage_container_template_enablement_within_sc
                 network_mode="bridge",
                 enabled=True,
                 namespace="labs",
+                shared_catalog=True,
                 enabled_namespaces_json='["labs"]',
                 idle_timeout_minutes=30,
             )

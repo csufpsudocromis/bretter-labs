@@ -4,6 +4,7 @@ import { api } from "../../api";
 
 const AdminImages = () => {
   const [images, setImages] = useState([]);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [file, setFile] = useState(null);
@@ -15,11 +16,17 @@ const AdminImages = () => {
   const [editId, setEditId] = useState(null);
   const [editName, setEditName] = useState("");
   const [editFilename, setEditFilename] = useState("");
+  const [editSharedCatalog, setEditSharedCatalog] = useState(false);
 
   const load = async () => {
     try {
-      const res = await api.get("/admin/images");
+      const [res, me] = await Promise.all([api.get("/admin/images"), api.get("/auth/me")]);
       setImages(res.data);
+      setIsPlatformAdmin(
+        String(me?.data?.role || "")
+          .trim()
+          .toLowerCase() === "platform_admin"
+      );
       setMessage("");
       setError("");
     } catch (err) {
@@ -206,12 +213,17 @@ const AdminImages = () => {
   const startEdit = (img) => {
     setEditId(img.id);
     setEditName(img.name);
-    setEditFilename(img.name);
+    setEditFilename(img.filename || img.name);
+    setEditSharedCatalog(Boolean(img.shared_catalog));
   };
 
   const saveEdit = async () => {
     try {
-      await api.patch(`/admin/images/${editId}`, { name: editName, filename: editFilename });
+      const payload = { name: editName, filename: editFilename };
+      if (isPlatformAdmin) {
+        payload.shared_catalog = Boolean(editSharedCatalog);
+      }
+      await api.patch(`/admin/images/${editId}`, payload);
       setEditId(null);
       setMessage("Updated");
       load();
@@ -224,6 +236,7 @@ const AdminImages = () => {
     setEditId(null);
     setEditName("");
     setEditFilename("");
+    setEditSharedCatalog(false);
   };
 
   return (
@@ -270,6 +283,18 @@ const AdminImages = () => {
                       Filename
                       <input value={editFilename} onChange={(e) => setEditFilename(e.target.value)} />
                     </label>
+                    {isPlatformAdmin && (
+                      <label>
+                        Catalog scope
+                        <select
+                          value={editSharedCatalog ? "shared" : "namespace"}
+                          onChange={(e) => setEditSharedCatalog(e.target.value === "shared")}
+                        >
+                          <option value="namespace">Namespace-owned</option>
+                          <option value="shared">Shared (cross-namespace)</option>
+                        </select>
+                      </label>
+                    )}
                     <div className="actions">
                       <button onClick={saveEdit}>Save</button>
                       <button className="ghost" onClick={cancelEdit}>
@@ -279,6 +304,9 @@ const AdminImages = () => {
                   </div>
                 ) : (
                   <>
+                    <div className="muted small">
+                      {img.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}
+                    </div>
                     <div className="actions">
                       <button className="ghost" onClick={() => startEdit(img)}>
                         Rename

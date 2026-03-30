@@ -1,10 +1,12 @@
 import json
 import re
+from datetime import timedelta
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from kubernetes import client
 from kubernetes.client import ApiException
+from sqlalchemy import text
 from sqlmodel import Session, func, select
 
 from ..auth import require_permission, require_user
@@ -29,7 +31,11 @@ from ..services.tenant_context import (
     is_platform_admin,
     normalize_tenant,
 )
-from ..services.tenant_namespace_bootstrap import NamespaceBootstrapPolicy, ensure_team_runtime_namespace
+from ..services.tenant_namespace_bootstrap import (
+    NamespaceBootstrapPolicy,
+    detect_namespace_policy_drift,
+    ensure_team_runtime_namespace,
+)
 from ..tables import (
     AdminAuditEvent,
     ContainerImage,
@@ -476,6 +482,105 @@ def _namespace_policy_presence(namespace: str) -> tuple[bool, bool, int, list[st
     return quota_present, limit_range_present, policy_count, required_missing
 
 
+def _pct(failed: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return round((float(failed) / float(total)) * 100.0, 2)
+
+
+def _namespace_slo_budget(session: Session, namespace: str, *, lookback_minutes: int = 60) -> dict[str, float | int]:
+    cutoff = utc_now() - timedelta(minutes=max(5, int(lookback_minutes or 60)))
+
+    vm_totals = (
+        session.exec(
+            text(
+                """
+                SELECT
+                  COUNT(*) AS total,
+                  SUM(CASE WHEN lower(COALESCE(status, '')) IN ('failed', 'error') THEN 1 ELSE 0 END) AS failed
+                FROM instance
+                WHERE namespace = :namespace
+                  AND started_at >= :cutoff
+                """
+            ).bindparams(namespace=namespace, cutoff=cutoff)
+        )
+        .mappings()
+        .one()
+    )
+    vm_total = int(vm_totals.get("total") or 0)
+    vm_failed = int(vm_totals.get("failed") or 0)
+    vm_failure_rate = _pct(vm_failed, vm_total)
+
+    upload_totals = (
+        session.exec(
+            text(
+                """
+                SELECT
+                  COUNT(*) AS total,
+                  SUM(
+                    CASE
+                      WHEN lower(COALESCE(status, '')) IN ('failed', 'error')
+                      THEN 1 ELSE 0
+                    END
+                  ) AS failed
+                FROM imageuploadtask
+                WHERE namespace = :namespace
+                  AND updated_at >= :cutoff
+                  AND lower(COALESCE(status, '')) IN ('completed', 'failed', 'error')
+                """
+            ).bindparams(namespace=namespace, cutoff=cutoff)
+        )
+        .mappings()
+        .one()
+    )
+    upload_total = int(upload_totals.get("total") or 0)
+    upload_failed = int(upload_totals.get("failed") or 0)
+    upload_failure_rate = _pct(upload_failed, upload_total)
+
+    oldest_queue = (
+        session.exec(
+            text(
+                """
+                SELECT started_at
+                FROM containerinstance
+                WHERE namespace = :namespace
+                  AND lower(COALESCE(status, '')) IN ('queued', 'pending')
+                ORDER BY started_at ASC
+                LIMIT 1
+                """
+            ).bindparams(namespace=namespace)
+        )
+        .mappings()
+        .first()
+    )
+    queue_oldest_pending_seconds = 0
+    if oldest_queue and oldest_queue.get("started_at") is not None:
+        try:
+            queue_oldest_pending_seconds = max(
+                0,
+                int((utc_now() - oldest_queue["started_at"]).total_seconds()),
+            )
+        except Exception:
+            queue_oldest_pending_seconds = 0
+
+    error_budget_target_pct = 99.0
+    dominant_failure = max(vm_failure_rate, upload_failure_rate)
+    error_budget_remaining_pct = round(max(0.0, 100.0 - dominant_failure), 2)
+
+    return {
+        "lookback_minutes": max(5, int(lookback_minutes or 60)),
+        "vm_total": vm_total,
+        "vm_failed": vm_failed,
+        "vm_failure_rate_pct": vm_failure_rate,
+        "upload_total": upload_total,
+        "upload_failed": upload_failed,
+        "upload_failure_rate_pct": upload_failure_rate,
+        "queue_oldest_pending_seconds": queue_oldest_pending_seconds,
+        "error_budget_target_pct": error_budget_target_pct,
+        "error_budget_remaining_pct": error_budget_remaining_pct,
+    }
+
+
 def _delete_namespaced_runtime_resources(namespace: str) -> int:
     deleted = 0
     core = kube._client()
@@ -804,6 +909,13 @@ def list_managed_namespace_observability(
         quota_present, limit_range_present, network_policy_count, missing_policies = _namespace_policy_presence(
             namespace
         )
+        slo = _namespace_slo_budget(session, namespace, lookback_minutes=60)
+        drift_items = detect_namespace_policy_drift(
+            kube,
+            namespace=namespace,
+            team_label=normalize_team(getattr(row, "team_label", "default")),
+            policy=_managed_namespace_policy(row),
+        )
         out.append(
             ManagedNamespaceObservabilityOut(
                 namespace=namespace,
@@ -843,6 +955,19 @@ def list_managed_namespace_observability(
                 limit_range_present=limit_range_present,
                 network_policy_count=network_policy_count,
                 required_network_policies_missing=missing_policies if bool(row.enforce_network_policies) else [],
+                slo_window_minutes=int(slo["lookback_minutes"]),
+                vm_launches_total=int(slo["vm_total"]),
+                vm_launches_failed=int(slo["vm_failed"]),
+                vm_launch_failure_rate_pct=float(slo["vm_failure_rate_pct"]),
+                upload_finalizes_total=int(slo["upload_total"]),
+                upload_finalizes_failed=int(slo["upload_failed"]),
+                upload_finalize_failure_rate_pct=float(slo["upload_failure_rate_pct"]),
+                queue_oldest_pending_seconds=int(slo["queue_oldest_pending_seconds"]),
+                error_budget_target_pct=float(slo["error_budget_target_pct"]),
+                error_budget_remaining_pct=float(slo["error_budget_remaining_pct"]),
+                alert_route_key=f"tenant_namespace={namespace}",
+                drift_count=len(drift_items),
+                drift_items=drift_items[:8],
                 last_reconciled_at=row.last_reconciled_at,
             )
         )

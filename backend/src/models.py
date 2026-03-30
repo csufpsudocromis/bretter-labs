@@ -237,6 +237,19 @@ class ManagedNamespaceObservabilityOut(BaseModel):
     limit_range_present: bool = False
     network_policy_count: int = 0
     required_network_policies_missing: list[str] = Field(default_factory=list)
+    slo_window_minutes: int = 60
+    vm_launches_total: int = 0
+    vm_launches_failed: int = 0
+    vm_launch_failure_rate_pct: float = 0.0
+    upload_finalizes_total: int = 0
+    upload_finalizes_failed: int = 0
+    upload_finalize_failure_rate_pct: float = 0.0
+    queue_oldest_pending_seconds: int = 0
+    error_budget_target_pct: float = 99.0
+    error_budget_remaining_pct: float = 100.0
+    alert_route_key: str = ""
+    drift_count: int = 0
+    drift_items: list[str] = Field(default_factory=list)
     last_reconciled_at: Optional[datetime] = None
 
 
@@ -245,6 +258,7 @@ class ImageMeta(BaseModel):
     name: str
     tenant: str = "global"
     namespace: str = "labs"
+    shared_catalog: bool = False
     cluster_id: str = "local"
     checksum: str
     size_bytes: int
@@ -292,6 +306,7 @@ class ContainerImageCreate(BaseModel):
     image_ref: str = Field(..., min_length=1, max_length=255)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    shared_catalog: Optional[bool] = None
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
@@ -300,6 +315,7 @@ class ContainerImageUpdate(BaseModel):
     image_ref: Optional[str] = Field(default=None, min_length=1, max_length=255)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    shared_catalog: Optional[bool] = None
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
 
 
@@ -309,6 +325,7 @@ class ContainerImageMeta(BaseModel):
     image_ref: str
     tenant: str = "global"
     namespace: str = "labs"
+    shared_catalog: bool = False
     cluster_id: str = "local"
     signature_warning: Optional[str] = None
     last_scan_at: Optional[datetime] = None
@@ -328,6 +345,7 @@ class VMTemplateCreate(BaseModel):
     name: str
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    shared_catalog: Optional[bool] = None
     enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
@@ -351,6 +369,7 @@ class VMTemplateUpdate(BaseModel):
     name: Optional[str] = None
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    shared_catalog: Optional[bool] = None
     enabled_namespaces: Optional[list[str]] = None
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
@@ -375,6 +394,7 @@ class VMTemplate(BaseModel):
     name: str
     tenant: str = "global"
     namespace: str = "labs"
+    shared_catalog: bool = False
     enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: str = "local"
     description: Optional[str] = None
@@ -414,6 +434,7 @@ class ContainerTemplateCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    shared_catalog: Optional[bool] = None
     enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = ""
@@ -445,6 +466,7 @@ class ContainerTemplateUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     tenant: Optional[str] = Field(default=None, min_length=1, max_length=64)
     namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    shared_catalog: Optional[bool] = None
     enabled_namespaces: Optional[list[str]] = None
     cluster_id: Optional[str] = Field(default=None, min_length=1, max_length=64)
     description: Optional[str] = None
@@ -479,6 +501,7 @@ class ContainerTemplate(BaseModel):
     name: str
     tenant: str = "global"
     namespace: str = "labs"
+    shared_catalog: bool = False
     enabled_namespaces: list[str] = Field(default_factory=list)
     cluster_id: str = "local"
     description: Optional[str] = None

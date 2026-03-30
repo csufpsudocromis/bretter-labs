@@ -4,6 +4,7 @@ import { api } from "../../api";
 const DEFAULT_FORM = {
   name: "",
   image_ref: "",
+  shared_catalog: false,
 };
 
 const inferNameFromRef = (imageRef) => {
@@ -26,11 +27,12 @@ const normalizeSignatureWarning = (warning) => {
 
 const AdminContainerImages = () => {
   const [images, setImages] = useState([]);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
-  const [editForm, setEditForm] = useState({ name: "", image_ref: "" });
+  const [editForm, setEditForm] = useState({ name: "", image_ref: "", shared_catalog: false });
   const [busyAction, setBusyAction] = useState("");
   const [isCreating, setIsCreating] = useState(false);
 
@@ -40,8 +42,13 @@ const AdminContainerImages = () => {
 
   const load = useCallback(async () => {
     try {
-      const res = await api.get("/admin/container-images");
+      const [res, me] = await Promise.all([api.get("/admin/container-images"), api.get("/auth/me")]);
       setImages(res.data || []);
+      setIsPlatformAdmin(
+        String(me?.data?.role || "")
+          .trim()
+          .toLowerCase() === "platform_admin"
+      );
       setError("");
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to load container images");
@@ -69,6 +76,9 @@ const AdminContainerImages = () => {
       name: String(form.name || "").trim() || inferNameFromRef(imageRef),
       image_ref: imageRef,
     };
+    if (isPlatformAdmin) {
+      payload.shared_catalog = Boolean(form.shared_catalog);
+    }
     if (!payload.name || !payload.image_ref) {
       setError("Image reference is required");
       return;
@@ -100,7 +110,11 @@ const AdminContainerImages = () => {
 
   const startEdit = (row) => {
     setEditingId(row.id);
-    setEditForm({ name: row.name || "", image_ref: row.image_ref || "" });
+    setEditForm({
+      name: row.name || "",
+      image_ref: row.image_ref || "",
+      shared_catalog: Boolean(row.shared_catalog),
+    });
   };
 
   const saveEdit = async () => {
@@ -108,10 +122,14 @@ const AdminContainerImages = () => {
     if (!imageId || isImageBusy(imageId)) return;
     setBusyAction(actionKey(imageId, "save"));
     try {
-      const res = await api.patch(`/admin/container-images/${imageId}`, editForm);
+      const payload = { name: editForm.name, image_ref: editForm.image_ref };
+      if (isPlatformAdmin) {
+        payload.shared_catalog = Boolean(editForm.shared_catalog);
+      }
+      const res = await api.patch(`/admin/container-images/${imageId}`, payload);
       const signatureWarning = String(res?.data?.signature_warning || "").trim();
       setEditingId(null);
-      setEditForm({ name: "", image_ref: "" });
+      setEditForm({ name: "", image_ref: "", shared_catalog: false });
       setMessage(
         signatureWarning
           ? `Container image updated. Warning: ${normalizeSignatureWarning(signatureWarning)}`
@@ -199,6 +217,18 @@ const AdminContainerImages = () => {
                 onChange={(e) => setForm((prev) => ({ ...prev, image_ref: e.target.value }))}
               />
             </label>
+            {isPlatformAdmin && (
+              <label>
+                Catalog scope
+                <select
+                  value={form.shared_catalog ? "shared" : "namespace"}
+                  onChange={(e) => setForm((prev) => ({ ...prev, shared_catalog: e.target.value === "shared" }))}
+                >
+                  <option value="namespace">Namespace-owned</option>
+                  <option value="shared">Shared (cross-namespace)</option>
+                </select>
+              </label>
+            )}
             <button onClick={create} disabled={!canCreate || isCreating}>
               {isCreating ? "Adding..." : "Add image"}
             </button>
@@ -235,6 +265,20 @@ const AdminContainerImages = () => {
                         onChange={(e) => setEditForm((prev) => ({ ...prev, image_ref: e.target.value }))}
                       />
                     </label>
+                    {isPlatformAdmin && (
+                      <label>
+                        Catalog scope
+                        <select
+                          value={editForm.shared_catalog ? "shared" : "namespace"}
+                          onChange={(e) =>
+                            setEditForm((prev) => ({ ...prev, shared_catalog: e.target.value === "shared" }))
+                          }
+                        >
+                          <option value="namespace">Namespace-owned</option>
+                          <option value="shared">Shared (cross-namespace)</option>
+                        </select>
+                      </label>
+                    )}
                     <div className="actions container-image-actions">
                       <button className="ghost" onClick={() => setEditingId(null)} disabled={isBusy(img.id, "save")}>
                         Cancel
@@ -250,6 +294,9 @@ const AdminContainerImages = () => {
                 ) : (
                   <>
                     <div className="muted small">{img.image_ref}</div>
+                    <div className="muted small">
+                      {img.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}
+                    </div>
                     <div className="muted small">
                       Scan: {img.last_scan_status || "never"}
                       {img.last_scan_at ? ` (${new Date(img.last_scan_at).toLocaleString()})` : ""}

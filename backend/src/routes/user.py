@@ -571,7 +571,12 @@ def _template_enabled_for_namespace(record: Template, namespace: str) -> bool:
     selected = normalize_namespace(namespace)
     if not selected:
         return False
-    return selected in set(_template_enabled_namespaces(record))
+    if selected not in set(_template_enabled_namespaces(record)):
+        return False
+    template_namespace = _template_namespace(record)
+    if selected == template_namespace:
+        return True
+    return bool(getattr(record, "shared_catalog", False))
 
 
 def _namespace_vm_idle_timeout_minutes(session: Session, namespace: str, template: Template | None) -> int:
@@ -596,6 +601,10 @@ def _image_namespace(record: Image) -> str:
         or normalize_namespace(settings.kube_namespace)
         or "labs"
     )
+
+
+def _image_shared_catalog(record: Image) -> bool:
+    return bool(getattr(record, "shared_catalog", False))
 
 
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
@@ -867,7 +876,7 @@ def preflight_template_launch(
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
     image_namespace = _image_namespace(image)
-    if image_namespace != template_namespace:
+    if image_namespace != template_namespace and not _image_shared_catalog(image):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image namespace is invalid")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
@@ -1533,7 +1542,7 @@ def start_vm(
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
     image_namespace = _image_namespace(image)
-    if image_namespace != template_namespace:
+    if image_namespace != template_namespace and not _image_shared_catalog(image):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image namespace is invalid")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:
@@ -1833,7 +1842,7 @@ def restart_vm(
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image missing for template")
     image_namespace = _image_namespace(image)
-    if image_namespace != template_namespace:
+    if image_namespace != template_namespace and not _image_shared_catalog(image):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="template image namespace is invalid")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {template_tenant, GLOBAL_TENANT}:

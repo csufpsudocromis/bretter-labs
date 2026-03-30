@@ -4,6 +4,7 @@ import logging
 
 from kubernetes import client
 from kubernetes.client import ApiException
+from kubernetes.utils import parse_quantity
 from sqlmodel import select
 
 from ..config import settings
@@ -309,6 +310,174 @@ def _default_network_policies(control_namespace: str) -> list[client.V1NetworkPo
     ]
 
 
+def _quantity_matches(expected: str, actual: str) -> bool:
+    expected_raw = str(expected or "").strip()
+    actual_raw = str(actual or "").strip()
+    if expected_raw == actual_raw:
+        return True
+    if not expected_raw or not actual_raw:
+        return False
+    try:
+        return int(parse_quantity(expected_raw)) == int(parse_quantity(actual_raw))
+    except Exception:
+        return expected_raw == actual_raw
+
+
+def _expected_namespace_labels(team_label: str, policy: NamespaceBootstrapPolicy) -> dict[str, str]:
+    resolved_profile = _normalize_security_profile(policy.security_profile)
+    runtime_profile_label = "vm-privileged" if resolved_profile == "privileged" else resolved_profile
+    labels = {
+        "app.kubernetes.io/part-of": "bretter-labs",
+        "labs.bretter.io/tenant": "true",
+        "labs.bretter.io/team": _safe_team_label(team_label),
+        "labs.bretter.io/runtime-profile": runtime_profile_label,
+    }
+    labels.update(_pod_security_labels(security_profile=resolved_profile))
+    return labels
+
+
+def detect_namespace_policy_drift(
+    kube_service,
+    *,
+    namespace: str,
+    team_label: str,
+    policy: NamespaceBootstrapPolicy,
+) -> list[str]:
+    drifts: list[str] = []
+    target_namespace = normalize_namespace(namespace)
+    if not target_namespace:
+        return ["namespace name is empty"]
+
+    control_namespace = _control_namespace()
+    core_api = kube_service._client()
+    networking_api = kube_service._networking_client()
+    rbac_api = client.RbacAuthorizationV1Api(core_api.api_client)
+
+    expected_labels = _expected_namespace_labels(team_label=team_label, policy=policy)
+    try:
+        namespace_row = core_api.read_namespace(name=target_namespace)
+        live_labels = dict(getattr(namespace_row.metadata, "labels", {}) or {})
+        for key, expected in expected_labels.items():
+            actual = str(live_labels.get(key, "") or "").strip()
+            if actual != expected:
+                drifts.append(f"namespace label {key} drift (expected={expected!r}, actual={actual!r})")
+    except ApiException as exc:
+        if exc.status == 404:
+            drifts.append("namespace is missing")
+        else:
+            drifts.append(f"namespace read failed ({exc.status} {exc.reason})")
+        return drifts
+    except Exception as exc:
+        drifts.append(f"namespace read failed ({exc})")
+        return drifts
+
+    try:
+        rbac_api.read_namespaced_role(name=_ROLE_NAME, namespace=target_namespace)
+    except ApiException as exc:
+        if exc.status == 404:
+            drifts.append("runtime role is missing")
+        else:
+            drifts.append(f"runtime role read failed ({exc.status} {exc.reason})")
+    except Exception as exc:
+        drifts.append(f"runtime role read failed ({exc})")
+
+    try:
+        binding = rbac_api.read_namespaced_role_binding(name=_ROLE_BINDING_NAME, namespace=target_namespace)
+        subjects = list(getattr(binding, "subjects", None) or [])
+        expected_subject = ("ServiceAccount", "bretter-backend", control_namespace)
+        matched = False
+        for subject in subjects:
+            if isinstance(subject, dict):
+                kind = str(subject.get("kind", "")).strip()
+                name = str(subject.get("name", "")).strip()
+                subject_namespace = str(subject.get("namespace", "")).strip()
+            else:
+                kind = str(getattr(subject, "kind", "") or "").strip()
+                name = str(getattr(subject, "name", "") or "").strip()
+                subject_namespace = str(getattr(subject, "namespace", "") or "").strip()
+            if (kind, name, subject_namespace) == expected_subject:
+                matched = True
+                break
+        if not matched:
+            drifts.append("runtime role binding subjects drift")
+    except ApiException as exc:
+        if exc.status == 404:
+            drifts.append("runtime role binding is missing")
+        else:
+            drifts.append(f"runtime role binding read failed ({exc.status} {exc.reason})")
+    except Exception as exc:
+        drifts.append(f"runtime role binding read failed ({exc})")
+
+    expected_quota = _resource_quota(policy).spec.hard or {}
+    try:
+        quota = core_api.read_namespaced_resource_quota(name=_RESOURCE_QUOTA_NAME, namespace=target_namespace)
+        live_hard = dict(getattr(getattr(quota, "spec", None), "hard", {}) or {})
+        for key, expected in expected_quota.items():
+            actual = str(live_hard.get(key, "") or "").strip()
+            if not _quantity_matches(str(expected), actual):
+                drifts.append(f"resource quota {key} drift (expected={expected!r}, actual={actual!r})")
+    except ApiException as exc:
+        if exc.status == 404:
+            drifts.append("resource quota is missing")
+        else:
+            drifts.append(f"resource quota read failed ({exc.status} {exc.reason})")
+    except Exception as exc:
+        drifts.append(f"resource quota read failed ({exc})")
+
+    expected_limit = _limit_range(policy)
+    expected_limits = list(getattr(getattr(expected_limit, "spec", None), "limits", None) or [])
+    expected_container_limit = next(
+        (row for row in expected_limits if str(getattr(row, "type", "")) == "Container"), None
+    )
+    try:
+        live_limit = core_api.read_namespaced_limit_range(name=_LIMIT_RANGE_NAME, namespace=target_namespace)
+        live_limits = list(getattr(getattr(live_limit, "spec", None), "limits", None) or [])
+        live_container_limit = next((row for row in live_limits if str(getattr(row, "type", "")) == "Container"), None)
+        if expected_container_limit is None or live_container_limit is None:
+            drifts.append("limit range container defaults drift")
+        else:
+            for section_name in ("min", "default_request", "default", "max"):
+                expected_section = dict(getattr(expected_container_limit, section_name, {}) or {})
+                live_section = dict(getattr(live_container_limit, section_name, {}) or {})
+                for key, expected in expected_section.items():
+                    actual = str(live_section.get(key, "") or "").strip()
+                    if not _quantity_matches(str(expected), actual):
+                        drifts.append(
+                            f"limit range {section_name}.{key} drift (expected={expected!r}, actual={actual!r})"
+                        )
+    except ApiException as exc:
+        if exc.status == 404:
+            drifts.append("limit range is missing")
+        else:
+            drifts.append(f"limit range read failed ({exc.status} {exc.reason})")
+    except Exception as exc:
+        drifts.append(f"limit range read failed ({exc})")
+
+    policy_names = {str(item.metadata.name or "").strip() for item in _default_network_policies(control_namespace)}
+    try:
+        live_names = {
+            str(getattr(getattr(item, "metadata", None), "name", "") or "").strip()
+            for item in networking_api.list_namespaced_network_policy(namespace=target_namespace).items
+        }
+        if policy.enforce_network_policies:
+            missing = sorted(name for name in policy_names if name and name not in live_names)
+            if missing:
+                drifts.append(f"network policies missing: {', '.join(missing)}")
+        else:
+            unexpected = sorted(name for name in policy_names if name and name in live_names)
+            if unexpected:
+                drifts.append(f"network policies should be absent: {', '.join(unexpected)}")
+    except ApiException as exc:
+        if exc.status == 404 and policy.enforce_network_policies:
+            drifts.append("network policies list unavailable")
+        elif exc.status != 404:
+            drifts.append(f"network policy read failed ({exc.status} {exc.reason})")
+    except Exception as exc:
+        drifts.append(f"network policy read failed ({exc})")
+
+    return drifts
+
+
 def _upsert_role(rbac_api: client.RbacAuthorizationV1Api, namespace: str) -> None:
     body = _runtime_role()
     try:
@@ -544,12 +713,38 @@ def reconcile_all_managed_namespaces(kube_service) -> list[NamespaceReconcileRes
             namespace = normalize_namespace(getattr(row, "namespace", None))
             if not namespace:
                 continue
+            policy = _policy_from_managed_namespace(row)
+            team_label = normalize_team(getattr(row, "team_label", "default"))
             try:
+                before_drift = detect_namespace_policy_drift(
+                    kube_service,
+                    namespace=namespace,
+                    team_label=team_label,
+                    policy=policy,
+                )
                 reconcile_managed_namespace(kube_service, row)
+                after_drift = detect_namespace_policy_drift(
+                    kube_service,
+                    namespace=namespace,
+                    team_label=team_label,
+                    policy=policy,
+                )
+                if after_drift:
+                    results.append(
+                        NamespaceReconcileResult(
+                            namespace=namespace,
+                            ok=False,
+                            detail=f"drift remains after reconcile: {', '.join(after_drift[:5])}",
+                        )
+                    )
+                    continue
                 row.last_reconciled_at = utc_now()
                 row.updated_at = row.last_reconciled_at
                 session.add(row)
-                results.append(NamespaceReconcileResult(namespace=namespace, ok=True, detail="reconciled"))
+                detail = "reconciled"
+                if before_drift:
+                    detail = f"reconciled {len(before_drift)} drift item(s)"
+                results.append(NamespaceReconcileResult(namespace=namespace, ok=True, detail=detail))
             except Exception as exc:
                 results.append(NamespaceReconcileResult(namespace=namespace, ok=False, detail=str(exc)))
         session.commit()

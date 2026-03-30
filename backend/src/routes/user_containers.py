@@ -259,7 +259,12 @@ def _container_template_enabled_for_namespace(record: ContainerTemplateTable, na
     selected = normalize_namespace(namespace)
     if not selected:
         return False
-    return selected in set(_container_template_enabled_namespaces(record))
+    if selected not in set(_container_template_enabled_namespaces(record)):
+        return False
+    template_namespace = _container_template_namespace(record)
+    if selected == template_namespace:
+        return True
+    return bool(getattr(record, "shared_catalog", False))
 
 
 def _container_image_namespace(record: ContainerImageTable) -> str:
@@ -268,6 +273,10 @@ def _container_image_namespace(record: ContainerImageTable) -> str:
         or normalize_namespace(settings.kube_namespace)
         or "labs"
     )
+
+
+def _container_image_shared_catalog(record: ContainerImageTable) -> bool:
+    return bool(getattr(record, "shared_catalog", False))
 
 
 def _kube_for_container_cluster(session: Session, cluster_id: str):
@@ -2161,7 +2170,7 @@ def start_container_template(
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
     image_namespace = _container_image_namespace(image)
-    if image_namespace != template_namespace:
+    if image_namespace != template_namespace and not _container_image_shared_catalog(image):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="container template image namespace scope is invalid"
         )
@@ -2427,7 +2436,7 @@ def restart_container(
     if not image:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image missing for template")
     image_namespace = _container_image_namespace(image)
-    if image_namespace != template_namespace:
+    if image_namespace != template_namespace and not _container_image_shared_catalog(image):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="container template image namespace scope is invalid"
         )

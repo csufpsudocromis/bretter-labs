@@ -613,6 +613,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/settings/namespaces/observability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Managed Namespace Observability */
+        get: operations["list_managed_namespace_observability_admin_settings_namespaces_observability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/settings/namespaces/reconcile-all": {
         parameters: {
             query?: never;
@@ -646,6 +663,23 @@ export interface paths {
         head?: never;
         /** Update Managed Namespace */
         patch: operations["update_managed_namespace_admin_settings_namespaces__namespace__patch"];
+        trace?: never;
+    };
+    "/admin/settings/namespaces/{namespace}/decommission": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Decommission Managed Namespace */
+        post: operations["decommission_managed_namespace_admin_settings_namespaces__namespace__decommission_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/admin/settings/namespaces/{namespace}/reconcile": {
@@ -1906,6 +1940,8 @@ export interface components {
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /** Tenant */
             tenant?: string | null;
         };
@@ -1944,6 +1980,11 @@ export interface components {
              * @default labs
              */
             namespace: string;
+            /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
             /** Signature Warning */
             signature_warning?: string | null;
             /**
@@ -1962,6 +2003,8 @@ export interface components {
             name?: string | null;
             /** Namespace */
             namespace?: string | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /** Tenant */
             tenant?: string | null;
         };
@@ -2134,6 +2177,11 @@ export interface components {
              */
             run_as_non_root: boolean;
             /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
+            /**
              * Startup Timeout Seconds
              * @default 300
              */
@@ -2250,6 +2298,8 @@ export interface components {
              * @default false
              */
             run_as_non_root: boolean;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /**
              * Startup Timeout Seconds
              * @default 300
@@ -2314,6 +2364,8 @@ export interface components {
             readiness_success_path?: string | null;
             /** Run As Non Root */
             run_as_non_root?: boolean | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /** Startup Timeout Seconds */
             startup_timeout_seconds?: number | null;
             /** Tenant */
@@ -2441,6 +2493,11 @@ export interface components {
              * @default labs
              */
             namespace: string;
+            /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
             /** Size Bytes */
             size_bytes: number;
             /**
@@ -2455,6 +2512,11 @@ export interface components {
             filename: string;
             /** Name */
             name?: string | null;
+            /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
             /**
              * Skip Validation
              * @default false
@@ -2484,6 +2546,11 @@ export interface components {
              * @default labs
              */
             namespace: string;
+            /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
             /** Size Bytes */
             size_bytes: number;
             /**
@@ -2498,6 +2565,8 @@ export interface components {
             filename?: string | null;
             /** Name */
             name?: string | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /**
              * Skip Validation
              * @default false
@@ -2641,6 +2710,26 @@ export interface components {
              */
             ldap_user_filter: string;
         };
+        /** ManagedNamespaceCleanupStepOut */
+        ManagedNamespaceCleanupStepOut: {
+            /**
+             * Affected
+             * @default 0
+             */
+            affected: number;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "warning" | "error" | "skipped";
+            /** Step */
+            step: string;
+        };
         /** ManagedNamespaceCreate */
         ManagedNamespaceCreate: {
             /**
@@ -2771,6 +2860,174 @@ export interface components {
              * @default 60
              */
             vm_auto_delete_minutes_default: number;
+        };
+        /** ManagedNamespaceDecommissionOut */
+        ManagedNamespaceDecommissionOut: {
+            /**
+             * Blocked
+             * @default false
+             */
+            blocked: boolean;
+            /**
+             * Delete Cluster Namespace
+             * @default true
+             */
+            delete_cluster_namespace: boolean;
+            /**
+             * Deleted Cluster Resources
+             * @default 0
+             */
+            deleted_cluster_resources: number;
+            /**
+             * Deleted Database Records
+             * @default 0
+             */
+            deleted_database_records: number;
+            /**
+             * Finished At
+             * Format: date-time
+             */
+            finished_at: string;
+            /**
+             * Force Cleanup
+             * @default false
+             */
+            force_cleanup: boolean;
+            /** Namespace */
+            namespace: string;
+            /** Steps */
+            steps?: components["schemas"]["ManagedNamespaceCleanupStepOut"][];
+        };
+        /** ManagedNamespaceObservabilityOut */
+        ManagedNamespaceObservabilityOut: {
+            /**
+             * Active Container Instances
+             * @default 0
+             */
+            active_container_instances: number;
+            /**
+             * Active Vm Instances
+             * @default 0
+             */
+            active_vm_instances: number;
+            /**
+             * Alert Route Key
+             * @default
+             */
+            alert_route_key: string;
+            /**
+             * Drift Count
+             * @default 0
+             */
+            drift_count: number;
+            /** Drift Items */
+            drift_items?: string[];
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Error Budget Remaining Pct
+             * @default 100
+             */
+            error_budget_remaining_pct: number;
+            /**
+             * Error Budget Target Pct
+             * @default 99
+             */
+            error_budget_target_pct: number;
+            /**
+             * Failed Total Instances
+             * @default 0
+             */
+            failed_total_instances: number;
+            /**
+             * Image Upload Tasks Failed
+             * @default 0
+             */
+            image_upload_tasks_failed: number;
+            /**
+             * Image Upload Tasks Pending
+             * @default 0
+             */
+            image_upload_tasks_pending: number;
+            /** Last Reconciled At */
+            last_reconciled_at?: string | null;
+            /**
+             * Limit Range Present
+             * @default false
+             */
+            limit_range_present: boolean;
+            /** Namespace */
+            namespace: string;
+            /**
+             * Network Policy Count
+             * @default 0
+             */
+            network_policy_count: number;
+            /**
+             * Present In Cluster
+             * @default false
+             */
+            present_in_cluster: boolean;
+            /**
+             * Queue Oldest Pending Seconds
+             * @default 0
+             */
+            queue_oldest_pending_seconds: number;
+            /**
+             * Queued Container Instances
+             * @default 0
+             */
+            queued_container_instances: number;
+            /** Required Network Policies Missing */
+            required_network_policies_missing?: string[];
+            /**
+             * Resource Quota Present
+             * @default false
+             */
+            resource_quota_present: boolean;
+            /**
+             * Running Total Instances
+             * @default 0
+             */
+            running_total_instances: number;
+            /**
+             * Slo Window Minutes
+             * @default 60
+             */
+            slo_window_minutes: number;
+            /**
+             * Upload Finalize Failure Rate Pct
+             * @default 0
+             */
+            upload_finalize_failure_rate_pct: number;
+            /**
+             * Upload Finalizes Failed
+             * @default 0
+             */
+            upload_finalizes_failed: number;
+            /**
+             * Upload Finalizes Total
+             * @default 0
+             */
+            upload_finalizes_total: number;
+            /**
+             * Vm Launch Failure Rate Pct
+             * @default 0
+             */
+            vm_launch_failure_rate_pct: number;
+            /**
+             * Vm Launches Failed
+             * @default 0
+             */
+            vm_launches_failed: number;
+            /**
+             * Vm Launches Total
+             * @default 0
+             */
+            vm_launches_total: number;
         };
         /** ManagedNamespaceOut */
         ManagedNamespaceOut: {
@@ -3752,6 +4009,11 @@ export interface components {
             /** Rdp Default Username */
             rdp_default_username?: string | null;
             /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
+            /**
              * Tenant
              * @default global
              */
@@ -3824,6 +4086,8 @@ export interface components {
             rdp_default_password?: string | null;
             /** Rdp Default Username */
             rdp_default_username?: string | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /** Tenant */
             tenant?: string | null;
         };
@@ -3894,6 +4158,8 @@ export interface components {
             rdp_default_password?: string | null;
             /** Rdp Default Username */
             rdp_default_username?: string | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
             /** Tenant */
             tenant?: string | null;
         };
@@ -5555,6 +5821,37 @@ export interface operations {
             };
         };
     };
+    list_managed_namespace_observability_admin_settings_namespaces_observability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceObservabilityOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     reconcile_all_managed_namespaces_admin_settings_namespaces_reconcile_all_post: {
         parameters: {
             query?: never;
@@ -5592,6 +5889,7 @@ export interface operations {
         parameters: {
             query?: {
                 delete_cluster_namespace?: boolean;
+                force_cleanup?: boolean;
             };
             header?: {
                 authorization?: string | null;
@@ -5604,11 +5902,13 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceDecommissionOut"];
+                };
             };
             /** @description Validation Error */
             422: {
@@ -5645,6 +5945,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ManagedNamespaceOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decommission_managed_namespace_admin_settings_namespaces__namespace__decommission_post: {
+        parameters: {
+            query?: {
+                delete_cluster_namespace?: boolean;
+                force_cleanup?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                namespace: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedNamespaceDecommissionOut"];
                 };
             };
             /** @description Validation Error */

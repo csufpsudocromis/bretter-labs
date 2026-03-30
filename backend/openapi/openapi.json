@@ -996,6 +996,17 @@
             ],
             "title": "Namespace"
           },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
+          },
           "tenant": {
             "anyOf": [
               {
@@ -1067,6 +1078,11 @@
             "default": "labs",
             "title": "Namespace",
             "type": "string"
+          },
+          "shared_catalog": {
+            "default": false,
+            "title": "Shared Catalog",
+            "type": "boolean"
           },
           "signature_warning": {
             "anyOf": [
@@ -1147,6 +1163,17 @@
               }
             ],
             "title": "Namespace"
+          },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
           },
           "tenant": {
             "anyOf": [
@@ -1482,6 +1509,11 @@
             "title": "Run As Non Root",
             "type": "boolean"
           },
+          "shared_catalog": {
+            "default": false,
+            "title": "Shared Catalog",
+            "type": "boolean"
+          },
           "startup_timeout_seconds": {
             "default": 300,
             "title": "Startup Timeout Seconds",
@@ -1704,6 +1736,17 @@
             "default": false,
             "title": "Run As Non Root",
             "type": "boolean"
+          },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
           },
           "startup_timeout_seconds": {
             "default": 300,
@@ -2060,6 +2103,17 @@
             ],
             "title": "Run As Non Root"
           },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
+          },
           "startup_timeout_seconds": {
             "anyOf": [
               {
@@ -2313,6 +2367,11 @@
             "title": "Namespace",
             "type": "string"
           },
+          "shared_catalog": {
+            "default": false,
+            "title": "Shared Catalog",
+            "type": "boolean"
+          },
           "size_bytes": {
             "title": "Size Bytes",
             "type": "integer"
@@ -2350,6 +2409,11 @@
               }
             ],
             "title": "Name"
+          },
+          "shared_catalog": {
+            "default": false,
+            "title": "Shared Catalog",
+            "type": "boolean"
           },
           "skip_validation": {
             "default": false,
@@ -2391,6 +2455,11 @@
             "default": "labs",
             "title": "Namespace",
             "type": "string"
+          },
+          "shared_catalog": {
+            "default": false,
+            "title": "Shared Catalog",
+            "type": "boolean"
           },
           "size_bytes": {
             "title": "Size Bytes",
@@ -2435,6 +2504,17 @@
               }
             ],
             "title": "Name"
+          },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
           },
           "skip_validation": {
             "default": false,
@@ -2987,10 +3067,37 @@
             "title": "Active Vm Instances",
             "type": "integer"
           },
+          "alert_route_key": {
+            "default": "",
+            "title": "Alert Route Key",
+            "type": "string"
+          },
+          "drift_count": {
+            "default": 0,
+            "title": "Drift Count",
+            "type": "integer"
+          },
+          "drift_items": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Drift Items",
+            "type": "array"
+          },
           "enabled": {
             "default": true,
             "title": "Enabled",
             "type": "boolean"
+          },
+          "error_budget_remaining_pct": {
+            "default": 100.0,
+            "title": "Error Budget Remaining Pct",
+            "type": "number"
+          },
+          "error_budget_target_pct": {
+            "default": 99.0,
+            "title": "Error Budget Target Pct",
+            "type": "number"
           },
           "failed_total_instances": {
             "default": 0,
@@ -3038,6 +3145,11 @@
             "title": "Present In Cluster",
             "type": "boolean"
           },
+          "queue_oldest_pending_seconds": {
+            "default": 0,
+            "title": "Queue Oldest Pending Seconds",
+            "type": "integer"
+          },
           "queued_container_instances": {
             "default": 0,
             "title": "Queued Container Instances",
@@ -3058,6 +3170,41 @@
           "running_total_instances": {
             "default": 0,
             "title": "Running Total Instances",
+            "type": "integer"
+          },
+          "slo_window_minutes": {
+            "default": 60,
+            "title": "Slo Window Minutes",
+            "type": "integer"
+          },
+          "upload_finalize_failure_rate_pct": {
+            "default": 0.0,
+            "title": "Upload Finalize Failure Rate Pct",
+            "type": "number"
+          },
+          "upload_finalizes_failed": {
+            "default": 0,
+            "title": "Upload Finalizes Failed",
+            "type": "integer"
+          },
+          "upload_finalizes_total": {
+            "default": 0,
+            "title": "Upload Finalizes Total",
+            "type": "integer"
+          },
+          "vm_launch_failure_rate_pct": {
+            "default": 0.0,
+            "title": "Vm Launch Failure Rate Pct",
+            "type": "number"
+          },
+          "vm_launches_failed": {
+            "default": 0,
+            "title": "Vm Launches Failed",
+            "type": "integer"
+          },
+          "vm_launches_total": {
+            "default": 0,
+            "title": "Vm Launches Total",
             "type": "integer"
           }
         },
@@ -5432,6 +5579,11 @@
             ],
             "title": "Rdp Default Username"
           },
+          "shared_catalog": {
+            "default": false,
+            "title": "Shared Catalog",
+            "type": "boolean"
+          },
           "tenant": {
             "default": "global",
             "title": "Tenant",
@@ -5600,6 +5752,17 @@
               }
             ],
             "title": "Rdp Default Username"
+          },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
           },
           "tenant": {
             "anyOf": [
@@ -5935,6 +6098,17 @@
               }
             ],
             "title": "Rdp Default Username"
+          },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
           },
           "tenant": {
             "anyOf": [

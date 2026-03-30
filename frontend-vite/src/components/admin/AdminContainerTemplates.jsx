@@ -23,6 +23,7 @@ const DEFAULT_FORM = {
   env_text: "",
   auto_delete_minutes: 60,
   idle_timeout_minutes: 30,
+  shared_catalog: false,
   enabled_namespaces: [],
   enabled: false,
 };
@@ -152,6 +153,7 @@ const AdminContainerTemplates = () => {
     env: parseEnv(source.env_text),
     auto_delete_minutes: Number(source.auto_delete_minutes) || 60,
     idle_timeout_minutes: Math.max(1, Number(source.idle_timeout_minutes) || 30),
+    shared_catalog: Boolean(source.shared_catalog),
     enabled_namespaces: Array.isArray(source.enabled_namespaces) ? source.enabled_namespaces : [],
     enabled: Boolean(source.enabled),
   });
@@ -214,6 +216,7 @@ const AdminContainerTemplates = () => {
       env_text: formatEnv(tmpl.env || {}),
       auto_delete_minutes: tmpl.auto_delete_minutes || 60,
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
+      shared_catalog: Boolean(tmpl.shared_catalog),
       enabled_namespaces: Array.isArray(tmpl.enabled_namespaces) ? tmpl.enabled_namespaces : [],
       enabled: Boolean(tmpl.enabled),
     });
@@ -364,6 +367,18 @@ const AdminContainerTemplates = () => {
               </div>
               <span className="muted small">Select the namespaces where this template can be launched.</span>
             </div>
+            {isPlatformAdmin && (
+              <label>
+                Catalog scope
+                <select
+                  value={form.shared_catalog ? "shared" : "namespace"}
+                  onChange={(e) => setForm((prev) => ({ ...prev, shared_catalog: e.target.value === "shared" }))}
+                >
+                  <option value="namespace">Namespace-owned</option>
+                  <option value="shared">Shared catalog</option>
+                </select>
+              </label>
+            )}
             <label>
               Healthcheck protocol
               <select
@@ -530,6 +545,7 @@ const AdminContainerTemplates = () => {
                   <span>{tmpl.memory_mb} MB RAM</span>
                   <span>Port {tmpl.container_port || 80}</span>
                 </div>
+                <div className="muted small">{tmpl.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}</div>
                 <div className="muted small template-image-ref">Image: {imageRef(tmpl.container_image_id)}</div>
                 <div className="muted small">
                   Enabled namespaces:{" "}

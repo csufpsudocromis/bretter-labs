@@ -52,6 +52,7 @@ class Image(SQLModel, table=True):
     filename: str
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)
+    shared_catalog: bool = Field(default=False, index=True)
     cluster_id: str = Field(default="local", index=True)
     source_pvc: Optional[str] = None
     checksum: str
@@ -92,6 +93,7 @@ class Template(SQLModel, table=True):
     name: str
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)
+    shared_catalog: bool = Field(default=False, index=True)
     cluster_id: str = Field(default="local", index=True)
     enabled_namespaces_json: str = Field(
         default="[]",
@@ -135,6 +137,7 @@ class ContainerImage(SQLModel, table=True):
     image_ref: str
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)
+    shared_catalog: bool = Field(default=False, index=True)
     cluster_id: str = Field(default="local", index=True)
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
@@ -152,6 +155,7 @@ class ContainerTemplate(SQLModel, table=True):
     name: str
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)
+    shared_catalog: bool = Field(default=False, index=True)
     cluster_id: str = Field(default="local", index=True)
     enabled_namespaces_json: str = Field(
         default="[]",

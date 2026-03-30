@@ -281,6 +281,7 @@ ALERTMANAGER_WEBHOOK_RECEIVER_NAME="${ALERTMANAGER_WEBHOOK_RECEIVER_NAME:-ops-we
 ALERTMANAGER_WEBHOOK_SECRET_NAME="${ALERTMANAGER_WEBHOOK_SECRET_NAME:-}"
 ALERTMANAGER_WEBHOOK_SECRET_KEY="${ALERTMANAGER_WEBHOOK_SECRET_KEY:-url}"
 ALERTMANAGER_WEBHOOK_MATCHERS="${ALERTMANAGER_WEBHOOK_MATCHERS:-severity=~\"critical|warning\"}"
+ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES="${ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES:-}"
 RUN_POST_DEPLOY_API_HEALTH_CHECK="${RUN_POST_DEPLOY_API_HEALTH_CHECK:-1}"
 POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS="${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS:-120}"
 RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK="${RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK:-1}"
@@ -1259,6 +1260,9 @@ validate_monitoring_config() {
     [ -n "$ALERTMANAGER_WEBHOOK_SECRET_KEY" ] || fail "ALERTMANAGER_WEBHOOK_SECRET_KEY cannot be empty when webhook receiver is enabled."
     [ -n "$ALERTMANAGER_WEBHOOK_MATCHERS" ] || fail "ALERTMANAGER_WEBHOOK_MATCHERS cannot be empty when webhook receiver is enabled."
   fi
+  if [ -n "$ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES" ]; then
+    parse_alertmanager_namespace_webhook_routes >/dev/null || fail "ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES is invalid."
+  fi
   case "$ENABLE_GHCR_ACCESS_HEALTHCHECK" in
     0 | 1) ;;
     *) fail "ENABLE_GHCR_ACCESS_HEALTHCHECK must be either 0 or 1." ;;
@@ -1823,6 +1827,9 @@ install_monitoring_stack() {
   local values_file alertmanager_group_by_yaml alertmanager_route_children_yaml
   local alertmanager_receivers_extra_yaml alertmanager_webhook_url
   local alertmanager_webhook_url_escaped alertmanager_webhook_matchers_escaped
+  local namespace_route_entries route_namespace route_secret_name route_secret_key
+  local route_webhook_url route_webhook_url_escaped route_receiver_name route_matcher_escaped
+  local route_block receiver_block
 
   install_helm
   log "Installing kube-prometheus-stack in namespace ${MONITORING_NAMESPACE}..."
@@ -1841,11 +1848,56 @@ for item in items:
     print(f"        - {item}")
 PY
   )"
-  alertmanager_route_children_yaml="          []"
+  alertmanager_route_children_yaml=""
   alertmanager_receivers_extra_yaml=""
   alertmanager_webhook_url=""
   alertmanager_webhook_url_escaped=""
   alertmanager_webhook_matchers_escaped=""
+  if ! namespace_route_entries="$(parse_alertmanager_namespace_webhook_routes)"; then
+    fail "ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES is invalid."
+  fi
+  if [ -n "$namespace_route_entries" ]; then
+    while IFS=$'\t' read -r route_namespace route_secret_name route_secret_key; do
+      [ -n "$route_namespace" ] || continue
+      route_webhook_url="$(secret_data_plaintext "$NAMESPACE" "$route_secret_name" "$route_secret_key" || true)"
+      if [ -z "$route_webhook_url" ]; then
+        fail "Alertmanager namespace route is enabled but secret ${route_secret_name}/${route_secret_key} is missing for namespace ${route_namespace}."
+      fi
+      route_receiver_name="tenant-${route_namespace}-webhook"
+      route_matcher_escaped="$(yaml_escape "namespace=\"${route_namespace}\"")"
+      route_block="$(
+        cat <<EOF
+          - receiver: "${route_receiver_name}"
+            matchers:
+              - "${route_matcher_escaped}"
+            continue: false
+EOF
+      )"
+      if [ -n "$alertmanager_route_children_yaml" ]; then
+        alertmanager_route_children_yaml="${alertmanager_route_children_yaml}
+${route_block}"
+      else
+        alertmanager_route_children_yaml="$route_block"
+      fi
+      route_webhook_url_escaped="$(yaml_escape "$route_webhook_url")"
+      receiver_block="$(
+        cat <<EOF
+        - name: "${route_receiver_name}"
+          webhook_configs:
+            - url: "${route_webhook_url_escaped}"
+              send_resolved: true
+EOF
+      )"
+      if [ -n "$alertmanager_receivers_extra_yaml" ]; then
+        alertmanager_receivers_extra_yaml="${alertmanager_receivers_extra_yaml}
+${receiver_block}"
+      else
+        alertmanager_receivers_extra_yaml="$receiver_block"
+      fi
+    done <<EOF
+${namespace_route_entries}
+EOF
+  fi
   if [ "$ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED" -eq 1 ]; then
     alertmanager_webhook_url="$(secret_data_plaintext "$NAMESPACE" "$ALERTMANAGER_WEBHOOK_SECRET_NAME" "$ALERTMANAGER_WEBHOOK_SECRET_KEY" || true)"
     if [ -z "$alertmanager_webhook_url" ]; then
@@ -1853,7 +1905,7 @@ PY
     fi
     alertmanager_webhook_url_escaped="$(yaml_escape "$alertmanager_webhook_url")"
     alertmanager_webhook_matchers_escaped="$(yaml_escape "$ALERTMANAGER_WEBHOOK_MATCHERS")"
-    alertmanager_route_children_yaml="$(
+    route_block="$(
       cat <<EOF
           - receiver: "${ALERTMANAGER_WEBHOOK_RECEIVER_NAME}"
             matchers:
@@ -1861,7 +1913,13 @@ PY
             continue: false
 EOF
     )"
-    alertmanager_receivers_extra_yaml="$(
+    if [ -n "$alertmanager_route_children_yaml" ]; then
+      alertmanager_route_children_yaml="${alertmanager_route_children_yaml}
+${route_block}"
+    else
+      alertmanager_route_children_yaml="$route_block"
+    fi
+    receiver_block="$(
       cat <<EOF
         - name: "${ALERTMANAGER_WEBHOOK_RECEIVER_NAME}"
           webhook_configs:
@@ -1869,6 +1927,15 @@ EOF
               send_resolved: true
 EOF
     )"
+    if [ -n "$alertmanager_receivers_extra_yaml" ]; then
+      alertmanager_receivers_extra_yaml="${alertmanager_receivers_extra_yaml}
+${receiver_block}"
+    else
+      alertmanager_receivers_extra_yaml="$receiver_block"
+    fi
+  fi
+  if [ -z "$alertmanager_route_children_yaml" ]; then
+    alertmanager_route_children_yaml="          []"
   fi
 
   values_file="$(mktemp /tmp/bretter-monitoring-values.XXXXXX.yaml)"
@@ -3077,6 +3144,45 @@ escape_sed_replacement() {
 
 yaml_escape() {
   printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'
+}
+
+parse_alertmanager_namespace_webhook_routes() {
+  python3 - "$ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES" <<'PY'
+import re
+import sys
+
+raw = str(sys.argv[1] if len(sys.argv) > 1 else "").strip()
+if not raw:
+    raise SystemExit(0)
+
+dns1123_label = re.compile(r"^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$")
+for idx, chunk in enumerate(raw.split(","), start=1):
+    entry = chunk.strip()
+    if not entry:
+        continue
+    if "=" not in entry:
+        print(
+            f"invalid ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES entry #{idx}: "
+            f"expected namespace=secretName[/secretKey], got {entry!r}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    namespace, secret_ref = [part.strip() for part in entry.split("=", 1)]
+    if not dns1123_label.fullmatch(namespace):
+        print(f"invalid namespace in ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES: {namespace!r}", file=sys.stderr)
+        raise SystemExit(1)
+    if "/" in secret_ref:
+        secret_name, secret_key = [part.strip() for part in secret_ref.split("/", 1)]
+    else:
+        secret_name, secret_key = secret_ref.strip(), "url"
+    if not dns1123_label.fullmatch(secret_name):
+        print(f"invalid secret name in ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES: {secret_name!r}", file=sys.stderr)
+        raise SystemExit(1)
+    if not secret_key:
+        print(f"invalid secret key in ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES for namespace {namespace!r}", file=sys.stderr)
+        raise SystemExit(1)
+    print(f"{namespace}\t{secret_name}\t{secret_key}")
+PY
 }
 
 render_manifest_template() {

@@ -267,6 +267,14 @@ const AdminNamespacesSettings = () => {
   };
 
   const obsByNamespace = new Map(observabilityRows.map((row) => [String(row.namespace || ""), row]));
+  const formatDuration = (seconds) => {
+    const total = Math.max(0, Number(seconds || 0));
+    if (!Number.isFinite(total) || total <= 0) return "0s";
+    const mins = Math.floor(total / 60);
+    const rem = Math.floor(total % 60);
+    if (mins <= 0) return `${rem}s`;
+    return `${mins}m ${rem}s`;
+  };
 
   return (
     <div>
@@ -524,6 +532,20 @@ const AdminNamespacesSettings = () => {
                       : ""}
                   </div>
                 ) : null}
+                {obsByNamespace.get(row.namespace) ? (
+                  <div className="small muted">
+                    SLO (60m): VM fail{" "}
+                    {Number(obsByNamespace.get(row.namespace).vm_launch_failure_rate_pct || 0).toFixed(2)}% | Upload
+                    fail {Number(obsByNamespace.get(row.namespace).upload_finalize_failure_rate_pct || 0).toFixed(2)}% |
+                    Budget {Number(obsByNamespace.get(row.namespace).error_budget_remaining_pct || 0).toFixed(2)}%
+                  </div>
+                ) : null}
+                {obsByNamespace.get(row.namespace) ? (
+                  <div className="small muted">
+                    Drift: {Number(obsByNamespace.get(row.namespace).drift_count || 0)} | Route key:{" "}
+                    {String(obsByNamespace.get(row.namespace).alert_route_key || "-")}
+                  </div>
+                ) : null}
                 <div className="actions" style={{ marginTop: "0.75rem" }}>
                   <button type="button" className="ghost" onClick={() => startEdit(row)} disabled={saving}>
                     Edit
@@ -560,16 +582,33 @@ const AdminNamespacesSettings = () => {
                       {item.queued_container_instances}
                     </div>
                     <div className="small muted">
+                      SLO ({item.slo_window_minutes || 60}m): VM fail{" "}
+                      {Number(item.vm_launch_failure_rate_pct || 0).toFixed(2)}% ({item.vm_launches_failed}/
+                      {item.vm_launches_total}) | Upload fail{" "}
+                      {Number(item.upload_finalize_failure_rate_pct || 0).toFixed(2)}% ({item.upload_finalizes_failed}/
+                      {item.upload_finalizes_total})
+                    </div>
+                    <div className="small muted">
+                      Queue oldest pending: {formatDuration(item.queue_oldest_pending_seconds)} | Error budget
+                      remaining: {Number(item.error_budget_remaining_pct || 0).toFixed(2)}%
+                    </div>
+                    <div className="small muted">
                       Upload tasks pending: {item.image_upload_tasks_pending} | failed: {item.image_upload_tasks_failed}
                     </div>
                     <div className="small muted">
                       Quota: {item.resource_quota_present ? "ok" : "missing"} | LimitRange:{" "}
                       {item.limit_range_present ? "ok" : "missing"} | Netpol: {item.network_policy_count}
                     </div>
+                    <div className="small muted">
+                      Drift: {item.drift_count || 0} | Alert route key: {item.alert_route_key || "-"}
+                    </div>
                     {item.required_network_policies_missing?.length > 0 && (
                       <div className="small muted">
                         Missing policies: {item.required_network_policies_missing.join(", ")}
                       </div>
+                    )}
+                    {item.drift_items?.length > 0 && (
+                      <div className="small muted">Drift details: {item.drift_items.join(" | ")}</div>
                     )}
                   </div>
                 ))}

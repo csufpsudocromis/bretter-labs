@@ -23,6 +23,7 @@ const DEFAULT_FORM = {
   rdp_default_username: "",
   rdp_default_password: "",
   rdp_default_password_configured: false,
+  shared_catalog: false,
   enabled_namespaces: [],
   enabled: false,
 };
@@ -131,6 +132,7 @@ const AdminTemplates = () => {
       preclone_pool_size: tmpl.preclone_pool_size || 0,
       preclone_pool_max: tmpl.preclone_pool_max ?? tmpl.preclone_pool_size ?? 0,
       enabled: tmpl.enabled,
+      shared_catalog: Boolean(tmpl.shared_catalog),
       enabled_namespaces: Array.isArray(tmpl.enabled_namespaces) ? tmpl.enabled_namespaces : [],
       network_mode: tmpl.network_mode || "bridge",
       console_provider: tmpl.console_provider || "spice",
@@ -312,6 +314,18 @@ const AdminTemplates = () => {
               </div>
               <span className="muted small">Select the namespaces where this template can be launched.</span>
             </label>
+            {isPlatformAdmin && (
+              <label>
+                Catalog scope
+                <select
+                  value={form.shared_catalog ? "shared" : "namespace"}
+                  onChange={(e) => setForm({ ...form, shared_catalog: e.target.value === "shared" })}
+                >
+                  <option value="namespace">Namespace-owned</option>
+                  <option value="shared">Shared catalog</option>
+                </select>
+              </label>
+            )}
             <label>
               Console provider
               <select
@@ -390,6 +404,7 @@ const AdminTemplates = () => {
                     {t.enabled ? "enabled" : "disabled"}
                   </span>
                 </div>
+                <div className="muted small">{t.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}</div>
                 <div className="specs">
                   <span>{t.cpu_cores} CPU</span>
                   <span>{Math.round(t.ram_mb / 1024)} GB RAM</span>

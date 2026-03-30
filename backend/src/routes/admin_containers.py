@@ -62,7 +62,10 @@ def _ensure_container_namespace_columns() -> None:
             cols = {row[1] for row in cur.execute("PRAGMA table_info(containerimage)")}
             if "namespace" not in cols:
                 cur.execute("ALTER TABLE containerimage ADD COLUMN namespace TEXT DEFAULT 'labs'")
+            if "shared_catalog" not in cols:
+                cur.execute("ALTER TABLE containerimage ADD COLUMN shared_catalog BOOLEAN DEFAULT 0")
             cur.execute("UPDATE containerimage SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
+            cur.execute("UPDATE containerimage SET shared_catalog = 0 WHERE shared_catalog IS NULL")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_containerimage_namespace ON containerimage(namespace)")
         if "containertemplate" in tables:
             cols = {row[1] for row in cur.execute("PRAGMA table_info(containertemplate)")}
@@ -70,12 +73,15 @@ def _ensure_container_namespace_columns() -> None:
                 cur.execute("ALTER TABLE containertemplate ADD COLUMN namespace TEXT DEFAULT 'labs'")
             if "enabled_namespaces_json" not in cols:
                 cur.execute("ALTER TABLE containertemplate ADD COLUMN enabled_namespaces_json TEXT DEFAULT '[]'")
+            if "shared_catalog" not in cols:
+                cur.execute("ALTER TABLE containertemplate ADD COLUMN shared_catalog BOOLEAN DEFAULT 0")
             cur.execute(
                 "UPDATE containertemplate SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''"
             )
             cur.execute(
                 "UPDATE containertemplate SET enabled_namespaces_json = '[]' WHERE enabled_namespaces_json IS NULL OR trim(enabled_namespaces_json) = ''"
             )
+            cur.execute("UPDATE containertemplate SET shared_catalog = 0 WHERE shared_catalog IS NULL")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_containertemplate_namespace ON containertemplate(namespace)")
         conn.commit()
     except Exception:
@@ -119,6 +125,33 @@ def _namespace_scoped_record(record: object, actor: User) -> bool:
     if scope is None:
         return True
     return _record_namespace(record) in scope
+
+
+def _record_shared_catalog(record: object) -> bool:
+    return bool(getattr(record, "shared_catalog", False))
+
+
+def _record_visible_for_namespace(record: object, namespace: str | None) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return True
+    record_namespace = _record_namespace(record)
+    return record_namespace == selected or (_record_shared_catalog(record) and record_namespace != "")
+
+
+def _record_visible_for_actor(record: object, actor: User, *, requested_namespace: str | None = None) -> bool:
+    if is_platform_admin(actor):
+        return _record_visible_for_namespace(record, requested_namespace)
+    scope = _namespace_scope_for_actor(actor)
+    record_namespace = _record_namespace(record)
+    in_scope = scope is None or record_namespace in scope
+    if in_scope and _record_visible_for_namespace(record, requested_namespace):
+        return True
+    if not _record_shared_catalog(record):
+        return False
+    if requested_namespace:
+        return scope is None or requested_namespace in scope
+    return bool(scope) or scope is None
 
 
 def _requested_namespace_hint(request: Request | None) -> str | None:
@@ -339,6 +372,7 @@ def _image_out(record: ContainerImageTable, signature_warning: str | None = None
         image_ref=record.image_ref,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         namespace=_record_namespace(record),
+        shared_catalog=_record_shared_catalog(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         signature_warning=signature_warning,
         last_scan_at=getattr(record, "last_scan_at", None),
@@ -410,7 +444,38 @@ def _template_enabled_for_namespace(record: ContainerTemplateTable, namespace: s
     selected = normalize_namespace(namespace)
     if not selected:
         return False
-    return selected in set(_template_enabled_namespaces(record))
+    if selected not in set(_template_enabled_namespaces(record)):
+        return False
+    template_namespace = _record_namespace(record)
+    if selected == template_namespace:
+        return True
+    return bool(getattr(record, "shared_catalog", False))
+
+
+def _template_shared_catalog(record: ContainerTemplateTable) -> bool:
+    return bool(getattr(record, "shared_catalog", False))
+
+
+def _template_visible_for_actor(
+    record: ContainerTemplateTable,
+    actor: User,
+    *,
+    requested_namespace: str | None = None,
+) -> bool:
+    if not _record_visible_for_actor(record, actor, requested_namespace=requested_namespace):
+        return False
+    if is_platform_admin(actor):
+        return requested_namespace is None or _template_enabled_for_namespace(record, requested_namespace)
+    if not _template_shared_catalog(record):
+        if requested_namespace:
+            return _record_namespace(record) == requested_namespace
+        return _namespace_scoped_record(record, actor)
+    if requested_namespace:
+        return _template_enabled_for_namespace(record, requested_namespace)
+    scope = _namespace_scope_for_actor(actor)
+    if scope is None:
+        return True
+    return any(_template_enabled_for_namespace(record, namespace) for namespace in scope)
 
 
 def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
@@ -422,6 +487,7 @@ def _template_out(record: ContainerTemplateTable) -> ContainerTemplate:
         name=record.name,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         namespace=_record_namespace(record),
+        shared_catalog=_template_shared_catalog(record),
         enabled_namespaces=_template_enabled_namespaces(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
         description=record.description,
@@ -587,6 +653,12 @@ def create_container_image(
         requested_namespace=payload.namespace,
         fallback_namespace=settings.kube_namespace,
     )
+    shared_catalog = bool(payload.shared_catalog) if payload.shared_catalog is not None else False
+    if shared_catalog and not is_platform_admin(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can publish shared catalogs",
+        )
     image_ref = _normalize_container_image_ref(payload.image_ref)
     _enforce_registry_policy(image_ref)
     signature_warning = _verify_image_signature(image_ref)
@@ -606,6 +678,7 @@ def create_container_image(
         image_ref=image_ref,
         tenant=resource_tenant,
         namespace=resource_namespace,
+        shared_catalog=shared_catalog,
         cluster_id=str(payload.cluster_id or local_cluster_id()),
         last_scan_at=utc_now() if settings.container_scan_enabled else None,
         last_scan_status="queued" if settings.container_scan_enabled else "never",
@@ -636,15 +709,12 @@ def list_container_images(
     if requested_namespace:
         assert_actor_can_access_namespace(actor, requested_namespace)
     stmt = select(ContainerImageTable)
-    scope = _tenant_scope_for_actor(actor, include_global=True)
-    if scope is not None:
-        stmt = stmt.where(ContainerImageTable.tenant.in_(scope))
-    namespace_scope = _namespace_scope_for_actor(actor)
-    if namespace_scope is not None:
-        stmt = stmt.where(ContainerImageTable.namespace.in_(sorted(namespace_scope)))
-    if requested_namespace:
-        stmt = stmt.where(ContainerImageTable.namespace == requested_namespace)
+    if not is_platform_admin(actor):
+        scope = _tenant_scope_for_actor(actor, include_global=True)
+        if scope is not None:
+            stmt = stmt.where(ContainerImageTable.tenant.in_(scope))
     rows = session.exec(stmt).all()
+    rows = [row for row in rows if _record_visible_for_actor(row, actor, requested_namespace=requested_namespace)]
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_image_out(row) for row in rows]
 
@@ -670,6 +740,13 @@ def update_container_image(
         next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
     if payload.namespace is not None:
         next_namespace = assert_actor_can_access_namespace(actor, payload.namespace)
+    if payload.shared_catalog is not None:
+        if not is_platform_admin(actor):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only platform admins can change shared catalog scope",
+            )
+        record.shared_catalog = bool(payload.shared_catalog)
 
     updates = payload.model_dump(exclude_unset=True)
     signature_warning = None
@@ -832,8 +909,14 @@ def create_container_template(
         requested_namespace=payload.namespace,
         fallback_namespace=settings.kube_namespace,
     )
+    requested_shared_catalog = bool(payload.shared_catalog) if payload.shared_catalog is not None else False
+    if requested_shared_catalog and not is_platform_admin(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can publish shared catalogs",
+        )
     image = session.get(ContainerImageTable, payload.container_image_id)
-    if not image or not _namespace_scoped_record(image, actor):
+    if not image or not _record_visible_for_actor(image, actor, requested_namespace=resource_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
@@ -842,13 +925,24 @@ def create_container_template(
             detail=f"container template tenant {resource_tenant} cannot use image tenant {image_tenant}",
         )
     image_namespace = _record_namespace(image)
-    if image_namespace != resource_namespace:
+    if image_namespace != resource_namespace and not _record_shared_catalog(image):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"container template namespace {resource_namespace} cannot use image namespace {image_namespace}",
+            detail=(
+                f"container template namespace {resource_namespace} cannot use namespace-owned image namespace "
+                f"{image_namespace}; mark image as shared catalog or pick an image in {resource_namespace}"
+            ),
         )
     enabled_namespaces = normalize_namespace_scopes(payload.enabled_namespaces)
-    if not enabled_namespaces:
+    if requested_shared_catalog:
+        if not enabled_namespaces:
+            enabled_namespaces = [resource_namespace]
+    else:
+        if enabled_namespaces and enabled_namespaces != [resource_namespace]:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="namespace-owned template can only target its own namespace",
+            )
         enabled_namespaces = [resource_namespace]
     _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
 
@@ -867,6 +961,7 @@ def create_container_template(
         name=(payload.name or "").strip(),
         tenant=resource_tenant,
         namespace=resource_namespace,
+        shared_catalog=requested_shared_catalog,
         enabled_namespaces_json=_template_enabled_namespaces_json(enabled_namespaces),
         cluster_id=str(payload.cluster_id or getattr(image, "cluster_id", "") or local_cluster_id()),
         description=(payload.description or "").strip(),
@@ -918,10 +1013,8 @@ def list_container_templates(
     scope = _tenant_scope_for_actor(actor, include_global=True)
     if scope is not None:
         stmt = stmt.where(ContainerTemplateTable.tenant.in_(scope))
-    namespace_scope = _namespace_scope_for_actor(actor)
-    if namespace_scope is not None and not requested_namespace:
-        stmt = stmt.where(ContainerTemplateTable.namespace.in_(sorted(namespace_scope)))
     rows = session.exec(stmt).all()
+    rows = [row for row in rows if _template_visible_for_actor(row, actor, requested_namespace=requested_namespace)]
     rows.sort(key=lambda item: item.created_at, reverse=True)
     return [_template_out(row) for row in rows]
 
@@ -939,7 +1032,7 @@ def update_container_template(
     actor: User = Depends(require_user),
 ) -> ContainerTemplate:
     updates = payload.model_dump(exclude_unset=True)
-    namespace_enable_only = set(updates).issubset({"enabled_namespaces"})
+    namespace_enable_only = set(updates).issubset({"enabled_namespaces", "shared_catalog"})
 
     record = session.get(ContainerTemplateTable, template_id)
     if not record:
@@ -948,6 +1041,7 @@ def update_container_template(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container template not found")
     next_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     next_namespace = _record_namespace(record)
+    next_shared_catalog = bool(getattr(record, "shared_catalog", False))
     enabled_namespaces = _template_enabled_namespaces(record)
     has_explicit_enabled_namespaces = bool(str(getattr(record, "enabled_namespaces_json", "") or "").strip())
 
@@ -958,6 +1052,13 @@ def update_container_template(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="only platform admins can change global template enabled state",
         )
+    if "shared_catalog" in updates:
+        if not is_platform_admin(actor):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="only platform admins can change shared catalog scope",
+            )
+        next_shared_catalog = bool(updates.get("shared_catalog"))
     if "tenant" in updates:
         next_tenant = assert_actor_can_manage_tenant(actor, updates.get("tenant"))
     if "namespace" in updates:
@@ -968,6 +1069,14 @@ def update_container_template(
     elif "namespace" in updates and not has_explicit_enabled_namespaces:
         enabled_namespaces = [next_namespace]
         _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
+
+    if not next_shared_catalog:
+        if enabled_namespaces and enabled_namespaces != [next_namespace]:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="namespace-owned template can only target its own namespace",
+            )
+        enabled_namespaces = [next_namespace]
 
     if updates.get("enabled") is True and not enabled_namespaces:
         raise HTTPException(
@@ -984,7 +1093,7 @@ def update_container_template(
     image = None
     if image_changed:
         image = session.get(ContainerImageTable, image_id)
-        if not image or not _namespace_scoped_record(image, actor):
+        if not image or not _record_visible_for_actor(image, actor, requested_namespace=next_namespace):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container image not found")
         image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
         if image_tenant not in {next_tenant, GLOBAL_TENANT}:
@@ -993,10 +1102,13 @@ def update_container_template(
                 detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
         image_namespace = _record_namespace(image)
-        if image_namespace != next_namespace:
+        if image_namespace != next_namespace and not _record_shared_catalog(image):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"container template namespace {next_namespace} cannot use image namespace {image_namespace}",
+                detail=(
+                    f"container template namespace {next_namespace} cannot use namespace-owned image namespace "
+                    f"{image_namespace}; mark image as shared catalog or keep template in {image_namespace}"
+                ),
             )
         _enforce_registry_policy(image.image_ref)
         _verify_image_signature(image.image_ref)
@@ -1065,13 +1177,17 @@ def update_container_template(
                 detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
         image_namespace = _record_namespace(image_for_tenant)
-        if image_namespace != next_namespace:
+        if image_namespace != next_namespace and not _record_shared_catalog(image_for_tenant):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=f"container template namespace {next_namespace} cannot use image namespace {image_namespace}",
+                detail=(
+                    f"container template namespace {next_namespace} cannot use namespace-owned image namespace "
+                    f"{image_namespace}; mark image as shared catalog or keep template in {image_namespace}"
+                ),
             )
     record.tenant = next_tenant
     record.namespace = next_namespace
+    record.shared_catalog = next_shared_catalog
     record.enabled_namespaces_json = _template_enabled_namespaces_json(enabled_namespaces)
 
     session.add(record)
