@@ -22,6 +22,7 @@ import AdminSSOSettings from "./components/admin/AdminSSOSettings.jsx";
 import AdminStorageSettings from "./components/admin/AdminStorageSettings.jsx";
 import AdminLDAPSettings from "./components/admin/AdminLDAPSettings.jsx";
 import AdminNamespacesSettings from "./components/admin/AdminNamespacesSettings.jsx";
+import NamespaceDirectory from "./components/NamespaceDirectory.jsx";
 
 const DEFAULT_SITE = {
   title: "Bretter Labs",
@@ -84,6 +85,7 @@ const AppShell = () => {
   const [user, setUser] = useState(null);
   const [error, setError] = useState(null);
   const [site, setSite] = useState({ ...DEFAULT_SITE });
+  const [availableNamespaces, setAvailableNamespaces] = useState([]);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -95,13 +97,26 @@ const AppShell = () => {
   }, [user]);
   const preferredUserNamespace = userNamespaceScopes[0] || "";
   const activeNamespace = pathNamespace || preferredUserNamespace;
+  const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
+  const isStandardUser =
+    String(user?.role || "")
+      .trim()
+      .toLowerCase() === "user" && !canAccessAdmin;
+  const namespaceOptions = useMemo(() => {
+    const merged = new Set([
+      ...userNamespaceScopes,
+      ...(Array.isArray(availableNamespaces) ? availableNamespaces.map((ns) => normalizeNamespace(ns)) : []),
+    ]);
+    if (activeNamespace) {
+      merged.add(activeNamespace);
+    }
+    return [...merged].filter(Boolean).sort();
+  }, [userNamespaceScopes, availableNamespaces, activeNamespace]);
   const namespacePrefix = namespacePath(activeNamespace);
   const userRootPath = namespacePrefix || "/";
   const adminRootPath = namespacePrefix ? `${namespacePrefix}/admin` : "/admin";
   const namespaceLabel = activeNamespace || "unscoped";
-  const namespaceOptions =
-    userNamespaceScopes.length > 0 ? userNamespaceScopes : activeNamespace ? [activeNamespace] : [];
-  const canSwitchNamespace = namespaceOptions.length > 1;
+  const canSwitchNamespace = !isStandardUser && namespaceOptions.length > 0;
 
   useEffect(() => {
     const loadCurrentUser = async () => {
@@ -114,6 +129,32 @@ const AppShell = () => {
     };
     loadCurrentUser();
   }, []);
+
+  useEffect(() => {
+    if (!user || !canAccessAdmin) {
+      setAvailableNamespaces([]);
+      return;
+    }
+    let cancelled = false;
+    const loadNamespaces = async () => {
+      try {
+        const res = await api.get("/admin/template-namespaces");
+        if (cancelled) return;
+        const options = Array.isArray(res?.data)
+          ? [...new Set(res.data.map((value) => normalizeNamespace(value)).filter(Boolean))]
+          : [];
+        setAvailableNamespaces(options);
+      } catch (err) {
+        if (!cancelled) {
+          setAvailableNamespaces([]);
+        }
+      }
+    };
+    loadNamespaces();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, canAccessAdmin]);
 
   useEffect(() => {
     const handleAuthInvalid = (event) => {
@@ -168,6 +209,7 @@ const AppShell = () => {
       .toLowerCase();
     if (role !== "namespace_admin") return;
     if (!preferredUserNamespace) return;
+    if (String(location.pathname || "/") === "/") return;
     if (pathNamespace === preferredUserNamespace) return;
     navigate(withNamespacePath(location.pathname, preferredUserNamespace), { replace: true });
   }, [user, preferredUserNamespace, pathNamespace, location.pathname, navigate]);
@@ -263,8 +305,6 @@ const AppShell = () => {
   };
 
   const authed = Boolean(user);
-  const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
-
   return (
     <div className="page">
       <header>
@@ -277,15 +317,23 @@ const AppShell = () => {
             <span>
               {user.username} {canAccessAdmin ? `(${roleDisplay(user)})` : ""}
             </span>
-            <span className="badge">Namespace: {namespaceLabel}</span>
-            {canSwitchNamespace && (
-              <select value={activeNamespace} onChange={(e) => switchNamespace(e.target.value)}>
-                {namespaceOptions.map((entry) => (
-                  <option key={entry} value={entry}>
-                    {entry}
-                  </option>
-                ))}
-              </select>
+            {canSwitchNamespace ? (
+              <span className="namespace-switch">
+                <span className="muted small">Namespace:</span>
+                <select
+                  value={activeNamespace}
+                  onChange={(e) => switchNamespace(e.target.value)}
+                  disabled={namespaceOptions.length < 2}
+                >
+                  {namespaceOptions.map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            ) : (
+              <span className="badge">Namespace: {namespaceLabel}</span>
             )}
             <button onClick={logout} className="ghost">
               Logout
@@ -309,14 +357,7 @@ const AppShell = () => {
             {canAccessAdmin && <Link to={adminRootPath}>Admin</Link>}
           </nav>
           <Routes>
-            <Route
-              path="/"
-              element={
-                <section className="card">
-                  <UserPanel />
-                </section>
-              }
-            />
+            <Route path="/" element={<NamespaceDirectory namespaces={namespaceOptions} />} />
             <Route
               path="/ns/:namespace"
               element={

@@ -26,8 +26,6 @@ api.interceptors.request.use((config) => {
   const headers = { ...(config.headers || {}) };
   if (namespace) {
     headers["X-Bretter-Namespace"] = namespace;
-  } else if (headers["X-Bretter-Namespace"]) {
-    delete headers["X-Bretter-Namespace"];
   }
   return { ...config, headers };
 });

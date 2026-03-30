@@ -38,6 +38,9 @@ describe("AdminImages upload flow", () => {
       if (url === "/admin/images") {
         return { data: state.images };
       }
+      if (url === "/auth/me") {
+        return { data: { role: "platform_admin" } };
+      }
       if (url === "/admin/images/upload-tasks/task-1234") {
         state.pollCount += 1;
         state.images = [

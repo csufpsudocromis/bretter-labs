@@ -214,10 +214,29 @@ button:disabled {
   background: #ffffffcc;
 }
 
+.namespace-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.namespace-switch select {
+  min-width: 180px;
+}
+
 .ghost {
   background: transparent;
   border: 1px solid var(--border-color);
   color: var(--text-color);
+}
+
+.namespace-open-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
 }
 
 .danger {
