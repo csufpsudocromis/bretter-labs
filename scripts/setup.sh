@@ -4970,6 +4970,7 @@ spec:
       ttlSecondsAfterFinished: ${SYSTEM_CRONJOB_TTL_SECONDS}
       template:
         spec:
+          serviceAccountName: bretter-backend
           restartPolicy: Never
           imagePullSecrets:
             - name: ghcr-creds
