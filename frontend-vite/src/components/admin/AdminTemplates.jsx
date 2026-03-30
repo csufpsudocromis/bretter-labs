@@ -33,6 +33,7 @@ const AdminTemplates = () => {
   const [images, setImages] = useState([]);
   const [namespaceOptions, setNamespaceOptions] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [canManageTemplateEnableState, setCanManageTemplateEnableState] = useState(false);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [editingId, setEditingId] = useState(null);
@@ -66,11 +67,21 @@ const AdminTemplates = () => {
           ]
         : [];
       setNamespaceOptions(options);
+      const permissions = Array.isArray(meRes?.data?.permissions)
+        ? meRes.data.permissions
+            .map((entry) =>
+              String(entry || "")
+                .trim()
+                .toLowerCase()
+            )
+            .filter(Boolean)
+        : [];
       setIsPlatformAdmin(
         String(meRes?.data?.role || "")
           .trim()
           .toLowerCase() === "platform_admin"
       );
+      setCanManageTemplateEnableState(permissions.includes("*") || permissions.includes("admin.templates.write"));
     } catch (err) {
       setMessage(err.response?.data?.detail || "Failed to load templates/images");
     }
@@ -152,6 +163,9 @@ const AdminTemplates = () => {
       if (!payload.rdp_default_password) {
         delete payload.rdp_default_password;
       }
+      if (!canEditTemplateEnabled(form.shared_catalog)) {
+        delete payload.enabled;
+      }
       await api.patch(`/admin/templates/${editingId}`, payload);
       setMessage("");
       setEditingId(null);
@@ -180,6 +194,9 @@ const AdminTemplates = () => {
       return { ...prev, enabled_namespaces: [...current, target].sort() };
     });
   };
+
+  const canEditTemplateEnabled = (sharedCatalog) =>
+    canManageTemplateEnableState && (isPlatformAdmin || !Boolean(sharedCatalog));
 
   return (
     <div>
@@ -364,7 +381,7 @@ const AdminTemplates = () => {
                 </label>
               </>
             )}
-            {editingId && isPlatformAdmin && (
+            {editingId && canEditTemplateEnabled(form.shared_catalog) && (
               <label>
                 Enabled
                 <select
@@ -428,7 +445,7 @@ const AdminTemplates = () => {
                 {t.description && <div className="muted small">{t.description}</div>}
                 <div className="muted small">Image: {imageName(t.image_id)}</div>
                 <div className="actions">
-                  {isPlatformAdmin && (
+                  {canEditTemplateEnabled(t.shared_catalog) && (
                     <button className="ghost" onClick={() => toggle(t.id, !t.enabled)}>
                       {t.enabled ? "Disable" : "Enable"}
                     </button>

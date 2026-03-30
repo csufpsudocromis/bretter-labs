@@ -1047,10 +1047,10 @@ def update_container_template(
 
     if not updates:
         return _template_out(record)
-    if not is_platform_admin(actor) and "enabled" in updates:
+    if "enabled" in updates and not is_platform_admin(actor) and bool(getattr(record, "shared_catalog", False)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="only platform admins can change global template enabled state",
+            detail="only platform admins can change shared template enabled state",
         )
     if "shared_catalog" in updates:
         if not is_platform_admin(actor):

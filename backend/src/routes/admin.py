@@ -5415,10 +5415,10 @@ def update_template(
     enabled_namespaces = _template_enabled_namespaces(record)
     has_explicit_enabled_namespaces = bool(str(getattr(record, "enabled_namespaces_json", "") or "").strip())
 
-    if not is_platform_admin(actor) and payload.enabled is not None:
+    if payload.enabled is not None and not is_platform_admin(actor) and bool(getattr(record, "shared_catalog", False)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="only platform admins can change global template enabled state",
+            detail="only platform admins can change shared template enabled state",
         )
     if payload.shared_catalog is not None:
         if not is_platform_admin(actor):

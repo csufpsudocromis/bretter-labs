@@ -85,6 +85,7 @@ const AdminContainerTemplates = () => {
   const [images, setImages] = useState([]);
   const [namespaceOptions, setNamespaceOptions] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [canManageTemplateEnableState, setCanManageTemplateEnableState] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
@@ -114,11 +115,21 @@ const AdminContainerTemplates = () => {
           ]
         : [];
       setNamespaceOptions(options);
+      const permissions = Array.isArray(meRes?.data?.permissions)
+        ? meRes.data.permissions
+            .map((entry) =>
+              String(entry || "")
+                .trim()
+                .toLowerCase()
+            )
+            .filter(Boolean)
+        : [];
       setIsPlatformAdmin(
         String(meRes?.data?.role || "")
           .trim()
           .toLowerCase() === "platform_admin"
       );
+      setCanManageTemplateEnableState(permissions.includes("*") || permissions.includes("admin.templates.write"));
       setError("");
     } catch (err) {
       setError(err.response?.data?.detail || "Failed to load container templates");
@@ -226,7 +237,11 @@ const AdminContainerTemplates = () => {
 
   const saveEdit = async () => {
     try {
-      await api.patch(`/admin/container-templates/${editingId}`, toPayload(form));
+      const payload = toPayload(form);
+      if (!canEditTemplateEnabled(form.shared_catalog)) {
+        delete payload.enabled;
+      }
+      await api.patch(`/admin/container-templates/${editingId}`, payload);
       setEditingId(null);
       setForm({ ...DEFAULT_FORM });
       setMessage("Container template saved");
@@ -257,6 +272,9 @@ const AdminContainerTemplates = () => {
       return { ...prev, enabled_namespaces: [...current, target].sort() };
     });
   };
+
+  const canEditTemplateEnabled = (sharedCatalog) =>
+    canManageTemplateEnableState && (isPlatformAdmin || !Boolean(sharedCatalog));
 
   return (
     <div className="container-templates-page">
@@ -500,7 +518,7 @@ const AdminContainerTemplates = () => {
                 }
               />
             </label>
-            {editingId && isPlatformAdmin && (
+            {editingId && canEditTemplateEnabled(form.shared_catalog) && (
               <label>
                 Enabled
                 <select
@@ -554,7 +572,7 @@ const AdminContainerTemplates = () => {
                     : "-"}
                 </div>
                 <div className="actions">
-                  {isPlatformAdmin && (
+                  {canEditTemplateEnabled(tmpl.shared_catalog) && (
                     <button className="ghost" onClick={() => toggle(tmpl.id, !tmpl.enabled)}>
                       {tmpl.enabled ? "Disable" : "Enable"}
                     </button>
