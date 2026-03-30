@@ -93,11 +93,8 @@ if [[ "$CONSOLE_PROVIDER" != "spice" && "${VGA_TYPE}" == "qxl" ]]; then
   VGA_TYPE="std"
 fi
 
-# Detect disk format when not provided. VHDs (vpc) need the right format to boot.
-DISK_FORMAT="$DISK_FORMAT_ENV"
-# For VHDs, keep the vpc format unless explicitly overridden.
-if [[ -z "$DISK_FORMAT" ]]; then
-  DISK_FORMAT=$(python3 - "$DISK" <<'PY'
+# Detect actual disk format from image metadata.
+DETECTED_DISK_FORMAT=$(python3 - "$DISK" <<'PY'
 import json, subprocess, sys
 path = sys.argv[1]
 fmt = ""
@@ -110,7 +107,14 @@ if not fmt and path.lower().endswith(".vhd"):
     fmt = "vpc"
 print(fmt or "raw")
 PY
-  )
+)
+
+DISK_FORMAT="$DISK_FORMAT_ENV"
+if [[ -z "$DISK_FORMAT" ]]; then
+  DISK_FORMAT="$DETECTED_DISK_FORMAT"
+elif [[ "$DISK_FORMAT" != "$DETECTED_DISK_FORMAT" ]]; then
+  echo "DISK_FORMAT=${DISK_FORMAT} does not match detected format ${DETECTED_DISK_FORMAT}; using detected format." >&2
+  DISK_FORMAT="$DETECTED_DISK_FORMAT"
 fi
 
 # Derive console port from env (WS_PORT). For QEMU VNC websocket we need plain WS; Guac will terminate TLS.
