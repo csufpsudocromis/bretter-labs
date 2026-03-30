@@ -1143,17 +1143,6 @@ class KubernetesService:
         vga = "std" if is_linux else "qxl"
         if console_provider in {"guacamole", "guacamole_rdp"} and vga == "qxl":
             vga = "std"
-        suffix = Path(req.image_path).suffix.lower()
-        # Use the native disk format for both Linux and Windows.
-        disk_format = None
-        if suffix in {".vhd", ".vhdx"}:
-            disk_format = "vpc"
-        elif suffix in {".qcow", ".qcow2"}:
-            disk_format = "qcow2"
-        elif suffix == ".raw":
-            disk_format = "raw"
-        elif suffix == ".vdi":
-            disk_format = "vdi"
         machine_type = settings.linux_machine_type if is_linux else settings.windows_machine_type
         efi_enabled = settings.linux_efi_enabled if is_linux else settings.windows_efi_enabled
         cpu_model = settings.linux_cpu_model if is_linux else settings.windows_cpu_model
@@ -1190,8 +1179,6 @@ class KubernetesService:
                     client.V1EnvVar(name="TLS_KEY_FILE", value="/tls/tls.key"),
                 ]
             )
-        if disk_format:
-            env_vars.append(client.V1EnvVar(name="DISK_FORMAT", value=disk_format))
         container = client.V1Container(
             name="vm-runner",
             image=settings.runner_image,
