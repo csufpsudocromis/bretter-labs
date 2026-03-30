@@ -160,6 +160,9 @@ const AdminTemplates = () => {
     try {
       const payload = { ...form };
       delete payload.rdp_default_password_configured;
+      if (!isPlatformAdmin) {
+        delete payload.shared_catalog;
+      }
       if (!payload.rdp_default_password) {
         delete payload.rdp_default_password;
       }

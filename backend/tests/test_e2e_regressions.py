@@ -551,6 +551,120 @@ def test_namespace_admin_cannot_toggle_shared_container_template_enabled_state(c
     assert "only platform admins can change shared template enabled state" in denied.json()["detail"]
 
 
+def test_namespace_admin_can_edit_namespace_owned_vm_template_even_if_client_sends_unchanged_shared_catalog(
+    client: TestClient,
+):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-edit-vm-local-1",
+                name="Edit VM Local Image",
+                filename="edit-vm-local.qcow2",
+                checksum="sha256:edit-vm-local",
+                size_bytes=2048,
+                source_pvc="golden-images-vm-local-edit",
+                namespace="labs-team-red",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-edit-vm-local-1",
+                name="Editable VM Template",
+                description="before-edit",
+                os_type="windows",
+                image_id="img-edit-vm-local-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=True,
+                namespace="labs-team-red",
+                shared_catalog=False,
+                enabled_namespaces_json='["labs-team-red"]',
+            )
+        )
+        session.add(
+            User(
+                username="ns-template-editor-vm",
+                password_hash=hash_password("password"),
+                role=Role.NAMESPACE_ADMIN,
+                is_admin=True,
+                namespace_scopes_json='["labs-team-red"]',
+            )
+        )
+        session.commit()
+
+    ns_login = client.post("/auth/login", json={"username": "ns-template-editor-vm", "password": "password"})
+    assert ns_login.status_code == 200, ns_login.text
+
+    updated = client.patch(
+        "/admin/templates/tmpl-edit-vm-local-1",
+        json={"description": "after-edit", "shared_catalog": False},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["description"] == "after-edit"
+    assert updated.json()["shared_catalog"] is False
+
+
+def test_namespace_admin_can_edit_namespace_owned_container_template_even_if_client_sends_unchanged_shared_catalog(
+    client: TestClient,
+):
+    with Session(engine) as session:
+        session.add(
+            ContainerImage(
+                id="img-edit-ct-local-1",
+                name="Edit CT Local Image",
+                image_ref="docker.io/library/nginx:stable",
+                namespace="labs-team-red",
+            )
+        )
+        session.add(
+            ContainerTemplate(
+                id="tmpl-edit-ct-local-1",
+                template_key="edit-ct-local",
+                version=1,
+                is_default=True,
+                name="Editable CT Template",
+                description="before-edit",
+                container_image_id="img-edit-ct-local-1",
+                cpu_millicores=500,
+                memory_mb=512,
+                container_port=80,
+                healthcheck_protocol="tcp",
+                healthcheck_path="/",
+                startup_timeout_seconds=300,
+                expose_strategy="nodeport",
+                network_mode="bridge",
+                enabled=True,
+                namespace="labs-team-red",
+                shared_catalog=False,
+                enabled_namespaces_json='["labs-team-red"]',
+                idle_timeout_minutes=30,
+            )
+        )
+        session.add(
+            User(
+                username="ns-template-editor-ct",
+                password_hash=hash_password("password"),
+                role=Role.NAMESPACE_ADMIN,
+                is_admin=True,
+                namespace_scopes_json='["labs-team-red"]',
+            )
+        )
+        session.commit()
+
+    ns_login = client.post("/auth/login", json={"username": "ns-template-editor-ct", "password": "password"})
+    assert ns_login.status_code == 200, ns_login.text
+
+    updated = client.patch(
+        "/admin/container-templates/tmpl-edit-ct-local-1",
+        json={"description": "after-edit", "shared_catalog": False},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["description"] == "after-edit"
+    assert updated.json()["shared_catalog"] is False
+
+
 def test_legacy_role_alias_normalizes_to_lab_admin(client: TestClient):
     with Session(engine) as session:
         session.add(

@@ -238,6 +238,9 @@ const AdminContainerTemplates = () => {
   const saveEdit = async () => {
     try {
       const payload = toPayload(form);
+      if (!isPlatformAdmin) {
+        delete payload.shared_catalog;
+      }
       if (!canEditTemplateEnabled(form.shared_catalog)) {
         delete payload.enabled;
       }

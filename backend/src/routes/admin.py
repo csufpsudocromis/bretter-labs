@@ -5421,12 +5421,16 @@ def update_template(
             detail="only platform admins can change shared template enabled state",
         )
     if payload.shared_catalog is not None:
+        requested_shared_catalog = bool(payload.shared_catalog)
+        current_shared_catalog = bool(getattr(record, "shared_catalog", False))
         if not is_platform_admin(actor):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="only platform admins can change shared catalog scope",
-            )
-        next_shared_catalog = bool(payload.shared_catalog)
+            if requested_shared_catalog != current_shared_catalog:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="only platform admins can change shared catalog scope",
+                )
+        else:
+            next_shared_catalog = requested_shared_catalog
 
     if payload.tenant is not None:
         next_tenant = assert_actor_can_manage_tenant(actor, payload.tenant)
