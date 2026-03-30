@@ -86,6 +86,7 @@ const AppShell = () => {
   const [error, setError] = useState(null);
   const [site, setSite] = useState({ ...DEFAULT_SITE });
   const [availableNamespaces, setAvailableNamespaces] = useState([]);
+  const [selectedNamespace, setSelectedNamespace] = useState("");
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -96,7 +97,8 @@ const AppShell = () => {
     return [...new Set(user.namespace_scopes.map((ns) => normalizeNamespace(ns)).filter(Boolean))];
   }, [user]);
   const preferredUserNamespace = userNamespaceScopes[0] || "";
-  const activeNamespace = pathNamespace || preferredUserNamespace;
+  const rememberedNamespace = normalizeNamespace(selectedNamespace);
+  const activeNamespace = pathNamespace || rememberedNamespace || preferredUserNamespace;
   const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
   const isStandardUser =
     String(user?.role || "")
@@ -129,6 +131,36 @@ const AppShell = () => {
     };
     loadCurrentUser();
   }, []);
+
+  useEffect(() => {
+    if (!pathNamespace) return;
+    setSelectedNamespace((prev) => {
+      const normalizedPrev = normalizeNamespace(prev);
+      return normalizedPrev === pathNamespace ? normalizedPrev : pathNamespace;
+    });
+  }, [pathNamespace]);
+
+  useEffect(() => {
+    if (!user) {
+      setSelectedNamespace("");
+      return;
+    }
+    const role = String(user?.role || "")
+      .trim()
+      .toLowerCase();
+    if (role !== "namespace_admin") return;
+    if (userNamespaceScopes.length === 0) {
+      setSelectedNamespace("");
+      return;
+    }
+    setSelectedNamespace((prev) => {
+      const normalizedPrev = normalizeNamespace(prev);
+      if (normalizedPrev && userNamespaceScopes.includes(normalizedPrev)) {
+        return normalizedPrev;
+      }
+      return userNamespaceScopes[0];
+    });
+  }, [user, userNamespaceScopes]);
 
   useEffect(() => {
     if (!user || !canAccessAdmin) {
@@ -192,6 +224,7 @@ const AppShell = () => {
       setUser(nextUser);
       setError(null);
       if (nextRole === "namespace_admin" && nextScopes.length > 0) {
+        setSelectedNamespace(nextScopes[0]);
         navigate(withNamespacePath(location.pathname, nextScopes[0]));
       } else {
         navigate(userRootPath);
@@ -208,11 +241,12 @@ const AppShell = () => {
       .trim()
       .toLowerCase();
     if (role !== "namespace_admin") return;
-    if (!preferredUserNamespace) return;
+    const targetNamespace = rememberedNamespace || preferredUserNamespace;
+    if (!targetNamespace) return;
     if (String(location.pathname || "/") === "/") return;
-    if (pathNamespace === preferredUserNamespace) return;
-    navigate(withNamespacePath(location.pathname, preferredUserNamespace), { replace: true });
-  }, [user, preferredUserNamespace, pathNamespace, location.pathname, navigate]);
+    if (pathNamespace === targetNamespace) return;
+    navigate(withNamespacePath(location.pathname, targetNamespace), { replace: true });
+  }, [user, rememberedNamespace, preferredUserNamespace, pathNamespace, location.pathname, navigate]);
 
   useEffect(() => {
     const loadSite = async () => {
@@ -294,6 +328,7 @@ const AppShell = () => {
       // Ignore logout transport issues and clear local state anyway.
     }
     setUser(null);
+    setSelectedNamespace("");
     navigate(userRootPath);
   };
 
@@ -301,6 +336,7 @@ const AppShell = () => {
     const next = normalizeNamespace(nextNamespace);
     if (!next) return;
     setError(null);
+    setSelectedNamespace(next);
     navigate(withNamespacePath(location.pathname, next));
   };
 
