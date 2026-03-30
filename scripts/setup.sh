@@ -1729,6 +1729,59 @@ tune_longhorn_for_phase2() {
   fi
 }
 
+resolve_vm_storage_class_default() {
+  if [ -n "$VM_STORAGE_CLASS" ]; then
+    return
+  fi
+
+  local candidate reason sc_count
+  candidate=""
+  reason=""
+
+  if kubectl get storageclass "$LONGHORN_VM_STORAGE_CLASS" >/dev/null 2>&1; then
+    candidate="$LONGHORN_VM_STORAGE_CLASS"
+    reason="detected Longhorn VM storage class"
+  fi
+
+  if [ -z "$candidate" ]; then
+    candidate="$(
+      kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+        head -n 1
+    )"
+    if [ -n "$candidate" ]; then
+      reason="detected cluster default storage class"
+    fi
+  fi
+
+  if [ -z "$candidate" ]; then
+    candidate="$(
+      kubectl get storageclass -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.beta\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+        head -n 1
+    )"
+    if [ -n "$candidate" ]; then
+      reason="detected legacy default storage class"
+    fi
+  fi
+
+  if [ -z "$candidate" ]; then
+    sc_count="$(kubectl get storageclass --no-headers 2>/dev/null | awk 'NF>0 {count++} END {print count+0}')"
+    if [ "$sc_count" -eq 1 ]; then
+      candidate="$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)"
+      if [ -n "$candidate" ]; then
+        reason="single available storage class"
+      fi
+    fi
+  fi
+
+  if [ -n "$candidate" ]; then
+    VM_STORAGE_CLASS="$candidate"
+    log "VM_STORAGE_CLASS not set; defaulting to $VM_STORAGE_CLASS ($reason)."
+    return
+  fi
+
+  log "WARNING: VM_STORAGE_CLASS is unset and could not be auto-detected. Clone-based VM upload/launch will fail until configured."
+}
+
 ensure_cdi_installed() {
   if kubectl get crd datavolumes.cdi.kubevirt.io >/dev/null 2>&1 &&
     kubectl api-resources --api-group=upload.cdi.kubevirt.io 2>/dev/null | awk '{print $1}' | grep -qx "uploadtokenrequests"; then
@@ -6256,6 +6309,7 @@ run_phase_prereqs() {
   install_kubectl
   ensure_kubeconfig
   tune_longhorn_for_phase2
+  resolve_vm_storage_class_default
   detect_control_node
   detect_node_external_host
   enable_cpu_manager_static_all_nodes
@@ -6372,6 +6426,7 @@ main() {
     ensure_cluster_runtime_context
   fi
   if ! phase_enabled prereqs && phase_enabled deploy; then
+    resolve_vm_storage_class_default
     ensure_cdi_installed
     configure_cdi_upload_proxy_url
     install_external_secrets_operator
