@@ -36,7 +36,7 @@ def _ensure_bool_column(table: str, column: str) -> None:
     if column in _column_names(table):
         return
     with op.batch_alter_table(table) as batch_op:
-        batch_op.add_column(sa.Column(column, sa.Boolean(), nullable=False, server_default=sa.text("0")))
+        batch_op.add_column(sa.Column(column, sa.Boolean(), nullable=False, server_default=sa.text("false")))
 
 
 def upgrade() -> None:
@@ -44,7 +44,7 @@ def upgrade() -> None:
         _ensure_bool_column(table, "shared_catalog")
     for table in ("image", "template", "containerimage", "containertemplate"):
         if table in _table_names():
-            op.execute(f"UPDATE {table} SET shared_catalog = 0 WHERE shared_catalog IS NULL")
+            op.execute(f"UPDATE {table} SET shared_catalog = false WHERE shared_catalog IS NULL")
 
 
 def downgrade() -> None:
