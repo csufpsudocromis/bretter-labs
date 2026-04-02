@@ -1,6 +1,6 @@
 # Operations Runbook
 
-Last reviewed: March 26, 2026.
+Last reviewed: April 2, 2026.
 
 ## Production pre-rollout gate
 
@@ -154,6 +154,8 @@ kubectl -n labs get pods -o wide
 
 ## Operator/CRD checks (when `ORCHESTRATION_BACKEND=dual|crd`)
 
+If you are not running the external LabInstance operator deployment, keep these checks for incident triage only and rely on the automatic go-live canary skip behavior (`RUN_CRD_OPERATOR_CANARY=auto`).
+
 Controller health:
 
 ```bash
@@ -174,6 +176,12 @@ Canary lifecycle test:
 ```bash
 NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh
 ```
+
+Go-live proof canary behavior:
+
+- `RUN_CRD_OPERATOR_CANARY=auto`: run canary only when `bretter-labinstance-operator` exists and is ready.
+- `RUN_CRD_OPERATOR_CANARY=1`: strict mode; fail if the operator is missing/unready.
+- `RUN_CRD_OPERATOR_CANARY=0`: always skip canary.
 
 ## Pre-deploy gate
 
@@ -383,15 +391,15 @@ kubectl -n labs get limitrange bretter-default-container-limits -o yaml
 
 Admin UI checks:
 
-- `/admin/scaling-quotas` should load available namespaces.
-- `/admin/scaling-quotas` should allow team+namespace quota rows (not only `default`).
+- `/admin/settings/namespaces` should load available namespaces and limits.
+- Legacy aliases `/admin/scaling-quotas` and `/admin/team-quotas` should route to the same namespace settings page.
 - Quota changes should apply to both VM and container starts.
 - When hit, users should receive quota detail (HTTP 429) or queued reason.
 - `/admin/audit-events` should show recent admin mutations for templates/images/quotas/settings.
 
 ## Tenant namespace bootstrap
 
-Bootstrap per-team namespace guardrails:
+Bootstrap tenant namespace guardrails:
 
 ```bash
 TEAM=physics TEAM_NAMESPACE_PREFIX=labs-team- ./scripts/bootstrap_team_namespace.sh

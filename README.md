@@ -227,6 +227,7 @@ PRODUCTION_PROFILE=1 SETUP_PHASES=deploy,postdeploy ./scripts/setup.sh
 Proof artifact and operator docs:
 
 - Go-live proof script: [scripts/production_go_live_proof.sh](scripts/production_go_live_proof.sh)
+- In `RUN_CRD_OPERATOR_CANARY=auto` mode, go-live proof runs LabInstance canary only when `bretter-labinstance-operator` is present/ready; set `RUN_CRD_OPERATOR_CANARY=1` to force strict canary gating.
 - Branch protection apply/check scripts: [scripts/apply_branch_protection.sh](scripts/apply_branch_protection.sh), [scripts/check_branch_protection.sh](scripts/check_branch_protection.sh)
 - Postgres restore drill: [scripts/restore_drill_postgres.sh](scripts/restore_drill_postgres.sh)
 - Staging failure drill script: [scripts/failure_drill_control_plane.sh](scripts/failure_drill_control_plane.sh)
@@ -448,8 +449,8 @@ Production note:
 ## VM Launch Readiness Preflight
 
 - API: `GET /user/templates/{template_id}/preflight`
-- Purpose: checks placement, tenant runtime namespace bootstrap, source PVC availability, storage class readiness, and runner image pullability before launch.
-- UI behavior: User page runs this check per template and only enables **Start Lab** when preflight is ready.
+- Purpose: checks placement, tenant runtime namespace bootstrap, source PVC availability, storage class readiness, and runner image pullability.
+- UI behavior: launch preflight is evaluated at launch/start time; the user page no longer blocks **Start Lab** behind a preflight poll loop.
 - Enterprise CORS mode (`BLABS_CORS_ENTERPRISE_PROFILE=1`) requires explicit `BLABS_CORS_ALLOWED_ORIGINS`, disables `BLABS_CORS_ALLOWED_ORIGIN_REGEX`, and disallows wildcard methods/headers.
 - In enterprise mode, default CORS methods/headers are `GET,POST,PUT,PATCH,DELETE,OPTIONS` and `Accept,Content-Type,Authorization` (override via `BLABS_CORS_ALLOWED_METHODS` and `BLABS_CORS_ALLOWED_HEADERS`).
 - Server-side launch locking enforces one active lab per user, even under concurrent requests.

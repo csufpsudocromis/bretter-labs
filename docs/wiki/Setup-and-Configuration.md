@@ -227,7 +227,8 @@ ENABLE_MONITORING=1 \
 - `/admin/settings/appearance`: theme, contrast targets, background upload, font sizing
 - `/admin/settings/sso`: SSO provider config
 - `/admin/settings/ldap`: LDAP bind/search settings
-- `/admin/scaling-quotas`: namespace quota controls for lab count/cpu/ram/storage/idle cap
+- `/admin/settings/namespaces`: managed namespace controls (quota, limits, idle cap, upload cap, namespace lifecycle)
+  - legacy aliases `/admin/scaling-quotas` and `/admin/team-quotas` route to the same namespace settings page
 
 ## Notes
 
@@ -256,6 +257,7 @@ ENABLE_MONITORING=1 \
 - Use `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml` before production rollouts (add additional `-f <site-values>.yaml` overlays when used).
 - Use `NAMESPACE=labs ./scripts/deploy_preflight.sh` before rollout to enforce merged-values validation, secret wiring, and per-node image pullability.
 - `postdeploy` now runs `scripts/production_go_live_proof.sh` automatically when `RUN_PRODUCTION_GO_LIVE_PROOF=1` (default in production profile).
+- In go-live proof, `RUN_CRD_OPERATOR_CANARY=auto` runs LabInstance canary only when `bretter-labinstance-operator` is present/ready; use `RUN_CRD_OPERATOR_CANARY=1` to force strict canary gating.
 - `postdeploy` also runs a runner image startup smoke pod by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
 - Post-deploy API smoke validation now checks `https://<NODE_EXTERNAL_HOST>:30073/api/health` (or `http://...` when `PUBLIC_SCHEME=http`).

@@ -1,10 +1,11 @@
 # Scaling and Quotas
 
-Last reviewed: March 27, 2026.
+Last reviewed: April 2, 2026.
 
 ## Overview
 
-`/admin/scaling-quotas` controls namespace quota limits used by VM and container launch paths.
+`/admin/settings/namespaces` is the canonical UI for namespace quota and capacity controls used by VM and container launch paths.
+Legacy aliases `/admin/scaling-quotas` and `/admin/team-quotas` route to the same page for backward compatibility.
 
 Cluster component scaling is configured separately through Helm/setup values:
 
@@ -50,10 +51,14 @@ The one-active-lab rule is still enforced separately:
 ## Backing API routes
 
 - `GET /admin/quota-namespaces`
-- `GET /admin/team-quotas`
-- `POST /admin/team-quotas`
-- `PATCH /admin/team-quotas/{quota_id}`
-- `DELETE /admin/team-quotas/{quota_id}`
+- `GET /admin/team-quotas` (legacy path; namespace quota rows)
+- `POST /admin/team-quotas` (legacy path)
+- `PATCH /admin/team-quotas/{quota_id}` (legacy path)
+- `DELETE /admin/team-quotas/{quota_id}` (legacy path)
+- `GET /admin/settings/namespaces` (managed namespace definitions + limits)
+- `POST /admin/settings/namespaces`
+- `PATCH /admin/settings/namespaces/{namespace}`
+- `DELETE /admin/settings/namespaces/{namespace}`
 
 Compatibility route:
 

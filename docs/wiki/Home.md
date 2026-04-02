@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: March 26, 2026.
+Last reviewed: April 2, 2026.
 
 ## Audience paths
 
@@ -44,7 +44,6 @@ Last reviewed: March 26, 2026.
 - [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - [Secret Operations Runbook](Secret-Operations-Runbook)
-- [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
 - [Namespace Lifecycle and Recovery](Namespace-Lifecycle-and-Recovery)
@@ -95,13 +94,16 @@ Reference pages:
 - Optional OIDC SSO login flow (authorization code + PKCE)
 - Optional LDAP auth fallback configured in `/admin/settings/ldap`
 - One active lab per user enforced server-side (VM + container)
-- Namespace-based scaling and quota controls in `/admin/scaling-quotas`
+- Namespace-based scaling/quota controls in `/admin/settings/namespaces` (legacy aliases `/admin/scaling-quotas` and `/admin/team-quotas` still route to the same view)
+- Namespace switcher in the top header for scoped admin users (`/ns/<namespace>/...`)
+- Namespace directory at `/` shows launchable labs and running labs across assigned namespaces
 - Backend/frontend autoscaling controls via HPA (`*_HPA_MIN/MAX_REPLICAS`, CPU utilization targets) plus `UVICORN_WORKERS`
 - Default ingress NetworkPolicies with explicit app allow rules
 - Error log cap/rotation at 10MB with paging (50 entries/page)
 - Reusable production baseline values with site-overlay template (`values-production-site.template.yaml`)
 - Deploy preflight gate checks merged values, secret wiring, and per-node image pullability
 - Automatic production go-live proof in `postdeploy` when `PRODUCTION_PROFILE=1`
+- Go-live canary behavior: `RUN_CRD_OPERATOR_CANARY=auto` skips LabInstance canary if `bretter-labinstance-operator` is not deployed/ready; set `RUN_CRD_OPERATOR_CANARY=1` to force strict canary gating
 - Post-deploy admin API smoke validation job (`bretter-post-deploy-admin-api-smoke`)
 - Recurring GHCR access and user-flow SLO probe CronJobs with Prometheus alert rules
 - Secret-backed postdeploy auth checks and RDP connect-latency probe credentials

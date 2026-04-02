@@ -292,7 +292,33 @@ if [ "$fail_count" -eq 0 ] || [ -n "$backend_meta" ]; then
 fi
 
 should_run_crd_canary=0
-case "$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')" in
+run_crd_operator_canary_mode="$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')"
+crd_canary_skip_logged=0
+crd_operator_present=0
+crd_operator_ready_replicas=0
+crd_operator_desired_replicas=0
+crd_operator_reason=""
+if kubectl -n "$NAMESPACE" get deployment bretter-labinstance-operator >/dev/null 2>&1; then
+  crd_operator_present=1
+  crd_operator_desired_replicas="$(
+    kubectl -n "$NAMESPACE" get deployment bretter-labinstance-operator -o jsonpath='{.spec.replicas}' 2>/dev/null || true
+  )"
+  crd_operator_ready_replicas="$(
+    kubectl -n "$NAMESPACE" get deployment bretter-labinstance-operator -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true
+  )"
+  if [[ ! "$crd_operator_desired_replicas" =~ ^[0-9]+$ ]]; then
+    crd_operator_desired_replicas=0
+  fi
+  if [[ ! "$crd_operator_ready_replicas" =~ ^[0-9]+$ ]]; then
+    crd_operator_ready_replicas=0
+  fi
+  if [ "$crd_operator_desired_replicas" -lt 1 ] || [ "$crd_operator_ready_replicas" -lt 1 ]; then
+    crd_operator_reason="deployment bretter-labinstance-operator not ready (ready=${crd_operator_ready_replicas}, desired=${crd_operator_desired_replicas})"
+  fi
+else
+  crd_operator_reason="deployment bretter-labinstance-operator not found"
+fi
+case "$run_crd_operator_canary_mode" in
   1 | true | yes | on)
     should_run_crd_canary=1
     ;;
@@ -312,7 +338,17 @@ case "$(printf '%s' "$RUN_CRD_OPERATOR_CANARY" | tr '[:upper:]' '[:lower:]')" in
 esac
 
 if [ "$should_run_crd_canary" -eq 1 ]; then
-  if [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
+  if [ "$crd_operator_present" -ne 1 ] || [ -n "$crd_operator_reason" ]; then
+    if [ "$run_crd_operator_canary_mode" = "auto" ]; then
+      log "CRD operator canary skipped (${crd_operator_reason}; RUN_CRD_OPERATOR_CANARY=auto, backend=${orchestration_backend:-db})."
+      crd_canary_skip_logged=1
+      should_run_crd_canary=0
+    else
+      fail_check "operator LabInstance canary (${crd_operator_reason})"
+      should_run_crd_canary=0
+    fi
+  fi
+  if [ "$should_run_crd_canary" -eq 1 ] && [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
     CRD_CANARY_TEMPLATE_ID="$(
       python3 - "$NAMESPACE" <<'PY'
 import subprocess
@@ -350,9 +386,9 @@ PY
       log "Auto-selected CRD canary template id: ${CRD_CANARY_TEMPLATE_ID}"
     fi
   fi
-  if [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
+  if [ "$should_run_crd_canary" -eq 1 ] && [ -z "$CRD_CANARY_TEMPLATE_ID" ]; then
     fail_check "operator LabInstance canary (missing CRD_CANARY_TEMPLATE_ID)"
-  else
+  elif [ "$should_run_crd_canary" -eq 1 ]; then
     run_check "operator LabInstance canary" \
       env \
       NAMESPACE="$NAMESPACE" \
@@ -362,7 +398,8 @@ PY
       CRD_CANARY_DELETE_WAIT_SECONDS="$CRD_CANARY_DELETE_WAIT_SECONDS" \
       "$ROOT_DIR/scripts/crd_canary_labinstance.sh"
   fi
-else
+fi
+if [ "$should_run_crd_canary" -eq 0 ] && [ "$crd_canary_skip_logged" -ne 1 ]; then
   log "CRD operator canary skipped (RUN_CRD_OPERATOR_CANARY=${RUN_CRD_OPERATOR_CANARY}, backend=${orchestration_backend:-db})."
 fi
 

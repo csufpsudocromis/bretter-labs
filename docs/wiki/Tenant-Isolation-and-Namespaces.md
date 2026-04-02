@@ -1,10 +1,10 @@
 # Tenant Isolation and Namespaces
 
-Last reviewed: March 20, 2026.
+Last reviewed: April 2, 2026.
 
 ## Goal
 
-Use per-team namespaces with explicit quota and network-policy boundaries instead of shared runtime sprawl.
+Use per-tenant namespaces with explicit quota and network-policy boundaries instead of shared runtime sprawl.
 Do not treat label-only isolation in a shared namespace as a strong boundary.
 
 ## Mode settings
@@ -25,7 +25,7 @@ Production guardrails and backend startup validation require `TEAM_NAMESPACE_MOD
 
 Isolation is enforced at multiple layers:
 
-- Namespace boundary: each team runs labs in its own namespace (`TEAM_NAMESPACE_PREFIX + <team-slug>`).
+- Namespace boundary: each tenant runs labs in its own namespace (`TEAM_NAMESPACE_PREFIX + <tenant-slug>` when using bootstrap naming).
 - API tenant scope: tenant admins can only manage resources in their own tenant; platform admins can manage all tenants.
 - Resource visibility: non-platform users/admins can only see tenant-scoped resources plus global shared resources.
 - Quota accounting: active VM/container usage is counted per-tenant namespace for quota enforcement.
@@ -34,7 +34,7 @@ Isolation is enforced at multiple layers:
 Tenant roles:
 
 - `platform_admin`: global scope across all tenants.
-- `tenant_admin`: admin scope limited to own tenant namespace/resources.
+- `namespace_admin` / `tenant_admin`: admin scope limited to assigned namespace resources.
 
 ## Bootstrap a tenant namespace
 
@@ -76,8 +76,8 @@ kubectl -n labs-team-physics get networkpolicy
 
 ## Operational notes
 
-- Keep per-team namespaces non-overlapping and deterministic.
-- Prefer team-scoped quota updates through GitOps/PR-reviewed YAML or the bootstrap script rerun.
+- Keep tenant namespaces non-overlapping and deterministic.
+- Prefer namespace-scoped quota updates through `/admin/settings/namespaces`, GitOps/PR-reviewed YAML, or bootstrap script reruns.
 - Keep cross-namespace connectivity blocked by default; add explicit allow rules only for required dependencies.
 - Use `scripts/namespace_config_backup.py` to export namespace policy/binding state before major changes.
 - Use `POST /admin/settings/namespaces/<namespace>/decommission` for ordered cleanup with status reporting.
