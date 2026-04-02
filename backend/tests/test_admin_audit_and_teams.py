@@ -181,7 +181,7 @@ def test_admin_image_upload_finalize_smoke(login_admin: TestClient, monkeypatch,
     def _fake_ensure_finalize(task):  # noqa: ANN001
         task.finalize_job = "img-finalize-smoke"
         task.status = "finalizing"
-        task.stage = "finalizing"
+        task.stage = "normalizing"
         task.progress_percent = 0
         task.detail = "Finalizing image format/checksum on cluster"
         task.updated_at = utc_now()
@@ -189,7 +189,7 @@ def test_admin_image_upload_finalize_smoke(login_admin: TestClient, monkeypatch,
     def _fake_refresh(task, session):  # noqa: ANN001
         if task.status != "completed":
             task.status = "completed"
-            task.stage = "completed"
+            task.stage = "ready"
             task.progress_percent = 100
             task.detail = "Image ready"
             task.error_message = None
@@ -226,7 +226,7 @@ def test_admin_image_upload_finalize_smoke(login_admin: TestClient, monkeypatch,
     status = login_admin.get(f"/admin/images/upload-tasks/{task_id}")
     assert status.status_code == 200, status.text
     assert status.json()["status"] == "completed"
-    assert status.json()["stage"] == "completed"
+    assert status.json()["stage"] == "ready"
     assert status.json()["progress_percent"] == 100
 
 
@@ -236,7 +236,7 @@ def test_admin_image_upload_finalize_and_delete_smoke(login_admin: TestClient, m
     def _fake_ensure_finalize(task):  # noqa: ANN001
         task.finalize_job = "img-finalize-delete-smoke"
         task.status = "finalizing"
-        task.stage = "finalizing"
+        task.stage = "normalizing"
         task.progress_percent = 50
         task.detail = "Finalizing image format/checksum on cluster"
         task.updated_at = utc_now()
@@ -244,7 +244,7 @@ def test_admin_image_upload_finalize_and_delete_smoke(login_admin: TestClient, m
     def _fake_refresh(task, session):  # noqa: ANN001
         if task.status != "completed":
             task.status = "completed"
-            task.stage = "completed"
+            task.stage = "ready"
             task.progress_percent = 100
             task.detail = "Image ready"
             task.error_message = None

@@ -147,6 +147,11 @@ TASK_RETENTION_HOURS = 24
 FINALIZE_MAX_RETRIES = max(0, int(getattr(settings, "image_finalize_max_retries", 3) or 3))
 FINALIZE_RETRY_BASE_SECONDS = max(5, int(getattr(settings, "image_finalize_retry_base_seconds", 15) or 15))
 FINALIZE_RETRY_MAX_SECONDS = max(30, int(getattr(settings, "image_finalize_retry_max_seconds", 600) or 600))
+UPLOAD_STAGE_UPLOADED = "uploaded"
+UPLOAD_STAGE_NORMALIZING = "normalizing"
+UPLOAD_STAGE_SEEDED = "seeded"
+UPLOAD_STAGE_READY = "ready"
+UPLOAD_STAGE_FAILED = "failed"
 
 _CDI_AVAILABLE: bool | None = None
 FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%")
@@ -2082,19 +2087,47 @@ def _task_stage_progress(task: ImageUploadTask) -> tuple[str, int | None]:
     status = str(getattr(task, "status", "") or "").strip().lower()
     stage = str(getattr(task, "stage", "") or "").strip().lower()
     if status == "completed":
-        return ("completed", 100)
+        return (UPLOAD_STAGE_READY, 100)
     if status == "failed":
-        return ("failed", _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=100))
+        return (
+            UPLOAD_STAGE_FAILED,
+            _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=100),
+        )
+
+    if stage in {
+        UPLOAD_STAGE_UPLOADED,
+        UPLOAD_STAGE_NORMALIZING,
+        UPLOAD_STAGE_SEEDED,
+        UPLOAD_STAGE_READY,
+        UPLOAD_STAGE_FAILED,
+    }:
+        bounded = 100 if stage == UPLOAD_STAGE_READY else (99 if stage == UPLOAD_STAGE_SEEDED else 100)
+        return (stage, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=bounded))
+
     if status == "uploading":
-        return ("uploading", _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=100))
+        return (
+            UPLOAD_STAGE_UPLOADED,
+            _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=100),
+        )
     if status == "finalizing":
         progress = getattr(task, "progress_percent", None)
-        return ("finalizing", _coerce_progress_percent(progress, default=0, upper_bound=100))
+        return (UPLOAD_STAGE_NORMALIZING, _coerce_progress_percent(progress, default=0, upper_bound=100))
     if status == "importing":
-        return ("importing", _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=99))
-    if stage:
-        return (stage, getattr(task, "progress_percent", None))
-    return ("queued", getattr(task, "progress_percent", None))
+        return (
+            UPLOAD_STAGE_SEEDED,
+            _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=99),
+        )
+    if stage == "completed":
+        return (UPLOAD_STAGE_READY, 100)
+    if stage == "finalizing":
+        return (UPLOAD_STAGE_NORMALIZING, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
+    if stage == "importing":
+        return (UPLOAD_STAGE_SEEDED, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
+    if stage == "uploading":
+        return (UPLOAD_STAGE_UPLOADED, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
+    if stage == "failed":
+        return (UPLOAD_STAGE_FAILED, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
+    return (UPLOAD_STAGE_UPLOADED if status else "queued", getattr(task, "progress_percent", None))
 
 
 def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
@@ -2848,7 +2881,7 @@ def _ensure_upload_task_finalize_job(task: ImageUploadTask, *, force_recreate: b
         task.finalize_job = None
     task.finalize_job = _create_finalize_from_upload_job(task) if task.upload_pvc else _create_finalize_job(task)
     task.status = "finalizing"
-    task.stage = "finalizing"
+    task.stage = UPLOAD_STAGE_NORMALIZING
     task.progress_percent = 0
     task.max_retries = max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES))
     task.next_retry_at = None
@@ -2996,7 +3029,18 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
     task.max_retries = max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES))
     task.retry_count = max(0, int(getattr(task, "retry_count", 0) or 0))
     if not str(getattr(task, "stage", "") or "").strip():
-        task.stage = task.status
+        if task.status == "uploading":
+            task.stage = UPLOAD_STAGE_UPLOADED
+        elif task.status == "finalizing":
+            task.stage = UPLOAD_STAGE_NORMALIZING
+        elif task.status == "importing":
+            task.stage = UPLOAD_STAGE_SEEDED
+        elif task.status == "completed":
+            task.stage = UPLOAD_STAGE_READY
+        elif task.status == "failed":
+            task.stage = UPLOAD_STAGE_FAILED
+        else:
+            task.stage = task.status
 
     def _commit_task() -> ImageUploadTask:
         task.updated_at = utc_now()
@@ -3005,13 +3049,42 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
         session.refresh(task)
         return task
 
+    def _schedule_import_retry_or_fail(*, failure_detail: str, latest_error: str, final_detail: str) -> ImageUploadTask:
+        task.last_retry_error = (str(latest_error or failure_detail).strip() or failure_detail)[:4096]
+        if task.retry_count >= task.max_retries:
+            task.status = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
+            task.detail = final_detail
+            task.error_message = task.last_retry_error
+            _commit_task()
+            return task
+        task.retry_count += 1
+        backoff = _retry_backoff_seconds(task.retry_count)
+        task.next_retry_at = utc_now() + timedelta(seconds=backoff)
+        task.detail = f"{failure_detail}; retrying in {backoff}s (attempt {task.retry_count}/{task.max_retries})"
+        task.error_message = None
+        task.stage = UPLOAD_STAGE_SEEDED
+        if task.copy_job and not str(task.copy_job).startswith("dv:"):
+            try:
+                batch.delete_namespaced_job(
+                    name=task.copy_job,
+                    namespace=settings.kube_namespace,
+                    propagation_policy="Background",
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    logger.warning("Failed deleting copy job %s during retry", task.copy_job, exc_info=True)
+        task.copy_job = None
+        _commit_task()
+        return task
+
     if task.upload_pvc and task.status == "uploading":
         try:
             phase, msg = _datavolume_phase(task.upload_pvc)
         except ApiException as exc:
             if exc.status == 404:
                 task.status = "failed"
-                task.stage = "failed"
+                task.stage = UPLOAD_STAGE_FAILED
                 task.detail = "Direct upload DataVolume not found"
                 task.error_message = "direct upload datavolume disappeared before completion"
                 _commit_task()
@@ -3021,28 +3094,28 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
         phase_lower = phase.lower()
         if phase_lower == "failed":
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Direct CDI upload failed"
             task.error_message = msg or "direct upload failed"
             _commit_task()
             _cleanup_task_jobs(task)
             return task
         if phase_lower != "succeeded":
-            task.stage = "uploading"
+            task.stage = UPLOAD_STAGE_UPLOADED
             task.detail = "Uploading image directly to CDI DataVolume"
             task.error_message = None
             task.progress_percent = None
             _commit_task()
             return task
         task.status = "finalizing"
-        task.stage = "finalizing"
+        task.stage = UPLOAD_STAGE_NORMALIZING
         task.progress_percent = 0
         task.finalize_started_at = now
         task.max_retries = max(0, int(getattr(task, "max_retries", FINALIZE_MAX_RETRIES) or FINALIZE_MAX_RETRIES))
         task.retry_count = 0
         task.next_retry_at = None
         task.last_retry_error = None
-        task.detail = "Direct upload complete; starting finalize job"
+        task.detail = "Upload complete; normalizing image format/checksum"
         task.error_message = None
 
     if task.status != "uploading":
@@ -3050,7 +3123,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             _ensure_upload_task_finalize_job(task)
         except Exception as exc:
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Failed to submit finalize job"
             task.error_message = str(exc)
             _commit_task()
@@ -3062,7 +3135,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             FINALIZE_JOB_TIMEOUT_SECONDS + 300, FINALIZE_JOB_TIMEOUT_SECONDS
         ):
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Finalize job timed out"
             task.error_message = "finalize job exceeded timeout"
             _commit_task()
@@ -3075,7 +3148,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.status = "failed"
                 task.detail = "Finalize job not found"
                 task.error_message = "finalize job disappeared before completion"
-                task.stage = "failed"
+                task.stage = UPLOAD_STAGE_FAILED
                 _commit_task()
                 return task
             raise
@@ -3092,7 +3165,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                         f"(attempt {task.retry_count}/{task.max_retries})"
                     )
                     task.error_message = None
-                    task.stage = "finalizing"
+                    task.stage = UPLOAD_STAGE_NORMALIZING
                     _commit_task()
                     return task
                 if task.next_retry_at and now >= task.next_retry_at:
@@ -3100,7 +3173,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                         _ensure_upload_task_finalize_job(task, force_recreate=True)
                     except Exception as exc:
                         task.status = "failed"
-                        task.stage = "failed"
+                        task.stage = UPLOAD_STAGE_FAILED
                         task.detail = "Failed to resubmit finalize job"
                         task.error_message = str(exc)
                         _commit_task()
@@ -3108,7 +3181,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     task.next_retry_at = None
                     task.detail = f"Retrying finalize job (attempt {task.retry_count}/{task.max_retries})"
                     task.error_message = None
-                    task.stage = "finalizing"
+                    task.stage = UPLOAD_STAGE_NORMALIZING
                     _commit_task()
                     return task
                 task.retry_count += 1
@@ -3118,11 +3191,11 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     f"Finalize job failed; retrying in {backoff}s " f"(attempt {task.retry_count}/{task.max_retries})"
                 )
                 task.error_message = None
-                task.stage = "finalizing"
+                task.stage = UPLOAD_STAGE_NORMALIZING
                 _commit_task()
                 return task
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Finalize job failed after retries"
             task.error_message = latest_error
             _commit_task()
@@ -3154,7 +3227,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     )
                     task.detail = f"Finalizing image format/checksum on cluster ({normalized_progress}% complete)"
                     task.progress_percent = normalized_progress
-                task.stage = "finalizing"
+                task.stage = UPLOAD_STAGE_NORMALIZING
                 task.error_message = None
                 _commit_task()
                 return task
@@ -3166,9 +3239,9 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.filename = out_name
             task.size_bytes = out_size
             task.checksum = out_sha
-            task.detail = "Preparing source PVC copy job (96% complete)"
+            task.detail = "Normalization complete; preparing clone source seed (96% complete)"
             task.error_message = None
-            task.stage = "finalizing"
+            task.stage = UPLOAD_STAGE_NORMALIZING
             task.progress_percent = max(
                 _coerce_progress_percent(getattr(task, "progress_percent", 95), default=95, upper_bound=99),
                 96,
@@ -3176,7 +3249,7 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             _commit_task()
         except Exception as exc:
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Failed to parse finalize output"
             task.error_message = str(exc)
             _commit_task()
@@ -3187,12 +3260,15 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.source_pvc = claim_name
             task.copy_job = copy_job
             task.status = "importing"
-            task.stage = "importing"
+            task.stage = UPLOAD_STAGE_SEEDED
             task.detail = (
-                "Importing image into clone source PVC via CDI DataVolume"
+                "Seeding clone source PVC via CDI DataVolume"
                 if copy_job.startswith("dv:")
-                else "Copying image into clone source PVC"
+                else "Seeding clone source PVC"
             )
+            task.retry_count = 0
+            task.next_retry_at = None
+            task.last_retry_error = None
             task.progress_percent = max(
                 _coerce_progress_percent(getattr(task, "progress_percent", 96), default=96, upper_bound=99),
                 97,
@@ -3202,24 +3278,40 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             return task
         except Exception as exc:
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Failed to start source PVC copy job"
             task.error_message = str(exc)
             _commit_task()
             return task
 
     if task.status == "importing":
+        if task.next_retry_at:
+            if now < task.next_retry_at:
+                wait_seconds = max(1, int((task.next_retry_at - now).total_seconds()))
+                task.detail = (
+                    f"Seed retry scheduled in {wait_seconds}s " f"(attempt {task.retry_count}/{task.max_retries})"
+                )
+                task.stage = UPLOAD_STAGE_SEEDED
+                task.error_message = None
+                _commit_task()
+                return task
+            task.next_retry_at = None
+            task.detail = f"Retrying clone source seed (attempt {task.retry_count}/{task.max_retries})"
+            task.stage = UPLOAD_STAGE_SEEDED
+            task.error_message = None
+            _commit_task()
+
         if not task.copy_job:
             try:
                 claim_name, copy_job = _create_task_copy_job(task)
                 task.source_pvc = claim_name
                 task.copy_job = copy_job
                 task.detail = (
-                    "Importing image into clone source PVC via CDI DataVolume"
+                    "Seeding clone source PVC via CDI DataVolume"
                     if copy_job.startswith("dv:")
-                    else "Copying image into clone source PVC"
+                    else "Seeding clone source PVC"
                 )
-                task.stage = "importing"
+                task.stage = UPLOAD_STAGE_SEEDED
                 task.progress_percent = max(
                     _coerce_progress_percent(getattr(task, "progress_percent", 96), default=96, upper_bound=99),
                     97,
@@ -3227,12 +3319,11 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 task.detail = f"{task.detail} ({task.progress_percent}% complete)"
                 _commit_task()
             except Exception as exc:
-                task.status = "failed"
-                task.stage = "failed"
-                task.detail = "Failed to start source PVC copy job"
-                task.error_message = str(exc)
-                _commit_task()
-                return task
+                return _schedule_import_retry_or_fail(
+                    failure_detail="Failed to start source PVC seed job",
+                    latest_error=str(exc),
+                    final_detail="Source PVC seed failed after retries",
+                )
 
         if task.copy_job.startswith("dv:"):
             dv_name = task.copy_job.split(":", 1)[1]
@@ -3240,30 +3331,28 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                 dv_phase, dv_msg = _datavolume_phase(dv_name)
             except ApiException as exc:
                 if exc.status == 404:
-                    task.status = "failed"
-                    task.stage = "failed"
-                    task.detail = "DataVolume import not found"
-                    task.error_message = "datavolume disappeared before completion"
-                    _commit_task()
-                    return task
+                    return _schedule_import_retry_or_fail(
+                        failure_detail="CDI DataVolume seed not found",
+                        latest_error="datavolume disappeared before completion",
+                        final_detail="CDI DataVolume seed failed after retries",
+                    )
                 raise
 
             phase_lower = dv_phase.lower()
             if phase_lower not in {"succeeded", "failed"}:
                 import_progress = _advance_progress_percent(task, floor=97, cap=99, step=1)
-                task.detail = f"Importing image into clone source PVC via CDI DataVolume ({import_progress}% complete)"
-                task.stage = "importing"
+                task.detail = f"Seeding clone source PVC via CDI DataVolume ({import_progress}% complete)"
+                task.stage = UPLOAD_STAGE_SEEDED
                 task.error_message = None
                 _commit_task()
                 return task
             if phase_lower == "failed":
-                task.status = "failed"
-                task.stage = "failed"
-                task.detail = "CDI DataVolume import failed"
-                task.error_message = dv_msg or "datavolume import failed"
-                _commit_task()
                 _cleanup_fileserver(task.id)
-                return task
+                return _schedule_import_retry_or_fail(
+                    failure_detail="CDI DataVolume seed failed",
+                    latest_error=dv_msg or "datavolume import failed",
+                    final_detail="CDI DataVolume seed failed after retries",
+                )
             _cleanup_fileserver(task.id)
             try:
                 _ensure_source_filename_alias_on_pvc(
@@ -3272,54 +3361,53 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
                     task.filename,
                 )
             except Exception as exc:
-                task.status = "failed"
-                task.stage = "failed"
-                task.detail = "Failed to finalize source image filename alias"
-                task.error_message = str(exc)
-                _commit_task()
-                return task
+                return _schedule_import_retry_or_fail(
+                    failure_detail="Failed to finalize source image filename alias",
+                    latest_error=str(exc),
+                    final_detail="Source image filename alias finalize failed after retries",
+                )
         else:
             try:
                 job = batch.read_namespaced_job(name=task.copy_job, namespace=settings.kube_namespace)
                 phase = _job_phase(job)
             except ApiException as exc:
                 if exc.status == 404:
-                    task.status = "failed"
-                    task.stage = "failed"
-                    task.detail = "Source PVC copy job not found"
-                    task.error_message = "copy job disappeared before completion"
-                    _commit_task()
-                    return task
+                    return _schedule_import_retry_or_fail(
+                        failure_detail="Source PVC seed job not found",
+                        latest_error="copy job disappeared before completion",
+                        final_detail="Source PVC seed failed after retries",
+                    )
                 raise
 
             if phase in {"running", "pending"}:
                 import_progress = _advance_progress_percent(task, floor=97, cap=99, step=1)
-                task.detail = f"Copying image into clone source PVC ({import_progress}% complete)"
-                task.stage = "importing"
+                task.detail = f"Seeding clone source PVC ({import_progress}% complete)"
+                task.stage = UPLOAD_STAGE_SEEDED
                 task.error_message = None
                 _commit_task()
                 return task
 
             if phase == "failed":
-                task.status = "failed"
-                task.stage = "failed"
-                task.detail = "Source PVC copy failed"
-                task.error_message = _read_job_log(task.copy_job, tail_lines=120) or "copy job failed"
-                _commit_task()
-                return task
+                return _schedule_import_retry_or_fail(
+                    failure_detail="Source PVC seed failed",
+                    latest_error=_read_job_log(task.copy_job, tail_lines=120) or "copy job failed",
+                    final_detail="Source PVC seed failed after retries",
+                )
 
         try:
             _upsert_image_from_task(task, session)
             task.status = "completed"
-            task.stage = "completed"
+            task.stage = UPLOAD_STAGE_READY
             task.progress_percent = 100
             task.detail = "Image ready"
             task.error_message = None
+            task.next_retry_at = None
+            task.last_retry_error = None
             _commit_task()
             _cleanup_task_jobs(task)
         except Exception as exc:
             task.status = "failed"
-            task.stage = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
             task.detail = "Failed to register image metadata"
             task.error_message = str(exc)
             _commit_task()
@@ -3353,7 +3441,7 @@ def run_upload_task_watchdog(
             failed_task = session.get(ImageUploadTask, task.id)
             if failed_task:
                 failed_task.status = "failed"
-                failed_task.stage = "failed"
+                failed_task.stage = UPLOAD_STAGE_FAILED
                 failed_task.detail = "Watchdog refresh failed"
                 failed_task.error_message = str(exc)[:4096]
                 failed_task.updated_at = utc_now()
@@ -3862,9 +3950,31 @@ def _actor_can_assign_role(actor: User, target_role: str) -> bool:
     return can_non_platform_assign_role(target_role)
 
 
+def _role_supports_namespace_scopes(role: str | None) -> bool:
+    resolved_role = str(role or "").strip().lower()
+    return bool(resolved_role) and resolved_role != Role.PLATFORM_ADMIN
+
+
+def _assert_actor_can_assign_namespace_scopes(actor: User, namespace_scopes: list[str]) -> None:
+    if is_platform_admin(actor):
+        return
+    requested = [normalize_namespace(item) for item in namespace_scopes if normalize_namespace(item)]
+    if not requested:
+        return
+    actor_scope = _namespace_scope_for_actor(actor) or set()
+    if not actor_scope:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient namespace scope")
+    denied = sorted({item for item in requested if item not in actor_scope})
+    if denied:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"cannot assign namespace scopes outside actor scope: {', '.join(denied)}",
+        )
+
+
 def _effective_user_namespace_scopes(user: User, *, role: str | None = None) -> list[str]:
     resolved_role = str(role or role_for_user(user)).strip().lower()
-    if resolved_role != Role.NAMESPACE_ADMIN:
+    if not _role_supports_namespace_scopes(resolved_role):
         return []
     return user_namespace_scopes(user)
 
@@ -4201,8 +4311,9 @@ def add_user(
     if not _actor_can_assign_role(actor, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
     namespace_scopes = _normalize_user_namespace_scopes_payload(payload.namespace_scopes)
-    if role != Role.NAMESPACE_ADMIN:
+    if not _role_supports_namespace_scopes(role):
         namespace_scopes = []
+    _assert_actor_can_assign_namespace_scopes(actor, namespace_scopes)
     user = User(
         username=payload.username,
         password_hash=hash_password(payload.password),
@@ -4243,7 +4354,7 @@ def list_users(session: Session = Depends(get_session), actor: User = Depends(re
             mutated = True
         role = role_for_user(user)
         scopes = user_namespace_scopes(user)
-        if role != Role.NAMESPACE_ADMIN and scopes:
+        if not _role_supports_namespace_scopes(role) and scopes:
             set_user_namespace_scopes(user, [])
             session.add(user)
             mutated = True
@@ -4285,6 +4396,7 @@ def update_user(
         user.force_password_change = False
         revoke_tokens(session, username)
     resulting_role = role_for_user(user)
+    role_changed = False
     if payload.role is not None or payload.is_admin is not None:
         try:
             role = normalize_requested_role(payload.role, payload.is_admin)
@@ -4292,15 +4404,17 @@ def update_user(
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         if not _actor_can_assign_role(actor, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
+        role_changed = role != resulting_role
         user.role = role
         user.is_admin = can_access_admin(role)
         resulting_role = role
     if payload.namespace_scopes is None:
-        namespace_scopes = user_namespace_scopes(user)
+        namespace_scopes = [] if role_changed else user_namespace_scopes(user)
     else:
         namespace_scopes = _normalize_user_namespace_scopes_payload(payload.namespace_scopes)
-    if resulting_role != Role.NAMESPACE_ADMIN:
+    if not _role_supports_namespace_scopes(resulting_role):
         namespace_scopes = []
+    _assert_actor_can_assign_namespace_scopes(actor, namespace_scopes)
     set_user_namespace_scopes(user, namespace_scopes)
     if payload.team is not None:
         _ = payload.team
@@ -4626,9 +4740,9 @@ def upload_image(
         cluster_id=local_cluster_id(),
         size_bytes=size_bytes,
         status="finalizing",
-        stage="finalizing",
+        stage=UPLOAD_STAGE_UPLOADED,
         progress_percent=0,
-        detail="Upload complete; submitting finalize job",
+        detail="Upload complete; queued for normalization",
         error_message=None,
         retry_count=0,
         max_retries=FINALIZE_MAX_RETRIES,
@@ -4659,7 +4773,7 @@ def upload_image(
         session.refresh(task)
     except Exception as exc:
         task.status = "failed"
-        task.stage = "failed"
+        task.stage = UPLOAD_STAGE_FAILED
         task.detail = "Failed to submit finalize job"
         task.error_message = str(exc)
         task.updated_at = utc_now()
@@ -4720,9 +4834,9 @@ def start_direct_upload(
         cluster_id=local_cluster_id(),
         size_bytes=payload.size_bytes,
         status="uploading",
-        stage="uploading",
+        stage=UPLOAD_STAGE_UPLOADED,
         progress_percent=0,
-        detail="Ready for direct CDI upload",
+        detail="Upload session initialized",
         error_message=None,
         retry_count=0,
         max_retries=FINALIZE_MAX_RETRIES,
@@ -4747,14 +4861,14 @@ def start_direct_upload(
         task.upload_pvc = _create_direct_upload_datavolume(task)
         token = _request_direct_upload_token(task.upload_pvc)
         task.detail = "Uploading image directly to CDI DataVolume"
-        task.stage = "uploading"
+        task.stage = UPLOAD_STAGE_UPLOADED
         task.updated_at = utc_now()
         session.add(task)
         session.commit()
         session.refresh(task)
     except Exception as exc:
         task.status = "failed"
-        task.stage = "failed"
+        task.stage = UPLOAD_STAGE_FAILED
         task.detail = "Failed to initialize direct CDI upload"
         task.error_message = str(exc)
         task.updated_at = utc_now()
@@ -4787,7 +4901,7 @@ def get_upload_task(
     except Exception as exc:
         logger.error("Failed to refresh upload task %s: %s", task_id, exc, exc_info=True)
         task.status = "failed"
-        task.stage = "failed"
+        task.stage = UPLOAD_STAGE_FAILED
         task.detail = "Internal error while refreshing upload task"
         task.error_message = str(exc)
         task.updated_at = utc_now()

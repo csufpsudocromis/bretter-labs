@@ -34,7 +34,7 @@ ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED=1 \
 ALERTMANAGER_WEBHOOK_RECEIVER_NAME=ops-webhook \
 ALERTMANAGER_WEBHOOK_SECRET_NAME=bretter-alertmanager-webhook \
 ALERTMANAGER_WEBHOOK_SECRET_KEY=url \
-ALERTMANAGER_WEBHOOK_MATCHERS='severity=~"critical|warning"' \
+ALERTMANAGER_WEBHOOK_MATCHERS='severity="critical"' \
 ./scripts/setup.sh
 ```
 
@@ -43,7 +43,8 @@ If the secret/key is missing when webhook routing is enabled, setup fails fast.
 ## Production guidance
 
 - Keep an explicit default receiver (do not rely on chart implicit defaults).
-- Route actionable severities to at least one external receiver.
+- Keep paging webhook routes focused on high-signal alerts (default matcher is `severity="critical"`).
+- Route lower-signal warning alerts to non-paging channels (dashboards, ticketing, or email digests).
 - Keep receiver URLs in Kubernetes secrets, not committed values files.
 - VM launch/RDP/upload burn-rate alerts now include `runbook_url` annotations that point to the Operations Runbook triage sections.
 - Validate post-deploy health and alert wiring with:

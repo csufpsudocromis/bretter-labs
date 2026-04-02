@@ -46,6 +46,9 @@ const AdminImages = () => {
   const formatTaskDetail = (task) => {
     if (!task) return "";
     const pieces = [];
+    const status = String(task.status || "")
+      .trim()
+      .toLowerCase();
     const stage = String(task.stage || task.status || "")
       .trim()
       .toLowerCase();
@@ -55,7 +58,7 @@ const AdminImages = () => {
     if (detail) {
       pieces.push(detail);
     }
-    if (hasProgress && stage !== "uploading") {
+    if (hasProgress && status !== "uploading") {
       pieces.push(`Progress: ${Math.min(100, Math.max(0, Math.round(progressValue)))}%`);
     }
     const retryCount = Number(task.retry_count || 0);
@@ -77,15 +80,18 @@ const AdminImages = () => {
       const res = await api.get(`/admin/images/upload-tasks/${taskId}`);
       const task = res.data;
       setUploadDetail(formatTaskDetail(task));
+      const status = String(task.status || "")
+        .trim()
+        .toLowerCase();
       const stage = String(task.stage || task.status || "")
         .trim()
         .toLowerCase();
-      if (stage === "uploading") {
+      if (status === "uploading") {
         setUploadStage("uploading");
-      } else if (stage === "finalizing" || stage === "importing") {
+      } else if (["uploaded", "normalizing", "seeded", "ready", "finalizing", "importing"].includes(stage)) {
         setUploadStage("finalizing");
       }
-      if (Number.isFinite(task.progress_percent) && stage !== "uploading") {
+      if (Number.isFinite(task.progress_percent) && status !== "uploading") {
         setProgress(Math.min(100, Math.max(0, Math.round(task.progress_percent))));
       }
       if (task.status === "completed") return task;

@@ -166,7 +166,7 @@ def _status_feedback(
             or "mountvolume" in detail_text
         ):
             elapsed_hint = _elapsed_hint(started_at)
-            base = detail or "Preparing VM disk and container."
+            base = "Waiting for resources..."
             return "building", f"{base} {elapsed_hint}".strip()
         if "unschedulable" in reason_text or "failedscheduling" in reason_text:
             return "pending", detail or "Waiting for available node resources."

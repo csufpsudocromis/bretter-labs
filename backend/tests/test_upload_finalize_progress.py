@@ -54,7 +54,7 @@ def test_task_stage_progress_defaults_importing_to_zero_until_reported() -> None
         progress_percent=None,
     )
     stage, progress = _task_stage_progress(task)
-    assert stage == "importing"
+    assert stage == "seeded"
     assert progress == 0
 
 
@@ -69,5 +69,20 @@ def test_task_stage_progress_defaults_finalizing_to_zero_until_reported() -> Non
         progress_percent=None,
     )
     stage, progress = _task_stage_progress(task)
-    assert stage == "finalizing"
+    assert stage == "normalizing"
     assert progress == 0
+
+
+def test_task_stage_progress_maps_completed_to_ready() -> None:
+    task = ImageUploadTask(
+        id="task-ready",
+        original_filename="sample.vdi",
+        filename="sample.vdi",
+        size_bytes=1024,
+        status="completed",
+        stage="completed",
+        progress_percent=100,
+    )
+    stage, progress = _task_stage_progress(task)
+    assert stage == "ready"
+    assert progress == 100

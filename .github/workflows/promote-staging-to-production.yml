@@ -129,6 +129,14 @@ jobs:
               ./scripts/production_go_live_proof.sh
           fi
 
+      - name: Enforce staging synthetic gate
+        run: |
+          set -euo pipefail
+          report="$(ls -1t artifacts/go-live/production-go-live-*.txt 2>/dev/null | head -n1 || true)"
+          [ -n "${report}" ] || { echo "Missing staging go-live report." >&2; exit 1; }
+          grep -F "PASS: post-deploy synthetic user flow check" "${report}" >/dev/null \
+            || { echo "Synthetic gate missing/failed in ${report}" >&2; tail -n 200 "${report}" >&2; exit 1; }
+
       - name: Upload staging gate artifacts
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
@@ -232,6 +240,14 @@ jobs:
               ROLLBACK_ON_PROOF_FAILURE=1 \
               ./scripts/deploy_production_safe.sh
           fi
+
+      - name: Enforce production synthetic gate
+        run: |
+          set -euo pipefail
+          report="$(ls -1t artifacts/go-live/production-go-live-*.txt 2>/dev/null | head -n1 || true)"
+          [ -n "${report}" ] || { echo "Missing production go-live report." >&2; exit 1; }
+          grep -F "PASS: post-deploy synthetic user flow check" "${report}" >/dev/null \
+            || { echo "Synthetic gate missing/failed in ${report}" >&2; tail -n 200 "${report}" >&2; exit 1; }
 
       - name: Check live config drift
         run: |

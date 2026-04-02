@@ -100,10 +100,6 @@ const AppShell = () => {
   const rememberedNamespace = normalizeNamespace(selectedNamespace);
   const activeNamespace = pathNamespace || rememberedNamespace || preferredUserNamespace;
   const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
-  const isStandardUser =
-    String(user?.role || "")
-      .trim()
-      .toLowerCase() === "user" && !canAccessAdmin;
   const namespaceOptions = useMemo(() => {
     const merged = new Set([
       ...userNamespaceScopes,
@@ -118,7 +114,7 @@ const AppShell = () => {
   const userRootPath = namespacePrefix || "/";
   const adminRootPath = namespacePrefix ? `${namespacePrefix}/admin` : "/admin";
   const namespaceLabel = activeNamespace || "unscoped";
-  const canSwitchNamespace = !isStandardUser && namespaceOptions.length > 0;
+  const canSwitchNamespace = namespaceOptions.length > 0;
 
   useEffect(() => {
     const loadCurrentUser = async () => {
@@ -355,7 +351,7 @@ const AppShell = () => {
             </span>
             {canSwitchNamespace ? (
               <span className="namespace-switch">
-                <span className="muted small">Namespace:</span>
+                <span className="small namespace-switch-label">Namespace:</span>
                 <select
                   value={activeNamespace}
                   onChange={(e) => switchNamespace(e.target.value)}

@@ -99,6 +99,11 @@ const normalizeRoleCatalog = (items) => {
     });
 };
 
+const roleSupportsNamespaceScopes = (role) =>
+  String(role || "")
+    .trim()
+    .toLowerCase() !== "platform_admin";
+
 const AdminUsers = () => {
   const [users, setUsers] = useState([]);
   const [roleCatalog, setRoleCatalog] = useState(FALLBACK_ROLE_CATALOG);
@@ -210,7 +215,7 @@ const AdminUsers = () => {
   }, []);
 
   const create = async () => {
-    const selectedScopes = role === "namespace_admin" ? namespaceScopes : [];
+    const selectedScopes = roleSupportsNamespaceScopes(role) ? namespaceScopes : [];
     try {
       await api.post("/admin/users", {
         username,
@@ -257,7 +262,7 @@ const AdminUsers = () => {
   };
 
   const saveUser = async () => {
-    const selectedScopes = editRole === "namespace_admin" ? editNamespaceScopes : [];
+    const selectedScopes = roleSupportsNamespaceScopes(editRole) ? editNamespaceScopes : [];
     try {
       await api.patch(`/admin/users/${editingUser}`, {
         username: editUsername,
@@ -484,7 +489,7 @@ const AdminUsers = () => {
                 ))}
               </select>
             </label>
-            {role === "namespace_admin" && (
+            {roleSupportsNamespaceScopes(role) && (
               <div>
                 <div className="muted small">Allowed namespaces</div>
                 <div className="namespace-scope-list">
@@ -520,10 +525,8 @@ const AdminUsers = () => {
                   <h4>{u.username}</h4>
                   <span className="badge">{roleLabel(u.role || (u.is_admin ? "platform_admin" : "user"))}</span>
                 </div>
-                {String(u.role || "").toLowerCase() === "namespace_admin" && Array.isArray(u.namespace_scopes) && (
-                  <div className="muted small">
-                    Namespaces: {u.namespace_scopes.length > 0 ? u.namespace_scopes.join(", ") : "-"}
-                  </div>
+                {Array.isArray(u.namespace_scopes) && u.namespace_scopes.length > 0 && (
+                  <div className="muted small">Namespaces: {u.namespace_scopes.join(", ")}</div>
                 )}
               </button>
             ))}
@@ -546,7 +549,7 @@ const AdminUsers = () => {
                     ))}
                   </select>
                 </label>
-                {editRole === "namespace_admin" && (
+                {roleSupportsNamespaceScopes(editRole) && (
                   <div>
                     <div className="muted small">Allowed namespaces</div>
                     <div className="namespace-scope-list">

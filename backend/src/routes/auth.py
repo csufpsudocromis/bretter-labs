@@ -89,7 +89,7 @@ def _ensure_namespace_admin_scopes_or_raise(user: User) -> None:
 
 def _user_out(user: User) -> UserOut:
     role = role_for_user(user)
-    namespace_scopes = user_namespace_scopes(user) if role == Role.NAMESPACE_ADMIN else []
+    namespace_scopes = user_namespace_scopes(user) if role != Role.PLATFORM_ADMIN else []
     return UserOut(
         username=user.username,
         role=role,

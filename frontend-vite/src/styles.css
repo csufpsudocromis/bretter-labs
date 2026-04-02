@@ -1,6 +1,10 @@
 :root {
   color-scheme: light;
-  font-family: "Inter", system-ui, -apple-system, sans-serif;
+  font-family:
+    "Inter",
+    system-ui,
+    -apple-system,
+    sans-serif;
   --app-font-family: "Inter", system-ui, -apple-system, sans-serif;
   --app-font-size-base: 16px;
   --app-font-size-h1: 32px;
@@ -194,7 +198,9 @@ button:disabled {
   text-decoration: none;
   color: var(--text-color);
   box-shadow: 0 8px 30px rgba(15, 23, 42, 0.08);
-  transition: transform 120ms ease, box-shadow 120ms ease;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .tile:hover {
@@ -220,6 +226,10 @@ button:disabled {
   gap: 0.4rem;
 }
 
+.namespace-switch-label {
+  color: #000000;
+}
+
 .namespace-switch select {
   min-width: 180px;
 }
@@ -230,13 +240,40 @@ button:disabled {
   color: var(--text-color);
 }
 
-.namespace-open-link {
-  display: inline-flex;
+.namespace-directory-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.namespace-lab-row {
+  display: grid;
+  gap: 1rem;
+}
+
+.namespace-row-head {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  text-decoration: none;
-  padding: 0.5rem 0.65rem;
-  border-radius: 8px;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.namespace-row-head h3 {
+  margin: 0;
+}
+
+.namespace-row-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.namespace-row-grid h4 {
+  margin: 0 0 0.5rem;
+}
+
+.namespace-card-actions {
+  margin-top: 0.75rem;
 }
 
 .danger {

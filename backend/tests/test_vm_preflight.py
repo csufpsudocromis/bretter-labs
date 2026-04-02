@@ -175,5 +175,5 @@ def test_status_feedback_maps_unbound_pvc_to_building_with_elapsed_hint() -> Non
         started_at=utc_now() - timedelta(minutes=3, seconds=12),
     )
     assert stage == "building"
-    assert "PersistentVolumeClaims" in detail
+    assert detail.startswith("Waiting for resources...")
     assert "Elapsed:" in detail
