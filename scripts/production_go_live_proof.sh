@@ -256,6 +256,10 @@ print(f"public_scheme={env_values.get('BLABS_PUBLIC_SCHEME', '')}")
 print(f"cors_allowed_origins={cors_origins}")
 print(f"orchestration_backend={env_values.get('BLABS_ORCHESTRATION_BACKEND', '')}")
 print(f"kube_vm_storage_class={env_values.get('BLABS_KUBE_VM_STORAGE_CLASS', '')}")
+print(
+    "rdp_connect_probe_enabled="
+    + ("1" if is_truthy(env_values.get("BLABS_ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE", "0")) else "0")
+)
 PY
 )" || fail_check "backend deployment production env + secret wiring"
 
@@ -267,6 +271,7 @@ node_external_host=""
 public_scheme=""
 cors_allowed_origins=""
 orchestration_backend=""
+rdp_connect_probe_enabled="0"
 if [ "$fail_count" -eq 0 ] || [ -n "$backend_meta" ]; then
   while IFS='=' read -r key value; do
     case "$key" in
@@ -278,6 +283,7 @@ if [ "$fail_count" -eq 0 ] || [ -n "$backend_meta" ]; then
       public_scheme) public_scheme="$value" ;;
       cors_allowed_origins) cors_allowed_origins="$value" ;;
       orchestration_backend) orchestration_backend="$value" ;;
+      rdp_connect_probe_enabled) rdp_connect_probe_enabled="$value" ;;
     esac
   done <<<"$backend_meta"
   if [ -n "$backend_meta" ]; then
@@ -320,7 +326,7 @@ pod = subprocess.check_output(
 if not pod:
     print("", end="")
     raise SystemExit(0)
-query = "SELECT id FROM template WHERE enabled = 1 ORDER BY created_at ASC LIMIT 1;"
+query = "SELECT id FROM template WHERE enabled = true ORDER BY created_at ASC LIMIT 1;"
 out = subprocess.check_output(
     [
         "kubectl",
@@ -630,8 +636,12 @@ if errors:
 
 print(f"Validated tenant baseline resources in {len(set(tenant_namespaces))} tenant namespace(s).")
 PY
-run_check "rdp connect-latency cronjob present" \
-  kubectl -n "$NAMESPACE" get cronjob bretter-slo-rdp-connect-latency
+if [ "${rdp_connect_probe_enabled}" = "1" ]; then
+  run_check "rdp connect-latency cronjob present" \
+    kubectl -n "$NAMESPACE" get cronjob bretter-slo-rdp-connect-latency
+else
+  pass_check "rdp connect-latency cronjob check skipped (probe disabled)"
+fi
 
 node_external_host="${NODE_EXTERNAL_HOST_OVERRIDE:-$node_external_host}"
 public_scheme="${PUBLIC_SCHEME_OVERRIDE:-$public_scheme}"
