@@ -257,6 +257,42 @@ def _wait_for_container_ws_readiness_status(
     last_detail = ""
     while time.time() < deadline_epoch:
         try:
+            containers = _request(
+                session,
+                method="GET",
+                api_base=api_base,
+                path_or_url="/user/containers",
+                verify_tls=verify_tls,
+            )
+        except requests.RequestException as exc:
+            last_detail = f"container list request error: {type(exc).__name__}"
+            time.sleep(poll_seconds)
+            continue
+
+        if containers.status_code == 200:
+            row = next(
+                (item for item in (containers.json() or []) if str(item.get("id") or "").strip() == container_id),
+                None,
+            )
+            if row is None:
+                return False, "container instance missing during readiness check"
+            row_status = str(row.get("status") or "").strip().lower()
+            row_stage = str(row.get("status_stage") or row_status).strip().lower()
+            row_detail = str(row.get("status_detail") or "").strip()
+            if row_status in {"failed", "stopped", "completed"}:
+                return False, row_detail or f"container transitioned to {row_status}"
+            if row_stage in {"queued", "pending", "building"}:
+                last_detail = row_detail or "Scheduling container pod."
+                time.sleep(poll_seconds)
+                continue
+        elif containers.status_code in {401, 403}:
+            return False, f"container list authorization failed ({containers.status_code})"
+        else:
+            last_detail = f"container list returned {containers.status_code}"
+            time.sleep(poll_seconds)
+            continue
+
+        try:
             readiness = _request(
                 session,
                 method="GET",

@@ -35,6 +35,9 @@ def _canonical_env_item(row: dict[str, Any]) -> tuple[str, str]:
     if "value" in row:
         return (name, f"value:{row.get('value', '')}")
     value_from = row.get("valueFrom") or {}
+    if not value_from:
+        # Kubernetes can normalize empty env entries into an empty valueFrom object.
+        return (name, "value:")
     secret = value_from.get("secretKeyRef")
     if isinstance(secret, dict):
         secret_name = str(secret.get("name") or "").strip()
@@ -125,6 +128,8 @@ def _compare_backend_env(expected: dict[str, Any], live: dict[str, Any], mismatc
 
     for key, expected_value in sorted(expected_env.items()):
         live_value = live_env.get(key)
+        if expected_value == "value:" and (live_value is None or live_value == "other:{}"):
+            continue
         if live_value != expected_value:
             mismatches.append(f"backend env drift for {key}: expected={expected_value!r} live={live_value!r}")
 
@@ -232,7 +237,14 @@ def main() -> int:
     if not targets:
         raise SystemExit("ERROR: at least one deployment name is required.")
 
-    helm_cmd = ["helm", "template", args.release_name, str((root / args.chart_dir).resolve())]
+    helm_cmd = [
+        "helm",
+        "template",
+        args.release_name,
+        str((root / args.chart_dir).resolve()),
+        "--namespace",
+        args.namespace,
+    ]
     for value_file in resolved_values:
         helm_cmd.extend(["-f", value_file])
     rendered_yaml = _run_text(helm_cmd)
