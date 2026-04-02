@@ -245,7 +245,7 @@ def _wait_for_rdp_connect(
     return ""
 
 
-def _wait_for_container_ws_readiness(
+def _wait_for_container_ws_readiness_status(
     *,
     session: requests.Session,
     api_base: str,
@@ -253,7 +253,7 @@ def _wait_for_container_ws_readiness(
     container_id: str,
     deadline_epoch: float,
     poll_seconds: float,
-) -> None:
+) -> tuple[bool, str]:
     last_detail = ""
     while time.time() < deadline_epoch:
         try:
@@ -271,13 +271,13 @@ def _wait_for_container_ws_readiness(
         if readiness.status_code == 200:
             payload = readiness.json() or {}
             if bool(payload.get("ready")):
-                return
+                return True, ""
             last_detail = str(payload.get("detail") or "").strip()
         else:
             last_detail = f"connect-readiness returned {readiness.status_code}"
         time.sleep(poll_seconds)
     detail = last_detail[:300] if last_detail else "no readiness detail"
-    _fail(f"timeout waiting for container websocket readiness: {detail}")
+    return False, detail
 
 
 def _require_rdp_frame(
@@ -498,6 +498,10 @@ def main() -> int:
     poll_seconds = max(1.0, float(os.environ.get("SYNTHETIC_POLL_SECONDS") or "3"))
     rdp_marker_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS") or "180"))
     container_ws_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_CONTAINER_WS_TIMEOUT_SECONDS") or "180"))
+    container_launch_retry_limit = max(1, int(os.environ.get("SYNTHETIC_CONTAINER_LAUNCH_RETRY_LIMIT") or "3"))
+    container_launch_retry_backoff_seconds = max(
+        1, int(os.environ.get("SYNTHETIC_CONTAINER_LAUNCH_RETRY_BACKOFF_SECONDS") or "20")
+    )
     image_upload_timeout_seconds = max(60, int(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS") or "1200"))
     post_vm_grace_seconds = max(0, int(os.environ.get("SYNTHETIC_POST_VM_GRACE_SECONDS") or "20"))
     single_lab_limit_message = "you already have a virtual lab running"
@@ -671,47 +675,88 @@ def main() -> int:
         if post_vm_grace_seconds > 0:
             time.sleep(post_vm_grace_seconds)
 
-        while time.time() < deadline:
-            container_start = _request(
-                session,
-                method="POST",
+        last_container_ws_detail = ""
+        container_ready = False
+        for launch_attempt in range(1, container_launch_retry_limit + 1):
+            while time.time() < deadline:
+                container_start = _request(
+                    session,
+                    method="POST",
+                    api_base=api_base,
+                    path_or_url=f"/user/container-templates/{container_template_id}/start",
+                    verify_tls=verify_tls,
+                )
+                if container_start.status_code == 201:
+                    container_id = str((container_start.json() or {}).get("id") or "").strip()
+                    break
+                detail = ""
+                try:
+                    detail = str((container_start.json() or {}).get("detail") or "")
+                except Exception:
+                    detail = container_start.text or ""
+                if container_start.status_code == 429 and single_lab_limit_message in detail.lower():
+                    time.sleep(poll_seconds)
+                    continue
+                _fail(f"container start failed ({container_start.status_code}): {detail[:300]}")
+            if not container_id:
+                _fail("timeout waiting for available slot for container start")
+
+            _wait_for(
+                session=session,
                 api_base=api_base,
-                path_or_url=f"/user/container-templates/{container_template_id}/start",
+                verify_tls=verify_tls,
+                list_path="/user/containers",
+                instance_id=container_id,
+                deadline_epoch=deadline,
+                poll_seconds=poll_seconds,
+                allowed_stages={"pending", "building", "queued", "starting", "running", "ready"},
+            )
+            container_ready, last_container_ws_detail = _wait_for_container_ws_readiness_status(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                container_id=container_id,
+                deadline_epoch=min(deadline, time.time() + container_ws_timeout_seconds),
+                poll_seconds=poll_seconds,
+            )
+            if container_ready:
+                break
+
+            container_ws_detail = str(last_container_ws_detail or "").strip().lower()
+            container_delete = _request(
+                session,
+                method="DELETE",
+                api_base=api_base,
+                path_or_url=f"/user/containers/{container_id}",
                 verify_tls=verify_tls,
             )
-            if container_start.status_code == 201:
-                container_id = str((container_start.json() or {}).get("id") or "").strip()
-                break
-            detail = ""
-            try:
-                detail = str((container_start.json() or {}).get("detail") or "")
-            except Exception:
-                detail = container_start.text or ""
-            if container_start.status_code == 429 and single_lab_limit_message in detail.lower():
-                time.sleep(poll_seconds)
+            if container_delete.status_code not in {204, 404}:
+                _fail(
+                    f"container cleanup after failed readiness failed ({container_delete.status_code}): "
+                    f"{container_delete.text[:300]}"
+                )
+            _wait_deleted_or_released(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                list_path="/user/containers",
+                instance_id=container_id,
+                deadline_epoch=min(deadline, time.time() + 180),
+                poll_seconds=poll_seconds,
+            )
+            container_id = ""
+            if (
+                "scheduling container pod" in container_ws_detail
+                and launch_attempt < container_launch_retry_limit
+                and time.time() < deadline
+            ):
+                time.sleep(container_launch_retry_backoff_seconds)
                 continue
-            _fail(f"container start failed ({container_start.status_code}): {detail[:300]}")
-        if not container_id:
-            _fail("timeout waiting for available slot for container start")
+            break
 
-        _wait_for(
-            session=session,
-            api_base=api_base,
-            verify_tls=verify_tls,
-            list_path="/user/containers",
-            instance_id=container_id,
-            deadline_epoch=deadline,
-            poll_seconds=poll_seconds,
-            allowed_stages={"pending", "building", "queued", "starting", "running", "ready"},
-        )
-        _wait_for_container_ws_readiness(
-            session=session,
-            api_base=api_base,
-            verify_tls=verify_tls,
-            container_id=container_id,
-            deadline_epoch=min(deadline, time.time() + container_ws_timeout_seconds),
-            poll_seconds=poll_seconds,
-        )
+        if not container_ready:
+            detail = last_container_ws_detail[:300] if last_container_ws_detail else "no readiness detail"
+            _fail(f"timeout waiting for container websocket readiness: {detail}")
 
         container_token = _request(
             session,
