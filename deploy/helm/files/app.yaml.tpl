@@ -404,8 +404,8 @@ spec:
           imagePullPolicy: IfNotPresent
           command:
             - python
-            - -m
-            - backend.src.tools.db_migrate_job
+            - -c
+            - from backend.src.db import init_db; init_db()
           securityContext:
             runAsNonRoot: true
             runAsUser: 10001
