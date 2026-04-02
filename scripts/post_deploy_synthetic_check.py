@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, urlunparse
 
 import requests
 
@@ -346,6 +346,17 @@ def _run_image_upload_finalize_check(
         _fail(f"image cleanup delete failed ({image_delete.status_code}): {image_delete.text[:300]}")
 
 
+def _container_idle_bridge_url(connect_url: str) -> str:
+    parsed = urlparse(str(connect_url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        _fail(f"container connect_url is not absolute: {connect_url!r}")
+    base_path = parsed.path or "/"
+    if not base_path.endswith("/"):
+        base_path = base_path + "/"
+    bridge_path = base_path + "__blabs_idle_bridge.js"
+    return urlunparse(parsed._replace(path=bridge_path))
+
+
 def main() -> int:
     api_base = str(os.environ.get("SYNTHETIC_API_BASE") or "").strip().rstrip("/")
     username = str(os.environ.get("SYNTHETIC_USERNAME") or "").strip()
@@ -574,11 +585,12 @@ def main() -> int:
         if not connect_url:
             _fail("container connect-token response missing connect_url")
 
+        idle_bridge_url = _container_idle_bridge_url(connect_url)
         idle_bridge = _request(
             session,
             method="GET",
             api_base=api_base,
-            path_or_url=f"/user/containers/{container_id}/connect/__blabs_idle_bridge.js",
+            path_or_url=idle_bridge_url,
             verify_tls=verify_tls,
         )
         if idle_bridge.status_code != 200:
