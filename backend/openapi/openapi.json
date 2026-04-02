@@ -55,6 +55,93 @@
         "title": "AdminAuditEventOut",
         "type": "object"
       },
+      "AdminLaunchTaskOut": {
+        "properties": {
+          "cluster_id": {
+            "default": "local",
+            "title": "Cluster Id",
+            "type": "string"
+          },
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "elapsed_seconds": {
+            "default": 0,
+            "title": "Elapsed Seconds",
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "vm",
+              "container"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_active_at": {
+            "format": "date-time",
+            "title": "Last Active At",
+            "type": "string"
+          },
+          "namespace": {
+            "default": "labs",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "owner": {
+            "title": "Owner",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "template_id": {
+            "title": "Template Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "kind",
+          "status",
+          "owner",
+          "template_id",
+          "started_at",
+          "last_active_at"
+        ],
+        "title": "AdminLaunchTaskOut",
+        "type": "object"
+      },
+      "AdminOperationActionResult": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "ok": {
+            "default": true,
+            "title": "Ok",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "AdminOperationActionResult",
+        "type": "object"
+      },
       "AlertManagerAlert": {
         "properties": {
           "description": {
@@ -3104,6 +3191,11 @@
             "title": "Failed Total Instances",
             "type": "integer"
           },
+          "image_import_oldest_pending_seconds": {
+            "default": 0,
+            "title": "Image Import Oldest Pending Seconds",
+            "type": "integer"
+          },
           "image_upload_tasks_failed": {
             "default": 0,
             "title": "Image Upload Tasks Failed",
@@ -3140,6 +3232,11 @@
             "title": "Network Policy Count",
             "type": "integer"
           },
+          "pending_pvc_count": {
+            "default": 0,
+            "title": "Pending Pvc Count",
+            "type": "integer"
+          },
           "present_in_cluster": {
             "default": false,
             "title": "Present In Cluster",
@@ -3153,6 +3250,74 @@
           "queued_container_instances": {
             "default": 0,
             "title": "Queued Container Instances",
+            "type": "integer"
+          },
+          "quota_concurrent_usage_pct": {
+            "default": 0.0,
+            "title": "Quota Concurrent Usage Pct",
+            "type": "number"
+          },
+          "quota_cpu_usage_pct": {
+            "default": 0.0,
+            "title": "Quota Cpu Usage Pct",
+            "type": "number"
+          },
+          "quota_current_concurrent_labs": {
+            "default": 0,
+            "title": "Quota Current Concurrent Labs",
+            "type": "integer"
+          },
+          "quota_current_cpu_millicores": {
+            "default": 0,
+            "title": "Quota Current Cpu Millicores",
+            "type": "integer"
+          },
+          "quota_current_memory_mb": {
+            "default": 0,
+            "title": "Quota Current Memory Mb",
+            "type": "integer"
+          },
+          "quota_max_concurrent_labs": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Max Concurrent Labs"
+          },
+          "quota_max_cpu_millicores": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Max Cpu Millicores"
+          },
+          "quota_max_memory_mb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quota Max Memory Mb"
+          },
+          "quota_memory_usage_pct": {
+            "default": 0.0,
+            "title": "Quota Memory Usage Pct",
+            "type": "number"
+          },
+          "recent_failures_60m": {
+            "default": 0,
+            "title": "Recent Failures 60M",
             "type": "integer"
           },
           "required_network_policies_missing": {
@@ -7746,6 +7911,511 @@
           }
         },
         "summary": "Rename Image",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/launch-tasks": {
+      "get": {
+        "operationId": "list_operation_launch_tasks_admin_operations_launch_tasks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 300,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AdminLaunchTaskOut"
+                  },
+                  "title": "Response List Operation Launch Tasks Admin Operations Launch Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Operation Launch Tasks",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/launch-tasks/{kind}/{task_id}": {
+      "delete": {
+        "operationId": "cleanup_operation_launch_task_admin_operations_launch_tasks__kind___task_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cleanup Operation Launch Task",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/launch-tasks/{kind}/{task_id}/cancel": {
+      "post": {
+        "operationId": "cancel_operation_launch_task_admin_operations_launch_tasks__kind___task_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Operation Launch Task",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/launch-tasks/{kind}/{task_id}/retry": {
+      "post": {
+        "operationId": "retry_operation_launch_task_admin_operations_launch_tasks__kind___task_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Operation Launch Task",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/upload-tasks": {
+      "get": {
+        "operationId": "list_operation_upload_tasks_admin_operations_upload_tasks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ImageUploadTaskStatus"
+                  },
+                  "title": "Response List Operation Upload Tasks Admin Operations Upload Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Operation Upload Tasks",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/upload-tasks/{task_id}": {
+      "delete": {
+        "operationId": "cleanup_operation_upload_task_admin_operations_upload_tasks__task_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cleanup Operation Upload Task",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/upload-tasks/{task_id}/cancel": {
+      "post": {
+        "operationId": "cancel_operation_upload_task_admin_operations_upload_tasks__task_id__cancel_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUploadTaskStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cancel Operation Upload Task",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/operations/upload-tasks/{task_id}/retry": {
+      "post": {
+        "operationId": "retry_operation_upload_task_admin_operations_upload_tasks__task_id__retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUploadTaskStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry Operation Upload Task",
         "tags": [
           "admin"
         ]

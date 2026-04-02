@@ -317,6 +317,142 @@ export interface paths {
         patch: operations["rename_image_admin_images__image_id__patch"];
         trace?: never;
     };
+    "/admin/operations/launch-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Operation Launch Tasks */
+        get: operations["list_operation_launch_tasks_admin_operations_launch_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/launch-tasks/{kind}/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cleanup Operation Launch Task */
+        delete: operations["cleanup_operation_launch_task_admin_operations_launch_tasks__kind___task_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/launch-tasks/{kind}/{task_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Operation Launch Task */
+        post: operations["cancel_operation_launch_task_admin_operations_launch_tasks__kind___task_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/launch-tasks/{kind}/{task_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Operation Launch Task */
+        post: operations["retry_operation_launch_task_admin_operations_launch_tasks__kind___task_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/upload-tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Operation Upload Tasks */
+        get: operations["list_operation_upload_tasks_admin_operations_upload_tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/upload-tasks/{task_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Cleanup Operation Upload Task */
+        delete: operations["cleanup_operation_upload_task_admin_operations_upload_tasks__task_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/upload-tasks/{task_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Operation Upload Task */
+        post: operations["cancel_operation_upload_task_admin_operations_upload_tasks__task_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/operations/upload-tasks/{task_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Operation Upload Task */
+        post: operations["retry_operation_upload_task_admin_operations_upload_tasks__task_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/pods": {
         parameters: {
             query?: never;
@@ -1530,6 +1666,62 @@ export interface components {
              * @default global
              */
             tenant: string;
+        };
+        /** AdminLaunchTaskOut */
+        AdminLaunchTaskOut: {
+            /**
+             * Cluster Id
+             * @default local
+             */
+            cluster_id: string;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Elapsed Seconds
+             * @default 0
+             */
+            elapsed_seconds: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "vm" | "container";
+            /**
+             * Last Active At
+             * Format: date-time
+             */
+            last_active_at: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
+            /** Owner */
+            owner: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+            /** Task Id */
+            task_id: string;
+            /** Template Id */
+            template_id: string;
+        };
+        /** AdminOperationActionResult */
+        AdminOperationActionResult: {
+            /** Detail */
+            detail: string;
+            /**
+             * Ok
+             * @default true
+             */
+            ok: boolean;
         };
         /** AlertManagerAlert */
         AlertManagerAlert: {
@@ -2943,6 +3135,11 @@ export interface components {
              */
             failed_total_instances: number;
             /**
+             * Image Import Oldest Pending Seconds
+             * @default 0
+             */
+            image_import_oldest_pending_seconds: number;
+            /**
              * Image Upload Tasks Failed
              * @default 0
              */
@@ -2967,6 +3164,11 @@ export interface components {
              */
             network_policy_count: number;
             /**
+             * Pending Pvc Count
+             * @default 0
+             */
+            pending_pvc_count: number;
+            /**
              * Present In Cluster
              * @default false
              */
@@ -2981,6 +3183,47 @@ export interface components {
              * @default 0
              */
             queued_container_instances: number;
+            /**
+             * Quota Concurrent Usage Pct
+             * @default 0
+             */
+            quota_concurrent_usage_pct: number;
+            /**
+             * Quota Cpu Usage Pct
+             * @default 0
+             */
+            quota_cpu_usage_pct: number;
+            /**
+             * Quota Current Concurrent Labs
+             * @default 0
+             */
+            quota_current_concurrent_labs: number;
+            /**
+             * Quota Current Cpu Millicores
+             * @default 0
+             */
+            quota_current_cpu_millicores: number;
+            /**
+             * Quota Current Memory Mb
+             * @default 0
+             */
+            quota_current_memory_mb: number;
+            /** Quota Max Concurrent Labs */
+            quota_max_concurrent_labs?: number | null;
+            /** Quota Max Cpu Millicores */
+            quota_max_cpu_millicores?: number | null;
+            /** Quota Max Memory Mb */
+            quota_max_memory_mb?: number | null;
+            /**
+             * Quota Memory Usage Pct
+             * @default 0
+             */
+            quota_memory_usage_pct: number;
+            /**
+             * Recent Failures 60M
+             * @default 0
+             */
+            recent_failures_60m: number;
             /** Required Network Policies Missing */
             required_network_policies_missing?: string[];
             /**
@@ -5009,6 +5252,273 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageMeta"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_operation_launch_tasks_admin_operations_launch_tasks_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminLaunchTaskOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cleanup_operation_launch_task_admin_operations_launch_tasks__kind___task_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                kind: string;
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_operation_launch_task_admin_operations_launch_tasks__kind___task_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                kind: string;
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_operation_launch_task_admin_operations_launch_tasks__kind___task_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                kind: string;
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_operation_upload_tasks_admin_operations_upload_tasks_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUploadTaskStatus"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cleanup_operation_upload_task_admin_operations_upload_tasks__task_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationActionResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_operation_upload_task_admin_operations_upload_tasks__task_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUploadTaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_operation_upload_task_admin_operations_upload_tasks__task_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                task_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUploadTaskStatus"];
                 };
             };
             /** @description Validation Error */
