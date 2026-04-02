@@ -26,6 +26,12 @@ const DEFAULT_FORM = {
   container_auto_delete_minutes_default: 60,
   queue_max_pending: 25,
   upload_max_bytes: 60 * 1024 * 1024 * 1024,
+  quota_enabled: true,
+  quota_max_concurrent_labs: "",
+  quota_max_cpu_millicores: "",
+  quota_max_memory_mb: "",
+  quota_max_storage_gib: "",
+  quota_idle_timeout_minutes_cap: "",
   enabled: true,
 };
 
@@ -60,12 +66,32 @@ const FIELD_HELP = {
   container_auto_delete_minutes_default: "Namespace default/cap for container auto-delete after stop/completion.",
   queue_max_pending: "Maximum queued container launches allowed in this namespace.",
   upload_max_bytes: "Maximum VM image upload size allowed in this namespace (bytes).",
+  quota_enabled: "Enable launch admission caps for this namespace. Disable to ignore configured cap fields.",
+  quota_max_concurrent_labs: "Maximum simultaneous running labs in this namespace (VM + container).",
+  quota_max_cpu_millicores: "Total CPU cap across active labs in this namespace (millicores).",
+  quota_max_memory_mb: "Total memory cap across active labs in this namespace (MB).",
+  quota_max_storage_gib: "Total storage cap across active labs in this namespace (GiB).",
+  quota_idle_timeout_minutes_cap: "Upper bound for user-selected idle timeout in this namespace (minutes).",
   enabled: "Disable to keep config without reconciliation; enable to enforce in-cluster resources.",
+};
+
+const normalizeNamespaceValue = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase();
+
+const normalizeOptionalPositiveInt = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.floor(parsed);
 };
 
 const AdminNamespacesSettings = () => {
   const [rows, setRows] = useState([]);
   const [observabilityRows, setObservabilityRows] = useState([]);
+  const [quotaRows, setQuotaRows] = useState([]);
   const [editingNamespace, setEditingNamespace] = useState("");
   const [form, setForm] = useState({ ...DEFAULT_FORM });
   const [message, setMessage] = useState("");
@@ -79,6 +105,12 @@ const AdminNamespacesSettings = () => {
       setObservabilityRows(Array.isArray(obs.data) ? obs.data : []);
     } catch (err) {
       setMessage(err.response?.data?.detail || "Failed to load managed namespaces");
+    }
+    try {
+      const quotaRes = await api.get("/admin/team-quotas");
+      setQuotaRows(Array.isArray(quotaRes.data) ? quotaRes.data : []);
+    } catch {
+      setQuotaRows([]);
     }
   };
 
@@ -94,9 +126,11 @@ const AdminNamespacesSettings = () => {
   };
 
   const startEdit = (row) => {
-    setEditingNamespace(String(row.namespace || ""));
+    const namespace = normalizeNamespaceValue(row.namespace);
+    const quota = quotaByNamespace.get(namespace);
+    setEditingNamespace(namespace);
     setForm({
-      namespace: String(row.namespace || ""),
+      namespace,
       security_profile: String(row.security_profile || "baseline"),
       enforce_network_policies: Boolean(row.enforce_network_policies),
       max_pods: String(row.max_pods || "200"),
@@ -120,6 +154,12 @@ const AdminNamespacesSettings = () => {
       container_auto_delete_minutes_default: Number(row.container_auto_delete_minutes_default || 60),
       queue_max_pending: Number(row.queue_max_pending || 25),
       upload_max_bytes: Number(row.upload_max_bytes || 60 * 1024 * 1024 * 1024),
+      quota_enabled: quota ? Boolean(quota.enabled) : true,
+      quota_max_concurrent_labs: quota?.max_concurrent_labs ?? "",
+      quota_max_cpu_millicores: quota?.max_cpu_millicores ?? "",
+      quota_max_memory_mb: quota?.max_memory_mb ?? "",
+      quota_max_storage_gib: quota?.max_storage_gib ?? "",
+      quota_idle_timeout_minutes_cap: quota?.idle_timeout_minutes_cap ?? "",
       enabled: Boolean(row.enabled),
     });
     setMessage("");
@@ -154,27 +194,87 @@ const AdminNamespacesSettings = () => {
     enabled: Boolean(form.enabled),
   });
 
+  const buildQuotaPayload = (forUpdate = false) => {
+    const payload = {
+      namespace: normalizeNamespaceValue(form.namespace) || "labs",
+      enabled: Boolean(form.quota_enabled),
+    };
+    const maxConcurrent = normalizeOptionalPositiveInt(form.quota_max_concurrent_labs);
+    const maxCpu = normalizeOptionalPositiveInt(form.quota_max_cpu_millicores);
+    const maxMem = normalizeOptionalPositiveInt(form.quota_max_memory_mb);
+    const maxStorage = normalizeOptionalPositiveInt(form.quota_max_storage_gib);
+    const idleCap = normalizeOptionalPositiveInt(form.quota_idle_timeout_minutes_cap);
+    if (forUpdate) {
+      if (String(form.quota_max_concurrent_labs).trim()) payload.max_concurrent_labs = maxConcurrent;
+      else payload.clear_max_concurrent_labs = true;
+      if (String(form.quota_max_cpu_millicores).trim()) payload.max_cpu_millicores = maxCpu;
+      else payload.clear_max_cpu_millicores = true;
+      if (String(form.quota_max_memory_mb).trim()) payload.max_memory_mb = maxMem;
+      else payload.clear_max_memory_mb = true;
+      if (String(form.quota_max_storage_gib).trim()) payload.max_storage_gib = maxStorage;
+      else payload.clear_max_storage_gib = true;
+      if (String(form.quota_idle_timeout_minutes_cap).trim()) payload.idle_timeout_minutes_cap = idleCap;
+      else payload.clear_idle_timeout_minutes_cap = true;
+      return payload;
+    }
+    payload.max_concurrent_labs = maxConcurrent;
+    payload.max_cpu_millicores = maxCpu;
+    payload.max_memory_mb = maxMem;
+    payload.max_storage_gib = maxStorage;
+    payload.idle_timeout_minutes_cap = idleCap;
+    return payload;
+  };
+
   const save = async () => {
-    const namespace = String(form.namespace || "")
-      .trim()
-      .toLowerCase();
+    const namespace = normalizeNamespaceValue(form.namespace);
     if (!namespace) {
       setMessage("Namespace is required");
       return;
     }
     setSaving(true);
+    let namespaceSaved = false;
     try {
       if (editingNamespace) {
         await api.patch(`/admin/settings/namespaces/${encodeURIComponent(editingNamespace)}`, buildPayload());
-        setMessage(`Managed namespace ${namespace} updated.`);
+        namespaceSaved = true;
       } else {
         await api.post("/admin/settings/namespaces", { namespace, ...buildPayload() });
-        setMessage(`Managed namespace ${namespace} created.`);
+        namespaceSaved = true;
       }
+
+      const existingQuota = quotaByNamespace.get(namespace);
+      const hasQuotaValues = [
+        form.quota_max_concurrent_labs,
+        form.quota_max_cpu_millicores,
+        form.quota_max_memory_mb,
+        form.quota_max_storage_gib,
+        form.quota_idle_timeout_minutes_cap,
+      ].some((value) => String(value || "").trim());
+      const shouldPersistQuota = hasQuotaValues || !Boolean(form.quota_enabled);
+      let quotaMessage = "Launch quota unchanged (unlimited).";
+      if (existingQuota) {
+        if (shouldPersistQuota) {
+          await api.patch(`/admin/team-quotas/${existingQuota.id}`, buildQuotaPayload(true));
+          quotaMessage = "Launch quota updated.";
+        } else {
+          await api.delete(`/admin/team-quotas/${existingQuota.id}`);
+          quotaMessage = "Launch quota cleared (unlimited).";
+        }
+      } else if (shouldPersistQuota) {
+        await api.post("/admin/team-quotas", buildQuotaPayload(false));
+        quotaMessage = "Launch quota saved.";
+      }
+
+      setMessage(`Managed namespace ${namespace} ${editingNamespace ? "updated" : "created"}. ${quotaMessage}`);
       resetForm();
       await load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to save managed namespace");
+      const detail = err.response?.data?.detail || "Failed to save managed namespace";
+      if (namespaceSaved) {
+        setMessage(`Managed namespace ${namespace} saved, but launch quota update failed: ${detail}`);
+      } else {
+        setMessage(detail);
+      }
     } finally {
       setSaving(false);
     }
@@ -267,6 +367,11 @@ const AdminNamespacesSettings = () => {
   };
 
   const obsByNamespace = new Map(observabilityRows.map((row) => [String(row.namespace || ""), row]));
+  const quotaByNamespace = new Map(quotaRows.map((row) => [normalizeNamespaceValue(row.namespace), row]));
+  const limitLabel = (value, suffix = "") => {
+    if (value === null || value === undefined || value === "") return "Unlimited";
+    return `${value}${suffix}`;
+  };
   const formatDuration = (seconds) => {
     const total = Math.max(0, Number(seconds || 0));
     if (!Number.isFinite(total) || total <= 0) return "0s";
@@ -471,6 +576,73 @@ const AdminNamespacesSettings = () => {
               <span className="muted small">{FIELD_HELP.upload_max_bytes}</span>
             </label>
             <label>
+              Launch quota enabled
+              <select
+                value={form.quota_enabled ? "yes" : "no"}
+                onChange={(e) => updateField("quota_enabled", e.target.value === "yes")}
+              >
+                <option value="yes">Enabled</option>
+                <option value="no">Disabled</option>
+              </select>
+              <span className="muted small">{FIELD_HELP.quota_enabled}</span>
+            </label>
+            <label>
+              Launch cap: max concurrent labs
+              <input
+                type="number"
+                min="1"
+                value={form.quota_max_concurrent_labs}
+                onChange={(e) => updateField("quota_max_concurrent_labs", e.target.value)}
+                placeholder="Unlimited"
+              />
+              <span className="muted small">{FIELD_HELP.quota_max_concurrent_labs}</span>
+            </label>
+            <label>
+              Launch cap: CPU (millicores)
+              <input
+                type="number"
+                min="100"
+                value={form.quota_max_cpu_millicores}
+                onChange={(e) => updateField("quota_max_cpu_millicores", e.target.value)}
+                placeholder="Unlimited"
+              />
+              <span className="muted small">{FIELD_HELP.quota_max_cpu_millicores}</span>
+            </label>
+            <label>
+              Launch cap: memory (MB)
+              <input
+                type="number"
+                min="128"
+                value={form.quota_max_memory_mb}
+                onChange={(e) => updateField("quota_max_memory_mb", e.target.value)}
+                placeholder="Unlimited"
+              />
+              <span className="muted small">{FIELD_HELP.quota_max_memory_mb}</span>
+            </label>
+            <label>
+              Launch cap: storage (GiB)
+              <input
+                type="number"
+                min="1"
+                value={form.quota_max_storage_gib}
+                onChange={(e) => updateField("quota_max_storage_gib", e.target.value)}
+                placeholder="Unlimited"
+              />
+              <span className="muted small">{FIELD_HELP.quota_max_storage_gib}</span>
+            </label>
+            <label>
+              Launch cap: idle timeout (minutes)
+              <input
+                type="number"
+                min="1"
+                max="1440"
+                value={form.quota_idle_timeout_minutes_cap}
+                onChange={(e) => updateField("quota_idle_timeout_minutes_cap", e.target.value)}
+                placeholder="No cap"
+              />
+              <span className="muted small">{FIELD_HELP.quota_idle_timeout_minutes_cap}</span>
+            </label>
+            <label>
               Enabled
               <select
                 value={form.enabled ? "yes" : "no"}
@@ -499,6 +671,28 @@ const AdminNamespacesSettings = () => {
             {rows.length === 0 && <div className="muted">No managed namespaces configured.</div>}
             {rows.map((row) => (
               <div key={row.id} className="tile">
+                {(() => {
+                  const quota = quotaByNamespace.get(normalizeNamespaceValue(row.namespace));
+                  return (
+                    <>
+                      <div className="small muted">
+                        Launch quota:{" "}
+                        {quota
+                          ? `${quota.enabled ? "enabled" : "disabled"} | labs ${limitLabel(
+                              quota.max_concurrent_labs
+                            )} | CPU ${limitLabel(quota.max_cpu_millicores, "m")} | RAM ${limitLabel(
+                              quota.max_memory_mb,
+                              "MB"
+                            )}`
+                          : "unlimited"}
+                      </div>
+                      <div className="small muted">
+                        Launch quota: storage {quota ? limitLabel(quota.max_storage_gib, "GiB") : "Unlimited"} | idle
+                        cap {quota ? limitLabel(quota.idle_timeout_minutes_cap, "m") : "Unlimited"}
+                      </div>
+                    </>
+                  );
+                })()}
                 <div className="tile-header">
                   <h4>{row.namespace}</h4>
                   <span className={`badge ${row.enabled ? "success" : "warn"}`}>

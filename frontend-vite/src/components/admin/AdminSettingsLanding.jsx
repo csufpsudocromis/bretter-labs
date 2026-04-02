@@ -10,10 +10,6 @@ const AdminSettingsLanding = () => (
         <h3>User Permissions</h3>
         <p>Create users and assign role-based permissions.</p>
       </Link>
-      <Link to="/admin/scaling-quotas" className="tile">
-        <h3>Scaling &amp; Quotas</h3>
-        <p>Set namespace limits for max labs, CPU/RAM, storage, and idle caps.</p>
-      </Link>
       <Link to="/admin/settings/appearance" className="tile">
         <h3>Appearance</h3>
         <p>Title, tagline, colors, and background image.</p>
@@ -28,7 +24,7 @@ const AdminSettingsLanding = () => (
       </Link>
       <Link to="/admin/settings/namespaces" className="tile">
         <h3>Namespaces</h3>
-        <p>Add/remove managed namespaces and tune namespace security/resource policies.</p>
+        <p>Add/remove managed namespaces and tune security, resources, and launch quota caps.</p>
       </Link>
       <Link to="/admin/settings/sso" className="tile">
         <h3>OIDC / SSO</h3>
