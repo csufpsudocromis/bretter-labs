@@ -357,6 +357,51 @@ def _container_idle_bridge_url(connect_url: str) -> str:
     return urlunparse(parsed._replace(path=bridge_path))
 
 
+def _int_or_default(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _select_container_template(
+    templates: list[dict[str, Any]], *, preferred_id: str, preferred_name: str
+) -> dict[str, Any]:
+    if preferred_id:
+        matched = next((row for row in templates if str(row.get("id") or "").strip() == preferred_id), None)
+        if matched is not None:
+            return matched
+    preferred_name_normalized = preferred_name.strip().lower()
+    if preferred_name_normalized:
+        matched = next(
+            (row for row in templates if preferred_name_normalized in str(row.get("name") or "").strip().lower()),
+            None,
+        )
+        if matched is not None:
+            return matched
+
+    synthetic_name_match = next(
+        (
+            row
+            for row in templates
+            if "synthetic" in str(row.get("name") or "").strip().lower()
+            and "nginx" in str(row.get("name") or "").strip().lower()
+        ),
+        None,
+    )
+    if synthetic_name_match is not None:
+        return synthetic_name_match
+
+    return min(
+        templates,
+        key=lambda row: (
+            _int_or_default(row.get("cpu_millicores"), 10_000_000),
+            _int_or_default(row.get("memory_mb"), 10_000_000),
+            str(row.get("name") or "").strip().lower(),
+        ),
+    )
+
+
 def main() -> int:
     api_base = str(os.environ.get("SYNTHETIC_API_BASE") or "").strip().rstrip("/")
     username = str(os.environ.get("SYNTHETIC_USERNAME") or "").strip()
@@ -371,11 +416,16 @@ def main() -> int:
     namespace_admin_password = str(os.environ.get("SYNTHETIC_NAMESPACE_ADMIN_PASSWORD") or "").strip()
     platform_admin_username = str(os.environ.get("SYNTHETIC_PLATFORM_ADMIN_USERNAME") or "").strip()
     platform_admin_password = str(os.environ.get("SYNTHETIC_PLATFORM_ADMIN_PASSWORD") or "").strip()
+    preferred_container_template_id = str(os.environ.get("SYNTHETIC_CONTAINER_TEMPLATE_ID") or "").strip()
+    preferred_container_template_name = str(
+        os.environ.get("SYNTHETIC_CONTAINER_TEMPLATE_NAME") or "Synthetic Nginx"
+    ).strip()
     timeout_seconds = max(120, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "900"))
     poll_seconds = max(1.0, float(os.environ.get("SYNTHETIC_POLL_SECONDS") or "3"))
     rdp_marker_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS") or "180"))
     container_ws_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_CONTAINER_WS_TIMEOUT_SECONDS") or "180"))
     image_upload_timeout_seconds = max(60, int(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS") or "1200"))
+    post_vm_grace_seconds = max(0, int(os.environ.get("SYNTHETIC_POST_VM_GRACE_SECONDS") or "20"))
     single_lab_limit_message = "you already have a virtual lab running"
 
     if not api_base:
@@ -466,7 +516,12 @@ def main() -> int:
             _fail("SYNTHETIC_REQUIRE_RDP_TEMPLATE=1 but no guacamole_rdp VM template is enabled.")
         vm_template = rdp_template or vm_templates[0]
         vm_template_id = str(vm_template.get("id") or "").strip()
-        container_template_id = str((container_templates[0] or {}).get("id") or "").strip()
+        selected_container_template = _select_container_template(
+            container_templates,
+            preferred_id=preferred_container_template_id,
+            preferred_name=preferred_container_template_name,
+        )
+        container_template_id = str((selected_container_template or {}).get("id") or "").strip()
         if not vm_template_id or not container_template_id:
             _fail("template list returned missing ids")
 
@@ -529,6 +584,8 @@ def main() -> int:
             poll_seconds=poll_seconds,
         )
         vm_id = ""
+        if post_vm_grace_seconds > 0:
+            time.sleep(post_vm_grace_seconds)
 
         while time.time() < deadline:
             container_start = _request(
