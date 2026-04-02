@@ -256,13 +256,18 @@ def _wait_for_container_ws_readiness(
 ) -> None:
     last_detail = ""
     while time.time() < deadline_epoch:
-        readiness = _request(
-            session,
-            method="GET",
-            api_base=api_base,
-            path_or_url=f"/user/containers/{container_id}/connect-readiness",
-            verify_tls=verify_tls,
-        )
+        try:
+            readiness = _request(
+                session,
+                method="GET",
+                api_base=api_base,
+                path_or_url=f"/user/containers/{container_id}/connect-readiness",
+                verify_tls=verify_tls,
+            )
+        except requests.RequestException as exc:
+            last_detail = f"connect-readiness request error: {type(exc).__name__}"
+            time.sleep(poll_seconds)
+            continue
         if readiness.status_code == 200:
             payload = readiness.json() or {}
             if bool(payload.get("ready")):
@@ -344,6 +349,75 @@ def _run_image_upload_finalize_check(
     )
     if image_delete.status_code not in {204, 404}:
         _fail(f"image cleanup delete failed ({image_delete.status_code}): {image_delete.text[:300]}")
+
+
+def _cleanup_existing_user_labs(
+    *,
+    session: requests.Session,
+    api_base: str,
+    verify_tls: bool,
+    deadline_epoch: float,
+    poll_seconds: float,
+) -> None:
+    vm_ids: list[str] = []
+    container_ids: list[str] = []
+
+    vm_list = _request(session, method="GET", api_base=api_base, path_or_url="/user/pods", verify_tls=verify_tls)
+    if vm_list.status_code == 200:
+        for row in vm_list.json() or []:
+            vm_id = str(row.get("id") or "").strip()
+            if vm_id:
+                vm_ids.append(vm_id)
+                _request(
+                    session,
+                    method="DELETE",
+                    api_base=api_base,
+                    path_or_url=f"/user/pods/{vm_id}",
+                    verify_tls=verify_tls,
+                )
+    else:
+        _fail(f"failed to list existing VMs for cleanup ({vm_list.status_code}): {vm_list.text[:300]}")
+
+    container_list = _request(
+        session, method="GET", api_base=api_base, path_or_url="/user/containers", verify_tls=verify_tls
+    )
+    if container_list.status_code == 200:
+        for row in container_list.json() or []:
+            container_id = str(row.get("id") or "").strip()
+            if container_id:
+                container_ids.append(container_id)
+                _request(
+                    session,
+                    method="DELETE",
+                    api_base=api_base,
+                    path_or_url=f"/user/containers/{container_id}",
+                    verify_tls=verify_tls,
+                )
+    else:
+        _fail(
+            f"failed to list existing containers for cleanup ({container_list.status_code}): {container_list.text[:300]}"
+        )
+
+    for vm_id in vm_ids:
+        _wait_deleted_or_released(
+            session=session,
+            api_base=api_base,
+            verify_tls=verify_tls,
+            list_path="/user/pods",
+            instance_id=vm_id,
+            deadline_epoch=min(deadline_epoch, time.time() + 180),
+            poll_seconds=poll_seconds,
+        )
+    for container_id in container_ids:
+        _wait_deleted_or_released(
+            session=session,
+            api_base=api_base,
+            verify_tls=verify_tls,
+            list_path="/user/containers",
+            instance_id=container_id,
+            deadline_epoch=min(deadline_epoch, time.time() + 180),
+            poll_seconds=poll_seconds,
+        )
 
 
 def _container_idle_bridge_url(connect_url: str) -> str:
@@ -432,6 +506,8 @@ def main() -> int:
         _fail("SYNTHETIC_API_BASE is required.")
     if not username or not password:
         _fail("SYNTHETIC_USERNAME and SYNTHETIC_PASSWORD are required.")
+    if not verify_tls:
+        requests.packages.urllib3.disable_warnings()  # type: ignore[attr-defined]
     if bool(lab_admin_username) != bool(lab_admin_password):
         _fail("SYNTHETIC_LAB_ADMIN_USERNAME and SYNTHETIC_LAB_ADMIN_PASSWORD must be set together.")
     if bool(namespace_admin_username) != bool(namespace_admin_password):
@@ -468,6 +544,14 @@ def main() -> int:
         )
         if login.status_code != 200:
             _fail(f"login failed ({login.status_code}): {login.text[:300]}")
+
+        _cleanup_existing_user_labs(
+            session=session,
+            api_base=api_base,
+            verify_tls=verify_tls,
+            deadline_epoch=deadline,
+            poll_seconds=poll_seconds,
+        )
 
         if upload_fixture_path and upload_fixture_name:
             _run_image_upload_finalize_check(
