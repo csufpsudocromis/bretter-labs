@@ -247,6 +247,18 @@ class ManagedNamespaceObservabilityOut(BaseModel):
     queue_oldest_pending_seconds: int = 0
     error_budget_target_pct: float = 99.0
     error_budget_remaining_pct: float = 100.0
+    quota_current_concurrent_labs: int = 0
+    quota_max_concurrent_labs: Optional[int] = None
+    quota_concurrent_usage_pct: float = 0.0
+    quota_current_cpu_millicores: int = 0
+    quota_max_cpu_millicores: Optional[int] = None
+    quota_cpu_usage_pct: float = 0.0
+    quota_current_memory_mb: int = 0
+    quota_max_memory_mb: Optional[int] = None
+    quota_memory_usage_pct: float = 0.0
+    pending_pvc_count: int = 0
+    image_import_oldest_pending_seconds: int = 0
+    recent_failures_60m: int = 0
     alert_route_key: str = ""
     drift_count: int = 0
     drift_items: list[str] = Field(default_factory=list)
@@ -287,6 +299,25 @@ class ImageUploadTaskStatus(BaseModel):
     image_id: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class AdminLaunchTaskOut(BaseModel):
+    task_id: str
+    kind: Literal["vm", "container"]
+    status: str
+    owner: str
+    namespace: str = "labs"
+    cluster_id: str = "local"
+    template_id: str
+    detail: str = ""
+    elapsed_seconds: int = 0
+    started_at: datetime
+    last_active_at: datetime
+
+
+class AdminOperationActionResult(BaseModel):
+    ok: bool = True
+    detail: str
 
 
 class AdminAuditEventOut(BaseModel):

@@ -488,6 +488,140 @@ def _pct(failed: int, total: int) -> float:
     return round((float(failed) / float(total)) * 100.0, 2)
 
 
+def _usage_pct(current: int, limit: int | None) -> float:
+    limit_value = int(limit or 0)
+    if limit_value <= 0:
+        return 0.0
+    return round((float(max(0, int(current))) / float(limit_value)) * 100.0, 2)
+
+
+def _namespace_quota_row(session: Session, namespace: str) -> TeamQuota | None:
+    rows = session.exec(select(TeamQuota).where(TeamQuota.namespace == namespace)).all()
+    if not rows:
+        return None
+
+    def _sort_key(row: TeamQuota) -> tuple[int, float]:
+        team_rank = 0 if normalize_team(getattr(row, "team", None)) == normalize_team("default") else 1
+        ts = getattr(row, "updated_at", None) or getattr(row, "created_at", None) or utc_now()
+        try:
+            epoch = float(ts.timestamp())
+        except Exception:
+            epoch = 0.0
+        return (team_rank, -epoch)
+
+    rows.sort(key=_sort_key)
+    return rows[0]
+
+
+def _namespace_runtime_usage(session: Session, namespace: str) -> tuple[int, int, int]:
+    vm_rows = session.exec(
+        select(Instance).where(Instance.namespace == namespace).where(Instance.status.in_(sorted(_ACTIVE_VM_STATUSES)))
+    ).all()
+    container_rows = session.exec(
+        select(ContainerInstance)
+        .where(ContainerInstance.namespace == namespace)
+        .where(ContainerInstance.status.in_(sorted(_ACTIVE_CONTAINER_STATUSES)))
+    ).all()
+
+    vm_template_ids = sorted({str(getattr(row, "template_id", "") or "").strip() for row in vm_rows if row.template_id})
+    vm_template_map: dict[str, Template] = {}
+    if vm_template_ids:
+        for template in session.exec(select(Template).where(Template.id.in_(vm_template_ids))).all():
+            vm_template_map[str(template.id)] = template
+
+    container_template_ids = sorted(
+        {str(getattr(row, "template_id", "") or "").strip() for row in container_rows if row.template_id}
+    )
+    container_template_map: dict[str, ContainerTemplate] = {}
+    if container_template_ids:
+        for template in session.exec(
+            select(ContainerTemplate).where(ContainerTemplate.id.in_(container_template_ids))
+        ).all():
+            container_template_map[str(template.id)] = template
+
+    cpu_m = 0
+    memory_mb = 0
+    for row in vm_rows:
+        template = vm_template_map.get(str(row.template_id))
+        if not template:
+            continue
+        cpu_m += max(1, int(getattr(template, "cpu_cores", 1) or 1)) * 1000
+        memory_mb += max(1, int(getattr(template, "ram_mb", 512) or 512))
+    for row in container_rows:
+        template = container_template_map.get(str(row.template_id))
+        if not template:
+            continue
+        cpu_m += max(1, int(getattr(template, "cpu_millicores", 500) or 500))
+        memory_mb += max(1, int(getattr(template, "memory_mb", 512) or 512))
+    return (len(vm_rows) + len(container_rows), cpu_m, memory_mb)
+
+
+def _namespace_pending_pvc_count(namespace: str) -> int:
+    try:
+        core = kube._client()
+        pending = 0
+        for item in core.list_namespaced_persistent_volume_claim(namespace=namespace).items:
+            phase = str(getattr(getattr(item, "status", None), "phase", "") or "").strip().lower()
+            if phase == "pending":
+                pending += 1
+        return pending
+    except Exception:
+        return 0
+
+
+def _namespace_oldest_pending_import_seconds(session: Session, namespace: str) -> int:
+    row = session.exec(
+        select(ImageUploadTask)
+        .where(ImageUploadTask.namespace == namespace)
+        .where(
+            ImageUploadTask.status.in_(sorted({"queued", "uploading", "finalizing", "importing", "pending", "running"}))
+        )
+        .order_by(ImageUploadTask.created_at.asc())
+        .limit(1)
+    ).first()
+    if not row or not getattr(row, "created_at", None):
+        return 0
+    try:
+        return max(0, int((utc_now() - row.created_at).total_seconds()))
+    except Exception:
+        return 0
+
+
+def _namespace_recent_failures(session: Session, namespace: str, *, lookback_minutes: int = 60) -> int:
+    cutoff = utc_now() - timedelta(minutes=max(5, int(lookback_minutes or 60)))
+    vm_failed = int(
+        session.exec(
+            select(func.count())
+            .select_from(Instance)
+            .where(Instance.namespace == namespace)
+            .where(Instance.status.in_(sorted(_FAILED_VM_STATUSES)))
+            .where(Instance.started_at >= cutoff)
+        ).one()
+        or 0
+    )
+    container_failed = int(
+        session.exec(
+            select(func.count())
+            .select_from(ContainerInstance)
+            .where(ContainerInstance.namespace == namespace)
+            .where(ContainerInstance.status.in_(sorted(_FAILED_CONTAINER_STATUSES)))
+            .where(ContainerInstance.started_at >= cutoff)
+        ).one()
+        or 0
+    )
+    upload_failed = int(
+        session.exec(
+            select(func.count())
+            .select_from(ImageUploadTask)
+            .where(ImageUploadTask.namespace == namespace)
+            .where(ImageUploadTask.status.in_(sorted({"failed", "error"})))
+            .where(ImageUploadTask.updated_at >= cutoff)
+        ).one()
+        or 0
+    )
+    return vm_failed + container_failed + upload_failed
+
+
 def _namespace_slo_budget(session: Session, namespace: str, *, lookback_minutes: int = 60) -> dict[str, float | int]:
     cutoff = utc_now() - timedelta(minutes=max(5, int(lookback_minutes or 60)))
 
@@ -910,6 +1044,14 @@ def list_managed_namespace_observability(
             namespace
         )
         slo = _namespace_slo_budget(session, namespace, lookback_minutes=60)
+        namespace_quota = _namespace_quota_row(session, namespace)
+        quota_current_labs, quota_current_cpu_m, quota_current_memory_mb = _namespace_runtime_usage(session, namespace)
+        quota_max_labs = int(getattr(namespace_quota, "max_concurrent_labs", 0) or 0) if namespace_quota else 0
+        quota_max_cpu_m = int(getattr(namespace_quota, "max_cpu_millicores", 0) or 0) if namespace_quota else 0
+        quota_max_memory_mb = int(getattr(namespace_quota, "max_memory_mb", 0) or 0) if namespace_quota else 0
+        pending_pvc_count = _namespace_pending_pvc_count(namespace)
+        oldest_import_pending_seconds = _namespace_oldest_pending_import_seconds(session, namespace)
+        recent_failures_60m = _namespace_recent_failures(session, namespace, lookback_minutes=60)
         drift_items = detect_namespace_policy_drift(
             kube,
             namespace=namespace,
@@ -965,6 +1107,18 @@ def list_managed_namespace_observability(
                 queue_oldest_pending_seconds=int(slo["queue_oldest_pending_seconds"]),
                 error_budget_target_pct=float(slo["error_budget_target_pct"]),
                 error_budget_remaining_pct=float(slo["error_budget_remaining_pct"]),
+                quota_current_concurrent_labs=quota_current_labs,
+                quota_max_concurrent_labs=(quota_max_labs or None),
+                quota_concurrent_usage_pct=_usage_pct(quota_current_labs, quota_max_labs),
+                quota_current_cpu_millicores=quota_current_cpu_m,
+                quota_max_cpu_millicores=(quota_max_cpu_m or None),
+                quota_cpu_usage_pct=_usage_pct(quota_current_cpu_m, quota_max_cpu_m),
+                quota_current_memory_mb=quota_current_memory_mb,
+                quota_max_memory_mb=(quota_max_memory_mb or None),
+                quota_memory_usage_pct=_usage_pct(quota_current_memory_mb, quota_max_memory_mb),
+                pending_pvc_count=pending_pvc_count,
+                image_import_oldest_pending_seconds=oldest_import_pending_seconds,
+                recent_failures_60m=recent_failures_60m,
                 alert_route_key=f"tenant_namespace={namespace}",
                 drift_count=len(drift_items),
                 drift_items=drift_items[:8],

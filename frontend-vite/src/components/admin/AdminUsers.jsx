@@ -104,6 +104,29 @@ const roleSupportsNamespaceScopes = (role) =>
     .trim()
     .toLowerCase() !== "platform_admin";
 
+const hasEffectivePermission = (permissions, permission) => {
+  if (!Array.isArray(permissions)) return false;
+  const normalized = permissions
+    .map((value) =>
+      String(value || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  if (normalized.includes("*")) return true;
+  if (normalized.includes(permission)) return true;
+  return normalized.some((entry) => entry.endsWith(".*") && permission.startsWith(entry.slice(0, -1)));
+};
+
+const PERMISSION_MATRIX = [
+  { label: "Admin console", read: "admin.access", write: null },
+  { label: "Users", read: "admin.users.read", write: "admin.users.write" },
+  { label: "VM/Container images", read: "admin.images.read", write: "admin.images.write" },
+  { label: "Templates", read: "admin.templates.read", write: "admin.templates.write" },
+  { label: "Operations", read: "admin.operations.read", write: "admin.operations.write" },
+  { label: "Settings", read: "admin.settings.read", write: "admin.settings.write" },
+];
+
 const AdminUsers = () => {
   const [users, setUsers] = useState([]);
   const [roleCatalog, setRoleCatalog] = useState(FALLBACK_ROLE_CATALOG);
@@ -373,61 +396,99 @@ const AdminUsers = () => {
         <div className="tile-grid">
           {roleCatalog.map((entry) => (
             <div key={entry.role} className="tile admin-users-role-tile">
-              <div className="tile-header">
-                <h4>{entry.label}</h4>
-                <span className="badge">{entry.role}</span>
-              </div>
-              {entry.description && <div className="muted small">{entry.description}</div>}
-              <div className="form">
-                <label>
-                  Label
-                  <input
-                    value={roleDrafts[entry.role]?.label ?? entry.label}
-                    onChange={(e) => updateRoleDraft(entry.role, { label: e.target.value })}
-                    disabled={!entry.editable}
-                  />
-                </label>
-                <label>
-                  Description
-                  <input
-                    value={roleDrafts[entry.role]?.description ?? entry.description}
-                    onChange={(e) => updateRoleDraft(entry.role, { description: e.target.value })}
-                    disabled={!entry.editable}
-                  />
-                </label>
-                <div className="muted small">Permissions</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem" }}>
-                  {permissionCatalog.map((permission) => (
-                    <label key={`${entry.role}-${permission}`} className="permission-row">
-                      <input
-                        type="checkbox"
-                        checked={(roleDrafts[entry.role]?.permissions || entry.permissions).includes(permission)}
-                        disabled={!entry.editable}
-                        onChange={() =>
-                          updateRoleDraft(entry.role, {
-                            permissions: togglePermission(
-                              roleDrafts[entry.role]?.permissions || entry.permissions,
-                              permission
-                            ),
-                          })
-                        }
-                      />
-                      <span className="permission-id">{permission}</span>
-                    </label>
-                  ))}
-                </div>
-                <div className="actions">
-                  <button type="button" onClick={() => saveRole(entry.role)} disabled={!entry.editable}>
-                    Save Role
-                  </button>
-                  {entry.deletable && (
-                    <button type="button" className="ghost" onClick={() => deleteRole(entry.role)}>
-                      Delete Role
-                    </button>
-                  )}
-                </div>
-                {!entry.editable && <div className="muted small">This role is fixed.</div>}
-              </div>
+              {(() => {
+                const effectivePermissions = roleDrafts[entry.role]?.permissions || entry.permissions;
+                const namespacePolicy = hasEffectivePermission(effectivePermissions, "*")
+                  ? "All namespaces (platform-wide)"
+                  : roleSupportsNamespaceScopes(entry.role)
+                    ? "Scoped by each user's Allowed Namespaces selection"
+                    : "No namespace-scoped admin access";
+                return (
+                  <>
+                    <div className="tile-header">
+                      <h4>{entry.label}</h4>
+                      <span className="badge">{entry.role}</span>
+                    </div>
+                    {entry.description && <div className="muted small">{entry.description}</div>}
+                    <div className="form">
+                      <label>
+                        Label
+                        <input
+                          value={roleDrafts[entry.role]?.label ?? entry.label}
+                          onChange={(e) => updateRoleDraft(entry.role, { label: e.target.value })}
+                          disabled={!entry.editable}
+                        />
+                      </label>
+                      <label>
+                        Description
+                        <input
+                          value={roleDrafts[entry.role]?.description ?? entry.description}
+                          onChange={(e) => updateRoleDraft(entry.role, { description: e.target.value })}
+                          disabled={!entry.editable}
+                        />
+                      </label>
+                      <div className="muted small">Permissions</div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.5rem" }}>
+                        {permissionCatalog.map((permission) => (
+                          <label key={`${entry.role}-${permission}`} className="permission-row">
+                            <input
+                              type="checkbox"
+                              checked={(roleDrafts[entry.role]?.permissions || entry.permissions).includes(permission)}
+                              disabled={!entry.editable}
+                              onChange={() =>
+                                updateRoleDraft(entry.role, {
+                                  permissions: togglePermission(
+                                    roleDrafts[entry.role]?.permissions || entry.permissions,
+                                    permission
+                                  ),
+                                })
+                              }
+                            />
+                            <span className="permission-id">{permission}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="permission-matrix">
+                        <div className="muted small">
+                          <strong>Effective access preview</strong>
+                        </div>
+                        <div className="permission-matrix-grid">
+                          <div className="muted small">Area</div>
+                          <div className="muted small">Read</div>
+                          <div className="muted small">Write</div>
+                          {PERMISSION_MATRIX.map((row) => (
+                            <React.Fragment key={`${entry.role}-${row.label}`}>
+                              <div className="small">{row.label}</div>
+                              <div className="small">
+                                {hasEffectivePermission(effectivePermissions, row.read) ? "Yes" : "No"}
+                              </div>
+                              <div className="small">
+                                {row.write
+                                  ? hasEffectivePermission(effectivePermissions, row.write)
+                                    ? "Yes"
+                                    : "No"
+                                  : "N/A"}
+                              </div>
+                            </React.Fragment>
+                          ))}
+                        </div>
+                        <div className="muted small">Namespace scope: {namespacePolicy}</div>
+                      </div>
+                      <div className="actions">
+                        <button type="button" onClick={() => saveRole(entry.role)} disabled={!entry.editable}>
+                          Save Role
+                        </button>
+                        {entry.deletable && (
+                          <button type="button" className="ghost" onClick={() => deleteRole(entry.role)}>
+                            Delete Role
+                          </button>
+                        )}
+                      </div>
+                      {!entry.editable && <div className="muted small">This role is fixed.</div>}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -462,6 +523,31 @@ const AdminUsers = () => {
                   <span className="permission-id">{permission}</span>
                 </label>
               ))}
+            </div>
+            <div className="permission-matrix">
+              <div className="muted small">
+                <strong>Effective access preview</strong>
+              </div>
+              <div className="permission-matrix-grid">
+                <div className="muted small">Area</div>
+                <div className="muted small">Read</div>
+                <div className="muted small">Write</div>
+                {PERMISSION_MATRIX.map((row) => (
+                  <React.Fragment key={`create-${row.label}`}>
+                    <div className="small">{row.label}</div>
+                    <div className="small">{hasEffectivePermission(newRolePermissions, row.read) ? "Yes" : "No"}</div>
+                    <div className="small">
+                      {row.write ? (hasEffectivePermission(newRolePermissions, row.write) ? "Yes" : "No") : "N/A"}
+                    </div>
+                  </React.Fragment>
+                ))}
+              </div>
+              <div className="muted small">
+                Namespace scope:{" "}
+                {hasEffectivePermission(newRolePermissions, "*")
+                  ? "All namespaces (platform-wide)"
+                  : "Scoped by each user's Allowed Namespaces selection"}
+              </div>
             </div>
             <div className="actions">
               <button type="button" onClick={createRole} disabled={!newRoleId.trim()}>

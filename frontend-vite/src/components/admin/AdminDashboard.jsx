@@ -6,6 +6,11 @@ const tiles = [
   { title: "VM Images", description: "Upload and manage VM images", to: "/admin/images" },
   { title: "Container Images", description: "Register container images", to: "/admin/container-images" },
   {
+    title: "Operations",
+    description: "Retry/cancel/cleanup failed upload and launch tasks",
+    to: "/admin/operations",
+  },
+  {
     title: "Container Templates",
     description: "Create and enable container run templates",
     to: "/admin/container-templates",

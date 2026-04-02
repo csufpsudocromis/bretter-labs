@@ -446,6 +446,28 @@ button:disabled {
   line-height: 1.25;
 }
 
+.admin-users-role-editor .permission-matrix {
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  background: #ffffff;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.admin-users-role-editor .permission-matrix-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(55px, auto) minmax(55px, auto);
+  gap: 0.2rem 0.5rem;
+  align-items: center;
+}
+
+.admin-users-role-editor .permission-matrix-grid > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .namespace-scope-list {
   display: flex;
   flex-direction: column;

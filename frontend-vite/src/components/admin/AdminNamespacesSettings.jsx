@@ -25,7 +25,7 @@ const DEFAULT_FORM = {
   vm_auto_delete_minutes_default: 60,
   container_auto_delete_minutes_default: 60,
   queue_max_pending: 25,
-  upload_max_bytes: 60 * 1024 * 1024 * 1024,
+  upload_max_gib: 60,
   quota_enabled: true,
   quota_max_concurrent_labs: "",
   quota_max_cpu_millicores: "",
@@ -34,6 +34,8 @@ const DEFAULT_FORM = {
   quota_idle_timeout_minutes_cap: "",
   enabled: true,
 };
+
+const BYTES_PER_GIB = 1024 * 1024 * 1024;
 
 const profileOptions = [
   { value: "restricted", label: "Restricted" },
@@ -65,7 +67,7 @@ const FIELD_HELP = {
   vm_auto_delete_minutes_default: "Namespace default/cap for VM auto-delete after stop/completion.",
   container_auto_delete_minutes_default: "Namespace default/cap for container auto-delete after stop/completion.",
   queue_max_pending: "Maximum queued container launches allowed in this namespace.",
-  upload_max_bytes: "Maximum VM image upload size allowed in this namespace (bytes).",
+  upload_max_gib: "Maximum VM image upload size allowed in this namespace (GiB).",
   quota_enabled: "Enable launch admission caps for this namespace. Disable to ignore configured cap fields.",
   quota_max_concurrent_labs: "Maximum simultaneous running labs in this namespace (VM + container).",
   quota_max_cpu_millicores: "Total CPU cap across active labs in this namespace (millicores).",
@@ -86,6 +88,18 @@ const normalizeOptionalPositiveInt = (value) => {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.floor(parsed);
+};
+
+const bytesToGiB = (value) => {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
+  return Math.round((bytes / BYTES_PER_GIB) * 100) / 100;
+};
+
+const gibToBytes = (value, fallbackGiB = 60) => {
+  const gib = Number(value || fallbackGiB);
+  if (!Number.isFinite(gib) || gib <= 0) return Math.floor(fallbackGiB * BYTES_PER_GIB);
+  return Math.floor(gib * BYTES_PER_GIB);
 };
 
 const AdminNamespacesSettings = () => {
@@ -153,7 +167,7 @@ const AdminNamespacesSettings = () => {
       vm_auto_delete_minutes_default: Number(row.vm_auto_delete_minutes_default || 60),
       container_auto_delete_minutes_default: Number(row.container_auto_delete_minutes_default || 60),
       queue_max_pending: Number(row.queue_max_pending || 25),
-      upload_max_bytes: Number(row.upload_max_bytes || 60 * 1024 * 1024 * 1024),
+      upload_max_gib: Math.max(1, bytesToGiB(Number(row.upload_max_bytes || 60 * BYTES_PER_GIB))),
       quota_enabled: quota ? Boolean(quota.enabled) : true,
       quota_max_concurrent_labs: quota?.max_concurrent_labs ?? "",
       quota_max_cpu_millicores: quota?.max_cpu_millicores ?? "",
@@ -190,7 +204,7 @@ const AdminNamespacesSettings = () => {
     vm_auto_delete_minutes_default: Math.max(1, Number(form.vm_auto_delete_minutes_default || 60)),
     container_auto_delete_minutes_default: Math.max(1, Number(form.container_auto_delete_minutes_default || 60)),
     queue_max_pending: Math.max(1, Number(form.queue_max_pending || 25)),
-    upload_max_bytes: Math.max(1, Number(form.upload_max_bytes || 60 * 1024 * 1024 * 1024)),
+    upload_max_bytes: Math.max(1, gibToBytes(form.upload_max_gib, 60)),
     enabled: Boolean(form.enabled),
   });
 
@@ -372,6 +386,7 @@ const AdminNamespacesSettings = () => {
     if (value === null || value === undefined || value === "") return "Unlimited";
     return `${value}${suffix}`;
   };
+  const pctLabel = (value) => `${Number(value || 0).toFixed(1)}%`;
   const formatDuration = (seconds) => {
     const total = Math.max(0, Number(seconds || 0));
     if (!Number.isFinite(total) || total <= 0) return "0s";
@@ -566,14 +581,15 @@ const AdminNamespacesSettings = () => {
               <span className="muted small">{FIELD_HELP.queue_max_pending}</span>
             </label>
             <label>
-              Upload max bytes
+              Upload max GiB
               <input
                 type="number"
                 min="1"
-                value={form.upload_max_bytes}
-                onChange={(e) => updateField("upload_max_bytes", Number(e.target.value))}
+                step="0.5"
+                value={form.upload_max_gib}
+                onChange={(e) => updateField("upload_max_gib", Number(e.target.value))}
               />
-              <span className="muted small">{FIELD_HELP.upload_max_bytes}</span>
+              <span className="muted small">{FIELD_HELP.upload_max_gib}</span>
             </label>
             <label>
               Launch quota enabled
@@ -709,8 +725,7 @@ const AdminNamespacesSettings = () => {
                   CT delete {row.container_auto_delete_minutes_default}m
                 </div>
                 <div className="small muted">
-                  Queue cap: {row.queue_max_pending} | Upload cap: {Number(row.upload_max_bytes || 0).toLocaleString()}{" "}
-                  bytes
+                  Queue cap: {row.queue_max_pending} | Upload cap: {bytesToGiB(row.upload_max_bytes)} GiB
                 </div>
                 <div className="small muted">
                   VM active: {row.active_vm_instances} | Container active: {row.active_container_instances}
@@ -761,7 +776,7 @@ const AdminNamespacesSettings = () => {
           </div>
           {observabilityRows.length > 0 && (
             <div className="card" style={{ marginTop: "1rem" }}>
-              <h4>Namespace Observability</h4>
+              <h4>Namespace Health Cards</h4>
               <div className="tile-grid">
                 {observabilityRows.map((item) => (
                   <div key={`obs-${item.namespace}`} className="tile template-tile">
@@ -785,6 +800,18 @@ const AdminNamespacesSettings = () => {
                     <div className="small muted">
                       Queue oldest pending: {formatDuration(item.queue_oldest_pending_seconds)} | Error budget
                       remaining: {Number(item.error_budget_remaining_pct || 0).toFixed(2)}%
+                    </div>
+                    <div className="small muted">
+                      Quota usage: labs {item.quota_current_concurrent_labs}/
+                      {limitLabel(item.quota_max_concurrent_labs)} ({pctLabel(item.quota_concurrent_usage_pct)}) | CPU{" "}
+                      {item.quota_current_cpu_millicores}m/{limitLabel(item.quota_max_cpu_millicores, "m")} (
+                      {pctLabel(item.quota_cpu_usage_pct)}) | RAM {item.quota_current_memory_mb}MB/
+                      {limitLabel(item.quota_max_memory_mb, "MB")} ({pctLabel(item.quota_memory_usage_pct)})
+                    </div>
+                    <div className="small muted">
+                      Pending PVCs: {item.pending_pvc_count} | Oldest import pending:{" "}
+                      {formatDuration(item.image_import_oldest_pending_seconds)} | Recent failures (60m):{" "}
+                      {item.recent_failures_60m}
                     </div>
                     <div className="small muted">
                       Upload tasks pending: {item.image_upload_tasks_pending} | failed: {item.image_upload_tasks_failed}

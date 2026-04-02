@@ -32,6 +32,8 @@ from ..console_providers import normalize_vm_console_provider
 from ..config import settings
 from ..db import SQLITE_DB, get_session, session_scope
 from ..models import (
+    AdminLaunchTaskOut,
+    AdminOperationActionResult,
     AlertManagerAlert,
     AlertsAndErrorsView,
     AdminAuditEventOut,
@@ -120,7 +122,17 @@ from ..services.tenant_context import (
     user_namespace_scopes,
 )
 from ..secret_codec import encrypt_secret, secret_is_configured
-from ..tables import Config, Image, ImageUploadTask, Instance, ManagedNamespace, TeamQuota, Template, User
+from ..tables import (
+    Config,
+    ContainerInstance as ContainerInstanceTable,
+    Image,
+    ImageUploadTask,
+    Instance,
+    ManagedNamespace,
+    TeamQuota,
+    Template,
+    User,
+)
 from ..tables import AdminAuditEvent
 from ..time_utils import utc_now
 
@@ -152,6 +164,9 @@ UPLOAD_STAGE_NORMALIZING = "normalizing"
 UPLOAD_STAGE_SEEDED = "seeded"
 UPLOAD_STAGE_READY = "ready"
 UPLOAD_STAGE_FAILED = "failed"
+UPLOAD_ACTIVE_STATUSES = {"queued", "uploading", "finalizing", "importing", "pending", "running"}
+UPLOAD_FAILED_STATUSES = {"failed", "error"}
+LAUNCH_ACTIVE_STATUSES = {"queued", "pending", "failed", "error"}
 
 _CDI_AVAILABLE: bool | None = None
 FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%")
@@ -2150,6 +2165,67 @@ def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
         image_id=task.image_id,
         created_at=task.created_at,
         updated_at=task.updated_at,
+    )
+
+
+def _elapsed_seconds(started_at: datetime | None) -> int:
+    if started_at is None:
+        return 0
+    try:
+        return max(0, int((utc_now() - started_at).total_seconds()))
+    except Exception:
+        return 0
+
+
+def _operation_request_for_namespace(namespace: str | None) -> Request:
+    selected = normalize_namespace(namespace) or normalize_namespace(settings.kube_namespace) or "labs"
+    header_value = selected.encode("utf-8")
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "POST",
+        "path": "/internal/admin/operations",
+        "raw_path": b"/internal/admin/operations",
+        "query_string": b"",
+        "headers": [(b"x-bretter-namespace", header_value)],
+        "client": ("127.0.0.1", 0),
+        "server": ("127.0.0.1", 80),
+        "scheme": "http",
+        "root_path": "",
+    }
+    return Request(scope)
+
+
+def _launch_task_out_from_vm(record: Instance) -> AdminLaunchTaskOut:
+    return AdminLaunchTaskOut(
+        task_id=record.id,
+        kind="vm",
+        status=str(record.status or "unknown"),
+        owner=record.owner,
+        namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+        template_id=record.template_id,
+        detail="VM launch is queued or failed.",
+        elapsed_seconds=_elapsed_seconds(getattr(record, "started_at", None)),
+        started_at=record.started_at,
+        last_active_at=record.last_active_at,
+    )
+
+
+def _launch_task_out_from_container(record: ContainerInstanceTable) -> AdminLaunchTaskOut:
+    detail = str(getattr(record, "queue_reason", "") or "").strip() or "Container launch is queued or failed."
+    return AdminLaunchTaskOut(
+        task_id=record.id,
+        kind="container",
+        status=str(record.status or "unknown"),
+        owner=record.owner,
+        namespace=str(getattr(record, "namespace", "") or settings.kube_namespace),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+        template_id=record.template_id,
+        detail=detail,
+        elapsed_seconds=_elapsed_seconds(getattr(record, "started_at", None)),
+        started_at=record.started_at,
+        last_active_at=record.last_active_at,
     )
 
 
@@ -4910,6 +4986,424 @@ def get_upload_task(
         session.refresh(task)
     _sync_labimageimport_crd(task, create_if_missing=False)
     return _upload_task_out(task)
+
+
+@router.get(
+    "/operations/upload-tasks",
+    response_model=list[ImageUploadTaskStatus],
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
+def list_operation_upload_tasks(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[ImageUploadTaskStatus]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
+    rows = session.exec(
+        select(ImageUploadTask)
+        .where(ImageUploadTask.status.in_(sorted(UPLOAD_ACTIVE_STATUSES | UPLOAD_FAILED_STATUSES)))
+        .order_by(ImageUploadTask.updated_at.desc())
+    ).all()
+    out: list[ImageUploadTaskStatus] = []
+    for row in rows:
+        if not _record_visible_for_actor(row, actor, requested_namespace=requested_namespace):
+            continue
+        if not _namespace_scoped_record(row, actor):
+            continue
+        try:
+            row = _refresh_upload_task(row, session)
+        except Exception as exc:
+            logger.warning("Failed to refresh operation upload task %s: %s", row.id, exc, exc_info=True)
+        out.append(_upload_task_out(row))
+        if len(out) >= limit:
+            break
+    return out
+
+
+@router.post(
+    "/operations/upload-tasks/{task_id}/retry",
+    response_model=ImageUploadTaskStatus,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def retry_operation_upload_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageUploadTaskStatus:
+    task = session.get(ImageUploadTask, task_id)
+    if (
+        not task
+        or not _record_visible_for_actor(task, actor, requested_namespace=None)
+        or not _namespace_scoped_record(task, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
+
+    status_name = str(getattr(task, "status", "") or "").strip().lower()
+    if status_name == "completed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="upload task is already completed")
+    if status_name == "uploading":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="upload task is still uploading; cancel before retrying",
+        )
+
+    task.retry_count = 0
+    task.next_retry_at = None
+    task.last_retry_error = None
+    task.error_message = None
+    task.updated_at = utc_now()
+    if status_name == "importing":
+        task.status = "importing"
+        task.stage = UPLOAD_STAGE_SEEDED
+        task.copy_job = None
+        task.detail = "Retry requested by admin; re-queueing clone source import"
+    else:
+        task.status = "finalizing"
+        task.stage = UPLOAD_STAGE_UPLOADED
+        task.progress_percent = 0
+        task.detail = "Retry requested by admin; re-queueing image finalization"
+        try:
+            _ensure_upload_task_finalize_job(task, force_recreate=True)
+        except Exception as exc:
+            task.status = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
+            task.error_message = str(exc)
+            task.detail = "Failed to re-queue finalization"
+    session.add(task)
+    session.commit()
+    session.refresh(task)
+    try:
+        task = _refresh_upload_task(task, session)
+    except Exception as exc:
+        logger.warning("Retry refresh failed for upload task %s: %s", task.id, exc, exc_info=True)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
+        action="retry",
+        target_type="image_upload_task",
+        target_id=task.id,
+        detail=f"namespace={_record_namespace(task)} status={task.status}",
+    )
+    session.commit()
+    session.refresh(task)
+    _sync_labimageimport_crd(task, create_if_missing=False)
+    return _upload_task_out(task)
+
+
+@router.post(
+    "/operations/upload-tasks/{task_id}/cancel",
+    response_model=ImageUploadTaskStatus,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def cancel_operation_upload_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageUploadTaskStatus:
+    task = session.get(ImageUploadTask, task_id)
+    if (
+        not task
+        or not _record_visible_for_actor(task, actor, requested_namespace=None)
+        or not _namespace_scoped_record(task, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
+
+    status_name = str(getattr(task, "status", "") or "").strip().lower()
+    if status_name == "completed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="completed upload task cannot be canceled")
+    _cleanup_task_jobs(task)
+    task.status = "failed"
+    task.stage = UPLOAD_STAGE_FAILED
+    task.detail = "Canceled by admin"
+    task.error_message = "canceled by admin"
+    task.last_retry_error = "canceled by admin"
+    task.next_retry_at = None
+    task.updated_at = utc_now()
+    session.add(task)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
+        action="cancel",
+        target_type="image_upload_task",
+        target_id=task.id,
+        detail=f"namespace={_record_namespace(task)}",
+    )
+    session.commit()
+    session.refresh(task)
+    _sync_labimageimport_crd(task, create_if_missing=False)
+    return _upload_task_out(task)
+
+
+@router.delete(
+    "/operations/upload-tasks/{task_id}",
+    response_model=AdminOperationActionResult,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def cleanup_operation_upload_task(
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> AdminOperationActionResult:
+    task = session.get(ImageUploadTask, task_id)
+    if (
+        not task
+        or not _record_visible_for_actor(task, actor, requested_namespace=None)
+        or not _namespace_scoped_record(task, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
+
+    cleaned_file = False
+    task_namespace = _record_namespace(task)
+    filename = Path(str(getattr(task, "filename", "") or "")).name
+    if filename and str(getattr(task, "status", "") or "").strip().lower() != "completed":
+        image_record = session.exec(
+            select(Image).where(Image.namespace == task_namespace).where(Image.filename == filename)
+        ).first()
+        if not image_record:
+            candidate = _image_dir() / filename
+            try:
+                if candidate.exists() and candidate.is_file():
+                    candidate.unlink()
+                    cleaned_file = True
+            except Exception as exc:
+                logger.warning("Failed to remove upload artifact %s for task %s: %s", candidate, task.id, exc)
+
+    _cleanup_task_jobs(task)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
+        action="cleanup",
+        target_type="image_upload_task",
+        target_id=task.id,
+        detail=f"namespace={task_namespace} file_removed={int(cleaned_file)}",
+    )
+    session.delete(task)
+    session.commit()
+    return AdminOperationActionResult(
+        ok=True,
+        detail="Upload task cleanup completed.",
+    )
+
+
+@router.get(
+    "/operations/launch-tasks",
+    response_model=list[AdminLaunchTaskOut],
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_READ))],
+)
+def list_operation_launch_tasks(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=300),
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[AdminLaunchTaskOut]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
+
+    vm_rows = session.exec(
+        select(Instance).where(Instance.status.in_(sorted(LAUNCH_ACTIVE_STATUSES))).order_by(Instance.started_at.desc())
+    ).all()
+    container_rows = session.exec(
+        select(ContainerInstanceTable)
+        .where(ContainerInstanceTable.status.in_(sorted(LAUNCH_ACTIVE_STATUSES)))
+        .order_by(ContainerInstanceTable.started_at.desc())
+    ).all()
+
+    out: list[AdminLaunchTaskOut] = []
+    for row in vm_rows:
+        if not _record_visible_for_actor(row, actor, requested_namespace=requested_namespace):
+            continue
+        if not _namespace_scoped_record(row, actor):
+            continue
+        out.append(_launch_task_out_from_vm(row))
+    for row in container_rows:
+        if not _record_visible_for_actor(row, actor, requested_namespace=requested_namespace):
+            continue
+        if not _namespace_scoped_record(row, actor):
+            continue
+        out.append(_launch_task_out_from_container(row))
+    out.sort(key=lambda item: item.started_at, reverse=True)
+    return out[:limit]
+
+
+@router.post(
+    "/operations/launch-tasks/{kind}/{task_id}/retry",
+    response_model=AdminOperationActionResult,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def retry_operation_launch_task(
+    kind: str,
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> AdminOperationActionResult:
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind not in {"vm", "container"}:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="kind must be vm or container")
+
+    if normalized_kind == "vm":
+        record = session.get(Instance, task_id)
+    else:
+        record = session.get(ContainerInstanceTable, task_id)
+    if (
+        not record
+        or not _record_visible_for_actor(record, actor, requested_namespace=None)
+        or not _namespace_scoped_record(record, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="launch task not found")
+
+    status_name = str(getattr(record, "status", "") or "").strip().lower()
+    if status_name not in LAUNCH_ACTIVE_STATUSES and status_name not in {"stopped"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="launch task is not retryable")
+    owner = session.get(User, str(getattr(record, "owner", "") or ""))
+    if not owner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="launch task owner not found")
+    internal_request = _operation_request_for_namespace(_record_namespace(record))
+    if normalized_kind == "vm":
+        from .user import restart_vm as user_restart_vm
+
+        user_restart_vm(task_id, request=internal_request, user=owner, session=session)
+    else:
+        from .user_containers import restart_container as user_restart_container
+
+        user_restart_container(task_id, request=internal_request, user=owner, session=session)
+
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        action="retry",
+        target_type=f"{normalized_kind}_launch_task",
+        target_id=task_id,
+        detail=f"namespace={_record_namespace(record)} owner={record.owner}",
+    )
+    session.commit()
+    return AdminOperationActionResult(ok=True, detail=f"{normalized_kind.upper()} launch retry submitted.")
+
+
+@router.post(
+    "/operations/launch-tasks/{kind}/{task_id}/cancel",
+    response_model=AdminOperationActionResult,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def cancel_operation_launch_task(
+    kind: str,
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> AdminOperationActionResult:
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind == "vm":
+        record = session.get(Instance, task_id)
+    elif normalized_kind == "container":
+        record = session.get(ContainerInstanceTable, task_id)
+    else:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="kind must be vm or container")
+    if (
+        not record
+        or not _record_visible_for_actor(record, actor, requested_namespace=None)
+        or not _namespace_scoped_record(record, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="launch task not found")
+
+    namespace = _record_namespace(record)
+    if normalized_kind == "vm":
+        try:
+            kube.stop_pod(task_id, record.owner, namespace=namespace)
+        except Exception:
+            pass
+        record.status = "stopped"
+        record.last_active_at = utc_now()
+        session.add(record)
+    else:
+        if str(getattr(record, "status", "") or "").strip().lower() != "queued":
+            try:
+                kube.stop_container_pod(task_id, record.owner, namespace=namespace)
+            except Exception:
+                pass
+            try:
+                kube.delete_container_service(task_id, namespace=namespace)
+            except Exception:
+                pass
+        record.status = "stopped"
+        record.queue_not_before = None
+        record.queue_reason = None
+        record.last_active_at = utc_now()
+        session.add(record)
+
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        action="cancel",
+        target_type=f"{normalized_kind}_launch_task",
+        target_id=task_id,
+        detail=f"namespace={namespace} owner={record.owner}",
+    )
+    session.commit()
+    return AdminOperationActionResult(ok=True, detail=f"{normalized_kind.upper()} launch task canceled.")
+
+
+@router.delete(
+    "/operations/launch-tasks/{kind}/{task_id}",
+    response_model=AdminOperationActionResult,
+    dependencies=[Depends(require_permission(Permission.OPERATIONS_WRITE))],
+)
+def cleanup_operation_launch_task(
+    kind: str,
+    task_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> AdminOperationActionResult:
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind == "vm":
+        record = session.get(Instance, task_id)
+    elif normalized_kind == "container":
+        record = session.get(ContainerInstanceTable, task_id)
+    else:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="kind must be vm or container")
+    if (
+        not record
+        or not _record_visible_for_actor(record, actor, requested_namespace=None)
+        or not _namespace_scoped_record(record, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="launch task not found")
+
+    namespace = _record_namespace(record)
+    if normalized_kind == "vm":
+        try:
+            kube.delete_pod(task_id, record.owner, disk_pvc=getattr(record, "disk_pvc", None), namespace=namespace)
+        except Exception:
+            pass
+        session.delete(record)
+    else:
+        try:
+            kube.delete_container_pod(task_id, record.owner, namespace=namespace)
+        except Exception:
+            pass
+        try:
+            kube.delete_container_service(task_id, namespace=namespace)
+        except Exception:
+            pass
+        session.delete(record)
+
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        action="cleanup",
+        target_type=f"{normalized_kind}_launch_task",
+        target_id=task_id,
+        detail=f"namespace={namespace} owner={record.owner}",
+    )
+    session.commit()
+    return AdminOperationActionResult(ok=True, detail=f"{normalized_kind.upper()} launch task cleaned up.")
 
 
 @router.post(
