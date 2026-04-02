@@ -331,6 +331,110 @@ spec:
     requests:
       storage: 10Gi
 ---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: bretter-db-migrate
+  namespace: __NAMESPACE__
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: bretter-db-migrate
+        security.bretter-labs.io/enforce-admission: "true"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: bretter-backend
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      imagePullSecrets:
+        - name: ghcr-creds
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          command:
+            - /bin/sh
+            - -c
+            - until pg_isready -h bretter-postgres.__NAMESPACE__.svc.cluster.local -p 5432 -U "$POSTGRES_USER" -d "$POSTGRES_DB"; do sleep 2; done
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_USER
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_DB
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: POSTGRES_PASSWORD
+      containers:
+        - name: migrate
+          image: __BACKEND_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command:
+            - python
+            - -m
+            - backend.src.tools.db_migrate_job
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+              ephemeral-storage: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+              ephemeral-storage: 1Gi
+          env:
+            - name: BLABS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: bretter-postgres
+                  key: BLABS_DATABASE_URL
+            - name: BLABS_REQUIRE_SCHEMA_READY
+              value: "__REQUIRE_SCHEMA_READY__"
+            - name: BLABS_EXPECTED_ALEMBIC_REVISION
+              value: "__EXPECTED_ALEMBIC_REVISION__"
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -501,6 +605,8 @@ spec:
               value: "__DATABASE_STATEMENT_TIMEOUT_MS__"
             - name: BLABS_DATABASE_SLOW_QUERY_MS
               value: "__DATABASE_SLOW_QUERY_MS__"
+            - name: BLABS_DB_AUTO_MIGRATE_ON_STARTUP
+              value: "__DB_AUTO_MIGRATE_ON_STARTUP__"
             - name: BLABS_ADMIN_DEFAULT_PASSWORD
               value: "__ADMIN_BOOTSTRAP_PASSWORD__"
             - name: BLABS_ERROR_LOG_FILE_PATH
@@ -863,6 +969,8 @@ spec:
               value: "__LABIMAGEIMPORT_CONTROLLER_METRICS_BIND__"
             - name: BLABS_LABIMAGEIMPORT_CONTROLLER_METRICS_PORT
               value: "__LABIMAGEIMPORT_CONTROLLER_METRICS_PORT__"
+            - name: BLABS_DB_AUTO_MIGRATE_ON_STARTUP
+              value: "__DB_AUTO_MIGRATE_ON_STARTUP__"
           volumeMounts:
             - name: images
               mountPath: /mnt/lab-images

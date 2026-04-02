@@ -681,6 +681,18 @@ def ensure_team_runtime_namespace(
             target_namespace=target_namespace,
             name=str(getattr(settings, "kube_tls_secret", "") or ""),
         )
+        _sync_secret(
+            core_api,
+            source_namespace=control_namespace,
+            target_namespace=target_namespace,
+            name=str(getattr(settings, "runtime_secrets_secret_name", "") or ""),
+        )
+        _sync_secret(
+            core_api,
+            source_namespace=control_namespace,
+            target_namespace=target_namespace,
+            name=str(getattr(settings, "container_signature_key_secret_name", "") or ""),
+        )
         _sync_configmap(
             core_api,
             source_namespace=control_namespace,

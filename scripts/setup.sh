@@ -42,6 +42,7 @@ DATABASE_STATEMENT_TIMEOUT_MS="${DATABASE_STATEMENT_TIMEOUT_MS:-15000}"
 DATABASE_SLOW_QUERY_MS="${DATABASE_SLOW_QUERY_MS:-500}"
 ALLOW_MUTABLE_IMAGE_TAGS="${ALLOW_MUTABLE_IMAGE_TAGS:-0}"
 ALLOW_CODE_MOUNT_OVERRIDES="${ALLOW_CODE_MOUNT_OVERRIDES:-0}"
+DB_AUTO_MIGRATE_ON_STARTUP="${DB_AUTO_MIGRATE_ON_STARTUP:-0}"
 SETUP_PHASES="${SETUP_PHASES:-prereqs,deploy,postdeploy}"
 SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
@@ -281,6 +282,12 @@ ALERTMANAGER_WEBHOOK_RECEIVER_NAME="${ALERTMANAGER_WEBHOOK_RECEIVER_NAME:-ops-we
 ALERTMANAGER_WEBHOOK_SECRET_NAME="${ALERTMANAGER_WEBHOOK_SECRET_NAME:-}"
 ALERTMANAGER_WEBHOOK_SECRET_KEY="${ALERTMANAGER_WEBHOOK_SECRET_KEY:-url}"
 ALERTMANAGER_WEBHOOK_MATCHERS="${ALERTMANAGER_WEBHOOK_MATCHERS:-severity=\"critical\"}"
+ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED="${ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED:-0}"
+ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_NAME="${ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_NAME:-ops-webhook-warning}"
+ALERTMANAGER_WARNING_WEBHOOK_SECRET_NAME="${ALERTMANAGER_WARNING_WEBHOOK_SECRET_NAME:-}"
+ALERTMANAGER_WARNING_WEBHOOK_SECRET_KEY="${ALERTMANAGER_WARNING_WEBHOOK_SECRET_KEY:-url}"
+ALERTMANAGER_WARNING_WEBHOOK_MATCHERS="${ALERTMANAGER_WARNING_WEBHOOK_MATCHERS:-severity=\"warning\"}"
+ALERTMANAGER_ENABLE_SEVERITY_INHIBITION="${ALERTMANAGER_ENABLE_SEVERITY_INHIBITION:-1}"
 ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES="${ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES:-}"
 RUN_POST_DEPLOY_API_HEALTH_CHECK="${RUN_POST_DEPLOY_API_HEALTH_CHECK:-1}"
 POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS="${POST_DEPLOY_API_HEALTH_TIMEOUT_SECONDS:-120}"
@@ -298,6 +305,10 @@ POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY:-admi
 POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admin_password}"
 POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY:-synthetic_username}"
 POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
+POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY:-lab_admin_username}"
+POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY:-lab_admin_password}"
+POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY:-namespace_admin_username}"
+POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY:-namespace_admin_password}"
 RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK="${RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK:-1}"
 POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS="${POST_DEPLOY_RUNNER_SMOKE_TIMEOUT_SECONDS:-120}"
 POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY="${POST_DEPLOY_RUNNER_SMOKE_IMAGE_PULL_POLICY:-IfNotPresent}"
@@ -968,11 +979,18 @@ validate_schema_gate_config() {
     0 | 1) ;;
     *) fail "REQUIRE_SCHEMA_READY must be either 0 or 1." ;;
   esac
+  case "$DB_AUTO_MIGRATE_ON_STARTUP" in
+    0 | 1) ;;
+    *) fail "DB_AUTO_MIGRATE_ON_STARTUP must be either 0 or 1." ;;
+  esac
   if [ -n "$EXPECTED_ALEMBIC_REVISION" ] && ! [[ "$EXPECTED_ALEMBIC_REVISION" =~ ^[A-Za-z0-9_]+$ ]]; then
     fail "EXPECTED_ALEMBIC_REVISION must be empty or an alphanumeric Alembic revision id."
   fi
   if [ "$PRODUCTION_PROFILE" -eq 1 ] && [ "$REQUIRE_SCHEMA_READY" -ne 1 ]; then
     fail "REQUIRE_SCHEMA_READY must be 1 when PRODUCTION_PROFILE=1."
+  fi
+  if [ "$PRODUCTION_PROFILE" -eq 1 ] && [ "$DB_AUTO_MIGRATE_ON_STARTUP" -ne 0 ]; then
+    fail "DB_AUTO_MIGRATE_ON_STARTUP must be 0 when PRODUCTION_PROFILE=1."
   fi
 }
 
@@ -1260,6 +1278,20 @@ validate_monitoring_config() {
     [ -n "$ALERTMANAGER_WEBHOOK_SECRET_KEY" ] || fail "ALERTMANAGER_WEBHOOK_SECRET_KEY cannot be empty when webhook receiver is enabled."
     [ -n "$ALERTMANAGER_WEBHOOK_MATCHERS" ] || fail "ALERTMANAGER_WEBHOOK_MATCHERS cannot be empty when webhook receiver is enabled."
   fi
+  case "$ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED" in
+    0 | 1) ;;
+    *) fail "ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED must be either 0 or 1." ;;
+  esac
+  if [ "$ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED" -eq 1 ]; then
+    [ -n "$ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_NAME" ] || fail "ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_NAME cannot be empty when warning webhook receiver is enabled."
+    [ -n "$ALERTMANAGER_WARNING_WEBHOOK_SECRET_NAME" ] || fail "ALERTMANAGER_WARNING_WEBHOOK_SECRET_NAME cannot be empty when warning webhook receiver is enabled."
+    [ -n "$ALERTMANAGER_WARNING_WEBHOOK_SECRET_KEY" ] || fail "ALERTMANAGER_WARNING_WEBHOOK_SECRET_KEY cannot be empty when warning webhook receiver is enabled."
+    [ -n "$ALERTMANAGER_WARNING_WEBHOOK_MATCHERS" ] || fail "ALERTMANAGER_WARNING_WEBHOOK_MATCHERS cannot be empty when warning webhook receiver is enabled."
+  fi
+  case "$ALERTMANAGER_ENABLE_SEVERITY_INHIBITION" in
+    0 | 1) ;;
+    *) fail "ALERTMANAGER_ENABLE_SEVERITY_INHIBITION must be either 0 or 1." ;;
+  esac
   if [ -n "$ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES" ]; then
     parse_alertmanager_namespace_webhook_routes >/dev/null || fail "ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES is invalid."
   fi
@@ -1880,6 +1912,8 @@ install_monitoring_stack() {
   local values_file alertmanager_group_by_yaml alertmanager_route_children_yaml
   local alertmanager_receivers_extra_yaml alertmanager_webhook_url
   local alertmanager_webhook_url_escaped alertmanager_webhook_matchers_escaped
+  local alertmanager_warning_webhook_url alertmanager_warning_webhook_url_escaped
+  local alertmanager_warning_webhook_matchers_escaped alertmanager_inhibit_rules_yaml
   local namespace_route_entries route_namespace route_secret_name route_secret_key
   local route_webhook_url route_webhook_url_escaped route_receiver_name route_matcher_escaped
   local route_block receiver_block
@@ -1906,6 +1940,10 @@ PY
   alertmanager_webhook_url=""
   alertmanager_webhook_url_escaped=""
   alertmanager_webhook_matchers_escaped=""
+  alertmanager_warning_webhook_url=""
+  alertmanager_warning_webhook_url_escaped=""
+  alertmanager_warning_webhook_matchers_escaped=""
+  alertmanager_inhibit_rules_yaml="      inhibit_rules: []"
   if ! namespace_route_entries="$(parse_alertmanager_namespace_webhook_routes)"; then
     fail "ALERTMANAGER_NAMESPACE_WEBHOOK_ROUTES is invalid."
   fi
@@ -1987,6 +2025,58 @@ ${receiver_block}"
       alertmanager_receivers_extra_yaml="$receiver_block"
     fi
   fi
+  if [ "$ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED" -eq 1 ]; then
+    alertmanager_warning_webhook_url="$(
+      secret_data_plaintext "$NAMESPACE" "$ALERTMANAGER_WARNING_WEBHOOK_SECRET_NAME" "$ALERTMANAGER_WARNING_WEBHOOK_SECRET_KEY" || true
+    )"
+    if [ -z "$alertmanager_warning_webhook_url" ]; then
+      fail "Alertmanager warning webhook receiver is enabled but secret ${ALERTMANAGER_WARNING_WEBHOOK_SECRET_NAME}/${ALERTMANAGER_WARNING_WEBHOOK_SECRET_KEY} is missing."
+    fi
+    alertmanager_warning_webhook_url_escaped="$(yaml_escape "$alertmanager_warning_webhook_url")"
+    alertmanager_warning_webhook_matchers_escaped="$(yaml_escape "$ALERTMANAGER_WARNING_WEBHOOK_MATCHERS")"
+    route_block="$(
+      cat <<EOF
+          - receiver: "${ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_NAME}"
+            matchers:
+              - "${alertmanager_warning_webhook_matchers_escaped}"
+            continue: false
+EOF
+    )"
+    if [ -n "$alertmanager_route_children_yaml" ]; then
+      alertmanager_route_children_yaml="${alertmanager_route_children_yaml}
+${route_block}"
+    else
+      alertmanager_route_children_yaml="$route_block"
+    fi
+    receiver_block="$(
+      cat <<EOF
+        - name: "${ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_NAME}"
+          webhook_configs:
+            - url: "${alertmanager_warning_webhook_url_escaped}"
+              send_resolved: true
+EOF
+    )"
+    if [ -n "$alertmanager_receivers_extra_yaml" ]; then
+      alertmanager_receivers_extra_yaml="${alertmanager_receivers_extra_yaml}
+${receiver_block}"
+    else
+      alertmanager_receivers_extra_yaml="$receiver_block"
+    fi
+  fi
+  if [ "$ALERTMANAGER_ENABLE_SEVERITY_INHIBITION" -eq 1 ]; then
+    alertmanager_inhibit_rules_yaml="$(
+      cat <<'EOF'
+      inhibit_rules:
+        - source_matchers:
+            - 'severity="critical"'
+          target_matchers:
+            - 'severity="warning"'
+          equal:
+            - alertname
+            - namespace
+EOF
+    )"
+  fi
   if [ -z "$alertmanager_route_children_yaml" ]; then
     alertmanager_route_children_yaml="          []"
   fi
@@ -2011,6 +2101,7 @@ ${alertmanager_group_by_yaml}
         repeat_interval: "${ALERTMANAGER_ROUTE_REPEAT_INTERVAL}"
         routes:
 ${alertmanager_route_children_yaml}
+${alertmanager_inhibit_rules_yaml}
       receivers:
         - name: "${ALERTMANAGER_DEFAULT_RECEIVER_NAME}"
 ${alertmanager_receivers_extra_yaml}
@@ -3415,7 +3506,7 @@ render_helm_values_override() {
   local container_allowed_registries container_signature_verification_enabled container_signature_key_ref container_signature_key_secret_name
   local container_scan_enabled container_scan_interval_minutes container_scan_severity
   local container_start_queue_enabled container_start_queue_base_delay_seconds container_start_queue_max_delay_seconds
-  local production_profile allow_code_mount_overrides require_schema_ready expected_alembic_revision
+  local production_profile allow_code_mount_overrides db_auto_migrate_on_startup require_schema_ready expected_alembic_revision
   local cors_enterprise_profile cors_allowed_origins cors_allowed_origin_regex cors_allowed_methods cors_allowed_headers
   local auth_login_rate_limit_window_seconds auth_login_rate_limit_max_attempts auth_login_lockout_seconds
   local vm_connect_insecure_tls container_connect_insecure_tls runtime_secrets_secret_name runtime_secrets_encryption_key_key secrets_encryption_key
@@ -3510,6 +3601,7 @@ render_helm_values_override() {
   container_start_queue_max_delay_seconds="$(yaml_escape "$CONTAINER_START_QUEUE_MAX_DELAY_SECONDS")"
   production_profile="$(yaml_escape "$PRODUCTION_PROFILE")"
   allow_code_mount_overrides="$(yaml_escape "$ALLOW_CODE_MOUNT_OVERRIDES")"
+  db_auto_migrate_on_startup="$(yaml_escape "$DB_AUTO_MIGRATE_ON_STARTUP")"
   require_schema_ready="$(yaml_escape "$REQUIRE_SCHEMA_READY")"
   expected_alembic_revision="$(yaml_escape "$EXPECTED_ALEMBIC_REVISION")"
   cors_enterprise_profile="$(yaml_escape "$CORS_ENTERPRISE_PROFILE")"
@@ -3616,6 +3708,7 @@ appTemplateValues:
   CONTAINER_START_QUEUE_MAX_DELAY_SECONDS: "${container_start_queue_max_delay_seconds}"
   PRODUCTION_PROFILE: "${production_profile}"
   ALLOW_CODE_MOUNT_OVERRIDES: "${allow_code_mount_overrides}"
+  DB_AUTO_MIGRATE_ON_STARTUP: "${db_auto_migrate_on_startup}"
   REQUIRE_SCHEMA_READY: "${require_schema_ready}"
   EXPECTED_ALEMBIC_REVISION: "${expected_alembic_revision}"
   CORS_ENTERPRISE_PROFILE: "${cors_enterprise_profile}"
@@ -6168,6 +6261,15 @@ run_production_go_live_proof() {
     HEALTH_TIMEOUT_SECONDS="$PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS" \
     NODE_EXTERNAL_HOST="$NODE_EXTERNAL_HOST" \
     PUBLIC_SCHEME="$PUBLIC_SCHEME" \
+    POST_DEPLOY_AUTH_SECRET_NAME="$POST_DEPLOY_AUTH_SECRET_NAME" \
+    POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY="$POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY" \
+    POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="$POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY" \
+    POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY="$POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY" \
+    POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" \
+    POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY="$POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY" \
+    POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY="$POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY" \
+    POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY="$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY" \
+    POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY="$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY" \
     "$ROOT_DIR/scripts/production_go_live_proof.sh"
 }
 
@@ -6253,6 +6355,7 @@ log_runtime_configuration() {
   log "Container scanning enabled: $CONTAINER_SCAN_ENABLED (interval: ${CONTAINER_SCAN_INTERVAL_MINUTES}m severity: ${CONTAINER_SCAN_SEVERITY})"
   log "Container start queue enabled: $CONTAINER_START_QUEUE_ENABLED (base/max backoff: ${CONTAINER_START_QUEUE_BASE_DELAY_SECONDS}s/${CONTAINER_START_QUEUE_MAX_DELAY_SECONDS}s)"
   log "Backend production profile: $PRODUCTION_PROFILE"
+  log "DB startup auto-migrate: $DB_AUTO_MIGRATE_ON_STARTUP (0 uses pre-deploy migration job)"
   log "Backend schema readiness gate: $REQUIRE_SCHEMA_READY (expected revision: ${EXPECTED_ALEMBIC_REVISION:-head})"
   log "CORS enterprise profile: $CORS_ENTERPRISE_PROFILE (origins: ${CORS_ALLOWED_ORIGINS:-default})"
   log "Auth login rate limit window/max/lockout: ${AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS}s/${AUTH_LOGIN_RATE_LIMIT_MAX_ATTEMPTS}/${AUTH_LOGIN_LOCKOUT_SECONDS}s"
@@ -6262,7 +6365,7 @@ log_runtime_configuration() {
   log "CDI install enabled: $INSTALL_CDI (version: $CDI_VERSION)"
   log "Using CDI upload proxy URL: ${CDI_UPLOAD_PROXY_URL:-disabled}"
   log "Monitoring stack enabled: $ENABLE_MONITORING (namespace: $MONITORING_NAMESPACE release: $MONITORING_RELEASE_NAME chart: ${MONITORING_CHART_VERSION})"
-  log "Alertmanager routing defaults: receiver=${ALERTMANAGER_DEFAULT_RECEIVER_NAME} group_by=${ALERTMANAGER_ROUTE_GROUP_BY} webhook_receiver=${ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED}"
+  log "Alertmanager routing defaults: receiver=${ALERTMANAGER_DEFAULT_RECEIVER_NAME} group_by=${ALERTMANAGER_ROUTE_GROUP_BY} critical_webhook=${ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED} warning_webhook=${ALERTMANAGER_WARNING_WEBHOOK_RECEIVER_ENABLED} severity_inhibit=${ALERTMANAGER_ENABLE_SEVERITY_INHIBITION}"
   log "GHCR access health check enabled: $ENABLE_GHCR_ACCESS_HEALTHCHECK (schedule: ${GHCR_ACCESS_HEALTHCHECK_SCHEDULE} timeout: ${GHCR_ACCESS_HEALTHCHECK_TIMEOUT_SECONDS}s secret: ${GHCR_ACCESS_HEALTHCHECK_IMAGE_PULL_SECRET})"
   log "User-flow SLO probes enabled: $ENABLE_USERFLOW_SLO_PROBES (schedule: ${USERFLOW_SLO_PROBE_SCHEDULE} lookback: ${USERFLOW_SLO_LOOKBACK_MINUTES}m vm-fail>${USERFLOW_SLO_VM_LAUNCH_FAILURE_RATE_PCT}% upload-fail>${USERFLOW_SLO_UPLOAD_FINALIZE_FAILURE_RATE_PCT}% rdp-fail>${USERFLOW_SLO_RDP_FAILURE_RATE_PCT}% queue-age-fail>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_FAILURE_RATE_PCT}% queue-age>${USERFLOW_SLO_IMAGE_IMPORT_QUEUE_MAX_AGE_MINUTES}m rdp-stuck>${USERFLOW_SLO_RDP_STUCK_MAX}/${USERFLOW_SLO_RDP_STUCK_MINUTES}m rdp-connect-probe=${ENABLE_USERFLOW_SLO_RDP_CONNECT_LATENCY_PROBE} rdp-connect-threshold=${USERFLOW_SLO_RDP_CONNECT_LATENCY_SECONDS}s rdp-connect-fail>${USERFLOW_SLO_RDP_CONNECT_FAILURE_RATE_PCT}% auth-secret=${USERFLOW_SLO_API_AUTH_SECRET_NAME}/${USERFLOW_SLO_API_AUTH_USERNAME_KEY},${USERFLOW_SLO_API_AUTH_PASSWORD_KEY} managed=${USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP})"
   log "Metrics-server enabled: $ENABLE_METRICS_SERVER (insecure kubelet TLS: $METRICS_SERVER_INSECURE_TLS)"

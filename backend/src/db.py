@@ -8,7 +8,7 @@ from sqlalchemy import event
 from sqlmodel import Session, create_engine
 
 from .config import settings
-from .migrations import run_db_migrations
+from .migrations import assert_schema_ready, run_db_migrations
 
 logger = logging.getLogger(__name__)
 _SLOW_QUERY_TIMER_KEY = "blabs_slow_query_started_at"
@@ -92,12 +92,20 @@ def _clear_slow_query_timer_on_error(exception_context):  # noqa: ANN001
 
 
 def init_db() -> None:
-    run_db_migrations(
-        engine=engine,
-        database_url=DATABASE_URL,
-        expected_revision=settings.expected_alembic_revision or None,
-        require_schema_ready=bool(settings.require_schema_ready),
-    )
+    if bool(getattr(settings, "db_auto_migrate_on_startup", True)):
+        run_db_migrations(
+            engine=engine,
+            database_url=DATABASE_URL,
+            expected_revision=settings.expected_alembic_revision or None,
+            require_schema_ready=bool(settings.require_schema_ready),
+        )
+        return
+    if bool(settings.require_schema_ready):
+        assert_schema_ready(
+            engine=engine,
+            database_url=DATABASE_URL,
+            expected_revision=settings.expected_alembic_revision or None,
+        )
 
 
 @contextmanager

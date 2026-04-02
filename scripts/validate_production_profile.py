@@ -182,6 +182,8 @@ def _validate(values: dict[str, Any], *, strict: bool) -> tuple[list[str], list[
         errors.append("ALLOW_CODE_MOUNT_OVERRIDES must be disabled for production.")
     if not get_bool("PRODUCTION_PROFILE", default=False):
         errors.append("PRODUCTION_PROFILE must be enabled for production.")
+    if get_bool("DB_AUTO_MIGRATE_ON_STARTUP", default=False):
+        errors.append("DB_AUTO_MIGRATE_ON_STARTUP must be disabled for production.")
     if not get_bool("REQUIRE_SCHEMA_READY", default=True):
         errors.append("REQUIRE_SCHEMA_READY must be enabled for production.")
     expected_revision = get_text("EXPECTED_ALEMBIC_REVISION")

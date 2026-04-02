@@ -43,6 +43,48 @@ def _request(
     return session.request(method=method, url=url, json=json_payload, timeout=20, verify=verify_tls)
 
 
+def _run_role_authz_check(
+    *,
+    session: requests.Session,
+    api_base: str,
+    verify_tls: bool,
+    username: str,
+    password: str,
+    expected_role: str,
+    route_expectations: list[tuple[str, bool]],
+) -> None:
+    login = _request(
+        session,
+        method="POST",
+        api_base=api_base,
+        path_or_url="/auth/login",
+        verify_tls=verify_tls,
+        json_payload={"username": username, "password": password},
+    )
+    if login.status_code != 200:
+        _fail(f"{expected_role} role check login failed ({login.status_code}): {login.text[:300]}")
+
+    try:
+        me = _request(session, method="GET", api_base=api_base, path_or_url="/auth/me", verify_tls=verify_tls)
+        if me.status_code != 200:
+            _fail(f"{expected_role} role check /auth/me failed ({me.status_code}): {me.text[:300]}")
+        me_role = str((me.json() or {}).get("role") or "").strip().lower()
+        if expected_role and me_role and me_role != expected_role:
+            _fail(f"{expected_role} role check mismatch: /auth/me reported role {me_role!r}")
+
+        for path, should_allow in route_expectations:
+            resp = _request(session, method="GET", api_base=api_base, path_or_url=path, verify_tls=verify_tls)
+            if should_allow and resp.status_code != 200:
+                _fail(f"{expected_role} role check expected allow for {path} but got {resp.status_code}")
+            if not should_allow and resp.status_code not in {401, 403}:
+                _fail(f"{expected_role} role check expected deny for {path} but got {resp.status_code}")
+    finally:
+        try:
+            _request(session, method="POST", api_base=api_base, path_or_url="/auth/logout", verify_tls=verify_tls)
+        except Exception:
+            pass
+
+
 def _fail(message: str) -> None:
     print(f"FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
@@ -312,6 +354,12 @@ def main() -> int:
     require_templates = _bool_env("SYNTHETIC_REQUIRE_TEMPLATES", True)
     require_rdp_template = _bool_env("SYNTHETIC_REQUIRE_RDP_TEMPLATE", False)
     require_image_upload_check = _bool_env("SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK", False)
+    lab_admin_username = str(os.environ.get("SYNTHETIC_LAB_ADMIN_USERNAME") or "").strip()
+    lab_admin_password = str(os.environ.get("SYNTHETIC_LAB_ADMIN_PASSWORD") or "").strip()
+    namespace_admin_username = str(os.environ.get("SYNTHETIC_NAMESPACE_ADMIN_USERNAME") or "").strip()
+    namespace_admin_password = str(os.environ.get("SYNTHETIC_NAMESPACE_ADMIN_PASSWORD") or "").strip()
+    platform_admin_username = str(os.environ.get("SYNTHETIC_PLATFORM_ADMIN_USERNAME") or "").strip()
+    platform_admin_password = str(os.environ.get("SYNTHETIC_PLATFORM_ADMIN_PASSWORD") or "").strip()
     timeout_seconds = max(120, int(os.environ.get("SYNTHETIC_TIMEOUT_SECONDS") or "900"))
     poll_seconds = max(1.0, float(os.environ.get("SYNTHETIC_POLL_SECONDS") or "3"))
     rdp_marker_timeout_seconds = max(30, int(os.environ.get("SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS") or "180"))
@@ -323,6 +371,12 @@ def main() -> int:
         _fail("SYNTHETIC_API_BASE is required.")
     if not username or not password:
         _fail("SYNTHETIC_USERNAME and SYNTHETIC_PASSWORD are required.")
+    if bool(lab_admin_username) != bool(lab_admin_password):
+        _fail("SYNTHETIC_LAB_ADMIN_USERNAME and SYNTHETIC_LAB_ADMIN_PASSWORD must be set together.")
+    if bool(namespace_admin_username) != bool(namespace_admin_password):
+        _fail("SYNTHETIC_NAMESPACE_ADMIN_USERNAME and SYNTHETIC_NAMESPACE_ADMIN_PASSWORD must be set together.")
+    if bool(platform_admin_username) != bool(platform_admin_password):
+        _fail("SYNTHETIC_PLATFORM_ADMIN_USERNAME and SYNTHETIC_PLATFORM_ADMIN_PASSWORD must be set together.")
 
     session = requests.Session()
     session.headers.update({"Accept": "application/json"})
@@ -544,6 +598,56 @@ def main() -> int:
         container_id = ""
 
         _request(session, method="POST", api_base=api_base, path_or_url="/auth/logout", verify_tls=verify_tls)
+        role_checks_run: list[str] = []
+
+        if lab_admin_username and lab_admin_password:
+            _run_role_authz_check(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                username=lab_admin_username,
+                password=lab_admin_password,
+                expected_role="lab_admin",
+                route_expectations=[
+                    ("/admin/images", True),
+                    ("/admin/users", False),
+                    ("/admin/settings/concurrency", False),
+                ],
+            )
+            role_checks_run.append("lab_admin authz")
+
+        if namespace_admin_username and namespace_admin_password:
+            _run_role_authz_check(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                username=namespace_admin_username,
+                password=namespace_admin_password,
+                expected_role="namespace_admin",
+                route_expectations=[
+                    ("/admin/images", True),
+                    ("/admin/users", True),
+                    ("/admin/settings/concurrency", True),
+                ],
+            )
+            role_checks_run.append("namespace_admin authz")
+
+        if platform_admin_username and platform_admin_password:
+            _run_role_authz_check(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                username=platform_admin_username,
+                password=platform_admin_password,
+                expected_role="platform_admin",
+                route_expectations=[
+                    ("/admin/images", True),
+                    ("/admin/users", True),
+                    ("/admin/settings/concurrency", True),
+                ],
+            )
+            role_checks_run.append("platform_admin authz")
+
         flow_parts = ["login"]
         if upload_fixture_path and upload_fixture_name:
             flow_parts.append("admin image upload/finalize/delete")
@@ -555,6 +659,7 @@ def main() -> int:
                 "container launch/websocket readiness/connect/delete",
             ]
         )
+        flow_parts.extend(role_checks_run)
         print("PASS: synthetic validation succeeded (" + " -> ".join(flow_parts) + ").")
         return 0
     finally:

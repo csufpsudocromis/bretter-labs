@@ -67,6 +67,18 @@ def _deployment_from_rendered(rendered_yaml: str, deployment_name: str) -> dict[
     raise RuntimeError(f"rendered manifest does not include Deployment/{deployment_name}")
 
 
+def _resource_from_rendered(rendered_yaml: str, *, kind: str, name: str) -> dict[str, Any]:
+    for doc in yaml.safe_load_all(rendered_yaml):
+        if not isinstance(doc, dict):
+            continue
+        if str(doc.get("kind") or "").strip() != kind:
+            continue
+        metadata = doc.get("metadata") or {}
+        if str(metadata.get("name") or "").strip() == name:
+            return doc
+    raise RuntimeError(f"rendered manifest does not include {kind}/{name}")
+
+
 def _container_map(deploy: dict[str, Any]) -> dict[str, dict[str, Any]]:
     containers = (((deploy.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
     out: dict[str, dict[str, Any]] = {}
@@ -142,6 +154,48 @@ def _find_blocked_code_mounts(container: dict[str, Any]) -> list[str]:
     return sorted(blocked)
 
 
+def _service_signature(service: dict[str, Any]) -> tuple[str, tuple[tuple[str, str, str, str, str], ...]]:
+    spec = service.get("spec") or {}
+    service_type = str(spec.get("type") or "ClusterIP").strip()
+    ports = spec.get("ports") or []
+    normalized_ports: list[tuple[str, str, str, str, str]] = []
+    for row in ports:
+        if not isinstance(row, dict):
+            continue
+        normalized_ports.append(
+            (
+                str(row.get("name") or "").strip(),
+                str(row.get("protocol") or "TCP").strip(),
+                str(row.get("port") or "").strip(),
+                str(row.get("targetPort") or "").strip(),
+                str(row.get("nodePort") or "").strip(),
+            )
+        )
+    normalized_ports.sort()
+    return service_type, tuple(normalized_ports)
+
+
+def _hpa_signature(hpa: dict[str, Any]) -> tuple[str, str, str]:
+    spec = hpa.get("spec") or {}
+    min_replicas = str(spec.get("minReplicas") if spec.get("minReplicas") is not None else "").strip()
+    max_replicas = str(spec.get("maxReplicas") if spec.get("maxReplicas") is not None else "").strip()
+    cpu_target = ""
+    for metric in spec.get("metrics") or []:
+        if not isinstance(metric, dict):
+            continue
+        if str(metric.get("type") or "").strip() != "Resource":
+            continue
+        resource = metric.get("resource") or {}
+        if str(resource.get("name") or "").strip() != "cpu":
+            continue
+        target = resource.get("target") or {}
+        cpu_target = str(
+            target.get("averageUtilization") if target.get("averageUtilization") is not None else ""
+        ).strip()
+        break
+    return min_replicas, max_replicas, cpu_target
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Fail when live deployment config drifts from rendered production values."
@@ -162,7 +216,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--deployments",
-        default="bretter-backend,bretter-frontend",
+        default="bretter-backend,bretter-frontend,bretter-labimageimport-controller",
         help="Comma-separated deployment names to compare.",
     )
     args = parser.parse_args()
@@ -215,6 +269,32 @@ def main() -> int:
 
         if name == "bretter-backend":
             _compare_backend_env(expected, live, mismatches)
+
+    # Critical service contracts (type/ports) must match rendered values.
+    for svc_name in ("bretter-backend", "bretter-frontend"):
+        try:
+            expected_svc = _resource_from_rendered(rendered_yaml, kind="Service", name=svc_name)
+        except RuntimeError as exc:
+            mismatches.append(str(exc))
+            continue
+        live_svc = _run_json(["kubectl", "-n", args.namespace, "get", "service", svc_name, "-o", "json"])
+        expected_sig = _service_signature(expected_svc)
+        live_sig = _service_signature(live_svc)
+        if expected_sig != live_sig:
+            mismatches.append(f"{svc_name} service contract drift: expected={expected_sig!r} live={live_sig!r}")
+
+    # Critical autoscaling contracts must match rendered values.
+    for hpa_name in ("bretter-backend", "bretter-frontend"):
+        try:
+            expected_hpa = _resource_from_rendered(rendered_yaml, kind="HorizontalPodAutoscaler", name=hpa_name)
+        except RuntimeError as exc:
+            mismatches.append(str(exc))
+            continue
+        live_hpa = _run_json(["kubectl", "-n", args.namespace, "get", "hpa", hpa_name, "-o", "json"])
+        expected_sig = _hpa_signature(expected_hpa)
+        live_sig = _hpa_signature(live_hpa)
+        if expected_sig != live_sig:
+            mismatches.append(f"{hpa_name} HPA drift: expected={expected_sig!r} live={live_sig!r}")
 
     if mismatches:
         print("FAIL: live config drift detected:", file=sys.stderr)

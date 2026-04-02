@@ -130,6 +130,11 @@ jobs:
           grep -F "PASS: post-deploy synthetic user flow check" "${report}" >/dev/null \
             || { echo "Synthetic gate missing/failed in ${report}" >&2; tail -n 200 "${report}" >&2; exit 1; }
 
+      - name: Verify controller rollout
+        run: |
+          set -euo pipefail
+          kubectl -n "${NAMESPACE}" rollout status deployment/bretter-labimageimport-controller --timeout=300s
+
       - name: Check live config drift
         run: |
           set -euo pipefail

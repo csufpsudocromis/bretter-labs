@@ -48,6 +48,7 @@ appTemplateValues:
   VM_RUNNER_PRIVILEGED: "0"
   VM_PRIVILEGED_RUNTIME_ISOLATION_ENABLED: "1"
   VM_PRIVILEGED_NAMESPACE_PREFIX: "labs-vm-priv-"
+  DB_AUTO_MIGRATE_ON_STARTUP: "0"
   REQUIRE_SCHEMA_READY: "1"
   EXPECTED_ALEMBIC_REVISION: ""
   # Keep empty in committed values files. Inject key material via runtime Kubernetes Secret.

@@ -86,3 +86,21 @@ def test_task_stage_progress_maps_completed_to_ready() -> None:
     stage, progress = _task_stage_progress(task)
     assert stage == "ready"
     assert progress == 100
+
+
+def test_task_stage_progress_preserves_explicit_pipeline_stage_contract() -> None:
+    stage_inputs = ("uploaded", "normalizing", "seeded", "ready", "failed")
+    observed: set[str] = set()
+    for stage_input in stage_inputs:
+        task = ImageUploadTask(
+            id=f"task-{stage_input}",
+            original_filename="sample.vdi",
+            filename="sample.vdi",
+            size_bytes=1024,
+            status="running" if stage_input != "failed" else "failed",
+            stage=stage_input,
+            progress_percent=50,
+        )
+        stage, _progress = _task_stage_progress(task)
+        observed.add(stage)
+    assert observed == {"uploaded", "normalizing", "seeded", "ready", "failed"}

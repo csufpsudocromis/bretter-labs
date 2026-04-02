@@ -120,7 +120,8 @@ fi
 
 if kubectl -n "$NAMESPACE" rollout status deployment/bretter-postgres --timeout=300s >>"$report_path" 2>&1 &&
   kubectl -n "$NAMESPACE" rollout status deployment/bretter-backend --timeout=300s >>"$report_path" 2>&1 &&
-  kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s >>"$report_path" 2>&1; then
+  kubectl -n "$NAMESPACE" rollout status deployment/bretter-frontend --timeout=300s >>"$report_path" 2>&1 &&
+  kubectl -n "$NAMESPACE" rollout status deployment/bretter-labimageimport-controller --timeout=300s >>"$report_path" 2>&1; then
   log "PASS: core deployment rollout checks passed."
 else
   fail "core deployment rollout checks failed."
@@ -135,16 +136,39 @@ fi
 
 if [ "$proof_exit" -eq 0 ]; then
   log "PASS: production go-live proof passed."
+else
+  log "FAIL: production go-live proof failed."
+fi
+
+drift_exit=0
+if [ "$proof_exit" -eq 0 ]; then
+  if python3 "$ROOT_DIR/scripts/check_live_config_drift.py" \
+    --namespace "$NAMESPACE" \
+    --release-name "$HELM_RELEASE_NAME" \
+    "${values_args[@]}" >>"$report_path" 2>&1; then
+    log "PASS: live config drift gate passed."
+  else
+    drift_exit=$?
+    log "FAIL: live config drift gate failed."
+  fi
+fi
+
+if [ "$proof_exit" -eq 0 ] && [ "$drift_exit" -eq 0 ]; then
   log "Report written to: $report_path"
   exit 0
 fi
 
-log "FAIL: production go-live proof failed."
 if [ "$ROLLBACK_ON_PROOF_FAILURE" -ne 1 ]; then
-  fail "rollback disabled after proof failure."
+  if [ "$proof_exit" -ne 0 ]; then
+    fail "rollback disabled after proof failure."
+  fi
+  fail "rollback disabled after live config drift failure."
 fi
 if [ -z "$pre_revision" ]; then
-  fail "cannot rollback automatically after proof failure (no previous Helm revision)."
+  if [ "$proof_exit" -ne 0 ]; then
+    fail "cannot rollback automatically after proof failure (no previous Helm revision)."
+  fi
+  fail "cannot rollback automatically after live config drift failure (no previous Helm revision)."
 fi
 
 log "Attempting automatic rollback to revision ${pre_revision}..."
@@ -157,7 +181,13 @@ NAMESPACE="$NAMESPACE" \
   "$ROOT_DIR/scripts/rollback_release.sh" >>"$report_path" 2>&1 || rollback_exit=$?
 
 if [ "$rollback_exit" -ne 0 ]; then
-  fail "go-live proof failed and rollback to revision ${pre_revision} also failed."
+  if [ "$proof_exit" -ne 0 ]; then
+    fail "go-live proof failed and rollback to revision ${pre_revision} also failed."
+  fi
+  fail "live config drift gate failed and rollback to revision ${pre_revision} also failed."
 fi
 
-fail "go-live proof failed; release was rolled back to revision ${pre_revision}."
+if [ "$proof_exit" -ne 0 ]; then
+  fail "go-live proof failed; release was rolled back to revision ${pre_revision}."
+fi
+fail "live config drift gate failed; release was rolled back to revision ${pre_revision}."

@@ -19,8 +19,14 @@ RUN_RESTORE_DRILL="${RUN_RESTORE_DRILL:-0}"
 RESTORE_DRILL_KEEP_DB="${RESTORE_DRILL_KEEP_DB:-0}"
 RUN_RESTORE_DRILL_CLEAN_NAMESPACE="${RUN_RESTORE_DRILL_CLEAN_NAMESPACE:-1}"
 POST_DEPLOY_AUTH_SECRET_NAME="${POST_DEPLOY_AUTH_SECRET_NAME:-bretter-postdeploy-auth}"
+POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY:-admin_username}"
 POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY:-admin_password}"
+POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY:-synthetic_username}"
 POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY="${POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY:-synthetic_password}"
+POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY:-lab_admin_username}"
+POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY:-lab_admin_password}"
+POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY="${POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY:-namespace_admin_username}"
+POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY="${POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY:-namespace_admin_password}"
 RDP_SLO_AUTH_SECRET_NAME="${RDP_SLO_AUTH_SECRET_NAME:-bretter-userflow-slo-api-auth}"
 RDP_SLO_AUTH_PASSWORD_KEY="${RDP_SLO_AUTH_PASSWORD_KEY:-password}"
 SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK="${SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK:-0}"
@@ -540,6 +546,26 @@ else
   fail_check "postdeploy synthetic auth secret exists with password key"
 fi
 
+postdeploy_lab_admin_user_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY" 2>/dev/null || true)"
+postdeploy_lab_admin_pass_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY" 2>/dev/null || true)"
+if [ -n "$postdeploy_lab_admin_user_b64" ] && [ -n "$postdeploy_lab_admin_pass_b64" ]; then
+  pass_check "postdeploy lab-admin auth keys exist (role synthetic check enabled)"
+elif [ -n "$postdeploy_lab_admin_user_b64" ] || [ -n "$postdeploy_lab_admin_pass_b64" ]; then
+  fail_check "postdeploy lab-admin auth keys are partially configured"
+else
+  log "Optional lab-admin synthetic role check credentials not configured."
+fi
+
+postdeploy_namespace_admin_user_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY" 2>/dev/null || true)"
+postdeploy_namespace_admin_pass_b64="$(secret_data_value_b64 "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY" 2>/dev/null || true)"
+if [ -n "$postdeploy_namespace_admin_user_b64" ] && [ -n "$postdeploy_namespace_admin_pass_b64" ]; then
+  pass_check "postdeploy namespace-admin auth keys exist (role synthetic check enabled)"
+elif [ -n "$postdeploy_namespace_admin_user_b64" ] || [ -n "$postdeploy_namespace_admin_pass_b64" ]; then
+  fail_check "postdeploy namespace-admin auth keys are partially configured"
+else
+  log "Optional namespace-admin synthetic role check credentials not configured."
+fi
+
 rdp_slo_auth_b64="$(secret_data_value_b64 "$NAMESPACE" "$RDP_SLO_AUTH_SECRET_NAME" "$RDP_SLO_AUTH_PASSWORD_KEY" 2>/dev/null || true)"
 if [ -n "$rdp_slo_auth_b64" ]; then
   pass_check "rdp slo auth secret exists with password key"
@@ -647,6 +673,10 @@ if [ -z "$node_external_host" ]; then
 else
   synthetic_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY" || true)"
   synthetic_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" || true)"
+  lab_admin_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY" || true)"
+  lab_admin_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY" || true)"
+  namespace_admin_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY" || true)"
+  namespace_admin_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_PASSWORD_KEY" || true)"
   if [ -z "$synthetic_password" ]; then
     fail_check "post-deploy synthetic user flow check (missing synthetic credentials)"
   else
@@ -664,6 +694,10 @@ else
       SYNTHETIC_IMAGE_UPLOAD_FILE="${SYNTHETIC_IMAGE_UPLOAD_FILE}" \
       SYNTHETIC_IMAGE_UPLOAD_NAME="${SYNTHETIC_IMAGE_UPLOAD_NAME}" \
       SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS="${SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS}" \
+      SYNTHETIC_LAB_ADMIN_USERNAME="${lab_admin_username}" \
+      SYNTHETIC_LAB_ADMIN_PASSWORD="${lab_admin_password}" \
+      SYNTHETIC_NAMESPACE_ADMIN_USERNAME="${namespace_admin_username}" \
+      SYNTHETIC_NAMESPACE_ADMIN_PASSWORD="${namespace_admin_password}" \
       "$ROOT_DIR/scripts/post_deploy_synthetic_check.py"
   fi
 fi

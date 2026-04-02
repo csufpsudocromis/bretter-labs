@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     database_pool_recycle_seconds: int = 1800
     database_statement_timeout_ms: int = 15000
     database_slow_query_ms: int = 500
+    # Prefer a single pre-deploy migration job in Kubernetes; keep startup migration
+    # opt-in for local/dev workflows.
+    db_auto_migrate_on_startup: bool = True
     require_schema_ready: bool = True
     expected_alembic_revision: str = ""
     kube_namespace: str = "labs"
@@ -150,6 +153,8 @@ class Settings(BaseSettings):
     vm_connect_insecure_tls: bool = False
     container_connect_insecure_tls: bool = False
     secrets_encryption_key: str = ""
+    runtime_secrets_secret_name: str = "bretter-runtime-secrets"
+    runtime_secrets_encryption_key_key: str = "secrets_encryption_key"
     site_assets_dir: str = "/data/site-assets"
     alertmanager_api_url: str = (
         "http://kube-prometheus-stack-alertmanager.monitoring.svc.cluster.local:9093/api/v2/alerts"
