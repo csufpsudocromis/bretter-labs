@@ -33,6 +33,7 @@ ISO_BOOT_RECORD_SCAN_MAX_SECTORS="${ISO_BOOT_RECORD_SCAN_MAX_SECTORS:-512}"
 USE_VIRTUAL_TPM="0"
 USE_SECURE_BOOT="0"
 ENABLE_AUTO_BOOT_KEYPRESS="0"
+SECONDARY_ISO=""
 TPM_SOCKET_DIR="/tmp/swtpm"
 TPM_STATE_DIR="/tmp/swtpm-state"
 TPM_SOCKET_PATH="${TPM_SOCKET_DIR}/swtpm-sock"
@@ -226,6 +227,44 @@ print("0")
 PY
 }
 
+find_bootable_iso_fallback() {
+  local original_iso="$1"
+  local iso_dir
+  iso_dir="$(dirname "$original_iso")"
+  if [[ ! -d "$iso_dir" ]]; then
+    return 1
+  fi
+  local original_base
+  original_base="$(basename "$original_iso")"
+  local candidate
+  local preferred=()
+  local others=()
+  shopt -s nullglob
+  for candidate in "$iso_dir"/*.iso "$iso_dir"/*.ISO; do
+    local base
+    local base_lc
+    base="$(basename "$candidate")"
+    base_lc="${base,,}"
+    if [[ "$base" == "$original_base" ]]; then
+      continue
+    fi
+    if [[ "${OS_TYPE,,}" == "windows" && "$base_lc" == *win* ]]; then
+      preferred+=("$candidate")
+    else
+      others+=("$candidate")
+    fi
+  done
+  shopt -u nullglob
+  local ordered=("${preferred[@]}" "${others[@]}")
+  for candidate in "${ordered[@]}"; do
+    if [[ "$(iso_has_el_torito_boot_record "$candidate")" == "1" ]] || [[ "$(iso_supports_uefi_boot "$candidate")" == "1" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -333,15 +372,29 @@ if [[ -n "$BOOT_ISO" && "${BOOT_ORDER,,}" == *d* ]]; then
     iso_bootable="1"
   fi
   if [[ "$iso_bootable" != "1" ]]; then
-    original_boot_order="$BOOT_ORDER"
-    BOOT_ORDER="$(printf '%s' "$BOOT_ORDER" | tr -d 'dD')"
-    if [[ -z "$BOOT_ORDER" ]]; then
-      BOOT_ORDER="c"
-    elif [[ "${BOOT_ORDER,,}" != *c* ]]; then
-      BOOT_ORDER="c${BOOT_ORDER}"
+    fallback_boot_iso="$(find_bootable_iso_fallback "$BOOT_ISO" || true)"
+    if [[ -n "$fallback_boot_iso" ]]; then
+      echo "BOOT_ISO is not bootable; using fallback boot ISO ${fallback_boot_iso} and keeping original attached as secondary CD."
+      SECONDARY_ISO="$BOOT_ISO"
+      BOOT_ISO="$fallback_boot_iso"
+      if [[ "${BOOT_ORDER,,}" != *d* ]]; then
+        BOOT_ORDER="d${BOOT_ORDER}"
+      fi
+      if [[ "${BOOT_ORDER,,}" != *c* ]]; then
+        BOOT_ORDER="${BOOT_ORDER}c"
+      fi
+      BOOT_ORDER="${BOOT_ORDER:0:3}"
+    else
+      original_boot_order="$BOOT_ORDER"
+      BOOT_ORDER="$(printf '%s' "$BOOT_ORDER" | tr -d 'dD')"
+      if [[ -z "$BOOT_ORDER" ]]; then
+        BOOT_ORDER="c"
+      elif [[ "${BOOT_ORDER,,}" != *c* ]]; then
+        BOOT_ORDER="c${BOOT_ORDER}"
+      fi
+      BOOT_ORDER="${BOOT_ORDER:0:3}"
+      echo "BOOT_ISO does not appear bootable; falling back from boot order ${original_boot_order} to ${BOOT_ORDER}."
     fi
-    BOOT_ORDER="${BOOT_ORDER:0:3}"
-    echo "BOOT_ISO does not appear bootable; falling back from boot order ${original_boot_order} to ${BOOT_ORDER}."
   fi
 fi
 
@@ -704,6 +757,11 @@ fi
 if [[ -n "$BOOT_ISO" ]]; then
   QEMU_ARGS+=(
     -drive "file=${BOOT_ISO},media=cdrom,readonly=on"
+  )
+fi
+if [[ -n "$SECONDARY_ISO" ]]; then
+  QEMU_ARGS+=(
+    -drive "file=${SECONDARY_ISO},media=cdrom,readonly=on"
   )
 fi
 
