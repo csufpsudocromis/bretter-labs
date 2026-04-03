@@ -4036,13 +4036,15 @@ def _ensure_image_source_pvc(image_id: str, image_path: Path, size_bytes: int) -
     return claim_name
 
 
-def _validate_file_on_pvc(filename: str) -> None:
+def _validate_file_on_pvc(filename: str, *, claim_name: str | None = None) -> None:
     """
     Validate the image on the PVC using qemu-img check. Raises if invalid.
     """
+    safe_filename = Path(filename).name
     result = _with_pvc_helper(
-        ["/bin/sh", "-c", f"qemu-img check /images/{filename}"],
+        ["/bin/sh", "-c", f"qemu-img check /images/{safe_filename}"],
         image=settings.runner_image,
+        claim_name=claim_name,
     )
     if result and result.returncode != 0:
         msg = (getattr(result, "stderr", "") or getattr(result, "stdout", "") or "").strip()
@@ -6073,7 +6075,10 @@ def create_image_from_iso(
         target_filename=installer_iso_filename,
     )
     if not payload.skip_validation:
-        _validate_file_on_pvc(filename)
+        try:
+            _validate_file_on_pvc(filename, claim_name=source_pvc)
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"validation failed: {exc}") from exc
 
     checksum = hashlib.sha256(f"scratch:{image_id}:{filename}:{payload.drive_size_gib}".encode("utf-8")).hexdigest()
     size_bytes = int(payload.drive_size_gib) * (1024**3)

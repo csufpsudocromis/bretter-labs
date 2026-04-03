@@ -16,6 +16,7 @@ from src.tables import (
     ContainerImage,
     ContainerTemplate,
     Image,
+    IsoImage,
     Instance,
     TeamQuota,
     Template,
@@ -1636,6 +1637,85 @@ def test_admin_force_delete_template_denied_for_non_platform_admin(client: TestC
     denied = client.delete("/admin/templates/tmpl-delete-force-check-2", params={"force": "true"})
     assert denied.status_code == 403, denied.text
     assert "only platform admins can force delete" in denied.json()["detail"]
+
+
+def test_admin_create_image_from_iso_validates_on_source_pvc(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            IsoImage(
+                id="iso-create-check-1",
+                name="Windows 11 ISO",
+                filename="windows-11.iso",
+                checksum="sha256:iso-create-check-1",
+                size_bytes=1024,
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(settings, "kube_vm_storage_class", "longhorn-r1")
+    monkeypatch.setattr("src.routes.admin._ensure_image_source_pvc_claim", lambda *_args, **_kwargs: "img-src-test")
+    monkeypatch.setattr("src.routes.admin._create_blank_disk_on_source_pvc", lambda **_kwargs: None)
+    monkeypatch.setattr("src.routes.admin._copy_pvc_path_to_pvc", lambda **_kwargs: None)
+    captured = {}
+
+    def _fake_validate(filename: str, *, claim_name: str | None = None):
+        captured["filename"] = filename
+        captured["claim_name"] = claim_name
+
+    monkeypatch.setattr("src.routes.admin._validate_file_on_pvc", _fake_validate)
+
+    created = login_admin.post(
+        "/admin/images/create-from-iso",
+        json={
+            "name": "Windows 11",
+            "iso_image_id": "iso-create-check-1",
+            "os_type": "windows",
+            "drive_size_gib": 64,
+            "default_cpu_cores": 2,
+            "default_ram_mb": 4096,
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert captured["filename"] == "windows-11.qcow2"
+    assert captured["claim_name"] == "img-src-test"
+
+
+def test_admin_create_image_from_iso_returns_validation_error_detail(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            IsoImage(
+                id="iso-create-check-2",
+                name="Windows 11 ISO 2",
+                filename="windows-11-2.iso",
+                checksum="sha256:iso-create-check-2",
+                size_bytes=1024,
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(settings, "kube_vm_storage_class", "longhorn-r1")
+    monkeypatch.setattr("src.routes.admin._ensure_image_source_pvc_claim", lambda *_args, **_kwargs: "img-src-test-2")
+    monkeypatch.setattr("src.routes.admin._create_blank_disk_on_source_pvc", lambda **_kwargs: None)
+    monkeypatch.setattr("src.routes.admin._copy_pvc_path_to_pvc", lambda **_kwargs: None)
+
+    def _fail_validate(_filename: str, *, claim_name: str | None = None):  # noqa: ARG001
+        raise RuntimeError("qemu-img test failure")
+
+    monkeypatch.setattr("src.routes.admin._validate_file_on_pvc", _fail_validate)
+
+    created = login_admin.post(
+        "/admin/images/create-from-iso",
+        json={
+            "name": "Windows 11 Broken",
+            "iso_image_id": "iso-create-check-2",
+            "os_type": "windows",
+            "drive_size_gib": 64,
+            "default_cpu_cores": 2,
+            "default_ram_mb": 4096,
+        },
+    )
+    assert created.status_code == 400, created.text
+    assert "validation failed: qemu-img test failure" in created.json()["detail"]
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):
