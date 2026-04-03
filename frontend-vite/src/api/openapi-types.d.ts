@@ -2287,6 +2287,16 @@ export interface components {
         /** ImageCreateFromIso */
         ImageCreateFromIso: {
             /**
+             * Default Cpu Cores
+             * @default 2
+             */
+            default_cpu_cores: number;
+            /**
+             * Default Ram Mb
+             * @default 4096
+             */
+            default_ram_mb: number;
+            /**
              * Drive Size Gib
              * @default 64
              */
@@ -2361,6 +2371,16 @@ export interface components {
              * @default global
              */
             tenant: string;
+            /**
+             * Update Cpu Cores Default
+             * @default 2
+             */
+            update_cpu_cores_default: number;
+            /**
+             * Update Ram Mb Default
+             * @default 4096
+             */
+            update_ram_mb_default: number;
         };
         /** ImageImport */
         ImageImport: {
@@ -2381,23 +2401,14 @@ export interface components {
         };
         /** ImageLaunchUpdateRequest */
         ImageLaunchUpdateRequest: {
-            /**
-             * Console Provider
-             * @default spice
-             */
-            console_provider: string;
-            /**
-             * Cpu Cores
-             * @default 2
-             */
-            cpu_cores: number;
+            /** Console Provider */
+            console_provider?: string | null;
+            /** Cpu Cores */
+            cpu_cores?: number | null;
             /** Os Type */
             os_type?: string | null;
-            /**
-             * Ram Mb
-             * @default 4096
-             */
-            ram_mb: number;
+            /** Ram Mb */
+            ram_mb?: number | null;
         };
         /** ImageMeta */
         ImageMeta: {
@@ -2449,6 +2460,16 @@ export interface components {
              * @default global
              */
             tenant: string;
+            /**
+             * Update Cpu Cores Default
+             * @default 2
+             */
+            update_cpu_cores_default: number;
+            /**
+             * Update Ram Mb Default
+             * @default 4096
+             */
+            update_ram_mb_default: number;
         };
         /** ImageRename */
         ImageRename: {
@@ -2463,6 +2484,10 @@ export interface components {
              * @default false
              */
             skip_validation: boolean;
+            /** Update Cpu Cores Default */
+            update_cpu_cores_default?: number | null;
+            /** Update Ram Mb Default */
+            update_ram_mb_default?: number | null;
         };
         /** ImageUploadTaskStatus */
         ImageUploadTaskStatus: {

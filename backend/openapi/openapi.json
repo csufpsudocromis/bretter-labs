@@ -1762,6 +1762,20 @@
       },
       "ImageCreateFromIso": {
         "properties": {
+          "default_cpu_cores": {
+            "default": 2,
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Default Cpu Cores",
+            "type": "integer"
+          },
+          "default_ram_mb": {
+            "default": 4096,
+            "maximum": 65536.0,
+            "minimum": 512.0,
+            "title": "Default Ram Mb",
+            "type": "integer"
+          },
           "drive_size_gib": {
             "default": 64,
             "maximum": 1024.0,
@@ -1900,6 +1914,16 @@
             "default": "global",
             "title": "Tenant",
             "type": "string"
+          },
+          "update_cpu_cores_default": {
+            "default": 2,
+            "title": "Update Cpu Cores Default",
+            "type": "integer"
+          },
+          "update_ram_mb_default": {
+            "default": 4096,
+            "title": "Update Ram Mb Default",
+            "type": "integer"
           }
         },
         "required": [
@@ -1950,17 +1974,29 @@
       "ImageLaunchUpdateRequest": {
         "properties": {
           "console_provider": {
-            "default": "spice",
-            "pattern": "^(spice|guacamole|guacamole_rdp)$",
-            "title": "Console Provider",
-            "type": "string"
+            "anyOf": [
+              {
+                "pattern": "^(spice|guacamole|guacamole_rdp)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Console Provider"
           },
           "cpu_cores": {
-            "default": 2,
-            "maximum": 16.0,
-            "minimum": 1.0,
-            "title": "Cpu Cores",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 16.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Cores"
           },
           "os_type": {
             "anyOf": [
@@ -1975,11 +2011,17 @@
             "title": "Os Type"
           },
           "ram_mb": {
-            "default": 4096,
-            "maximum": 65536.0,
-            "minimum": 512.0,
-            "title": "Ram Mb",
-            "type": "integer"
+            "anyOf": [
+              {
+                "maximum": 65536.0,
+                "minimum": 512.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ram Mb"
           }
         },
         "title": "ImageLaunchUpdateRequest",
@@ -2087,6 +2129,16 @@
             "default": "global",
             "title": "Tenant",
             "type": "string"
+          },
+          "update_cpu_cores_default": {
+            "default": 2,
+            "title": "Update Cpu Cores Default",
+            "type": "integer"
+          },
+          "update_ram_mb_default": {
+            "default": 4096,
+            "title": "Update Ram Mb Default",
+            "type": "integer"
           }
         },
         "required": [
@@ -2138,6 +2190,32 @@
             "default": false,
             "title": "Skip Validation",
             "type": "boolean"
+          },
+          "update_cpu_cores_default": {
+            "anyOf": [
+              {
+                "maximum": 16.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Cpu Cores Default"
+          },
+          "update_ram_mb_default": {
+            "anyOf": [
+              {
+                "maximum": 65536.0,
+                "minimum": 512.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Ram Mb Default"
           }
         },
         "title": "ImageRename",

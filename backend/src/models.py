@@ -278,6 +278,8 @@ class ImageMeta(BaseModel):
     installer_iso_filename: str | None = None
     installer_os_type: str | None = None
     installer_disk_size_gib: int | None = None
+    update_cpu_cores_default: int = 2
+    update_ram_mb_default: int = 4096
     checksum: str
     size_bytes: int
     created_at: datetime

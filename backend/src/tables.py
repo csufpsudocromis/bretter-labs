@@ -59,6 +59,8 @@ class Image(SQLModel, table=True):
     installer_iso_filename: Optional[str] = None
     installer_os_type: Optional[str] = None
     installer_disk_size_gib: Optional[int] = None
+    update_cpu_cores_default: int = Field(default=2)
+    update_ram_mb_default: int = Field(default=4096)
     source_pvc: Optional[str] = None
     checksum: str
     size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))

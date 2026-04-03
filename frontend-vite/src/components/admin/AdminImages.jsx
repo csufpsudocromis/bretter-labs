@@ -24,11 +24,15 @@ const AdminImages = () => {
   const [editName, setEditName] = useState("");
   const [editFilename, setEditFilename] = useState("");
   const [editSharedCatalog, setEditSharedCatalog] = useState(false);
+  const [editDefaultCpuCores, setEditDefaultCpuCores] = useState(2);
+  const [editDefaultRamMb, setEditDefaultRamMb] = useState(4096);
   const [creatingImage, setCreatingImage] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createIsoId, setCreateIsoId] = useState("");
   const [createOsType, setCreateOsType] = useState("windows");
   const [createDriveSizeGiB, setCreateDriveSizeGiB] = useState(64);
+  const [createDefaultCpuCores, setCreateDefaultCpuCores] = useState(2);
+  const [createDefaultRamMb, setCreateDefaultRamMb] = useState(4096);
   const [createSharedCatalog, setCreateSharedCatalog] = useState(false);
   const [launchingImageId, setLaunchingImageId] = useState("");
 
@@ -244,11 +248,18 @@ const AdminImages = () => {
     setEditName(img.name);
     setEditFilename(img.filename || img.name);
     setEditSharedCatalog(Boolean(img.shared_catalog));
+    setEditDefaultCpuCores(Math.max(1, Number(img.update_cpu_cores_default || 2)));
+    setEditDefaultRamMb(Math.max(512, Number(img.update_ram_mb_default || 4096)));
   };
 
   const saveEdit = async () => {
     try {
-      const payload = { name: editName, filename: editFilename };
+      const payload = {
+        name: editName,
+        filename: editFilename,
+        update_cpu_cores_default: Math.max(1, Number(editDefaultCpuCores || 2)),
+        update_ram_mb_default: Math.max(512, Number(editDefaultRamMb || 4096)),
+      };
       if (isPlatformAdmin) {
         payload.shared_catalog = Boolean(editSharedCatalog);
       }
@@ -266,6 +277,8 @@ const AdminImages = () => {
     setEditName("");
     setEditFilename("");
     setEditSharedCatalog(false);
+    setEditDefaultCpuCores(2);
+    setEditDefaultRamMb(4096);
   };
 
   const createFromIso = async () => {
@@ -282,6 +295,8 @@ const AdminImages = () => {
         iso_image_id: createIsoId,
         os_type: createOsType,
         drive_size_gib: Math.max(10, Number(createDriveSizeGiB || 64)),
+        default_cpu_cores: Math.max(1, Number(createDefaultCpuCores || 2)),
+        default_ram_mb: Math.max(512, Number(createDefaultRamMb || 4096)),
         shared_catalog: isPlatformAdmin ? Boolean(createSharedCatalog) : false,
       };
       const res = await api.post("/admin/images/create-from-iso", payload);
@@ -289,6 +304,8 @@ const AdminImages = () => {
       setMessage(`Created image ${created?.name || payload.name}`);
       setCreateName("");
       setCreateDriveSizeGiB(64);
+      setCreateDefaultCpuCores(2);
+      setCreateDefaultRamMb(4096);
       setCreateSharedCatalog(false);
       load();
     } catch (err) {
@@ -305,6 +322,7 @@ const AdminImages = () => {
     try {
       const payload = {
         os_type: String(img.installer_os_type || createOsType || "windows"),
+        console_provider: "guacamole",
       };
       const res = await api.post(`/admin/images/${img.id}/launch-update`, payload);
       const instance = res?.data || {};
@@ -342,6 +360,61 @@ const AdminImages = () => {
             </p>
           )}
           <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
+          {editId && (
+            <>
+              <hr />
+              <h3>Edit Golden Image</h3>
+              <div className="form">
+                <label>
+                  Name
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                </label>
+                <label>
+                  Filename
+                  <input value={editFilename} onChange={(e) => setEditFilename(e.target.value)} />
+                </label>
+                <label>
+                  Default CPU cores
+                  <input
+                    type="number"
+                    min={1}
+                    max={16}
+                    value={editDefaultCpuCores}
+                    onChange={(event) => setEditDefaultCpuCores(Number(event.target.value || 2))}
+                  />
+                </label>
+                <label>
+                  Default RAM (MiB)
+                  <input
+                    type="number"
+                    min={512}
+                    max={65536}
+                    step={256}
+                    value={editDefaultRamMb}
+                    onChange={(event) => setEditDefaultRamMb(Number(event.target.value || 4096))}
+                  />
+                </label>
+                {isPlatformAdmin && (
+                  <label>
+                    Catalog scope
+                    <select
+                      value={editSharedCatalog ? "shared" : "namespace"}
+                      onChange={(e) => setEditSharedCatalog(e.target.value === "shared")}
+                    >
+                      <option value="namespace">Namespace-owned</option>
+                      <option value="shared">Shared (cross-namespace)</option>
+                    </select>
+                  </label>
+                )}
+                <div className="actions">
+                  <button onClick={saveEdit}>Save</button>
+                  <button className="ghost" onClick={cancelEdit}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
           <hr />
           <h3>Create Image</h3>
           <label>
@@ -380,6 +453,27 @@ const AdminImages = () => {
               onChange={(event) => setCreateDriveSizeGiB(Number(event.target.value || 64))}
             />
           </label>
+          <label>
+            Default CPU cores
+            <input
+              type="number"
+              min={1}
+              max={16}
+              value={createDefaultCpuCores}
+              onChange={(event) => setCreateDefaultCpuCores(Number(event.target.value || 2))}
+            />
+          </label>
+          <label>
+            Default RAM (MiB)
+            <input
+              type="number"
+              min={512}
+              max={65536}
+              step={256}
+              value={createDefaultRamMb}
+              onChange={(event) => setCreateDefaultRamMb(Number(event.target.value || 4096))}
+            />
+          </label>
           {isPlatformAdmin && (
             <label>
               Catalog scope
@@ -410,61 +504,32 @@ const AdminImages = () => {
                   <h4>{img.name}</h4>
                   <span className="muted small">{formatGiB(img.size_bytes)}</span>
                 </div>
-                {editId === img.id ? (
-                  <div className="form">
-                    <label>
-                      Name
-                      <input value={editName} onChange={(e) => setEditName(e.target.value)} />
-                    </label>
-                    <label>
-                      Filename
-                      <input value={editFilename} onChange={(e) => setEditFilename(e.target.value)} />
-                    </label>
-                    {isPlatformAdmin && (
-                      <label>
-                        Catalog scope
-                        <select
-                          value={editSharedCatalog ? "shared" : "namespace"}
-                          onChange={(e) => setEditSharedCatalog(e.target.value === "shared")}
-                        >
-                          <option value="namespace">Namespace-owned</option>
-                          <option value="shared">Shared (cross-namespace)</option>
-                        </select>
-                      </label>
-                    )}
-                    <div className="actions">
-                      <button onClick={saveEdit}>Save</button>
-                      <button className="ghost" onClick={cancelEdit}>
-                        Cancel
-                      </button>
-                    </div>
+                <>
+                  <div className="muted small">{img.filename || "no filename"}</div>
+                  <div className="muted small">{img.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}</div>
+                  <div className="muted small">
+                    Source: {img.source_kind || "uploaded"}
+                    {img.installer_iso_filename ? ` | ISO: ${img.installer_iso_filename}` : ""}
                   </div>
-                ) : (
-                  <>
-                    <div className="muted small">{img.filename || "no filename"}</div>
-                    <div className="muted small">
-                      {img.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}
-                    </div>
-                    <div className="muted small">
-                      Source: {img.source_kind || "uploaded"}
-                      {img.installer_iso_filename ? ` | ISO: ${img.installer_iso_filename}` : ""}
-                    </div>
-                    <div className="actions">
-                      <button className="ghost" onClick={() => startEdit(img)}>
-                        Edit
-                      </button>
-                      <button
-                        onClick={() => launchForUpdate(img)}
-                        disabled={Boolean(launchingImageId) && launchingImageId !== img.id}
-                      >
-                        {launchingImageId === img.id ? "Launching..." : "Launch update VM"}
-                      </button>
-                      <button className="danger" onClick={() => remove(img.id)}>
-                        Delete
-                      </button>
-                    </div>
-                  </>
-                )}
+                  <div className="muted small">
+                    Update defaults: {Number(img.update_cpu_cores_default || 2)} CPU,{" "}
+                    {Number(img.update_ram_mb_default || 4096)} MiB RAM
+                  </div>
+                  <div className="actions">
+                    <button className="ghost" onClick={() => startEdit(img)}>
+                      Edit
+                    </button>
+                    <button
+                      onClick={() => launchForUpdate(img)}
+                      disabled={Boolean(launchingImageId) && launchingImageId !== img.id}
+                    >
+                      {launchingImageId === img.id ? "Launching..." : "Launch update VM"}
+                    </button>
+                    <button className="danger" onClick={() => remove(img.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </>
               </div>
             ))}
           </div>

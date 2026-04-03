@@ -4125,6 +4125,8 @@ class ImageCreateFromIso(BaseModel):
     iso_image_id: str = Field(min_length=1, max_length=64)
     os_type: str = Field(default="windows", pattern="^(windows|linux)$")
     drive_size_gib: int = Field(default=64, ge=10, le=1024)
+    default_cpu_cores: int = Field(default=2, ge=1, le=16)
+    default_ram_mb: int = Field(default=4096, ge=512, le=65536)
     shared_catalog: bool = False
     skip_validation: bool = False
 
@@ -4133,6 +4135,8 @@ class ImageRename(BaseModel):
     name: str | None = None
     filename: str | None = None
     shared_catalog: bool | None = None
+    update_cpu_cores_default: int | None = Field(default=None, ge=1, le=16)
+    update_ram_mb_default: int | None = Field(default=None, ge=512, le=65536)
     skip_validation: bool = False
 
 
@@ -4142,10 +4146,10 @@ class IsoImageRename(BaseModel):
 
 
 class ImageLaunchUpdateRequest(BaseModel):
-    cpu_cores: int = Field(default=2, ge=1, le=16)
-    ram_mb: int = Field(default=4096, ge=512, le=65536)
+    cpu_cores: int | None = Field(default=None, ge=1, le=16)
+    ram_mb: int | None = Field(default=None, ge=512, le=65536)
     os_type: str | None = Field(default=None, pattern="^(windows|linux)$")
-    console_provider: str = Field(default="spice", pattern="^(spice|guacamole|guacamole_rdp)$")
+    console_provider: str | None = Field(default=None, pattern="^(spice|guacamole|guacamole_rdp)$")
 
 
 class DirectUploadStart(BaseModel):
@@ -5878,6 +5882,8 @@ def import_image(
         installer_iso_filename=None,
         installer_os_type=None,
         installer_disk_size_gib=None,
+        update_cpu_cores_default=2,
+        update_ram_mb_default=4096,
         source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
@@ -5907,6 +5913,8 @@ def import_image(
         installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
         installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
         installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
+        update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
+        update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -5949,6 +5957,8 @@ def list_images(
                 installer_iso_filename=None,
                 installer_os_type=None,
                 installer_disk_size_gib=None,
+                update_cpu_cores_default=2,
+                update_ram_mb_default=4096,
                 source_pvc=None,
                 checksum="",
                 size_bytes=info.get("size", 0),
@@ -5976,6 +5986,8 @@ def list_images(
             installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
             installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
             installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
+            update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
+            update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
             checksum=record.checksum,
             size_bytes=record.size_bytes,
             created_at=record.created_at,
@@ -6071,6 +6083,8 @@ def create_image_from_iso(
         installer_iso_filename=installer_iso_filename,
         installer_os_type=str(payload.os_type).strip().lower(),
         installer_disk_size_gib=int(payload.drive_size_gib),
+        update_cpu_cores_default=int(payload.default_cpu_cores),
+        update_ram_mb_default=int(payload.default_ram_mb),
         source_pvc=source_pvc,
         checksum=checksum,
         size_bytes=size_bytes,
@@ -6104,6 +6118,8 @@ def create_image_from_iso(
         installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
         installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
         installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
+        update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
+        update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -6141,7 +6157,12 @@ def launch_image_update_vm(
     template_id = f"img-update-{image.id}"
     template = session.get(Template, template_id)
     desired_os_type = str(payload.os_type or getattr(image, "installer_os_type", "") or "windows").strip().lower()
-    console_provider = normalize_vm_console_provider(payload.console_provider)
+    image_default_cpu = int(getattr(image, "update_cpu_cores_default", 0) or 2)
+    image_default_ram = int(getattr(image, "update_ram_mb_default", 0) or 4096)
+    launch_cpu = int(payload.cpu_cores or image_default_cpu)
+    launch_ram = int(payload.ram_mb or image_default_ram)
+    # Always use Guacamole VNC for image update launch flows.
+    console_provider = normalize_vm_console_provider("guacamole")
     if desired_os_type not in {"windows", "linux"}:
         desired_os_type = "windows"
 
@@ -6158,8 +6179,8 @@ def launch_image_update_vm(
             description=f"System-managed template for updating image {image.name}",
             os_type=desired_os_type,
             image_id=image.id,
-            cpu_cores=int(payload.cpu_cores),
-            ram_mb=int(payload.ram_mb),
+            cpu_cores=launch_cpu,
+            ram_mb=launch_ram,
             auto_delete_minutes=240,
             idle_timeout_minutes=120,
             preclone_pool_size=0,
@@ -6180,8 +6201,8 @@ def launch_image_update_vm(
         template.description = f"System-managed template for updating image {image.name}"
         template.os_type = desired_os_type
         template.image_id = image.id
-        template.cpu_cores = int(payload.cpu_cores)
-        template.ram_mb = int(payload.ram_mb)
+        template.cpu_cores = launch_cpu
+        template.ram_mb = launch_ram
         template.auto_delete_minutes = 240
         template.idle_timeout_minutes = 120
         template.preclone_pool_size = 0
@@ -6372,6 +6393,10 @@ def rename_image(
     record.filename = new_filename
     if payload.shared_catalog is not None:
         record.shared_catalog = bool(payload.shared_catalog)
+    if payload.update_cpu_cores_default is not None:
+        record.update_cpu_cores_default = int(payload.update_cpu_cores_default)
+    if payload.update_ram_mb_default is not None:
+        record.update_ram_mb_default = int(payload.update_ram_mb_default)
     session.add(record)
     _record_admin_audit_event(
         session,
@@ -6397,6 +6422,8 @@ def rename_image(
         installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
         installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
         installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
+        update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
+        update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
