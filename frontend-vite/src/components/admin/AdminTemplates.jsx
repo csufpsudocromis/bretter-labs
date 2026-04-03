@@ -123,6 +123,28 @@ const AdminTemplates = () => {
       setMessage("");
       load();
     } catch (err) {
+      if (
+        isPlatformAdmin &&
+        Number(err?.response?.status || 0) === 409 &&
+        String(err?.response?.data?.detail || "")
+          .toLowerCase()
+          .includes("active instances")
+      ) {
+        const force = window.confirm(
+          `${String(err.response?.data?.detail || "")}\n\nForce delete template and clean up active labs?`
+        );
+        if (force) {
+          try {
+            await api.delete(`/admin/templates/${id}`, { params: { force: "true" } });
+            setMessage("Template force deleted.");
+            load();
+            return;
+          } catch (forceErr) {
+            setMessage(forceErr.response?.data?.detail || "Failed to force delete template");
+            return;
+          }
+        }
+      }
       setMessage(err.response?.data?.detail || "Failed to delete template");
     }
   };

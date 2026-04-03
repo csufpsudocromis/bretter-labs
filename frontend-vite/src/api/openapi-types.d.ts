@@ -6786,7 +6786,9 @@ export interface operations {
     };
     delete_template_admin_templates__template_id__delete: {
         parameters: {
-            query?: never;
+            query?: {
+                force?: boolean;
+            };
             header?: {
                 authorization?: string | null;
             };

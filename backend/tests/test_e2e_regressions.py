@@ -1524,6 +1524,120 @@ def test_admin_delete_template_prunes_terminal_instances_then_deletes(login_admi
         assert session.get(Instance, "vm-delete-terminal-check-2") is None
 
 
+def test_admin_force_delete_template_cleans_active_instances_for_platform_admin(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-template-force-delete-check-1",
+                name="Template Force Delete Check Image",
+                filename="template-force-delete-check.qcow2",
+                checksum="sha256:template-force-delete-check",
+                size_bytes=4096,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-delete-force-check-1",
+                name="Delete Force Check Template",
+                description="linked active instance",
+                os_type="windows",
+                image_id="img-template-force-delete-check-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=False,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-force-check-1",
+                template_id="tmpl-delete-force-check-1",
+                owner="admin",
+                status="running",
+                namespace="labs",
+            )
+        )
+        session.commit()
+
+    cleanup_calls: list[tuple[str, str, str | None, str | None]] = []
+
+    class _FakeKube:
+        def delete_pod(self, instance_id, owner, disk_pvc=None, namespace=None):
+            cleanup_calls.append((instance_id, owner, disk_pvc, namespace))
+
+    monkeypatch.setattr("src.routes.admin.kube_service_for_cluster", lambda *args, **kwargs: _FakeKube())
+    monkeypatch.setattr("src.routes.admin.vm_orchestration_uses_legacy_path", lambda: True)
+    monkeypatch.setattr("src.routes.admin.vm_orchestration_writes_crd", lambda: False)
+
+    deleted = login_admin.delete("/admin/templates/tmpl-delete-force-check-1", params={"force": "true"})
+    assert deleted.status_code == 204, deleted.text
+    assert cleanup_calls == [("vm-delete-force-check-1", "admin", None, "labs")]
+
+    with Session(engine) as session:
+        assert session.get(Template, "tmpl-delete-force-check-1") is None
+        assert session.get(Instance, "vm-delete-force-check-1") is None
+
+
+def test_admin_force_delete_template_denied_for_non_platform_admin(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            User(
+                username="labadmin-force-delete-check",
+                password_hash=hash_password("password"),
+                role=Role.LAB_ADMIN,
+                is_admin=True,
+                force_password_change=False,
+            )
+        )
+        session.add(
+            Image(
+                id="img-template-force-delete-check-2",
+                name="Template Force Delete Check Image 2",
+                filename="template-force-delete-check-2.qcow2",
+                checksum="sha256:template-force-delete-check-2",
+                size_bytes=4096,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-delete-force-check-2",
+                name="Delete Force Check Template 2",
+                description="linked active instance",
+                os_type="windows",
+                image_id="img-template-force-delete-check-2",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=False,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-force-check-2",
+                template_id="tmpl-delete-force-check-2",
+                owner="labadmin-force-delete-check",
+                status="running",
+                namespace="labs",
+            )
+        )
+        session.commit()
+
+    login = client.post("/auth/login", json={"username": "labadmin-force-delete-check", "password": "password"})
+    assert login.status_code == 200, login.text
+
+    denied = client.delete("/admin/templates/tmpl-delete-force-check-2", params={"force": "true"})
+    assert denied.status_code == 403, denied.text
+    assert "only platform admins can force delete" in denied.json()["detail"]
+
+
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):
     _seed_vm_template()
     _seed_container_template()

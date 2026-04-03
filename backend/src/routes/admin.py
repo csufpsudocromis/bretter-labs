@@ -102,8 +102,14 @@ from ..services.labimageimport_crd import (
     patch_labimageimport_status_for_task,
     upsert_labimageimport_for_task,
 )
+from ..services.labinstance_crd import (
+    delete_vm_labinstance,
+    delete_vm_labinstance_best_effort,
+    vm_orchestration_uses_legacy_path,
+    vm_orchestration_writes_crd,
+)
 from ..services.kubernetes import kube
-from ..services.multi_cluster import local_cluster_id
+from ..services.multi_cluster import kube_service_for_cluster, local_cluster_id
 from ..services.namespace_policies import get_namespace_runtime_policy
 from ..services.team_quotas import normalize_namespace, normalize_optional_limit, normalize_team
 from ..services.tenant_context import (
@@ -6886,6 +6892,7 @@ def update_template(
 )
 def delete_template(
     template_id: str,
+    force: bool = Query(default=False),
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> None:
@@ -6906,15 +6913,71 @@ def delete_template(
             if str(getattr(instance, "status", "") or "").strip().lower() not in terminal_statuses
         ]
         if active_instances:
-            active_ids = [str(instance.id) for instance in active_instances[:3]]
-            suffix = ", ..." if len(active_instances) > 3 else ""
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"template is in use by active instances ({len(active_instances)}): "
-                    f"{', '.join(active_ids)}{suffix}. stop/delete those labs first."
-                ),
-            )
+            if force:
+                if not is_platform_admin(actor):
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="only platform admins can force delete templates with active instances",
+                    )
+                use_legacy_orchestration = vm_orchestration_uses_legacy_path()
+                write_crd_shadow = vm_orchestration_writes_crd()
+                cleanup_failures: list[str] = []
+                for instance in active_instances:
+                    instance_id = str(instance.id)
+                    instance_namespace = str(getattr(instance, "namespace", "") or settings.kube_namespace).strip()
+                    instance_cluster_id = str(getattr(instance, "cluster_id", "") or local_cluster_id()).strip()
+                    try:
+                        runtime_kube = kube_service_for_cluster(
+                            session,
+                            instance_cluster_id or local_cluster_id(),
+                            require_runtime_enabled=False,
+                        )
+                    except Exception as exc:
+                        cleanup_failures.append(f"{instance_id} (runtime client: {exc})")
+                        continue
+                    if use_legacy_orchestration:
+                        try:
+                            runtime_kube.delete_pod(
+                                instance_id,
+                                str(getattr(instance, "owner", "") or ""),
+                                disk_pvc=getattr(instance, "disk_pvc", None),
+                                namespace=instance_namespace,
+                            )
+                        except ApiException as exc:
+                            if exc.status not in {404, 409, 422}:
+                                cleanup_failures.append(f"{instance_id} (pod cleanup: {exc})")
+                                continue
+                        except Exception as exc:
+                            cleanup_failures.append(f"{instance_id} (pod cleanup: {exc})")
+                            continue
+                    if write_crd_shadow:
+                        try:
+                            if use_legacy_orchestration:
+                                delete_vm_labinstance_best_effort(instance_id, namespace=instance_namespace)
+                            else:
+                                delete_vm_labinstance(instance_id, namespace=instance_namespace, missing_ok=True)
+                        except Exception as exc:
+                            cleanup_failures.append(f"{instance_id} (LabInstance cleanup: {exc})")
+                if cleanup_failures:
+                    sample = ", ".join(cleanup_failures[:3])
+                    suffix = ", ..." if len(cleanup_failures) > 3 else ""
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "force delete could not clean up some active instances: "
+                            f"{sample}{suffix}. resolve them manually, then retry."
+                        ),
+                    )
+            else:
+                active_ids = [str(instance.id) for instance in active_instances[:3]]
+                suffix = ", ..." if len(active_instances) > 3 else ""
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        f"template is in use by active instances ({len(active_instances)}): "
+                        f"{', '.join(active_ids)}{suffix}. stop/delete those labs first."
+                    ),
+                )
         for instance in referenced_instances:
             session.delete(instance)
     _record_admin_audit_event(
