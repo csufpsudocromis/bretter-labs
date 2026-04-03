@@ -131,8 +131,15 @@ def _record_shared_catalog(record: object) -> bool:
     return bool(getattr(record, "shared_catalog", False))
 
 
+def _explicit_namespace(value: str | None) -> str | None:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None
+    return normalize_namespace(raw)
+
+
 def _record_visible_for_namespace(record: object, namespace: str | None) -> bool:
-    selected = normalize_namespace(namespace)
+    selected = _explicit_namespace(namespace)
     if not selected:
         return True
     record_namespace = _record_namespace(record)
@@ -158,10 +165,10 @@ def _requested_namespace_hint(request: Request | None) -> str | None:
     if request is None:
         return None
     for header in ("x-bretter-namespace", "x-blabs-namespace"):
-        value = normalize_namespace(request.headers.get(header))
+        value = _explicit_namespace(request.headers.get(header))
         if value:
             return value
-    query_value = normalize_namespace(request.query_params.get("namespace"))
+    query_value = _explicit_namespace(request.query_params.get("namespace"))
     return query_value or None
 
 
