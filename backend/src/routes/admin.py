@@ -6897,6 +6897,26 @@ def delete_template(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    referenced_instances = session.exec(select(Instance).where(Instance.template_id == record.id)).all()
+    if referenced_instances:
+        terminal_statuses = {"stopped", "completed", "failed", "error"}
+        active_instances = [
+            instance
+            for instance in referenced_instances
+            if str(getattr(instance, "status", "") or "").strip().lower() not in terminal_statuses
+        ]
+        if active_instances:
+            active_ids = [str(instance.id) for instance in active_instances[:3]]
+            suffix = ", ..." if len(active_instances) > 3 else ""
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"template is in use by active instances ({len(active_instances)}): "
+                    f"{', '.join(active_ids)}{suffix}. stop/delete those labs first."
+                ),
+            )
+        for instance in referenced_instances:
+            session.delete(instance)
     _record_admin_audit_event(
         session,
         actor=actor.username,

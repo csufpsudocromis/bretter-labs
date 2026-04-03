@@ -10,7 +10,17 @@ from src.config import settings
 from src.db import engine
 from src.rbac import Role
 from src.services.kubernetes import PodStatus, kube
-from src.tables import Config, ConnectToken, ContainerImage, ContainerTemplate, Image, TeamQuota, Template, User
+from src.tables import (
+    Config,
+    ConnectToken,
+    ContainerImage,
+    ContainerTemplate,
+    Image,
+    Instance,
+    TeamQuota,
+    Template,
+    User,
+)
 from src.time_utils import utc_now
 
 SINGLE_LAB_LIMIT_MESSAGE = "You already have a virtual lab running. Delete the current lab before starting a new one."
@@ -1414,6 +1424,104 @@ def test_admin_delete_image_rejects_when_template_references_it(login_admin: Tes
     deleted = login_admin.delete("/admin/images/img-delete-check-1")
     assert deleted.status_code == 409, deleted.text
     assert "image is in use by templates" in deleted.json()["detail"]
+
+
+def test_admin_delete_template_rejects_when_active_instance_references_it(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-template-delete-check-1",
+                name="Template Delete Check Image",
+                filename="template-delete-check.qcow2",
+                checksum="sha256:template-delete-check",
+                size_bytes=2048,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-delete-active-check-1",
+                name="Delete Active Check Template",
+                description="linked running instance",
+                os_type="windows",
+                image_id="img-template-delete-check-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-active-check-1",
+                template_id="tmpl-delete-active-check-1",
+                owner="admin",
+                status="running",
+            )
+        )
+        session.commit()
+
+    deleted = login_admin.delete("/admin/templates/tmpl-delete-active-check-1")
+    assert deleted.status_code == 409, deleted.text
+    assert "template is in use by active instances" in deleted.json()["detail"]
+
+
+def test_admin_delete_template_prunes_terminal_instances_then_deletes(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-template-delete-check-2",
+                name="Template Delete Check Image 2",
+                filename="template-delete-check-2.qcow2",
+                checksum="sha256:template-delete-check-2",
+                size_bytes=4096,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-delete-terminal-check-1",
+                name="Delete Terminal Check Template",
+                description="linked terminal instances",
+                os_type="windows",
+                image_id="img-template-delete-check-2",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=False,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-terminal-check-1",
+                template_id="tmpl-delete-terminal-check-1",
+                owner="admin",
+                status="stopped",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-terminal-check-2",
+                template_id="tmpl-delete-terminal-check-1",
+                owner="admin",
+                status="completed",
+            )
+        )
+        session.commit()
+
+    deleted = login_admin.delete("/admin/templates/tmpl-delete-terminal-check-1")
+    assert deleted.status_code == 204, deleted.text
+
+    with Session(engine) as session:
+        assert session.get(Template, "tmpl-delete-terminal-check-1") is None
+        assert session.get(Instance, "vm-delete-terminal-check-1") is None
+        assert session.get(Instance, "vm-delete-terminal-check-2") is None
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):
