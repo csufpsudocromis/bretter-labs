@@ -324,14 +324,14 @@ const AdminImages = () => {
     setMessage("");
     setError("");
     const popup = window.open("", "_blank");
-    if (!popup) {
-      setLaunchingImageId("");
-      setError("Browser blocked the console tab. Allow popups for this site and retry.");
-      return;
+    const blockedPopup = !popup;
+    if (popup) {
+      popup.document.title = "Preparing VM Console";
+      popup.document.body.innerHTML =
+        '<p style="font-family:sans-serif;padding:16px;">Preparing VM console. This tab will connect automatically.</p>';
+    } else {
+      setMessage("Popup blocked; preparing console and opening in this tab when ready.");
     }
-    popup.document.title = "Preparing VM Console";
-    popup.document.body.innerHTML =
-      '<p style="font-family:sans-serif;padding:16px;">Preparing VM console. This tab will connect automatically.</p>';
     try {
       const payload = {
         os_type: String(img.installer_os_type || createOsType || "windows"),
@@ -360,16 +360,22 @@ const AdminImages = () => {
         }
       }
       if (connectUrl) {
-        popup.location.replace(connectUrl);
+        if (popup) {
+          popup.location.replace(connectUrl);
+        } else {
+          window.location.assign(connectUrl);
+        }
       } else {
         throw new Error("VM console is still starting. Try again in a few moments.");
       }
       setMessage(`Update VM started (${String(instance.id || "").slice(0, 8)})`);
     } catch (err) {
-      try {
-        popup.close();
-      } catch (_closeErr) {
-        // no-op
+      if (!blockedPopup) {
+        try {
+          popup.close();
+        } catch (_closeErr) {
+          // no-op
+        }
       }
       setError(err.response?.data?.detail || err.message || "Failed to launch update VM");
     } finally {

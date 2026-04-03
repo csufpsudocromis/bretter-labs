@@ -26,6 +26,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("labinstance-controller")
 
 
+def _vm_boot_order_for_launch(template: Template, image: Image) -> str | None:
+    installer_iso_filename = str(getattr(image, "installer_iso_filename", "") or "").strip()
+    if not installer_iso_filename:
+        return None
+    source_kind = str(getattr(image, "source_kind", "") or "").strip().lower()
+    if source_kind == "scratch":
+        return "dc"
+    template_id = str(getattr(template, "id", "") or "").strip().lower()
+    if template_id.startswith("img-update-"):
+        return "dc"
+    return None
+
+
 def _ts() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -549,12 +562,7 @@ class LabInstanceController:
                 rdp_default_username=rdp_default_username,
                 rdp_default_password=rdp_default_password,
                 installer_iso_filename=(str(getattr(image, "installer_iso_filename", "") or "").strip() or None),
-                boot_order=(
-                    "dc"
-                    if str(getattr(image, "source_kind", "") or "").strip().lower() == "scratch"
-                    and str(getattr(image, "installer_iso_filename", "") or "").strip()
-                    else None
-                ),
+                boot_order=_vm_boot_order_for_launch(template, image),
             )
             pod_status = kube.create_pod(pod_request)
             kube.create_service_for_pod(
@@ -583,12 +591,7 @@ class LabInstanceController:
                             installer_iso_filename=(
                                 str(getattr(image, "installer_iso_filename", "") or "").strip() or None
                             ),
-                            boot_order=(
-                                "dc"
-                                if str(getattr(image, "source_kind", "") or "").strip().lower() == "scratch"
-                                and str(getattr(image, "installer_iso_filename", "") or "").strip()
-                                else None
-                            ),
+                            boot_order=_vm_boot_order_for_launch(template, image),
                         )
                     ),
                     "serviceName": f"svc-{instance_id[:8]}",
