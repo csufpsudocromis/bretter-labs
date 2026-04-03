@@ -1861,6 +1861,7 @@ def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_ad
     assert req is not None
     assert req.installer_iso_filename == "installer-win11.iso"
     assert req.boot_order == "dc"
+    assert req.instance_disk_pvc == "img-src-update-bootorder-check-1"
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):

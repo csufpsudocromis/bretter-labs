@@ -1560,6 +1560,7 @@ class KubernetesService:
         owner: str,
         disk_pvc: Optional[str] = None,
         namespace: str | None = None,
+        delete_disk_pvc: bool = True,
     ) -> None:
         core = self._client()
         networking = self._networking_client()
@@ -1593,6 +1594,12 @@ class KubernetesService:
             else:
                 logger.error("Failed to delete pod %s: %s", pod_name, exc)
                 raise
+        if not delete_disk_pvc:
+            return
+        if pvc_name.startswith("img-src-"):
+            # Guardrail: never remove golden-source PVCs via instance teardown.
+            logger.info("Skipping delete of source PVC %s during instance teardown.", pvc_name)
+            return
         try:
             core.delete_namespaced_persistent_volume_claim(name=pvc_name, namespace=ns)
         except ApiException as exc:

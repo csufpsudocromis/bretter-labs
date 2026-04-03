@@ -629,6 +629,10 @@ def _vm_boot_order_for_launch(template: Template, image: Image) -> str | None:
     return _image_boot_order(image)
 
 
+def _is_image_update_template_id(template_id: str | None) -> bool:
+    return str(template_id or "").strip().lower().startswith("img-update-")
+
+
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
     try:
         return kube_service_for_cluster(session, cluster_id)
@@ -1684,12 +1688,20 @@ def start_vm(
     pod_status: PodStatus | None = None
     disk_pvc: str | None = None
     if use_legacy_orchestration:
-        try:
-            warm_pool_pvc = runtime_kube.reserve_warm_pool_pvc(
-                template.id, instance_id, user.username, namespace=runtime_namespace
-            )
-        except Exception:
-            warm_pool_pvc = None
+        use_source_pvc_direct = _is_image_update_template_id(template.id)
+        warm_pool_pvc: str | None = None
+        instance_disk_pvc: str | None = None
+        if use_source_pvc_direct:
+            # Image-update sessions are expected to persist edits back to the golden source PVC.
+            instance_disk_pvc = str(getattr(image, "source_pvc", "") or "").strip() or None
+        else:
+            try:
+                warm_pool_pvc = runtime_kube.reserve_warm_pool_pvc(
+                    template.id, instance_id, user.username, namespace=runtime_namespace
+                )
+            except Exception:
+                warm_pool_pvc = None
+            instance_disk_pvc = warm_pool_pvc
         pod_request = PodRequest(
             instance_id=instance_id,
             template_id=template.id,
@@ -1700,7 +1712,7 @@ def start_vm(
             ram_mb=template.ram_mb,
             owner=user.username,
             network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
-            instance_disk_pvc=warm_pool_pvc,
+            instance_disk_pvc=instance_disk_pvc,
             console_provider=console_provider,
             spice_password=(spice_password or None),
             rdp_default_username=rdp_default_username,
@@ -1960,19 +1972,32 @@ def restart_vm(
     pod_status: PodStatus | None = None
     disk_pvc = record.disk_pvc
     if use_legacy_orchestration:
+        use_source_pvc_direct = _is_image_update_template_id(template.id)
         # Ensure any old pod with the same name is removed before re-create.
         try:
-            runtime_kube.delete_pod(instance_id, user.username, disk_pvc=record.disk_pvc, namespace=runtime_namespace)
+            runtime_kube.delete_pod(
+                instance_id,
+                user.username,
+                disk_pvc=record.disk_pvc,
+                namespace=runtime_namespace,
+                delete_disk_pvc=not use_source_pvc_direct,
+            )
         except ApiException as exc:
             if exc.status != 404:
                 raise
 
-        try:
-            warm_pool_pvc = runtime_kube.reserve_warm_pool_pvc(
-                template.id, record.id, user.username, namespace=runtime_namespace
-            )
-        except Exception:
-            warm_pool_pvc = None
+        warm_pool_pvc: str | None = None
+        instance_disk_pvc: str | None = None
+        if use_source_pvc_direct:
+            instance_disk_pvc = str(getattr(image, "source_pvc", "") or "").strip() or None
+        else:
+            try:
+                warm_pool_pvc = runtime_kube.reserve_warm_pool_pvc(
+                    template.id, record.id, user.username, namespace=runtime_namespace
+                )
+            except Exception:
+                warm_pool_pvc = None
+            instance_disk_pvc = warm_pool_pvc
         pod_request = PodRequest(
             instance_id=record.id,
             template_id=template.id,
@@ -1983,7 +2008,7 @@ def restart_vm(
             ram_mb=template.ram_mb,
             owner=user.username,
             network_mode=normalize_vm_network_mode(getattr(template, "network_mode", "bridge")),
-            instance_disk_pvc=warm_pool_pvc,
+            instance_disk_pvc=instance_disk_pvc,
             console_provider=console_provider,
             spice_password=(spice_password or None),
             rdp_default_username=rdp_default_username,
@@ -2091,8 +2116,15 @@ def delete_vm(
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
+        keep_disk = _is_image_update_template_id(record.template_id)
         try:
-            runtime_kube.delete_pod(instance_id, record.owner, disk_pvc=record.disk_pvc, namespace=instance_namespace)
+            runtime_kube.delete_pod(
+                instance_id,
+                record.owner,
+                disk_pvc=record.disk_pvc,
+                namespace=instance_namespace,
+                delete_disk_pvc=not keep_disk,
+            )
         except ApiException as exc:
             # VM teardown can race with Kubernetes garbage collection.
             # Treat not-found/conflict during delete as best-effort success.
