@@ -28,6 +28,57 @@ const DEFAULT_FORM = {
   enabled: false,
 };
 
+const normalizeApiErrorDetail = (detail, fallback) => {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (Array.isArray(detail)) {
+    const joined = detail
+      .map((entry) => {
+        if (typeof entry === "string") return entry;
+        if (entry && typeof entry === "object" && typeof entry.msg === "string") return entry.msg;
+        return "";
+      })
+      .filter(Boolean)
+      .join("; ");
+    return joined || fallback;
+  }
+  if (detail && typeof detail === "object") {
+    if (typeof detail.message === "string" && detail.message.trim()) {
+      return detail.message;
+    }
+    try {
+      return JSON.stringify(detail);
+    } catch (_err) {
+      return fallback;
+    }
+  }
+  return fallback;
+};
+
+const errorMessage = (err, fallback) => normalizeApiErrorDetail(err?.response?.data?.detail, fallback);
+
+const normalizeVmTemplatePayload = (payload) => {
+  const next = { ...payload };
+  if (next.auto_delete_minutes !== undefined) {
+    const value = Number(next.auto_delete_minutes);
+    if (Number.isFinite(value)) {
+      next.auto_delete_minutes = Math.max(1, Math.min(30, Math.round(value)));
+    } else {
+      delete next.auto_delete_minutes;
+    }
+  }
+  if (next.idle_timeout_minutes !== undefined) {
+    const value = Number(next.idle_timeout_minutes);
+    if (Number.isFinite(value)) {
+      next.idle_timeout_minutes = Math.max(1, Math.min(1440, Math.round(value)));
+    } else {
+      delete next.idle_timeout_minutes;
+    }
+  }
+  return next;
+};
+
 const AdminTemplates = () => {
   const [templates, setTemplates] = useState([]);
   const [images, setImages] = useState([]);
@@ -90,7 +141,7 @@ const AdminTemplates = () => {
       );
       setCanManageTemplateEnableState(permissions.includes("*") || permissions.includes("admin.templates.write"));
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to load templates/images");
+      setMessage(errorMessage(err, "Failed to load templates/images"));
     }
   };
 
@@ -100,7 +151,7 @@ const AdminTemplates = () => {
 
   const create = async () => {
     try {
-      const payload = { ...form, enabled: false };
+      const payload = normalizeVmTemplatePayload({ ...form, enabled: false });
       delete payload.rdp_default_password_configured;
       if (!payload.rdp_default_password) {
         delete payload.rdp_default_password;
@@ -110,7 +161,7 @@ const AdminTemplates = () => {
       resetForm();
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to create template");
+      setMessage(errorMessage(err, "Failed to create template"));
     }
   };
 
@@ -120,7 +171,7 @@ const AdminTemplates = () => {
       setMessage("");
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to toggle template");
+      setMessage(errorMessage(err, "Failed to toggle template"));
     }
   };
 
@@ -133,12 +184,10 @@ const AdminTemplates = () => {
       if (
         isPlatformAdmin &&
         Number(err?.response?.status || 0) === 409 &&
-        String(err?.response?.data?.detail || "")
-          .toLowerCase()
-          .includes("active instances")
+        String(errorMessage(err, "")).toLowerCase().includes("active instances")
       ) {
         const force = window.confirm(
-          `${String(err.response?.data?.detail || "")}\n\nForce delete template and clean up active labs?`
+          `${errorMessage(err, "Template has active instances.")}\n\nForce delete template and clean up active labs?`
         );
         if (force) {
           try {
@@ -147,12 +196,12 @@ const AdminTemplates = () => {
             load();
             return;
           } catch (forceErr) {
-            setMessage(forceErr.response?.data?.detail || "Failed to force delete template");
+            setMessage(errorMessage(forceErr, "Failed to force delete template"));
             return;
           }
         }
       }
-      setMessage(err.response?.data?.detail || "Failed to delete template");
+      setMessage(errorMessage(err, "Failed to delete template"));
     }
   };
 
@@ -170,7 +219,7 @@ const AdminTemplates = () => {
       image_id: tmpl.image_id,
       cpu_cores: tmpl.cpu_cores,
       ram_mb: tmpl.ram_mb,
-      auto_delete_minutes: tmpl.auto_delete_minutes,
+      auto_delete_minutes: Math.max(1, Math.min(30, Number(tmpl.auto_delete_minutes) || 30)),
       idle_timeout_minutes: tmpl.idle_timeout_minutes || 30,
       preclone_pool_size: tmpl.preclone_pool_size || 0,
       preclone_pool_max: tmpl.preclone_pool_max ?? tmpl.preclone_pool_size ?? 0,
@@ -190,7 +239,7 @@ const AdminTemplates = () => {
 
   const saveEdit = async () => {
     try {
-      const payload = { ...form };
+      const payload = normalizeVmTemplatePayload({ ...form });
       delete payload.rdp_default_password_configured;
       if (!isPlatformAdmin) {
         delete payload.shared_catalog;
@@ -207,7 +256,7 @@ const AdminTemplates = () => {
       resetForm();
       load();
     } catch (err) {
-      setMessage(err.response?.data?.detail || "Failed to update template");
+      setMessage(errorMessage(err, "Failed to update template"));
     }
   };
 
@@ -452,52 +501,54 @@ const AdminTemplates = () => {
           <h3>Existing templates</h3>
           <div className="tile-grid">
             {templateRows.length === 0 && <div className="muted">No templates yet.</div>}
-            {templateRows.map((t) => (
-              <div key={t.id} className="tile template-tile">
-                <div className="tile-header">
-                  <h4>{t.name}</h4>
-                  <span className={`badge ${t.enabled ? "success" : "warn"}`}>
-                    {t.enabled ? "enabled" : "disabled"}
-                  </span>
-                </div>
-                <div className="muted small">{t.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}</div>
-                <div className="specs">
-                  <span>{t.cpu_cores} CPU</span>
-                  <span>{Math.round(t.ram_mb / 1024)} GB RAM</span>
-                </div>
-                <div className="muted small">
-                  Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
-                </div>
-                <div className="muted small">Console: {consoleProviderLabel(t.console_provider)}</div>
-                {t.console_provider === "guacamole_rdp" && (
-                  <div className="muted small">
-                    RDP defaults: {t.rdp_default_username ? `user ${t.rdp_default_username}` : "no username"},{" "}
-                    {t.rdp_default_password_configured ? "password configured" : "no password"}
+            {templateRows
+              .filter((row) => row && typeof row === "object")
+              .map((t, idx) => (
+                <div key={t.id || `template-${idx}`} className="tile template-tile">
+                  <div className="tile-header">
+                    <h4>{t.name || "Template"}</h4>
+                    <span className={`badge ${t.enabled ? "success" : "warn"}`}>
+                      {t.enabled ? "enabled" : "disabled"}
+                    </span>
                   </div>
-                )}
-                <div className="muted small">
-                  Enabled namespaces:{" "}
-                  {Array.isArray(t.enabled_namespaces) && t.enabled_namespaces.length > 0
-                    ? t.enabled_namespaces.join(", ")
-                    : "-"}
-                </div>
-                {t.description && <div className="muted small">{t.description}</div>}
-                <div className="muted small">Image: {imageName(t.image_id)}</div>
-                <div className="actions">
-                  {canEditTemplateEnabled(t.shared_catalog) && (
-                    <button className="ghost" onClick={() => toggle(t.id, !t.enabled)}>
-                      {t.enabled ? "Disable" : "Enable"}
-                    </button>
+                  <div className="muted small">{t.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}</div>
+                  <div className="specs">
+                    <span>{t.cpu_cores || 0} CPU</span>
+                    <span>{Math.round((Number(t.ram_mb) || 0) / 1024)} GB RAM</span>
+                  </div>
+                  <div className="muted small">
+                    Pre-clone pool: {t.preclone_pool_size || 0} - {t.preclone_pool_max ?? t.preclone_pool_size ?? 0}
+                  </div>
+                  <div className="muted small">Console: {consoleProviderLabel(t.console_provider)}</div>
+                  {t.console_provider === "guacamole_rdp" && (
+                    <div className="muted small">
+                      RDP defaults: {t.rdp_default_username ? `user ${t.rdp_default_username}` : "no username"},{" "}
+                      {t.rdp_default_password_configured ? "password configured" : "no password"}
+                    </div>
                   )}
-                  <button className="ghost" onClick={() => startEdit(t)}>
-                    Edit
-                  </button>
-                  <button className="danger" onClick={() => remove(t.id)}>
-                    Delete
-                  </button>
+                  <div className="muted small">
+                    Enabled namespaces:{" "}
+                    {Array.isArray(t.enabled_namespaces) && t.enabled_namespaces.length > 0
+                      ? t.enabled_namespaces.join(", ")
+                      : "-"}
+                  </div>
+                  {t.description && <div className="muted small">{t.description}</div>}
+                  <div className="muted small">Image: {imageName(t.image_id)}</div>
+                  <div className="actions">
+                    {canEditTemplateEnabled(t.shared_catalog) && (
+                      <button className="ghost" onClick={() => toggle(t.id, !t.enabled)}>
+                        {t.enabled ? "Disable" : "Enable"}
+                      </button>
+                    )}
+                    <button className="ghost" onClick={() => startEdit(t)}>
+                      Edit
+                    </button>
+                    <button className="danger" onClick={() => remove(t.id)}>
+                      Delete
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))}
           </div>
         </div>
       </div>

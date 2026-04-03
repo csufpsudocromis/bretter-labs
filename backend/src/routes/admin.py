@@ -6193,7 +6193,7 @@ def launch_image_update_vm(
             image_id=image.id,
             cpu_cores=launch_cpu,
             ram_mb=launch_ram,
-            auto_delete_minutes=240,
+            auto_delete_minutes=30,
             idle_timeout_minutes=120,
             preclone_pool_size=0,
             preclone_pool_max=0,
@@ -6215,7 +6215,7 @@ def launch_image_update_vm(
         template.image_id = image.id
         template.cpu_cores = launch_cpu
         template.ram_mb = launch_ram
-        template.auto_delete_minutes = 240
+        template.auto_delete_minutes = 30
         template.idle_timeout_minutes = 120
         template.preclone_pool_size = 0
         template.preclone_pool_max = 0
