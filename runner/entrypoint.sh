@@ -22,6 +22,47 @@ GUAC_RDP_IGNORE_CERT="${GUAC_RDP_IGNORE_CERT:-true}"
 BOOT_ISO="${BOOT_ISO:-}"
 BOOT_ORDER="${BOOT_ORDER:-c}"
 TAP_EGRESS_IF=""
+VM_TPM_ENABLED="${VM_TPM_ENABLED:-auto}"
+VM_SECURE_BOOT="${VM_SECURE_BOOT:-auto}"
+USE_VIRTUAL_TPM="0"
+USE_SECURE_BOOT="0"
+TPM_SOCKET_DIR="/tmp/swtpm"
+TPM_STATE_DIR="/tmp/swtpm-state"
+TPM_SOCKET_PATH="${TPM_SOCKET_DIR}/swtpm-sock"
+
+is_enabled_flag() {
+  local raw="${1:-}"
+  case "${raw,,}" in
+    1|true|yes|on)
+      echo "1"
+      ;;
+    auto|"")
+      if [[ "${OS_TYPE,,}" == "windows" ]]; then
+        echo "1"
+      else
+        echo "0"
+      fi
+      ;;
+    *)
+      echo "0"
+      ;;
+  esac
+}
+
+start_virtual_tpm() {
+  if ! command -v swtpm >/dev/null 2>&1; then
+    echo "swtpm binary not found; continuing without virtual TPM." >&2
+    return 1
+  fi
+  mkdir -p "$TPM_SOCKET_DIR" "$TPM_STATE_DIR"
+  rm -f "$TPM_SOCKET_PATH"
+  swtpm socket \
+    --tpm2 \
+    --daemon \
+    --ctrl "type=unixio,path=${TPM_SOCKET_PATH}" \
+    --tpmstate "dir=${TPM_STATE_DIR}" \
+    --log level=20
+}
 
 iso_supports_uefi_boot() {
   local iso_path="$1"
@@ -29,7 +70,14 @@ iso_supports_uefi_boot() {
 import sys
 
 path = sys.argv[1]
-markers = (b"BOOTX64.EFI", b"BOOTIA32.EFI", b"EFI/BOOT")
+markers = (
+    b"BOOTX64.EFI",
+    b"BOOTIA32.EFI",
+    b"EFI/BOOT",
+    b"bootx64.efi",
+    b"bootia32.efi",
+    b"efi/boot",
+)
 chunk_size = 4 * 1024 * 1024
 tail = b""
 try:
@@ -121,6 +169,13 @@ if [[ "$CONSOLE_PROVIDER" != "spice" && "${VGA_TYPE}" == "qxl" ]]; then
   VGA_TYPE="std"
 fi
 
+USE_VIRTUAL_TPM="$(is_enabled_flag "$VM_TPM_ENABLED")"
+USE_SECURE_BOOT="$(is_enabled_flag "$VM_SECURE_BOOT")"
+if [[ "$USE_SECURE_BOOT" == "1" && "${EFI_ENABLED,,}" != "true" ]]; then
+  EFI_ENABLED="true"
+  echo "Secure boot requested; enabling EFI firmware."
+fi
+
 if [[ -n "$BOOT_ISO" && "${EFI_ENABLED,,}" == "true" ]]; then
   if [[ ! -f "$BOOT_ISO" ]]; then
     echo "Boot ISO not found: $BOOT_ISO" >&2
@@ -128,6 +183,9 @@ if [[ -n "$BOOT_ISO" && "${EFI_ENABLED,,}" == "true" ]]; then
   fi
   if [[ "$(iso_supports_uefi_boot "$BOOT_ISO")" != "1" ]]; then
     echo "BOOT_ISO appears BIOS-only; disabling EFI for this launch."
+    if [[ "$USE_SECURE_BOOT" == "1" ]]; then
+      echo "Windows secure boot requirements will not be met with a BIOS-only ISO." >&2
+    fi
     EFI_ENABLED="false"
   fi
 fi
@@ -290,12 +348,36 @@ fi
 OVMF_CODE=""
 OVMF_VARS_TEMPLATE=""
 
-for candidate_code in \
-  "/usr/share/OVMF/OVMF_CODE.fd" \
-  "/usr/share/OVMF/OVMF_CODE_4M.fd" \
-  "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
-  "/usr/share/edk2/ovmf/OVMF_CODE_4M.fd"; do
+if [[ "$USE_SECURE_BOOT" == "1" ]]; then
+  OVMF_CANDIDATES=(
+    "/usr/share/OVMF/OVMF_CODE_4M.ms.fd"
+    "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
+    "/usr/share/OVMF/OVMF_CODE_4M.snakeoil.fd"
+    "/usr/share/OVMF/OVMF_CODE_4M.fd"
+    "/usr/share/OVMF/OVMF_CODE.fd"
+    "/usr/share/edk2/ovmf/OVMF_CODE_4M.fd"
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd"
+  )
+else
+  OVMF_CANDIDATES=(
+    "/usr/share/OVMF/OVMF_CODE.fd"
+    "/usr/share/OVMF/OVMF_CODE_4M.fd"
+    "/usr/share/edk2/ovmf/OVMF_CODE.fd"
+    "/usr/share/edk2/ovmf/OVMF_CODE_4M.fd"
+  )
+fi
+
+for candidate_code in "${OVMF_CANDIDATES[@]}"; do
   case "$candidate_code" in
+    */OVMF_CODE_4M.ms.fd)
+      candidate_vars="${candidate_code%OVMF_CODE_4M.ms.fd}OVMF_VARS_4M.ms.fd"
+      ;;
+    */OVMF_CODE_4M.secboot.fd)
+      candidate_vars="${candidate_code%OVMF_CODE_4M.secboot.fd}OVMF_VARS_4M.fd"
+      ;;
+    */OVMF_CODE_4M.snakeoil.fd)
+      candidate_vars="${candidate_code%OVMF_CODE_4M.snakeoil.fd}OVMF_VARS_4M.snakeoil.fd"
+      ;;
     */OVMF_CODE_4M.fd)
       candidate_vars="${candidate_code%OVMF_CODE_4M.fd}OVMF_VARS_4M.fd"
       ;;
@@ -315,6 +397,17 @@ if [[ "${EFI_ENABLED,,}" == "true" && -n "$OVMF_CODE" && -n "$OVMF_VARS_TEMPLATE
   cp "$OVMF_VARS_TEMPLATE" "$OVMF_VARS" 2>/dev/null || true
   QEMU_ARGS+=(-drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE")
   QEMU_ARGS+=(-drive if=pflash,format=raw,file="$OVMF_VARS")
+fi
+
+if [[ "$USE_VIRTUAL_TPM" == "1" ]]; then
+  if start_virtual_tpm; then
+    QEMU_ARGS+=(
+      -chardev "socket,id=chrtpm,path=${TPM_SOCKET_PATH}"
+      -tpmdev "emulator,id=tpm0,chardev=chrtpm"
+      -device "tpm-tis,tpmdev=tpm0"
+    )
+    echo "Virtual TPM 2.0 enabled."
+  fi
 fi
 
 QEMU_ARGS+=(

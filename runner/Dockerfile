@@ -22,6 +22,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       qemu-system-x86 \
       qemu-utils \
+      swtpm \
       websockify \
       novnc \
       spice-html5 \
