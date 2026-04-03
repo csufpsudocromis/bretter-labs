@@ -325,10 +325,18 @@ const AdminImages = () => {
     setError("");
     const popup = window.open("", "_blank");
     const blockedPopup = !popup;
-    if (popup) {
+    const renderPopupStatus = (message) => {
+      if (!popup || popup.closed) return;
       popup.document.title = "Preparing VM Console";
-      popup.document.body.innerHTML =
-        '<p style="font-family:sans-serif;padding:16px;">Preparing VM console. This tab will connect automatically.</p>';
+      popup.document.body.innerHTML = "";
+      const wrapper = popup.document.createElement("p");
+      wrapper.style.fontFamily = "sans-serif";
+      wrapper.style.padding = "16px";
+      wrapper.textContent = message;
+      popup.document.body.appendChild(wrapper);
+    };
+    if (popup) {
+      renderPopupStatus("Preparing VM console. This tab will connect automatically.");
     } else {
       setMessage("Popup blocked; preparing console and opening in this tab when ready.");
     }
@@ -340,8 +348,10 @@ const AdminImages = () => {
       const res = await api.post(`/admin/images/${img.id}/launch-update`, payload);
       const instance = res?.data || {};
       const waitFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-      const connectDeadline = Date.now() + 180000;
+      const waitStartedAt = Date.now();
+      const connectDeadline = waitStartedAt + 900000;
       let connectUrl = String(instance.console_url || "").trim();
+      let waitDetail = "VM process started; waiting for console service.";
       if (instance?.id) {
         while (Date.now() < connectDeadline) {
           try {
@@ -355,7 +365,15 @@ const AdminImages = () => {
             if (!waitable) {
               throw tokenErr;
             }
+            const detail = String(tokenErr?.response?.data?.detail || "").trim();
+            if (detail) {
+              waitDetail = detail;
+            }
           }
+          const elapsedSeconds = Math.floor((Date.now() - waitStartedAt) / 1000);
+          renderPopupStatus(
+            `Preparing VM console (${elapsedSeconds}s). ${waitDetail} This tab will connect automatically.`
+          );
           await waitFor(2000);
         }
       }
@@ -366,7 +384,8 @@ const AdminImages = () => {
           window.location.assign(connectUrl);
         }
       } else {
-        throw new Error("VM console is still starting. Try again in a few moments.");
+        const elapsedSeconds = Math.floor((Date.now() - waitStartedAt) / 1000);
+        throw new Error(`VM console is still starting after ${elapsedSeconds}s. ${waitDetail}`);
       }
       setMessage(`Update VM started (${String(instance.id || "").slice(0, 8)})`);
     } catch (err) {

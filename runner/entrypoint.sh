@@ -27,6 +27,8 @@ VM_SECURE_BOOT="${VM_SECURE_BOOT:-auto}"
 AUTO_BOOT_ISO_KEYPRESS="${AUTO_BOOT_ISO_KEYPRESS:-auto}"
 AUTO_BOOT_KEYPRESS_COUNT="${AUTO_BOOT_KEYPRESS_COUNT:-15}"
 AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS="${AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS:-1}"
+UEFI_MARKER_SCAN_MAX_BYTES="${UEFI_MARKER_SCAN_MAX_BYTES:-67108864}"
+UEFI_FALLBACK_TO_BIOS_ON_NO_MARKER="${UEFI_FALLBACK_TO_BIOS_ON_NO_MARKER:-false}"
 USE_VIRTUAL_TPM="0"
 USE_SECURE_BOOT="0"
 ENABLE_AUTO_BOOT_KEYPRESS="0"
@@ -50,6 +52,18 @@ is_enabled_flag() {
       ;;
     *)
       echo "0"
+      ;;
+  esac
+}
+
+is_true_flag() {
+  local raw="${1:-}"
+  case "${raw,,}" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
       ;;
   esac
 }
@@ -131,10 +145,17 @@ send_initial_boot_keypresses() {
 
 iso_supports_uefi_boot() {
   local iso_path="$1"
-  python3 - "$iso_path" <<'PY'
+  local max_scan_bytes="${UEFI_MARKER_SCAN_MAX_BYTES}"
+  python3 - "$iso_path" "$max_scan_bytes" <<'PY'
 import sys
 
 path = sys.argv[1]
+try:
+    max_scan = int(sys.argv[2]) if len(sys.argv) > 2 else 67_108_864
+except Exception:
+    max_scan = 67_108_864
+if max_scan < 1:
+    max_scan = 67_108_864
 markers = (
     b"BOOTX64.EFI",
     b"BOOTIA32.EFI",
@@ -145,17 +166,19 @@ markers = (
 )
 chunk_size = 4 * 1024 * 1024
 tail = b""
+scanned = 0
 try:
     with open(path, "rb", buffering=0) as handle:
-        while True:
-            chunk = handle.read(chunk_size)
+        while scanned < max_scan:
+            chunk = handle.read(min(chunk_size, max_scan - scanned))
             if not chunk:
                 break
+            scanned += len(chunk)
             blob = tail + chunk
             if any(marker in blob for marker in markers):
                 print("1")
                 raise SystemExit(0)
-            tail = blob[-128:]
+            tail = blob[-256:]
 except Exception:
     pass
 print("0")
@@ -247,11 +270,17 @@ if [[ -n "$BOOT_ISO" && "${EFI_ENABLED,,}" == "true" ]]; then
     exit 1
   fi
   if [[ "$(iso_supports_uefi_boot "$BOOT_ISO")" != "1" ]]; then
-    echo "BOOT_ISO appears BIOS-only; disabling EFI for this launch."
-    if [[ "$USE_SECURE_BOOT" == "1" ]]; then
-      echo "Windows secure boot requirements will not be met with a BIOS-only ISO." >&2
+    if [[ "${OS_TYPE,,}" == "windows" ]]; then
+      echo "UEFI markers were not detected within scan limit; keeping EFI enabled for Windows installer media."
+    elif is_true_flag "$UEFI_FALLBACK_TO_BIOS_ON_NO_MARKER"; then
+      echo "BOOT_ISO appears BIOS-only; disabling EFI for this launch."
+      if [[ "$USE_SECURE_BOOT" == "1" ]]; then
+        echo "Windows secure boot requirements will not be met with a BIOS-only ISO." >&2
+      fi
+      EFI_ENABLED="false"
+    else
+      echo "UEFI markers were not detected within scan limit; keeping EFI setting unchanged."
     fi
-    EFI_ENABLED="false"
   fi
 fi
 
