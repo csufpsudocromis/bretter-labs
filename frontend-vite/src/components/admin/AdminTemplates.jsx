@@ -51,8 +51,10 @@ const AdminTemplates = () => {
         api.get("/admin/template-namespaces"),
         api.get("/auth/me"),
       ]);
-      setTemplates(tmplRes.data);
-      setImages(imgRes.data);
+      const templateRows = Array.isArray(tmplRes?.data) ? tmplRes.data : [];
+      const imageRows = Array.isArray(imgRes?.data) ? imgRes.data : [];
+      setTemplates(templateRows);
+      setImages(imageRows);
       const options = Array.isArray(nsRes.data)
         ? [
             ...new Set(
@@ -67,6 +69,11 @@ const AdminTemplates = () => {
           ]
         : [];
       setNamespaceOptions(options);
+      if (!Array.isArray(tmplRes?.data) || !Array.isArray(imgRes?.data)) {
+        setMessage("Template data reloaded with fallback defaults due to an unexpected API response.");
+      } else {
+        setMessage("");
+      }
       const permissions = Array.isArray(meRes?.data?.permissions)
         ? meRes.data.permissions
             .map((entry) =>
@@ -149,7 +156,10 @@ const AdminTemplates = () => {
     }
   };
 
-  const imageName = (id) => images.find((img) => img.id === id)?.name || "Image";
+  const imageName = (id) => {
+    if (!Array.isArray(images)) return "Image";
+    return images.find((img) => img.id === id)?.name || "Image";
+  };
 
   const startEdit = (tmpl) => {
     setEditingId(tmpl.id);
@@ -223,6 +233,10 @@ const AdminTemplates = () => {
   const canEditTemplateEnabled = (sharedCatalog) =>
     canManageTemplateEnableState && (isPlatformAdmin || !Boolean(sharedCatalog));
 
+  const templateRows = Array.isArray(templates) ? templates : [];
+  const imageRows = Array.isArray(images) ? images : [];
+  const namespaceRows = Array.isArray(namespaceOptions) ? namespaceOptions : [];
+
   return (
     <div>
       <h2>Templates</h2>
@@ -255,7 +269,7 @@ const AdminTemplates = () => {
               Image
               <select value={form.image_id} onChange={(e) => setForm({ ...form, image_id: e.target.value })}>
                 <option value="">Select image</option>
-                {images.map((img) => (
+                {imageRows.map((img) => (
                   <option key={img.id} value={img.id}>
                     {img.name}
                   </option>
@@ -342,8 +356,8 @@ const AdminTemplates = () => {
             <label>
               Enabled namespaces
               <div className="namespace-scope-list">
-                {namespaceOptions.length === 0 && <div className="muted small">No namespace options available.</div>}
-                {namespaceOptions.map((namespace) => (
+                {namespaceRows.length === 0 && <div className="muted small">No namespace options available.</div>}
+                {namespaceRows.map((namespace) => (
                   <label key={namespace} className="permission-row">
                     <input
                       type="checkbox"
@@ -437,8 +451,8 @@ const AdminTemplates = () => {
         <div>
           <h3>Existing templates</h3>
           <div className="tile-grid">
-            {templates.length === 0 && <div className="muted">No templates yet.</div>}
-            {templates.map((t) => (
+            {templateRows.length === 0 && <div className="muted">No templates yet.</div>}
+            {templateRows.map((t) => (
               <div key={t.id} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{t.name}</h4>
