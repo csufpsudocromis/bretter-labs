@@ -26,6 +26,7 @@ const AdminImages = () => {
   const [editSharedCatalog, setEditSharedCatalog] = useState(false);
   const [editDefaultCpuCores, setEditDefaultCpuCores] = useState(2);
   const [editDefaultRamMb, setEditDefaultRamMb] = useState(4096);
+  const [editUpdateIsoImageId, setEditUpdateIsoImageId] = useState("");
   const [creatingImage, setCreatingImage] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createIsoId, setCreateIsoId] = useState("");
@@ -250,6 +251,7 @@ const AdminImages = () => {
     setEditSharedCatalog(Boolean(img.shared_catalog));
     setEditDefaultCpuCores(Math.max(1, Number(img.update_cpu_cores_default || 2)));
     setEditDefaultRamMb(Math.max(512, Number(img.update_ram_mb_default || 4096)));
+    setEditUpdateIsoImageId(String(img.installer_iso_id || ""));
   };
 
   const saveEdit = async () => {
@@ -259,6 +261,7 @@ const AdminImages = () => {
         filename: editFilename,
         update_cpu_cores_default: Math.max(1, Number(editDefaultCpuCores || 2)),
         update_ram_mb_default: Math.max(512, Number(editDefaultRamMb || 4096)),
+        update_iso_image_id: String(editUpdateIsoImageId || ""),
       };
       if (isPlatformAdmin) {
         payload.shared_catalog = Boolean(editSharedCatalog);
@@ -279,6 +282,7 @@ const AdminImages = () => {
     setEditSharedCatalog(false);
     setEditDefaultCpuCores(2);
     setEditDefaultRamMb(4096);
+    setEditUpdateIsoImageId("");
   };
 
   const createFromIso = async () => {
@@ -394,6 +398,20 @@ const AdminImages = () => {
                     onChange={(event) => setEditDefaultRamMb(Number(event.target.value || 4096))}
                   />
                 </label>
+                <label>
+                  Mount ISO as CD (update VM)
+                  <select
+                    value={editUpdateIsoImageId}
+                    onChange={(event) => setEditUpdateIsoImageId(event.target.value)}
+                  >
+                    <option value="">None</option>
+                    {isoImages.map((row) => (
+                      <option key={row.id} value={row.id}>
+                        {row.name} ({formatGiB(row.size_bytes)})
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {isPlatformAdmin && (
                   <label>
                     Catalog scope
@@ -415,84 +433,88 @@ const AdminImages = () => {
               </div>
             </>
           )}
-          <hr />
-          <h3>Create Image</h3>
-          <label>
-            Name
-            <input
-              value={createName}
-              onChange={(event) => setCreateName(event.target.value)}
-              placeholder="Windows 11 Golden"
-            />
-          </label>
-          <label>
-            Boot ISO
-            <select value={createIsoId} onChange={(event) => setCreateIsoId(event.target.value)}>
-              <option value="">Select ISO</option>
-              {isoImages.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.name} ({formatGiB(row.size_bytes)})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            OS type
-            <select value={createOsType} onChange={(event) => setCreateOsType(event.target.value)}>
-              <option value="windows">Windows</option>
-              <option value="linux">Linux</option>
-            </select>
-          </label>
-          <label>
-            Drive size (GiB)
-            <input
-              type="number"
-              min={10}
-              max={1024}
-              value={createDriveSizeGiB}
-              onChange={(event) => setCreateDriveSizeGiB(Number(event.target.value || 64))}
-            />
-          </label>
-          <label>
-            Default CPU cores
-            <input
-              type="number"
-              min={1}
-              max={16}
-              value={createDefaultCpuCores}
-              onChange={(event) => setCreateDefaultCpuCores(Number(event.target.value || 2))}
-            />
-          </label>
-          <label>
-            Default RAM (MiB)
-            <input
-              type="number"
-              min={512}
-              max={65536}
-              step={256}
-              value={createDefaultRamMb}
-              onChange={(event) => setCreateDefaultRamMb(Number(event.target.value || 4096))}
-            />
-          </label>
-          {isPlatformAdmin && (
-            <label>
-              Catalog scope
-              <select
-                value={createSharedCatalog ? "shared" : "namespace"}
-                onChange={(event) => setCreateSharedCatalog(event.target.value === "shared")}
-              >
-                <option value="namespace">Namespace-owned</option>
-                <option value="shared">Shared (cross-namespace)</option>
-              </select>
-            </label>
+          {!editId && (
+            <>
+              <hr />
+              <h3>Create Image</h3>
+              <label>
+                Name
+                <input
+                  value={createName}
+                  onChange={(event) => setCreateName(event.target.value)}
+                  placeholder="Windows 11 Golden"
+                />
+              </label>
+              <label>
+                Boot ISO
+                <select value={createIsoId} onChange={(event) => setCreateIsoId(event.target.value)}>
+                  <option value="">Select ISO</option>
+                  {isoImages.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.name} ({formatGiB(row.size_bytes)})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                OS type
+                <select value={createOsType} onChange={(event) => setCreateOsType(event.target.value)}>
+                  <option value="windows">Windows</option>
+                  <option value="linux">Linux</option>
+                </select>
+              </label>
+              <label>
+                Drive size (GiB)
+                <input
+                  type="number"
+                  min={10}
+                  max={1024}
+                  value={createDriveSizeGiB}
+                  onChange={(event) => setCreateDriveSizeGiB(Number(event.target.value || 64))}
+                />
+              </label>
+              <label>
+                Default CPU cores
+                <input
+                  type="number"
+                  min={1}
+                  max={16}
+                  value={createDefaultCpuCores}
+                  onChange={(event) => setCreateDefaultCpuCores(Number(event.target.value || 2))}
+                />
+              </label>
+              <label>
+                Default RAM (MiB)
+                <input
+                  type="number"
+                  min={512}
+                  max={65536}
+                  step={256}
+                  value={createDefaultRamMb}
+                  onChange={(event) => setCreateDefaultRamMb(Number(event.target.value || 4096))}
+                />
+              </label>
+              {isPlatformAdmin && (
+                <label>
+                  Catalog scope
+                  <select
+                    value={createSharedCatalog ? "shared" : "namespace"}
+                    onChange={(event) => setCreateSharedCatalog(event.target.value === "shared")}
+                  >
+                    <option value="namespace">Namespace-owned</option>
+                    <option value="shared">Shared (cross-namespace)</option>
+                  </select>
+                </label>
+              )}
+              <button onClick={createFromIso} disabled={creatingImage || !createName.trim() || !createIsoId}>
+                {creatingImage ? "Creating..." : "Create Image"}
+              </button>
+              <p className="muted small">
+                Scratch image creation clones a blank disk, injects installer ISO media, and can then be launched for
+                update.
+              </p>
+            </>
           )}
-          <button onClick={createFromIso} disabled={creatingImage || !createName.trim() || !createIsoId}>
-            {creatingImage ? "Creating..." : "Create Image"}
-          </button>
-          <p className="muted small">
-            Scratch image creation clones a blank disk, injects installer ISO media, and can then be launched for
-            update.
-          </p>
         </div>
         <div>
           <h3>Golden Images</h3>

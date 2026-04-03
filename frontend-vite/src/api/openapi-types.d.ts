@@ -2486,6 +2486,8 @@ export interface components {
             skip_validation: boolean;
             /** Update Cpu Cores Default */
             update_cpu_cores_default?: number | null;
+            /** Update Iso Image Id */
+            update_iso_image_id?: string | null;
             /** Update Ram Mb Default */
             update_ram_mb_default?: number | null;
         };

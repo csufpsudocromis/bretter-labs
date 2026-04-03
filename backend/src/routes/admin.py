@@ -4137,6 +4137,7 @@ class ImageRename(BaseModel):
     shared_catalog: bool | None = None
     update_cpu_cores_default: int | None = Field(default=None, ge=1, le=16)
     update_ram_mb_default: int | None = Field(default=None, ge=512, le=65536)
+    update_iso_image_id: str | None = Field(default=None, max_length=64)
     skip_validation: bool = False
 
 
@@ -6365,6 +6366,36 @@ def rename_image(
     ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="filename already exists")
+    if payload.update_iso_image_id is not None:
+        requested_iso_image_id = str(payload.update_iso_image_id).strip()
+        if not requested_iso_image_id:
+            record.installer_iso_id = None
+            record.installer_iso_filename = None
+        else:
+            image_namespace = _record_namespace(record)
+            iso_record = session.get(IsoImage, requested_iso_image_id)
+            if not iso_record or not _record_visible_for_actor(iso_record, actor, requested_namespace=image_namespace):
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ISO image not found")
+            if not record.source_pvc:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="image is not ready for clone-based launch; re-import or re-upload the image",
+                )
+            try:
+                iso_rel_path = str(
+                    (_iso_dir().resolve().relative_to(_image_dir().resolve()) / iso_record.filename).as_posix()
+                )
+            except Exception:
+                iso_rel_path = f"{Path(settings.iso_storage_root).name}/{iso_record.filename}"
+            installer_iso_filename = f"installer-{iso_record.id[:8]}-{Path(iso_record.filename).name}"
+            _copy_pvc_path_to_pvc(
+                source_claim=settings.kube_image_pvc,
+                source_relative_path=iso_rel_path,
+                target_claim=record.source_pvc,
+                target_filename=installer_iso_filename,
+            )
+            record.installer_iso_id = iso_record.id
+            record.installer_iso_filename = installer_iso_filename
 
     src_path = _image_dir() / record.filename
     dst_path = _image_dir() / new_filename
@@ -6405,7 +6436,10 @@ def rename_image(
         action="update",
         target_type="image",
         target_id=record.id,
-        detail=f"namespace={_record_namespace(record)} name={record.name} filename={record.filename}",
+        detail=(
+            f"namespace={_record_namespace(record)} name={record.name} filename={record.filename} "
+            f"installer_iso_id={str(getattr(record, 'installer_iso_id', '') or '').strip()}"
+        ),
     )
     session.commit()
     session.refresh(record)

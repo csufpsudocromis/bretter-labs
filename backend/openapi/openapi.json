@@ -2204,6 +2204,18 @@
             ],
             "title": "Update Cpu Cores Default"
           },
+          "update_iso_image_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Update Iso Image Id"
+          },
           "update_ram_mb_default": {
             "anyOf": [
               {
