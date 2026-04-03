@@ -23,6 +23,7 @@ RUN apt-get update && \
       qemu-system-x86 \
       qemu-utils \
       swtpm \
+      socat \
       websockify \
       novnc \
       spice-html5 \

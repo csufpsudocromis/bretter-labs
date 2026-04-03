@@ -24,11 +24,16 @@ BOOT_ORDER="${BOOT_ORDER:-c}"
 TAP_EGRESS_IF=""
 VM_TPM_ENABLED="${VM_TPM_ENABLED:-auto}"
 VM_SECURE_BOOT="${VM_SECURE_BOOT:-auto}"
+AUTO_BOOT_ISO_KEYPRESS="${AUTO_BOOT_ISO_KEYPRESS:-auto}"
+AUTO_BOOT_KEYPRESS_COUNT="${AUTO_BOOT_KEYPRESS_COUNT:-15}"
+AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS="${AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS:-1}"
 USE_VIRTUAL_TPM="0"
 USE_SECURE_BOOT="0"
+ENABLE_AUTO_BOOT_KEYPRESS="0"
 TPM_SOCKET_DIR="/tmp/swtpm"
 TPM_STATE_DIR="/tmp/swtpm-state"
 TPM_SOCKET_PATH="${TPM_SOCKET_DIR}/swtpm-sock"
+QEMU_MONITOR_SOCKET="/tmp/qemu-monitor.sock"
 
 is_enabled_flag() {
   local raw="${1:-}"
@@ -62,6 +67,66 @@ start_virtual_tpm() {
     --ctrl "type=unixio,path=${TPM_SOCKET_PATH}" \
     --tpmstate "dir=${TPM_STATE_DIR}" \
     --log level=20
+}
+
+should_auto_boot_iso_keypress() {
+  local raw="${AUTO_BOOT_ISO_KEYPRESS,,}"
+  case "$raw" in
+    1|true|yes|on)
+      return 0
+      ;;
+    0|false|no|off)
+      return 1
+      ;;
+    auto|"")
+      if [[ "${OS_TYPE,,}" != "windows" ]]; then
+        return 1
+      fi
+      if [[ -z "$BOOT_ISO" ]]; then
+        return 1
+      fi
+      if [[ "${BOOT_ORDER,,}" != *d* ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+send_initial_boot_keypresses() {
+  if ! command -v socat >/dev/null 2>&1; then
+    echo "socat is unavailable; skipping auto keypress."
+    return 0
+  fi
+  local attempts="${AUTO_BOOT_KEYPRESS_COUNT}"
+  local interval="${AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS}"
+  if ! [[ "$attempts" =~ ^[0-9]+$ ]] || (( attempts < 1 )); then
+    attempts=15
+  fi
+  if ! [[ "$interval" =~ ^[0-9]+$ ]] || (( interval < 1 )); then
+    interval=1
+  fi
+  local _wait
+  for _wait in $(seq 1 30); do
+    if [[ -S "$QEMU_MONITOR_SOCKET" ]]; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ ! -S "$QEMU_MONITOR_SOCKET" ]]; then
+    echo "QEMU monitor socket unavailable; skipping auto keypress."
+    return 0
+  fi
+  echo "Auto-sending keypresses to pass ISO boot prompt (${attempts} attempts)."
+  local _try
+  for _try in $(seq 1 "$attempts"); do
+    printf 'sendkey spc\n' | socat - UNIX-CONNECT:"$QEMU_MONITOR_SOCKET" >/dev/null 2>&1 || true
+    printf 'sendkey ret\n' | socat - UNIX-CONNECT:"$QEMU_MONITOR_SOCKET" >/dev/null 2>&1 || true
+    sleep "$interval"
+  done
 }
 
 iso_supports_uefi_boot() {
@@ -410,6 +475,12 @@ if [[ "$USE_VIRTUAL_TPM" == "1" ]]; then
   fi
 fi
 
+if should_auto_boot_iso_keypress; then
+  ENABLE_AUTO_BOOT_KEYPRESS="1"
+  rm -f "$QEMU_MONITOR_SOCKET"
+  QEMU_ARGS+=(-monitor "unix:${QEMU_MONITOR_SOCKET},server,nowait")
+fi
+
 QEMU_ARGS+=(
   -machine "${MACHINE_TYPE}"
   -cpu "${CPU_MODEL}"
@@ -556,4 +627,9 @@ if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" ]]; then
 fi
 echo "Disk format: ${DISK_FORMAT}"
 echo "VM networking: backend=${VM_NET_BACKEND}, queues=${VM_NET_QUEUES}, vhost_net=${VM_VHOST_NET_ENABLED}"
-exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
+qemu-system-x86_64 "${QEMU_ARGS[@]}" &
+QEMU_PID="$!"
+if [[ "$ENABLE_AUTO_BOOT_KEYPRESS" == "1" ]]; then
+  send_initial_boot_keypresses &
+fi
+wait "$QEMU_PID"
