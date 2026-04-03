@@ -1237,8 +1237,12 @@ def test_vm_connect_token_uses_spice_embed_for_spice_templates(login_user: TestC
     assert "password=" in connect_url
 
 
-def test_vm_connect_token_uses_vnc_console_for_guacamole_templates(login_user: TestClient):
+def test_vm_connect_token_uses_vnc_console_for_guacamole_templates(login_user: TestClient, monkeypatch):
     _seed_vm_template(console_provider="guacamole")
+    monkeypatch.setattr(
+        "src.routes.user._vm_vnc_ready_status",
+        lambda _instance_id, _namespace=None: (True, "VM is running."),
+    )
 
     started = login_user.post("/user/templates/tmpl-vm-1/start")
     assert started.status_code == 201, started.text
@@ -1788,6 +1792,55 @@ def test_container_connect_tokens_are_one_time_and_not_url_based(login_user: Tes
         replay = replay_client.get(f"/user/containers/{container_id}/connect/__blabs_idle_bridge.js")
         assert replay.status_code == 401
         assert "invalid connect token" in replay.text.lower()
+
+
+def test_vm_connect_token_waits_for_guacamole_vnc_readiness(login_user: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-vm-vnc-ready-check",
+                name="VM VNC Ready Check",
+                filename="vnc-ready-check.qcow2",
+                checksum="sha256:vnc-ready-check",
+                size_bytes=1024,
+                source_pvc="golden-images-vm",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-vm-vnc-ready-check",
+                name="VM VNC Ready Check",
+                description="guacamole vnc readiness",
+                os_type="windows",
+                image_id="img-vm-vnc-ready-check",
+                cpu_cores=2,
+                ram_mb=4096,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="guacamole",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-vnc-ready-check",
+                template_id="tmpl-vm-vnc-ready-check",
+                owner="alice",
+                status="running",
+                namespace="labs",
+                console_url="https://example.invalid/vnc.html",
+            )
+        )
+        session.commit()
+
+    monkeypatch.setattr(
+        "src.routes.user._vm_vnc_ready_status",
+        lambda instance_id, namespace: (False, "VM process started; waiting for console service."),
+    )
+    denied = login_user.post("/user/pods/vm-vnc-ready-check/connect-token")
+    assert denied.status_code == 409, denied.text
+    assert denied.json()["detail"] == "VM process started; waiting for console service."
 
 
 def test_admin_can_upload_and_serve_local_login_background(login_admin: TestClient):

@@ -330,19 +330,34 @@ const AdminImages = () => {
       };
       const res = await api.post(`/admin/images/${img.id}/launch-update`, payload);
       const instance = res?.data || {};
+      const waitFor = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      const connectDeadline = Date.now() + 180000;
+      let connectUrl = String(instance.console_url || "").trim();
       if (instance?.id) {
-        const tokenRes = await api.post(`/user/pods/${instance.id}/connect-token`);
-        const connectUrl =
-          String(tokenRes?.data?.connect_url || "").trim() || String(instance.console_url || "").trim();
-        if (connectUrl) {
-          window.open(connectUrl, "_blank", "noopener,noreferrer");
+        while (Date.now() < connectDeadline) {
+          try {
+            const tokenRes = await api.post(`/user/pods/${instance.id}/connect-token`);
+            connectUrl = String(tokenRes?.data?.connect_url || "").trim() || connectUrl;
+            if (connectUrl) {
+              break;
+            }
+          } catch (tokenErr) {
+            const waitable = Number(tokenErr?.response?.status || 0) === 409;
+            if (!waitable) {
+              throw tokenErr;
+            }
+          }
+          await waitFor(2000);
         }
-      } else if (instance?.console_url) {
-        window.open(instance.console_url, "_blank", "noopener,noreferrer");
+      }
+      if (connectUrl) {
+        window.open(connectUrl, "_blank", "noopener,noreferrer");
+      } else {
+        throw new Error("VM console is still starting. Try again in a few moments.");
       }
       setMessage(`Update VM started (${String(instance.id || "").slice(0, 8)})`);
     } catch (err) {
-      setError(err.response?.data?.detail || "Failed to launch update VM");
+      setError(err.response?.data?.detail || err.message || "Failed to launch update VM");
     } finally {
       setLaunchingImageId("");
     }

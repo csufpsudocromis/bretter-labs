@@ -659,6 +659,28 @@ def _vm_rdp_ready_status(instance_id: str, namespace: str) -> tuple[bool, str]:
     return False, "VM process started; waiting for RDP service."
 
 
+def _vm_vnc_ready_status(instance_id: str, namespace: str) -> tuple[bool, str]:
+    upstream_host = _vm_service_host(instance_id, namespace)
+    for scheme in _vm_http_schemes():
+        upstream_url = f"{scheme}://{upstream_host}:6080/vnc.html"
+        verify_tls = scheme != "https"
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", InsecureRequestWarning)
+                response = requests.get(
+                    upstream_url,
+                    timeout=_VM_RDP_READY_TIMEOUT_SECONDS,
+                    verify=verify_tls,
+                )
+            if scheme == "http" and _upstream_requires_https(response):
+                continue
+            if response.status_code == 200:
+                return True, "VM is running."
+        except requests.RequestException:
+            continue
+    return False, "VM process started; waiting for console service."
+
+
 def _extract_spice_password(console_url: str | None) -> str:
     raw = str(console_url or "").strip()
     if not raw:
@@ -1090,6 +1112,10 @@ def issue_vm_connect_token(
     console_provider = normalize_vm_console_provider(
         getattr(template, "console_provider", _console_provider_from_url(record.console_url))
     )
+    if console_provider == "guacamole":
+        vnc_ready, vnc_detail = _vm_vnc_ready_status(record.id, instance_namespace)
+        if not vnc_ready:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=vnc_detail)
     if console_provider == "guacamole_rdp":
         rdp_ready, rdp_detail = _vm_rdp_ready_status(record.id, instance_namespace)
         if not rdp_ready:
