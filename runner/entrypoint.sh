@@ -23,6 +23,32 @@ BOOT_ISO="${BOOT_ISO:-}"
 BOOT_ORDER="${BOOT_ORDER:-c}"
 TAP_EGRESS_IF=""
 
+iso_supports_uefi_boot() {
+  local iso_path="$1"
+  python3 - "$iso_path" <<'PY'
+import sys
+
+path = sys.argv[1]
+markers = (b"BOOTX64.EFI", b"BOOTIA32.EFI", b"EFI/BOOT")
+chunk_size = 4 * 1024 * 1024
+tail = b""
+try:
+    with open(path, "rb", buffering=0) as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            blob = tail + chunk
+            if any(marker in blob for marker in markers):
+                print("1")
+                raise SystemExit(0)
+            tail = blob[-128:]
+except Exception:
+    pass
+print("0")
+PY
+}
+
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -93,6 +119,17 @@ if [[ "$CONSOLE_PROVIDER" == "guacamole_rdp" && "${VM_NET_BACKEND,,}" != "user" 
 fi
 if [[ "$CONSOLE_PROVIDER" != "spice" && "${VGA_TYPE}" == "qxl" ]]; then
   VGA_TYPE="std"
+fi
+
+if [[ -n "$BOOT_ISO" && "${EFI_ENABLED,,}" == "true" ]]; then
+  if [[ ! -f "$BOOT_ISO" ]]; then
+    echo "Boot ISO not found: $BOOT_ISO" >&2
+    exit 1
+  fi
+  if [[ "$(iso_supports_uefi_boot "$BOOT_ISO")" != "1" ]]; then
+    echo "BOOT_ISO appears BIOS-only; disabling EFI for this launch."
+    EFI_ENABLED="false"
+  fi
 fi
 
 # Detect actual disk format from image metadata.
