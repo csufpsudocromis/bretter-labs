@@ -1864,6 +1864,52 @@ def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_ad
     assert req.instance_disk_pvc == "img-src-update-bootorder-check-1"
 
 
+def test_user_vm_launch_with_img_update_prefix_template_still_uses_isolated_disk(login_user: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-user-update-prefix-check-1",
+                name="Windows 11",
+                filename="windows-11-user-prefix.qcow2",
+                checksum="sha256:img-user-update-prefix-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-user-update-prefix-check-1",
+            )
+        )
+        session.add(
+            Template(
+                id="img-update-user-prefix-check-1",
+                name="User Windows Template",
+                description="Regular user template",
+                os_type="windows",
+                image_id="img-user-update-prefix-check-1",
+                cpu_cores=2,
+                ram_mb=4096,
+                auto_delete_minutes=60,
+                idle_timeout_minutes=30,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.commit()
+
+    captured = {}
+
+    def _create_pod(req):
+        captured["req"] = req
+        return PodStatus(instance_id=req.instance_id, phase="pending", disk_pvc=f"pvc-{req.instance_id[:8]}")
+
+    monkeypatch.setattr(kube, "create_pod", _create_pod)
+
+    launched = login_user.post("/user/templates/img-update-user-prefix-check-1/start")
+    assert launched.status_code == 201, launched.text
+    req = captured.get("req")
+    assert req is not None
+    assert req.image_source_pvc == "img-src-user-update-prefix-check-1"
+    assert req.instance_disk_pvc is None
+
+
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):
     _seed_vm_template()
     _seed_container_template()

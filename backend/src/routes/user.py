@@ -623,14 +623,23 @@ def _vm_boot_order_for_launch(template: Template, image: Image) -> str | None:
     if _image_installer_iso_filename(image):
         # Image update sessions should always boot installer media first when present,
         # even for uploaded images that were later attached to an update ISO.
-        template_id = str(getattr(template, "id", "") or "").strip().lower()
-        if template_id.startswith("img-update-"):
+        if _is_system_image_update_template(template):
             return "dc"
     return _image_boot_order(image)
 
 
-def _is_image_update_template_id(template_id: str | None) -> bool:
-    return str(template_id or "").strip().lower().startswith("img-update-")
+_SYSTEM_IMAGE_UPDATE_TEMPLATE_ID_PREFIX = "img-update-"
+_SYSTEM_IMAGE_UPDATE_DESCRIPTION_PREFIX = "system-managed template for updating image "
+
+
+def _is_system_image_update_template(template: Template | None) -> bool:
+    if template is None:
+        return False
+    template_id = str(getattr(template, "id", "") or "").strip().lower()
+    if not template_id.startswith(_SYSTEM_IMAGE_UPDATE_TEMPLATE_ID_PREFIX):
+        return False
+    description = str(getattr(template, "description", "") or "").strip().lower()
+    return description.startswith(_SYSTEM_IMAGE_UPDATE_DESCRIPTION_PREFIX)
 
 
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
@@ -1688,7 +1697,7 @@ def start_vm(
     pod_status: PodStatus | None = None
     disk_pvc: str | None = None
     if use_legacy_orchestration:
-        use_source_pvc_direct = _is_image_update_template_id(template.id)
+        use_source_pvc_direct = _is_system_image_update_template(template)
         warm_pool_pvc: str | None = None
         instance_disk_pvc: str | None = None
         if use_source_pvc_direct:
@@ -1972,7 +1981,7 @@ def restart_vm(
     pod_status: PodStatus | None = None
     disk_pvc = record.disk_pvc
     if use_legacy_orchestration:
-        use_source_pvc_direct = _is_image_update_template_id(template.id)
+        use_source_pvc_direct = _is_system_image_update_template(template)
         # Ensure any old pod with the same name is removed before re-create.
         try:
             runtime_kube.delete_pod(
@@ -2116,7 +2125,7 @@ def delete_vm(
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
-        keep_disk = _is_image_update_template_id(record.template_id)
+        keep_disk = _is_system_image_update_template(template)
         try:
             runtime_kube.delete_pod(
                 instance_id,
