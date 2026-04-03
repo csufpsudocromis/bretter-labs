@@ -330,7 +330,14 @@ const AdminImages = () => {
       };
       const res = await api.post(`/admin/images/${img.id}/launch-update`, payload);
       const instance = res?.data || {};
-      if (instance?.console_url) {
+      if (instance?.id) {
+        const tokenRes = await api.post(`/user/pods/${instance.id}/connect-token`);
+        const connectUrl =
+          String(tokenRes?.data?.connect_url || "").trim() || String(instance.console_url || "").trim();
+        if (connectUrl) {
+          window.open(connectUrl, "_blank", "noopener,noreferrer");
+        }
+      } else if (instance?.console_url) {
         window.open(instance.console_url, "_blank", "noopener,noreferrer");
       }
       setMessage(`Update VM started (${String(instance.id || "").slice(0, 8)})`);
