@@ -78,6 +78,7 @@ kubectl -n labs-team-physics get networkpolicy
 
 - Keep tenant namespaces non-overlapping and deterministic.
 - Prefer namespace-scoped quota updates through `/admin/settings/namespaces`, GitOps/PR-reviewed YAML, or bootstrap script reruns.
+- Namespace picker/catalog endpoints intentionally expose only lab-managed namespaces (and actor-assigned scopes), not arbitrary cluster/system namespaces.
 - Keep cross-namespace connectivity blocked by default; add explicit allow rules only for required dependencies.
 - Use `scripts/namespace_config_backup.py` to export namespace policy/binding state before major changes.
 - Use `POST /admin/settings/namespaces/<namespace>/decommission` for ordered cleanup with status reporting.

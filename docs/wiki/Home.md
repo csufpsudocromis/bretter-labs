@@ -95,6 +95,7 @@ Reference pages:
 - Namespace-based scaling/quota controls in `/admin/settings/namespaces` (legacy aliases `/admin/scaling-quotas` and `/admin/team-quotas` still route to the same view)
 - Namespace switcher in the top header for scoped admin users (`/ns/<namespace>/...`)
 - Namespace directory at `/` shows launchable labs and running labs across assigned namespaces
+- Namespace selector/catalog APIs (`/admin/template-namespaces`, `/admin/quota-namespaces`) return lab-managed namespaces only and intentionally exclude unrelated system namespaces (`kube-*`, `default`, `cdi`, etc.)
 - Backend/frontend autoscaling controls via HPA (`*_HPA_MIN/MAX_REPLICAS`, CPU utilization targets) plus `UVICORN_WORKERS`
 - Default ingress NetworkPolicies with explicit app allow rules
 - Error log cap/rotation at 10MB with paging (50 entries/page)

@@ -79,6 +79,7 @@ _User view: launch feedback and in-browser connect workflow._
 ### User features
 
 - Launch labs from enabled VM and container templates
+- Namespace selector and root namespace directory show only assigned lab namespaces (system Kubernetes namespaces are hidden)
 - Staged runtime feedback (for example: Pending, Building, Starting, Running)
 - Browser connect for VM and container labs
 - Idle timeout behavior and cleanup automation

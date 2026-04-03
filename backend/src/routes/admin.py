@@ -131,7 +131,9 @@ from ..services.tenant_context import (
 from ..secret_codec import encrypt_secret, secret_is_configured
 from ..tables import (
     Config,
+    ContainerImage,
     ContainerInstance as ContainerInstanceTable,
+    ContainerTemplate,
     Image,
     IsoImage,
     ImageUploadTask,
@@ -4305,6 +4307,31 @@ def _canonical_namespace_quota_rows(rows: list[TeamQuota]) -> list[TeamQuota]:
     return [selected[name] for name in sorted(selected)]
 
 
+def _collect_known_lab_namespaces(session: Session) -> list[str]:
+    available: set[str] = set()
+    configured = normalize_namespace(settings.kube_namespace)
+    if configured:
+        available.add(configured)
+    namespace_queries = (
+        select(TeamQuota.namespace),
+        select(ManagedNamespace.namespace),
+        select(Template.namespace),
+        select(ContainerTemplate.namespace),
+        select(Image.namespace),
+        select(IsoImage.namespace),
+        select(ContainerImage.namespace),
+        select(Instance.namespace),
+        select(ContainerInstanceTable.namespace),
+        select(ImageUploadTask.namespace),
+    )
+    for stmt in namespace_queries:
+        for raw in session.exec(stmt).all():
+            normalized = normalize_namespace(raw)
+            if normalized:
+                available.add(normalized)
+    return sorted(available)
+
+
 @router.get(
     "/quota-namespaces",
     response_model=list[str],
@@ -4319,25 +4346,7 @@ def list_quota_namespaces(
         if scope:
             return scope
         return [normalize_namespace(tenant_namespace_for_team(actor.team))]
-    available: set[str] = set()
-    configured = normalize_namespace(settings.kube_namespace)
-    if configured:
-        available.add(configured)
-    rows = session.exec(select(TeamQuota.namespace)).all()
-    for row in rows:
-        available.add(normalize_namespace(row))
-    managed_rows = session.exec(select(ManagedNamespace.namespace)).all()
-    for row in managed_rows:
-        available.add(normalize_namespace(row))
-    try:
-        core = kube._client()
-        for ns in core.list_namespace().items:
-            name = normalize_namespace(getattr(ns.metadata, "name", None))
-            if name:
-                available.add(name)
-    except Exception as exc:
-        logger.warning("Failed to list namespaces for quota selector: %s", exc)
-    return sorted(available)
+    return _collect_known_lab_namespaces(session)
 
 
 @router.get(
@@ -4352,25 +4361,7 @@ def list_template_namespaces(
     scope = _namespace_scope_for_actor(actor)
     if scope is not None:
         return sorted(scope)
-    available: set[str] = set()
-    configured = normalize_namespace(settings.kube_namespace)
-    if configured:
-        available.add(configured)
-    quota_rows = session.exec(select(TeamQuota.namespace)).all()
-    for row in quota_rows:
-        available.add(normalize_namespace(row))
-    managed_rows = session.exec(select(ManagedNamespace.namespace)).all()
-    for row in managed_rows:
-        available.add(normalize_namespace(row))
-    try:
-        core = kube._client()
-        for ns in core.list_namespace().items:
-            name = normalize_namespace(getattr(ns.metadata, "name", None))
-            if name:
-                available.add(name)
-    except Exception as exc:
-        logger.warning("Failed to list namespaces for template selector: %s", exc)
-    return sorted(available)
+    return _collect_known_lab_namespaces(session)
 
 
 @router.get(
