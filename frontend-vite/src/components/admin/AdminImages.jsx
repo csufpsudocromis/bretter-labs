@@ -2,8 +2,15 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 import { api } from "../../api";
 
+const formatGiB = (value) => {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 GiB";
+  return `${(bytes / 1024 ** 3).toFixed(bytes >= 10 * 1024 ** 3 ? 0 : 1)} GiB`;
+};
+
 const AdminImages = () => {
   const [images, setImages] = useState([]);
+  const [isoImages, setIsoImages] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -17,11 +24,27 @@ const AdminImages = () => {
   const [editName, setEditName] = useState("");
   const [editFilename, setEditFilename] = useState("");
   const [editSharedCatalog, setEditSharedCatalog] = useState(false);
+  const [creatingImage, setCreatingImage] = useState(false);
+  const [createName, setCreateName] = useState("");
+  const [createIsoId, setCreateIsoId] = useState("");
+  const [createOsType, setCreateOsType] = useState("windows");
+  const [createDriveSizeGiB, setCreateDriveSizeGiB] = useState(64);
+  const [createSharedCatalog, setCreateSharedCatalog] = useState(false);
+  const [launchingImageId, setLaunchingImageId] = useState("");
 
   const load = async () => {
     try {
-      const [res, me] = await Promise.all([api.get("/admin/images"), api.get("/auth/me")]);
-      setImages(res.data);
+      const [res, isoRes, me] = await Promise.all([
+        api.get("/admin/images"),
+        api.get("/admin/iso-images"),
+        api.get("/auth/me"),
+      ]);
+      setImages(Array.isArray(res.data) ? res.data : []);
+      const isoRows = Array.isArray(isoRes.data) ? isoRes.data : [];
+      setIsoImages(isoRows);
+      if (!createIsoId && isoRows.length > 0) {
+        setCreateIsoId(String(isoRows[0].id || ""));
+      }
       setIsPlatformAdmin(
         String(me?.data?.role || "")
           .trim()
@@ -245,6 +268,57 @@ const AdminImages = () => {
     setEditSharedCatalog(false);
   };
 
+  const createFromIso = async () => {
+    if (!createName.trim() || !createIsoId) {
+      setError("Name and ISO are required");
+      return;
+    }
+    setCreatingImage(true);
+    setMessage("");
+    setError("");
+    try {
+      const payload = {
+        name: createName.trim(),
+        iso_image_id: createIsoId,
+        os_type: createOsType,
+        drive_size_gib: Math.max(10, Number(createDriveSizeGiB || 64)),
+        shared_catalog: isPlatformAdmin ? Boolean(createSharedCatalog) : false,
+      };
+      const res = await api.post("/admin/images/create-from-iso", payload);
+      const created = res?.data;
+      setMessage(`Created image ${created?.name || payload.name}`);
+      setCreateName("");
+      setCreateDriveSizeGiB(64);
+      setCreateSharedCatalog(false);
+      load();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to create image");
+    } finally {
+      setCreatingImage(false);
+    }
+  };
+
+  const launchForUpdate = async (img) => {
+    setLaunchingImageId(img.id);
+    setMessage("");
+    setError("");
+    try {
+      const payload = {
+        os_type: String(img.installer_os_type || createOsType || "windows"),
+      };
+      const res = await api.post(`/admin/images/${img.id}/launch-update`, payload);
+      const instance = res?.data || {};
+      if (instance?.console_url) {
+        window.open(instance.console_url, "_blank", "noopener,noreferrer");
+      }
+      setMessage(`Update VM started (${String(instance.id || "").slice(0, 8)})`);
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to launch update VM");
+    } finally {
+      setLaunchingImageId("");
+    }
+  };
+
   return (
     <div>
       <h2>Images</h2>
@@ -268,6 +342,63 @@ const AdminImages = () => {
             </p>
           )}
           <p className="muted small">Allowed: .vhd/.vhdx, .qcow/.qcow2, .vdi. QCOW is auto-converted to raw.</p>
+          <hr />
+          <h3>Create Image</h3>
+          <label>
+            Name
+            <input
+              value={createName}
+              onChange={(event) => setCreateName(event.target.value)}
+              placeholder="Windows 11 Golden"
+            />
+          </label>
+          <label>
+            Boot ISO
+            <select value={createIsoId} onChange={(event) => setCreateIsoId(event.target.value)}>
+              <option value="">Select ISO</option>
+              {isoImages.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.name} ({formatGiB(row.size_bytes)})
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            OS type
+            <select value={createOsType} onChange={(event) => setCreateOsType(event.target.value)}>
+              <option value="windows">Windows</option>
+              <option value="linux">Linux</option>
+            </select>
+          </label>
+          <label>
+            Drive size (GiB)
+            <input
+              type="number"
+              min={10}
+              max={1024}
+              value={createDriveSizeGiB}
+              onChange={(event) => setCreateDriveSizeGiB(Number(event.target.value || 64))}
+            />
+          </label>
+          {isPlatformAdmin && (
+            <label>
+              Catalog scope
+              <select
+                value={createSharedCatalog ? "shared" : "namespace"}
+                onChange={(event) => setCreateSharedCatalog(event.target.value === "shared")}
+              >
+                <option value="namespace">Namespace-owned</option>
+                <option value="shared">Shared (cross-namespace)</option>
+              </select>
+            </label>
+          )}
+          <button onClick={createFromIso} disabled={creatingImage || !createName.trim() || !createIsoId}>
+            {creatingImage ? "Creating..." : "Create Image"}
+          </button>
+          <p className="muted small">
+            Scratch image creation clones a blank disk, injects installer ISO media, and can then be launched for
+            update.
+          </p>
         </div>
         <div>
           <h3>Golden Images</h3>
@@ -277,7 +408,7 @@ const AdminImages = () => {
               <div key={img.id} className="tile template-tile">
                 <div className="tile-header">
                   <h4>{img.name}</h4>
-                  <span className="muted small">{Math.round(img.size_bytes / (1024 * 1024))} MB</span>
+                  <span className="muted small">{formatGiB(img.size_bytes)}</span>
                 </div>
                 {editId === img.id ? (
                   <div className="form">
@@ -310,12 +441,23 @@ const AdminImages = () => {
                   </div>
                 ) : (
                   <>
+                    <div className="muted small">{img.filename || "no filename"}</div>
                     <div className="muted small">
                       {img.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}
                     </div>
+                    <div className="muted small">
+                      Source: {img.source_kind || "uploaded"}
+                      {img.installer_iso_filename ? ` | ISO: ${img.installer_iso_filename}` : ""}
+                    </div>
                     <div className="actions">
                       <button className="ghost" onClick={() => startEdit(img)}>
-                        Rename
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => launchForUpdate(img)}
+                        disabled={Boolean(launchingImageId) && launchingImageId !== img.id}
+                      >
+                        {launchingImageId === img.id ? "Launching..." : "Launch update VM"}
                       </button>
                       <button className="danger" onClick={() => remove(img.id)}>
                         Delete

@@ -54,7 +54,24 @@ class Image(SQLModel, table=True):
     namespace: str = Field(default="labs", index=True)
     shared_catalog: bool = Field(default=False, index=True)
     cluster_id: str = Field(default="local", index=True)
+    source_kind: str = Field(default="uploaded", index=True)
+    installer_iso_id: Optional[str] = None
+    installer_iso_filename: Optional[str] = None
+    installer_os_type: Optional[str] = None
+    installer_disk_size_gib: Optional[int] = None
     source_pvc: Optional[str] = None
+    checksum: str
+    size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))
+    created_at: datetime = Field(default_factory=utc_now)
+
+
+class IsoImage(SQLModel, table=True):
+    id: str = Field(primary_key=True, index=True)
+    name: str
+    filename: str
+    tenant: str = Field(default="global", index=True)
+    namespace: str = Field(default="labs", index=True)
+    shared_catalog: bool = Field(default=False, index=True)
     checksum: str
     size_bytes: int = Field(sa_column=Column(BigInteger, nullable=False))
     created_at: datetime = Field(default_factory=utc_now)

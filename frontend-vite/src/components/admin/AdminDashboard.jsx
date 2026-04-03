@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 const tiles = [
   { title: "VM Templates", description: "Create and enable VM templates", to: "/admin/templates" },
   { title: "VM Images", description: "Upload and manage VM images", to: "/admin/images" },
+  { title: "ISO Images", description: "Upload installer ISOs for scratch image creation", to: "/admin/iso-images" },
   { title: "Container Images", description: "Register container images", to: "/admin/container-images" },
   {
     title: "Operations",

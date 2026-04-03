@@ -17,6 +17,7 @@ APP_TABLES: set[str] = {
     "containerinstance",
     "containertemplate",
     "image",
+    "isoimage",
     "imageuploadtask",
     "instance",
     "oidcloginstate",

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     per_user_vm_limit: int = 2
     idle_timeout_minutes: int = 30
     storage_root: str = "/mnt/lab-images"
+    iso_storage_root: str = "/mnt/lab-images/iso-images"
     database_path: str = "backend/data/app.db"
     database_url: str = ""
     database_pool_size: int = 20

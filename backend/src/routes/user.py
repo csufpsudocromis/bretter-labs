@@ -607,6 +607,18 @@ def _image_shared_catalog(record: Image) -> bool:
     return bool(getattr(record, "shared_catalog", False))
 
 
+def _image_installer_iso_filename(record: Image) -> str:
+    return str(getattr(record, "installer_iso_filename", "") or "").strip()
+
+
+def _image_boot_order(record: Image) -> str | None:
+    source_kind = str(getattr(record, "source_kind", "") or "").strip().lower()
+    if _image_installer_iso_filename(record) and source_kind == "scratch":
+        # Boot installer media first for scratch-built images.
+        return "dc"
+    return None
+
+
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
     try:
         return kube_service_for_cluster(session, cluster_id)
@@ -1657,6 +1669,8 @@ def start_vm(
             spice_password=(spice_password or None),
             rdp_default_username=rdp_default_username,
             rdp_default_password=rdp_default_password,
+            installer_iso_filename=_image_installer_iso_filename(image) or None,
+            boot_order=_image_boot_order(image),
             namespace=runtime_namespace,
         )
         try:
@@ -1938,6 +1952,8 @@ def restart_vm(
             spice_password=(spice_password or None),
             rdp_default_username=rdp_default_username,
             rdp_default_password=rdp_default_password,
+            installer_iso_filename=_image_installer_iso_filename(image) or None,
+            boot_order=_image_boot_order(image),
             namespace=runtime_namespace,
         )
         try:

@@ -248,6 +248,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/images/create-from-iso": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Image From Iso */
+        post: operations["create_image_from_iso_admin_images_create_from_iso_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/images/direct-upload/start": {
         parameters: {
             query?: never;
@@ -315,6 +332,59 @@ export interface paths {
         head?: never;
         /** Rename Image */
         patch: operations["rename_image_admin_images__image_id__patch"];
+        trace?: never;
+    };
+    "/admin/images/{image_id}/launch-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Launch Image Update Vm */
+        post: operations["launch_image_update_vm_admin_images__image_id__launch_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/iso-images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Iso Images */
+        get: operations["list_iso_images_admin_iso_images_get"];
+        put?: never;
+        /** Upload Iso Image */
+        post: operations["upload_iso_image_admin_iso_images_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/iso-images/{iso_image_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Iso Image */
+        delete: operations["delete_iso_image_admin_iso_images__iso_image_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Iso Image */
+        patch: operations["update_iso_image_admin_iso_images__iso_image_id__patch"];
         trace?: never;
     };
     "/admin/operations/launch-tasks": {
@@ -1621,6 +1691,14 @@ export interface components {
              */
             file: string;
         };
+        /** Body_upload_iso_image_admin_iso_images_post */
+        Body_upload_iso_image_admin_iso_images_post: {
+            /**
+             * File
+             * Format: binary
+             */
+            file: string;
+        };
         /** Body_upload_site_background_admin_settings_site_background_post */
         Body_upload_site_background_admin_settings_site_background_post: {
             /**
@@ -2206,6 +2284,33 @@ export interface components {
             /** Idle Timeout Minutes */
             idle_timeout_minutes: number;
         };
+        /** ImageCreateFromIso */
+        ImageCreateFromIso: {
+            /**
+             * Drive Size Gib
+             * @default 64
+             */
+            drive_size_gib: number;
+            /** Iso Image Id */
+            iso_image_id: string;
+            /** Name */
+            name: string;
+            /**
+             * Os Type
+             * @default windows
+             */
+            os_type: string;
+            /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
+            /**
+             * Skip Validation
+             * @default false
+             */
+            skip_validation: boolean;
+        };
         /** ImageCreateResponse */
         ImageCreateResponse: {
             /** Checksum */
@@ -2224,6 +2329,14 @@ export interface components {
             filename: string;
             /** Id */
             id: string;
+            /** Installer Disk Size Gib */
+            installer_disk_size_gib?: number | null;
+            /** Installer Iso Filename */
+            installer_iso_filename?: string | null;
+            /** Installer Iso Id */
+            installer_iso_id?: string | null;
+            /** Installer Os Type */
+            installer_os_type?: string | null;
             /** Name */
             name: string;
             /**
@@ -2238,6 +2351,11 @@ export interface components {
             shared_catalog: boolean;
             /** Size Bytes */
             size_bytes: number;
+            /**
+             * Source Kind
+             * @default uploaded
+             */
+            source_kind: string;
             /**
              * Tenant
              * @default global
@@ -2261,6 +2379,26 @@ export interface components {
              */
             skip_validation: boolean;
         };
+        /** ImageLaunchUpdateRequest */
+        ImageLaunchUpdateRequest: {
+            /**
+             * Console Provider
+             * @default spice
+             */
+            console_provider: string;
+            /**
+             * Cpu Cores
+             * @default 2
+             */
+            cpu_cores: number;
+            /** Os Type */
+            os_type?: string | null;
+            /**
+             * Ram Mb
+             * @default 4096
+             */
+            ram_mb: number;
+        };
         /** ImageMeta */
         ImageMeta: {
             /** Checksum */
@@ -2275,8 +2413,18 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Filename */
+            filename?: string | null;
             /** Id */
             id: string;
+            /** Installer Disk Size Gib */
+            installer_disk_size_gib?: number | null;
+            /** Installer Iso Filename */
+            installer_iso_filename?: string | null;
+            /** Installer Iso Id */
+            installer_iso_id?: string | null;
+            /** Installer Os Type */
+            installer_os_type?: string | null;
             /** Name */
             name: string;
             /**
@@ -2291,6 +2439,11 @@ export interface components {
             shared_catalog: boolean;
             /** Size Bytes */
             size_bytes: number;
+            /**
+             * Source Kind
+             * @default uploaded
+             */
+            source_kind: string;
             /**
              * Tenant
              * @default global
@@ -2368,6 +2521,46 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** IsoImageMeta */
+        IsoImageMeta: {
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Filename */
+            filename: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Namespace
+             * @default labs
+             */
+            namespace: string;
+            /**
+             * Shared Catalog
+             * @default false
+             */
+            shared_catalog: boolean;
+            /** Size Bytes */
+            size_bytes: number;
+            /**
+             * Tenant
+             * @default global
+             */
+            tenant: string;
+        };
+        /** IsoImageRename */
+        IsoImageRename: {
+            /** Name */
+            name?: string | null;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
         };
         /** LDAPSettings */
         LDAPSettings: {
@@ -4562,6 +4755,41 @@ export interface operations {
             };
         };
     };
+    create_image_from_iso_admin_images_create_from_iso_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageCreateFromIso"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_direct_upload_admin_images_direct_upload_start_post: {
         parameters: {
             query?: never;
@@ -4720,6 +4948,180 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ImageMeta"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    launch_image_update_vm_admin_images__image_id__launch_update_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageLaunchUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VMInstance"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_iso_images_admin_iso_images_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IsoImageMeta"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_iso_image_admin_iso_images_post: {
+        parameters: {
+            query?: {
+                name?: string | null;
+                shared_catalog?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_iso_image_admin_iso_images_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IsoImageMeta"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_iso_image_admin_iso_images__iso_image_id__delete: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                iso_image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_iso_image_admin_iso_images__iso_image_id__patch: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                iso_image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IsoImageRename"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IsoImageMeta"];
                 };
             };
             /** @description Validation Error */

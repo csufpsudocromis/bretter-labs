@@ -18,7 +18,7 @@ from urllib.parse import quote as urlquote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import requests
 from sqlalchemy import text
 from sqlmodel import Session, func, select
@@ -44,6 +44,7 @@ from ..models import (
     ImageCreateResponse,
     ImageMeta,
     ImageUploadTaskStatus,
+    IsoImageMeta,
     LDAPSettings,
     LDAPSettingsUpdate,
     RuntimeDriftItem,
@@ -126,6 +127,7 @@ from ..tables import (
     Config,
     ContainerInstance as ContainerInstanceTable,
     Image,
+    IsoImage,
     ImageUploadTask,
     Instance,
     ManagedNamespace,
@@ -140,6 +142,7 @@ router = APIRouter(dependencies=[Depends(require_permission(Permission.ADMIN_ACC
 logger = logging.getLogger(__name__)
 MAX_UPLOAD_BYTES = 60 * 1024 * 1024 * 1024  # 60 GB
 ALLOWED_SUFFIXES = {".vhd", ".vhdx", ".qcow", ".qcow2", ".vdi"}
+ALLOWED_ISO_SUFFIXES = {".iso"}
 RAW_CONVERSION_SUFFIXES = {".qcow", ".qcow2"}
 QCOW2_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".vdi"}
 MIN_FREE_UPLOAD_BYTES = 18 * 1024 * 1024 * 1024  # keep nodefs above kubelet disk-pressure headroom
@@ -177,6 +180,7 @@ AUDIT_NAMESPACE_DETAIL_RE = re.compile(r"(?:^|[\s,;])namespace=([a-z0-9]([-a-z0-
 ADMIN_AUDIT_EVENT_MAX_PER_TENANT = 50
 RUNTIME_ENV_NAMES: dict[str, str] = {
     "storage_root": "BLABS_STORAGE_ROOT",
+    "iso_storage_root": "BLABS_ISO_STORAGE_ROOT",
     "kube_namespace": "BLABS_KUBE_NAMESPACE",
     "kube_image_pvc": "BLABS_KUBE_IMAGE_PVC",
     "kube_runtime_class": "BLABS_KUBE_RUNTIME_CLASS",
@@ -191,6 +195,7 @@ RUNTIME_ENV_NAMES: dict[str, str] = {
 }
 RUNTIME_APPLY_BEHAVIOR: dict[str, str] = {
     "storage_root": "Immediate for current backend process; persists via DB override.",
+    "iso_storage_root": "Immediate for ISO upload/read operations; persists via DB override.",
     "kube_image_pvc": "Immediate for new image operations; persists via DB override.",
     "kube_vm_storage_class": "Immediate for new clone operations; persists via DB override.",
     "kube_namespace": "Environment controlled. Requires backend rollout after env change.",
@@ -207,6 +212,12 @@ RUNTIME_APPLY_BEHAVIOR: dict[str, str] = {
 
 def _image_dir() -> Path:
     path = Path(settings.storage_root)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _iso_dir() -> Path:
+    path = Path(settings.iso_storage_root)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -3082,6 +3093,11 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         existing.tenant = normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT)
         existing.namespace = _record_namespace(task)
         existing.cluster_id = str(getattr(task, "cluster_id", "") or local_cluster_id())
+        existing.source_kind = "uploaded"
+        existing.installer_iso_id = None
+        existing.installer_iso_filename = None
+        existing.installer_os_type = None
+        existing.installer_disk_size_gib = None
         existing.source_pvc = task.source_pvc
         existing.checksum = task.checksum
         existing.size_bytes = task.size_bytes
@@ -3095,6 +3111,11 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
         tenant=normalize_tenant(getattr(task, "tenant", None), default=GLOBAL_TENANT),
         namespace=_record_namespace(task),
         cluster_id=str(getattr(task, "cluster_id", "") or local_cluster_id()),
+        source_kind="uploaded",
+        installer_iso_id=None,
+        installer_iso_filename=None,
+        installer_os_type=None,
+        installer_disk_size_gib=None,
         source_pvc=task.source_pvc,
         checksum=task.checksum,
         size_bytes=task.size_bytes,
@@ -3795,6 +3816,118 @@ echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
         )
 
 
+def _copy_pvc_path_to_pvc(
+    *,
+    source_claim: str,
+    source_relative_path: str,
+    target_claim: str,
+    target_filename: str,
+) -> None:
+    source_rel = str(source_relative_path or "").strip().lstrip("/")
+    target_name = Path(str(target_filename or "").strip()).name
+    if not source_rel:
+        raise RuntimeError("source relative path is required")
+    if not target_name:
+        raise RuntimeError("target filename is required")
+
+    core = kube._client()
+    batch = client.BatchV1Api()
+    job_name = f"iso-copy-{uuid4().hex[:8]}"
+    container = client.V1Container(
+        name="copy",
+        image=PVC_HELPER_IMAGE,
+        image_pull_policy="IfNotPresent",
+        env=[
+            client.V1EnvVar(name="SOURCE_RELATIVE_PATH", value=source_rel),
+            client.V1EnvVar(name="TARGET_FILENAME", value=target_name),
+        ],
+        command=["/bin/sh", "-c"],
+        args=[
+            r"""
+set -eu
+src="/source/${SOURCE_RELATIVE_PATH}"
+dst="/target/${TARGET_FILENAME}"
+if [ ! -f "${src}" ]; then
+  echo "BLABS_ERROR=source missing: ${src}"
+  exit 20
+fi
+cp -f "${src}" "${dst}"
+sync
+echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
+"""
+        ],
+        volume_mounts=[
+            client.V1VolumeMount(name="source", mount_path="/source", read_only=True),
+            client.V1VolumeMount(name="target", mount_path="/target", read_only=False),
+        ],
+    )
+    spec = client.V1PodSpec(
+        restart_policy="Never",
+        containers=[container],
+        volumes=[
+            client.V1Volume(
+                name="source",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=source_claim),
+            ),
+            client.V1Volume(
+                name="target",
+                persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(claim_name=target_claim),
+            ),
+        ],
+    )
+    if settings.image_pull_secret:
+        spec.image_pull_secrets = [client.V1LocalObjectReference(name=settings.image_pull_secret)]
+
+    body = client.V1Job(
+        metadata=client.V1ObjectMeta(name=job_name, namespace=settings.kube_namespace),
+        spec=client.V1JobSpec(
+            backoff_limit=1,
+            active_deadline_seconds=COPY_JOB_TIMEOUT_SECONDS,
+            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            template=client.V1PodTemplateSpec(spec=spec),
+        ),
+    )
+    batch.create_namespaced_job(namespace=settings.kube_namespace, body=body)
+
+    deadline = time.time() + COPY_JOB_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        job = batch.read_namespaced_job(name=job_name, namespace=settings.kube_namespace)
+        phase = _job_phase(job)
+        if phase == "succeeded":
+            return
+        if phase == "failed":
+            break
+        time.sleep(2)
+
+    pods = core.list_namespaced_pod(
+        namespace=settings.kube_namespace,
+        label_selector=f"job-name={job_name}",
+    ).items
+    pod_name = pods[0].metadata.name if pods else ""
+    err = ""
+    if pod_name:
+        try:
+            err = core.read_namespaced_pod_log(name=pod_name, namespace=settings.kube_namespace, tail_lines=120)
+        except Exception:
+            pass
+    raise RuntimeError(f"copy job failed for {target_name}: {err.strip() or 'job failed'}")
+
+
+def _create_blank_disk_on_source_pvc(
+    *,
+    source_pvc: str,
+    filename: str,
+    disk_size_gib: int,
+) -> None:
+    safe_filename = Path(filename).name
+    size_gib = max(1, int(disk_size_gib or 1))
+    cmd = f"qemu-img create -f qcow2 /images/{safe_filename} {size_gib}G && sync"
+    _with_pvc_helper(
+        ["/bin/sh", "-c", cmd],
+        claim_name=source_pvc,
+    )
+
+
 def _source_pvc_name(image_id: str) -> str:
     return f"img-src-{image_id[:8].lower()}"
 
@@ -3987,11 +4120,32 @@ class ImageImport(BaseModel):
     skip_validation: bool = False
 
 
+class ImageCreateFromIso(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    iso_image_id: str = Field(min_length=1, max_length=64)
+    os_type: str = Field(default="windows", pattern="^(windows|linux)$")
+    drive_size_gib: int = Field(default=64, ge=10, le=1024)
+    shared_catalog: bool = False
+    skip_validation: bool = False
+
+
 class ImageRename(BaseModel):
     name: str | None = None
     filename: str | None = None
     shared_catalog: bool | None = None
     skip_validation: bool = False
+
+
+class IsoImageRename(BaseModel):
+    name: str | None = None
+    shared_catalog: bool | None = None
+
+
+class ImageLaunchUpdateRequest(BaseModel):
+    cpu_cores: int = Field(default=2, ge=1, le=16)
+    ram_mb: int = Field(default=4096, ge=512, le=65536)
+    os_type: str | None = Field(default=None, pattern="^(windows|linux)$")
+    console_provider: str = Field(default="spice", pattern="^(spice|guacamole|guacamole_rdp)$")
 
 
 class DirectUploadStart(BaseModel):
@@ -4732,6 +4886,226 @@ def delete_team_quota(
         detail=f"namespace={row.namespace}",
     )
     session.delete(row)
+    session.commit()
+
+
+def _iso_to_model(record: IsoImage) -> IsoImageMeta:
+    return IsoImageMeta(
+        id=record.id,
+        name=record.name,
+        filename=record.filename,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(record),
+        shared_catalog=_record_shared_catalog(record),
+        checksum=record.checksum,
+        size_bytes=record.size_bytes,
+        created_at=record.created_at,
+    )
+
+
+@router.get(
+    "/iso-images",
+    response_model=list[IsoImageMeta],
+    dependencies=[Depends(require_permission(Permission.IMAGES_READ))],
+)
+def list_iso_images(
+    request: Request,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> list[IsoImageMeta]:
+    requested_namespace = _requested_namespace_hint(request)
+    if requested_namespace:
+        assert_actor_can_access_namespace(actor, requested_namespace)
+    rows = session.exec(select(IsoImage)).all()
+    visible = [row for row in rows if _record_visible_for_actor(row, actor, requested_namespace=requested_namespace)]
+    return [_iso_to_model(row) for row in visible]
+
+
+@router.post(
+    "/iso-images",
+    response_model=IsoImageMeta,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def upload_iso_image(
+    request: Request,
+    file: UploadFile = File(...),
+    name: str | None = Query(default=None),
+    shared_catalog: bool = Query(default=False),
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> IsoImageMeta:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filename required")
+    if shared_catalog and not is_platform_admin(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can publish shared catalogs",
+        )
+    suffix = Path(file.filename).suffix.lower()
+    if suffix not in ALLOWED_ISO_SUFFIXES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid iso type")
+    resource_tenant = resolve_resource_tenant(actor)
+    resource_namespace = resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace)
+    namespace_policy = get_namespace_runtime_policy(session, resource_namespace)
+    upload_max_bytes = max(1, int(getattr(namespace_policy, "upload_max_bytes", MAX_UPLOAD_BYTES) or MAX_UPLOAD_BYTES))
+
+    original_name = Path(file.filename).name
+    stored_filename = f"{uuid4().hex[:8]}-{original_name}"
+    dest_path = _iso_dir() / stored_filename
+    size_bytes = 0
+    sha256 = hashlib.sha256()
+    try:
+        with dest_path.open("wb") as buffer:
+            while chunk := file.file.read(1024 * 1024):
+                _ensure_free_space(MIN_FREE_UPLOAD_BYTES + len(chunk), context="iso upload")
+                size_bytes += len(chunk)
+                if size_bytes > upload_max_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"ISO too large for namespace {resource_namespace} (max {upload_max_bytes} bytes)",
+                    )
+                sha256.update(chunk)
+                buffer.write(chunk)
+    except HTTPException:
+        try:
+            dest_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            dest_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"iso upload failed: {exc}"
+        ) from exc
+
+    if size_bytes <= 0:
+        dest_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded ISO is empty")
+
+    record = IsoImage(
+        id=str(uuid4()),
+        name=str(name or original_name).strip() or original_name,
+        filename=stored_filename,
+        tenant=resource_tenant,
+        namespace=resource_namespace,
+        shared_catalog=bool(shared_catalog),
+        checksum=sha256.hexdigest(),
+        size_bytes=size_bytes,
+        created_at=utc_now(),
+    )
+    session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=resource_tenant,
+        action="create",
+        target_type="iso_image",
+        target_id=record.id,
+        detail=f"namespace={record.namespace} filename={record.filename} size_bytes={record.size_bytes}",
+    )
+    session.commit()
+    session.refresh(record)
+    return _iso_to_model(record)
+
+
+@router.patch(
+    "/iso-images/{iso_image_id}",
+    response_model=IsoImageMeta,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def update_iso_image(
+    iso_image_id: str,
+    payload: IsoImageRename,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> IsoImageMeta:
+    record = session.get(IsoImage, iso_image_id)
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="iso image not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    if payload.shared_catalog is not None and not is_platform_admin(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can change shared catalog scope",
+        )
+    if payload.name is not None:
+        trimmed_name = str(payload.name or "").strip()
+        if not trimmed_name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name cannot be empty")
+        record.name = trimmed_name
+    if payload.shared_catalog is not None:
+        record.shared_catalog = bool(payload.shared_catalog)
+    session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=managed_tenant,
+        action="update",
+        target_type="iso_image",
+        target_id=record.id,
+        detail=f"namespace={_record_namespace(record)} name={record.name}",
+    )
+    session.commit()
+    session.refresh(record)
+    return _iso_to_model(record)
+
+
+@router.delete(
+    "/iso-images/{iso_image_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def delete_iso_image(
+    iso_image_id: str,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> None:
+    record = session.get(IsoImage, iso_image_id)
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="iso image not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    in_use = session.exec(
+        select(Image)
+        .where(Image.installer_iso_id == iso_image_id)
+        .where(Image.tenant == normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT))
+    ).all()
+    if in_use:
+        names = [str(row.name or row.id) for row in in_use[:3]]
+        suffix = "" if len(in_use) <= 3 else ", ..."
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"ISO is in use by images: {', '.join(names)}{suffix}",
+        )
+    iso_path = _iso_dir() / Path(record.filename).name
+    if iso_path.exists():
+        try:
+            iso_path.unlink()
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_507_INSUFFICIENT_STORAGE, detail="failed to delete iso"
+            ) from exc
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=managed_tenant,
+        action="delete",
+        target_type="iso_image",
+        target_id=record.id,
+        detail=f"namespace={_record_namespace(record)} filename={record.filename}",
+    )
+    session.delete(record)
     session.commit()
 
 
@@ -5499,6 +5873,11 @@ def import_image(
         namespace=resource_namespace,
         shared_catalog=shared_catalog,
         cluster_id=local_cluster_id(),
+        source_kind="uploaded",
+        installer_iso_id=None,
+        installer_iso_filename=None,
+        installer_os_type=None,
+        installer_disk_size_gib=None,
         source_pvc=source_pvc,
         checksum=sha256.hexdigest(),
         size_bytes=size_bytes,
@@ -5523,6 +5902,11 @@ def import_image(
         namespace=_record_namespace(record),
         shared_catalog=_record_shared_catalog(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+        source_kind=str(getattr(record, "source_kind", "") or "uploaded"),
+        installer_iso_id=(str(getattr(record, "installer_iso_id", "") or "").strip() or None),
+        installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
+        installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
+        installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
@@ -5560,6 +5944,11 @@ def list_images(
                 namespace=namespace_for_auto_rows,
                 shared_catalog=False,
                 cluster_id=local_cluster_id(),
+                source_kind="uploaded",
+                installer_iso_id=None,
+                installer_iso_filename=None,
+                installer_os_type=None,
+                installer_disk_size_gib=None,
                 source_pvc=None,
                 checksum="",
                 size_bytes=info.get("size", 0),
@@ -5577,16 +5966,265 @@ def list_images(
         ImageMeta(
             id=record.id,
             name=record.name,
+            filename=record.filename,
             tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
             namespace=_record_namespace(record),
             shared_catalog=_record_shared_catalog(record),
             cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+            source_kind=str(getattr(record, "source_kind", "") or "uploaded"),
+            installer_iso_id=(str(getattr(record, "installer_iso_id", "") or "").strip() or None),
+            installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
+            installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
+            installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
             checksum=record.checksum,
             size_bytes=record.size_bytes,
             created_at=record.created_at,
         )
         for record in images
     ]
+
+
+def _image_filename_from_name(name: str, *, suffix: str = ".qcow2") -> str:
+    cleaned = re.sub(r"[^a-z0-9._-]+", "-", str(name or "").strip().lower())
+    cleaned = cleaned.strip(".-")
+    if not cleaned:
+        cleaned = f"image-{uuid4().hex[:8]}"
+    if not cleaned.endswith(suffix):
+        cleaned = f"{cleaned}{suffix}"
+    return cleaned
+
+
+@router.post(
+    "/images/create-from-iso",
+    response_model=ImageCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def create_image_from_iso(
+    payload: ImageCreateFromIso,
+    request: Request,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageCreateResponse:
+    resource_tenant = resolve_resource_tenant(actor)
+    resource_namespace = resolve_resource_namespace(actor, request=request, fallback_namespace=settings.kube_namespace)
+    requested_shared_catalog = bool(payload.shared_catalog)
+    if requested_shared_catalog and not is_platform_admin(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can publish shared catalogs",
+        )
+    if not settings.kube_vm_storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clone-based VM storage is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
+        )
+
+    iso_record = session.get(IsoImage, payload.iso_image_id)
+    if not iso_record or not _record_visible_for_actor(iso_record, actor, requested_namespace=resource_namespace):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="ISO image not found")
+
+    filename = _image_filename_from_name(payload.name, suffix=".qcow2")
+    existing = session.exec(
+        select(Image)
+        .where(Image.filename == filename)
+        .where(Image.tenant == resource_tenant)
+        .where(Image.namespace == resource_namespace)
+    ).first()
+    if existing:
+        filename = _image_filename_from_name(f"{payload.name}-{uuid4().hex[:6]}", suffix=".qcow2")
+
+    image_id = str(uuid4())
+    source_pvc = _ensure_image_source_pvc_claim(image_id, int(payload.drive_size_gib) * (1024**3))
+    _create_blank_disk_on_source_pvc(
+        source_pvc=source_pvc,
+        filename=filename,
+        disk_size_gib=int(payload.drive_size_gib),
+    )
+
+    try:
+        iso_rel_path = str((_iso_dir().resolve().relative_to(_image_dir().resolve()) / iso_record.filename).as_posix())
+    except Exception:
+        iso_rel_path = f"{Path(settings.iso_storage_root).name}/{iso_record.filename}"
+    installer_iso_filename = f"installer-{iso_record.id[:8]}-{Path(iso_record.filename).name}"
+    _copy_pvc_path_to_pvc(
+        source_claim=settings.kube_image_pvc,
+        source_relative_path=iso_rel_path,
+        target_claim=source_pvc,
+        target_filename=installer_iso_filename,
+    )
+    if not payload.skip_validation:
+        _validate_file_on_pvc(filename)
+
+    checksum = hashlib.sha256(f"scratch:{image_id}:{filename}:{payload.drive_size_gib}".encode("utf-8")).hexdigest()
+    size_bytes = int(payload.drive_size_gib) * (1024**3)
+    record = Image(
+        id=image_id,
+        name=str(payload.name).strip(),
+        filename=filename,
+        tenant=resource_tenant,
+        namespace=resource_namespace,
+        shared_catalog=requested_shared_catalog,
+        cluster_id=local_cluster_id(),
+        source_kind="scratch",
+        installer_iso_id=iso_record.id,
+        installer_iso_filename=installer_iso_filename,
+        installer_os_type=str(payload.os_type).strip().lower(),
+        installer_disk_size_gib=int(payload.drive_size_gib),
+        source_pvc=source_pvc,
+        checksum=checksum,
+        size_bytes=size_bytes,
+        created_at=utc_now(),
+    )
+    session.add(record)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=resource_tenant,
+        action="create",
+        target_type="image",
+        target_id=record.id,
+        detail=(
+            f"namespace={record.namespace} source_kind=scratch filename={record.filename} "
+            f"installer_iso_id={record.installer_iso_id} drive_size_gib={record.installer_disk_size_gib}"
+        ),
+    )
+    session.commit()
+    session.refresh(record)
+    return ImageCreateResponse(
+        id=record.id,
+        name=record.name,
+        filename=record.filename,
+        tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(record),
+        shared_catalog=_record_shared_catalog(record),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+        source_kind=str(getattr(record, "source_kind", "") or "uploaded"),
+        installer_iso_id=(str(getattr(record, "installer_iso_id", "") or "").strip() or None),
+        installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
+        installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
+        installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
+        checksum=record.checksum,
+        size_bytes=record.size_bytes,
+        created_at=record.created_at,
+    )
+
+
+@router.post(
+    "/images/{image_id}/launch-update",
+    response_model=VMInstance,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def launch_image_update_vm(
+    image_id: str,
+    payload: ImageLaunchUpdateRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> VMInstance:
+    image = session.get(Image, image_id)
+    if (
+        not image
+        or not _tenant_scoped_record(image, actor, include_global=True)
+        or not _namespace_scoped_record(image, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+    if not image.source_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image is not ready for clone-based launch; re-import or re-upload the image",
+        )
+
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(image, "tenant", None))
+    image_namespace = _record_namespace(image)
+    template_id = f"img-update-{image.id}"
+    template = session.get(Template, template_id)
+    desired_os_type = str(payload.os_type or getattr(image, "installer_os_type", "") or "windows").strip().lower()
+    console_provider = normalize_vm_console_provider(payload.console_provider)
+    if desired_os_type not in {"windows", "linux"}:
+        desired_os_type = "windows"
+
+    enabled_namespaces = [image_namespace]
+    if template is None:
+        template = Template(
+            id=template_id,
+            name=f"Image Update: {image.name}",
+            tenant=managed_tenant,
+            namespace=image_namespace,
+            shared_catalog=False,
+            enabled_namespaces_json=_template_enabled_namespaces_json(enabled_namespaces),
+            cluster_id=str(getattr(image, "cluster_id", "") or local_cluster_id()),
+            description=f"System-managed template for updating image {image.name}",
+            os_type=desired_os_type,
+            image_id=image.id,
+            cpu_cores=int(payload.cpu_cores),
+            ram_mb=int(payload.ram_mb),
+            auto_delete_minutes=240,
+            idle_timeout_minutes=120,
+            preclone_pool_size=0,
+            preclone_pool_max=0,
+            max_active_instances=1,
+            enabled=True,
+            network_mode="bridge",
+            console_provider=console_provider,
+            created_at=utc_now(),
+        )
+    else:
+        template.name = f"Image Update: {image.name}"
+        template.tenant = managed_tenant
+        template.namespace = image_namespace
+        template.shared_catalog = False
+        template.enabled_namespaces_json = _template_enabled_namespaces_json(enabled_namespaces)
+        template.cluster_id = str(getattr(image, "cluster_id", "") or local_cluster_id())
+        template.description = f"System-managed template for updating image {image.name}"
+        template.os_type = desired_os_type
+        template.image_id = image.id
+        template.cpu_cores = int(payload.cpu_cores)
+        template.ram_mb = int(payload.ram_mb)
+        template.auto_delete_minutes = 240
+        template.idle_timeout_minutes = 120
+        template.preclone_pool_size = 0
+        template.preclone_pool_max = 0
+        template.max_active_instances = 1
+        template.network_mode = "bridge"
+        template.console_provider = console_provider
+        template.enabled = True
+
+    session.add(template)
+    session.commit()
+    session.refresh(template)
+
+    # start_vm enforces user/team visibility; for platform admins launching scoped resources,
+    # align synthetic launch actor team to the image tenant.
+    launch_actor = actor
+    image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
+    if is_platform_admin(actor) and image_tenant not in {GLOBAL_TENANT, actor_tenant(actor)}:
+        launch_actor = User(**actor.model_dump())
+        launch_actor.team = image_tenant
+
+    from .user import start_vm as user_start_vm
+
+    try:
+        instance = user_start_vm(template.id, request=request, user=launch_actor, session=session)
+    finally:
+        persisted_template = session.get(Template, template_id)
+        if persisted_template:
+            persisted_template.enabled = False
+            session.add(persisted_template)
+            session.commit()
+
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=managed_tenant,
+        action="launch_update",
+        target_type="image",
+        target_id=image.id,
+        detail=f"namespace={image_namespace} template_id={template_id}",
+    )
+    session.commit()
+    return instance
 
 
 @router.delete(
@@ -5749,10 +6387,16 @@ def rename_image(
     return ImageMeta(
         id=record.id,
         name=record.name,
+        filename=record.filename,
         tenant=managed_tenant,
         namespace=_record_namespace(record),
         shared_catalog=_record_shared_catalog(record),
         cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+        source_kind=str(getattr(record, "source_kind", "") or "uploaded"),
+        installer_iso_id=(str(getattr(record, "installer_iso_id", "") or "").strip() or None),
+        installer_iso_filename=(str(getattr(record, "installer_iso_filename", "") or "").strip() or None),
+        installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
+        installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,

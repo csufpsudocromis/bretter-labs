@@ -49,6 +49,8 @@ class PodRequest:
     spice_password: Optional[str] = None
     rdp_default_username: Optional[str] = None
     rdp_default_password: Optional[str] = None
+    installer_iso_filename: Optional[str] = None
+    boot_order: Optional[str] = None
 
 
 @dataclass
@@ -1161,6 +1163,12 @@ class KubernetesService:
             client.V1EnvVar(name="VM_NET_QUEUES", value=str(max(1, int(req.cpu_cores)))),
             client.V1EnvVar(name="CONSOLE_PROVIDER", value=console_provider),
         ]
+        installer_iso_filename = str(getattr(req, "installer_iso_filename", "") or "").strip()
+        if installer_iso_filename:
+            env_vars.append(client.V1EnvVar(name="BOOT_ISO", value=f"/data/{Path(installer_iso_filename).name}"))
+        boot_order = str(getattr(req, "boot_order", "") or "").strip()
+        if boot_order:
+            env_vars.append(client.V1EnvVar(name="BOOT_ORDER", value=boot_order))
         if console_provider == "spice":
             env_vars.append(client.V1EnvVar(name="SPICE_TICKETING", value="true"))
             if req.spice_password:

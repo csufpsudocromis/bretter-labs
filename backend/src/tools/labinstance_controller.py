@@ -548,6 +548,13 @@ class LabInstanceController:
                 console_provider=console_provider,
                 rdp_default_username=rdp_default_username,
                 rdp_default_password=rdp_default_password,
+                installer_iso_filename=(str(getattr(image, "installer_iso_filename", "") or "").strip() or None),
+                boot_order=(
+                    "dc"
+                    if str(getattr(image, "source_kind", "") or "").strip().lower() == "scratch"
+                    and str(getattr(image, "installer_iso_filename", "") or "").strip()
+                    else None
+                ),
             )
             pod_status = kube.create_pod(pod_request)
             kube.create_service_for_pod(
@@ -573,6 +580,15 @@ class LabInstanceController:
                             cpu_cores=template.cpu_cores,
                             ram_mb=template.ram_mb,
                             owner=owner,
+                            installer_iso_filename=(
+                                str(getattr(image, "installer_iso_filename", "") or "").strip() or None
+                            ),
+                            boot_order=(
+                                "dc"
+                                if str(getattr(image, "source_kind", "") or "").strip().lower() == "scratch"
+                                and str(getattr(image, "installer_iso_filename", "") or "").strip()
+                                else None
+                            ),
                         )
                     ),
                     "serviceName": f"svc-{instance_id[:8]}",

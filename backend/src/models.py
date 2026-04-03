@@ -268,10 +268,16 @@ class ManagedNamespaceObservabilityOut(BaseModel):
 class ImageMeta(BaseModel):
     id: str
     name: str
+    filename: str | None = None
     tenant: str = "global"
     namespace: str = "labs"
     shared_catalog: bool = False
     cluster_id: str = "local"
+    source_kind: str = "uploaded"
+    installer_iso_id: str | None = None
+    installer_iso_filename: str | None = None
+    installer_os_type: str | None = None
+    installer_disk_size_gib: int | None = None
     checksum: str
     size_bytes: int
     created_at: datetime
@@ -279,6 +285,18 @@ class ImageMeta(BaseModel):
 
 class ImageCreateResponse(ImageMeta):
     filename: str
+
+
+class IsoImageMeta(BaseModel):
+    id: str
+    name: str
+    filename: str
+    tenant: str = "global"
+    namespace: str = "labs"
+    shared_catalog: bool = False
+    checksum: str
+    size_bytes: int
+    created_at: datetime
 
 
 class ImageUploadTaskStatus(BaseModel):

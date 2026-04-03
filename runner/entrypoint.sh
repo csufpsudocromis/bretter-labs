@@ -19,6 +19,8 @@ GUAC_TOKEN_KEY="${GUAC_TOKEN_KEY:-}"
 # Default to NLA for Windows guests; allow overrides via env when required.
 GUAC_RDP_SECURITY="${GUAC_RDP_SECURITY:-nla}"
 GUAC_RDP_IGNORE_CERT="${GUAC_RDP_IGNORE_CERT:-true}"
+BOOT_ISO="${BOOT_ISO:-}"
+BOOT_ORDER="${BOOT_ORDER:-c}"
 TAP_EGRESS_IF=""
 
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
@@ -218,7 +220,7 @@ fi
 QEMU_ARGS=(
   -m "${RAM_MB}"
   -smp "${CPU_CORES}"
-  -boot c
+  -boot "${BOOT_ORDER}"
   -display none
   -device ich9-usb-ehci1
   -device ich9-usb-uhci1
@@ -406,6 +408,11 @@ if [[ "${OS_TYPE,,}" == "linux" ]]; then
 else
   QEMU_ARGS+=(
     -drive "file=${DISK},if=${DRIVE_IF},format=${DISK_FORMAT},cache=none"
+  )
+fi
+if [[ -n "$BOOT_ISO" ]]; then
+  QEMU_ARGS+=(
+    -drive "file=${BOOT_ISO},media=cdrom,readonly=on"
   )
 fi
 
