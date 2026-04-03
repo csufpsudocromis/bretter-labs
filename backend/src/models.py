@@ -404,7 +404,7 @@ class VMTemplateCreate(BaseModel):
     image_id: str
     cpu_cores: int = Field(..., ge=1, le=32)
     ram_mb: int = Field(..., ge=512, le=262144)
-    auto_delete_minutes: int = Field(..., ge=1, le=30)
+    auto_delete_minutes: int = Field(..., ge=1, le=10080)
     idle_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     preclone_pool_size: int = Field(default=0, ge=0, le=50)
     preclone_pool_max: int = Field(default=0, ge=0, le=50)
@@ -428,7 +428,7 @@ class VMTemplateUpdate(BaseModel):
     image_id: Optional[str] = None
     cpu_cores: Optional[int] = Field(default=None, ge=1, le=32)
     ram_mb: Optional[int] = Field(default=None, ge=512, le=262144)
-    auto_delete_minutes: Optional[int] = Field(default=None, ge=1, le=30)
+    auto_delete_minutes: Optional[int] = Field(default=None, ge=1, le=10080)
     idle_timeout_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
     preclone_pool_size: Optional[int] = Field(default=None, ge=0, le=50)
     preclone_pool_max: Optional[int] = Field(default=None, ge=0, le=50)
