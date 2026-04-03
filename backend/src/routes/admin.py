@@ -6377,11 +6377,20 @@ def rename_image(
     ).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="filename already exists")
+    current_installer_iso_id = str(getattr(record, "installer_iso_id", "") or "").strip()
+    current_installer_iso_filename = str(getattr(record, "installer_iso_filename", "") or "").strip()
     if payload.update_iso_image_id is not None:
         requested_iso_image_id = str(payload.update_iso_image_id).strip()
         if not requested_iso_image_id:
             record.installer_iso_id = None
             record.installer_iso_filename = None
+        elif (
+            requested_iso_image_id == current_installer_iso_id
+            and current_installer_iso_id
+            and current_installer_iso_filename
+        ):
+            # No ISO change requested; avoid re-copying installer media into the source PVC.
+            pass
         else:
             image_namespace = _record_namespace(record)
             iso_record = session.get(IsoImage, requested_iso_image_id)
@@ -6408,28 +6417,31 @@ def rename_image(
             record.installer_iso_id = iso_record.id
             record.installer_iso_filename = installer_iso_filename
 
-    src_path = _image_dir() / record.filename
-    dst_path = _image_dir() / new_filename
-    try:
-        if src_path.exists():
-            src_path.replace(dst_path)
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"rename failed: {exc}") from exc
-    if record.source_pvc and record.filename != new_filename:
+    if record.filename != new_filename:
+        src_path = _image_dir() / record.filename
+        dst_path = _image_dir() / new_filename
         try:
-            _with_pvc_helper(
-                [
-                    "/bin/sh",
-                    "-c",
-                    f"if [ -f /images/{record.filename} ]; then mv /images/{record.filename} /images/{new_filename}; fi",
-                ],
-                capture_output=False,
-                claim_name=record.source_pvc,
-            )
+            if src_path.exists():
+                src_path.replace(dst_path)
         except Exception as exc:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc rename failed: {exc}"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"rename failed: {exc}"
             ) from exc
+        if record.source_pvc:
+            try:
+                _with_pvc_helper(
+                    [
+                        "/bin/sh",
+                        "-c",
+                        f"if [ -f /images/{record.filename} ]; then mv /images/{record.filename} /images/{new_filename}; fi",
+                    ],
+                    capture_output=False,
+                    claim_name=record.source_pvc,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"source pvc rename failed: {exc}"
+                ) from exc
 
     record.name = new_name
     record.filename = new_filename

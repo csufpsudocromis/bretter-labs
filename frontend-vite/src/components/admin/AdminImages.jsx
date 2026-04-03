@@ -27,6 +27,7 @@ const AdminImages = () => {
   const [editDefaultCpuCores, setEditDefaultCpuCores] = useState(2);
   const [editDefaultRamMb, setEditDefaultRamMb] = useState(4096);
   const [editUpdateIsoImageId, setEditUpdateIsoImageId] = useState("");
+  const [editOriginal, setEditOriginal] = useState(null);
   const [creatingImage, setCreatingImage] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createIsoId, setCreateIsoId] = useState("");
@@ -252,22 +253,47 @@ const AdminImages = () => {
     setEditDefaultCpuCores(Math.max(1, Number(img.update_cpu_cores_default || 2)));
     setEditDefaultRamMb(Math.max(512, Number(img.update_ram_mb_default || 4096)));
     setEditUpdateIsoImageId(String(img.installer_iso_id || ""));
+    setEditOriginal({
+      name: String(img.name || ""),
+      filename: String(img.filename || img.name || ""),
+      sharedCatalog: Boolean(img.shared_catalog),
+      defaultCpuCores: Math.max(1, Number(img.update_cpu_cores_default || 2)),
+      defaultRamMb: Math.max(512, Number(img.update_ram_mb_default || 4096)),
+      updateIsoImageId: String(img.installer_iso_id || ""),
+    });
   };
 
   const saveEdit = async () => {
     try {
-      const payload = {
-        name: editName,
-        filename: editFilename,
-        update_cpu_cores_default: Math.max(1, Number(editDefaultCpuCores || 2)),
-        update_ram_mb_default: Math.max(512, Number(editDefaultRamMb || 4096)),
-        update_iso_image_id: String(editUpdateIsoImageId || ""),
-      };
-      if (isPlatformAdmin) {
+      const payload = {};
+      const normalizedCpu = Math.max(1, Number(editDefaultCpuCores || 2));
+      const normalizedRam = Math.max(512, Number(editDefaultRamMb || 4096));
+      const normalizedIsoId = String(editUpdateIsoImageId || "");
+      if (!editOriginal || editName !== editOriginal.name) {
+        payload.name = editName;
+      }
+      if (!editOriginal || editFilename !== editOriginal.filename) {
+        payload.filename = editFilename;
+      }
+      if (!editOriginal || normalizedCpu !== editOriginal.defaultCpuCores) {
+        payload.update_cpu_cores_default = normalizedCpu;
+      }
+      if (!editOriginal || normalizedRam !== editOriginal.defaultRamMb) {
+        payload.update_ram_mb_default = normalizedRam;
+      }
+      if (!editOriginal || normalizedIsoId !== editOriginal.updateIsoImageId) {
+        payload.update_iso_image_id = normalizedIsoId;
+      }
+      if (isPlatformAdmin && (!editOriginal || Boolean(editSharedCatalog) !== editOriginal.sharedCatalog)) {
         payload.shared_catalog = Boolean(editSharedCatalog);
+      }
+      if (Object.keys(payload).length === 0) {
+        setMessage("No changes to save");
+        return;
       }
       await api.patch(`/admin/images/${editId}`, payload);
       setEditId(null);
+      setEditOriginal(null);
       setMessage("Updated");
       load();
     } catch (err) {
@@ -283,6 +309,7 @@ const AdminImages = () => {
     setEditDefaultCpuCores(2);
     setEditDefaultRamMb(4096);
     setEditUpdateIsoImageId("");
+    setEditOriginal(null);
   };
 
   const createFromIso = async () => {
