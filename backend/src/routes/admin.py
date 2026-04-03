@@ -6407,13 +6407,8 @@ def rename_image(
                 )
             except Exception:
                 iso_rel_path = f"{Path(settings.iso_storage_root).name}/{iso_record.filename}"
-            installer_iso_filename = f"installer-{iso_record.id[:8]}-{Path(iso_record.filename).name}"
-            _copy_pvc_path_to_pvc(
-                source_claim=settings.kube_image_pvc,
-                source_relative_path=iso_rel_path,
-                target_claim=record.source_pvc,
-                target_filename=installer_iso_filename,
-            )
+            # Keep edit operations fast by storing the ISO library-relative path and mounting it directly at launch.
+            installer_iso_filename = iso_rel_path
             record.installer_iso_id = iso_record.id
             record.installer_iso_filename = installer_iso_filename
 

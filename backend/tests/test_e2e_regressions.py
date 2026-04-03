@@ -1775,6 +1775,56 @@ def test_admin_edit_image_does_not_recopy_same_installer_iso(login_admin: TestCl
     assert body["installer_iso_id"] == "iso-image-edit-same-check-1"
 
 
+def test_admin_edit_image_switches_iso_without_immediate_copy(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            IsoImage(
+                id="iso-image-edit-switch-check-1",
+                name="Windows Driver ISO",
+                filename="win-drivers.iso",
+                checksum="sha256:iso-image-edit-switch-check-1",
+                size_bytes=2048,
+            )
+        )
+        session.add(
+            Image(
+                id="img-edit-switch-iso-check-1",
+                name="Windows 11",
+                filename="windows-11-switch.qcow2",
+                checksum="sha256:img-edit-switch-iso-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-edit-switch-iso-check-1",
+                installer_iso_id=None,
+                installer_iso_filename=None,
+                update_cpu_cores_default=2,
+                update_ram_mb_default=4096,
+            )
+        )
+        session.commit()
+
+    copy_calls: list[dict[str, str]] = []
+
+    def _capture_copy(**kwargs):
+        copy_calls.append(kwargs)
+
+    monkeypatch.setattr("src.routes.admin._copy_pvc_path_to_pvc", _capture_copy)
+
+    updated = login_admin.patch(
+        "/admin/images/img-edit-switch-iso-check-1",
+        json={
+            "name": "Windows 11",
+            "filename": "windows-11-switch.qcow2",
+            "update_iso_image_id": "iso-image-edit-switch-check-1",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert copy_calls == []
+    body = updated.json()
+    assert body["installer_iso_id"] == "iso-image-edit-switch-check-1"
+    assert body["installer_iso_filename"].endswith("/win-drivers.iso")
+    assert body["installer_iso_filename"].startswith("iso-images/")
+
+
 def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(

@@ -29,6 +29,7 @@ AUTO_BOOT_KEYPRESS_COUNT="${AUTO_BOOT_KEYPRESS_COUNT:-15}"
 AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS="${AUTO_BOOT_KEYPRESS_INTERVAL_SECONDS:-1}"
 UEFI_MARKER_SCAN_MAX_BYTES="${UEFI_MARKER_SCAN_MAX_BYTES:-67108864}"
 UEFI_FALLBACK_TO_BIOS_ON_NO_MARKER="${UEFI_FALLBACK_TO_BIOS_ON_NO_MARKER:-false}"
+ISO_BOOT_RECORD_SCAN_MAX_SECTORS="${ISO_BOOT_RECORD_SCAN_MAX_SECTORS:-512}"
 USE_VIRTUAL_TPM="0"
 USE_SECURE_BOOT="0"
 ENABLE_AUTO_BOOT_KEYPRESS="0"
@@ -185,6 +186,46 @@ print("0")
 PY
 }
 
+iso_has_el_torito_boot_record() {
+  local iso_path="$1"
+  local max_scan_sectors="${ISO_BOOT_RECORD_SCAN_MAX_SECTORS}"
+  python3 - "$iso_path" "$max_scan_sectors" <<'PY'
+import sys
+
+path = sys.argv[1]
+try:
+    max_sectors = int(sys.argv[2]) if len(sys.argv) > 2 else 512
+except Exception:
+    max_sectors = 512
+if max_sectors < 32:
+    max_sectors = 512
+
+sector_size = 2048
+start_sector = 16
+limit_sector = start_sector + max_sectors
+marker = b"EL TORITO SPECIFICATION"
+
+try:
+    with open(path, "rb", buffering=0) as handle:
+        handle.seek(start_sector * sector_size)
+        for _ in range(start_sector, limit_sector):
+            block = handle.read(sector_size)
+            if len(block) < sector_size:
+                break
+            if block[1:6] != b"CD001":
+                continue
+            descriptor_type = block[0]
+            if descriptor_type == 0 and marker in block[7:39]:
+                print("1")
+                raise SystemExit(0)
+            if descriptor_type == 255:
+                break
+except Exception:
+    pass
+print("0")
+PY
+}
+
 # Parse args from API style: --disk <path> --console <url> --cpu N --ram MB
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -281,6 +322,26 @@ if [[ -n "$BOOT_ISO" && "${EFI_ENABLED,,}" == "true" ]]; then
     else
       echo "UEFI markers were not detected within scan limit; keeping EFI setting unchanged."
     fi
+  fi
+fi
+
+if [[ -n "$BOOT_ISO" && "${BOOT_ORDER,,}" == *d* ]]; then
+  iso_bootable="0"
+  if [[ "$(iso_has_el_torito_boot_record "$BOOT_ISO")" == "1" ]]; then
+    iso_bootable="1"
+  elif [[ "$(iso_supports_uefi_boot "$BOOT_ISO")" == "1" ]]; then
+    iso_bootable="1"
+  fi
+  if [[ "$iso_bootable" != "1" ]]; then
+    original_boot_order="$BOOT_ORDER"
+    BOOT_ORDER="$(printf '%s' "$BOOT_ORDER" | tr -d 'dD')"
+    if [[ -z "$BOOT_ORDER" ]]; then
+      BOOT_ORDER="c"
+    elif [[ "${BOOT_ORDER,,}" != *c* ]]; then
+      BOOT_ORDER="c${BOOT_ORDER}"
+    fi
+    BOOT_ORDER="${BOOT_ORDER:0:3}"
+    echo "BOOT_ISO does not appear bootable; falling back from boot order ${original_boot_order} to ${BOOT_ORDER}."
   fi
 fi
 

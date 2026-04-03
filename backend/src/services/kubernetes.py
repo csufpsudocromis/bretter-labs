@@ -1165,7 +1165,32 @@ class KubernetesService:
         ]
         installer_iso_filename = str(getattr(req, "installer_iso_filename", "") or "").strip()
         if installer_iso_filename:
-            env_vars.append(client.V1EnvVar(name="BOOT_ISO", value=f"/data/{Path(installer_iso_filename).name}"))
+            normalized_iso_path = installer_iso_filename.lstrip("/").replace("\\", "/")
+            if ".." in Path(normalized_iso_path).parts:
+                raise ValueError("installer_iso_filename contains invalid path traversal segments")
+            if "/" in normalized_iso_path:
+                if not settings.kube_image_pvc:
+                    raise ValueError("BLABS_KUBE_IMAGE_PVC is required when installer ISO path includes a subdirectory")
+                image_library_volume_name = "image-library"
+                if not any(volume.name == image_library_volume_name for volume in volumes):
+                    volumes.append(
+                        client.V1Volume(
+                            name=image_library_volume_name,
+                            persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                                claim_name=settings.kube_image_pvc
+                            ),
+                        )
+                    )
+                    volume_mounts.append(
+                        client.V1VolumeMount(
+                            name=image_library_volume_name,
+                            mount_path="/image-library",
+                            read_only=True,
+                        )
+                    )
+                env_vars.append(client.V1EnvVar(name="BOOT_ISO", value=f"/image-library/{normalized_iso_path}"))
+            else:
+                env_vars.append(client.V1EnvVar(name="BOOT_ISO", value=f"/data/{Path(normalized_iso_path).name}"))
         boot_order = str(getattr(req, "boot_order", "") or "").strip()
         if boot_order:
             env_vars.append(client.V1EnvVar(name="BOOT_ORDER", value=boot_order))
