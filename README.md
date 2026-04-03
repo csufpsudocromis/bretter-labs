@@ -64,11 +64,6 @@ _Admin view: image/template operations, runtime controls, and health._
 ![User lab launch and connect flow](images/thumbnail1.png)
 _User view: launch feedback and in-browser connect workflow._
 
-### 60-second walkthrough
-
-- Publish a short demo video/GIF and link it here for first-time evaluators.
-- Suggested location: GitHub Discussions "Show and Tell" thread.
-
 ## What You Get
 
 ### Admin features
