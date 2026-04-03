@@ -233,7 +233,7 @@ ENABLE_MONITORING=1 \
 ## Notes
 
 - Runtime settings keeps detailed env/runtime values read-only, while exposing writable global concurrency and idle-timeout controls.
-- The default deployment posture is single-cluster with multiple nodes; multi-cluster controls are optional advanced operations documented separately.
+- The default deployment posture is single-cluster with multiple nodes.
 - `ADMIN_BOOTSTRAP_PASSWORD` is only used when no admin user exists; generated random bootstrap secret is one-time and force-reset on first login.
 - Backend startup is fail-fast if no admin user exists and `ADMIN_BOOTSTRAP_PASSWORD` is empty.
 - By default, setup prunes `BLABS_ADMIN_DEFAULT_PASSWORD` from the backend deployment after rollout to avoid long-lived bootstrap secrets in pod specs.

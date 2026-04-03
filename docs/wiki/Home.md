@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: April 2, 2026.
+Last reviewed: April 3, 2026.
 
 ## Audience paths
 
@@ -27,7 +27,6 @@ Last reviewed: April 2, 2026.
 - API contract checks: [API Contract and Drift Guardrails](API-Contract-and-Drift-Guardrails)
 - Tenant isolation: [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
 - Namespace lifecycle/recovery: [Namespace Lifecycle and Recovery](Namespace-Lifecycle-and-Recovery)
-- Multi-cluster operations: [Multi-Cluster Operations](Multi-Cluster-Operations)
 
 ## Core pages
 
@@ -47,7 +46,6 @@ Last reviewed: April 2, 2026.
 - [Post-Deploy Validation SOP](Post-Deploy-Validation-SOP)
 - [Tenant Isolation and Namespaces](Tenant-Isolation-and-Namespaces)
 - [Namespace Lifecycle and Recovery](Namespace-Lifecycle-and-Recovery)
-- [Multi-Cluster Operations](Multi-Cluster-Operations)
 - [Error Catalog](Error-Catalog)
 - [Network Modes Reference](Network-Modes-Reference)
 - [Storage Capacity Playbook](Storage-Capacity-Playbook)
@@ -123,7 +121,7 @@ Reference pages:
 - Explicit PostgreSQL Alembic migration gate in CI (`scripts/check_alembic_postgres.sh`)
 - Tenant isolation audit gate for values/RBAC/network policy posture (`scripts/audit_tenant_isolation.sh`)
 - Tenant namespace bootstrap script for namespace quota/policy scaffolding
-- Single-cluster multi-node runtime scheduling by default, with optional advanced multi-cluster APIs documented separately
+- Single-cluster multi-node runtime scheduling by default
 
 ## Architecture diagram
 

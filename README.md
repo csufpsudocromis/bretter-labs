@@ -247,7 +247,6 @@ Proof artifact and operator docs:
 - Post-deploy validation SOP: [docs/wiki/Post-Deploy-Validation-SOP.md](docs/wiki/Post-Deploy-Validation-SOP.md)
 - Console and RDP operations: [docs/wiki/Console-Providers-and-RDP-Operations.md](docs/wiki/Console-Providers-and-RDP-Operations.md)
 - Websocket reliability and diagnostics: [docs/wiki/WebSocket-Reliability-and-Diagnostics.md](docs/wiki/WebSocket-Reliability-and-Diagnostics.md)
-- Optional advanced multi-cluster operations and placement: [docs/wiki/Multi-Cluster-Operations.md](docs/wiki/Multi-Cluster-Operations.md)
 - Operator incident runbook: [docs/wiki/Operator-Incident-Runbook.md](docs/wiki/Operator-Incident-Runbook.md)
 - GitHub release/packages runbook: [docs/wiki/GitHub-Release-and-Packages-Operations.md](docs/wiki/GitHub-Release-and-Packages-Operations.md)
 
@@ -271,8 +270,6 @@ Proof artifact and operator docs:
 | `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`); production hardening requires `per_team` (namespace-first isolation) |
 | `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
 | `TEAM_NAMESPACE_BOOTSTRAP_ENABLED` | `1` | Auto-bootstrap per-team runtime namespaces (RBAC/quota/network policy/secret sync); required in production profile |
-| `MULTI_CLUSTER_LOCAL_CLUSTER_ID` | `local` | Optional advanced multi-cluster metadata for the local runtime cluster |
-| `MULTI_CLUSTER_LOCAL_REGION` | `local` | Optional advanced multi-cluster region label for the local runtime cluster record |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |

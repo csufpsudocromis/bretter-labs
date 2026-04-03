@@ -53,6 +53,10 @@ def scan_tracked_files() -> int:
             continue
         try:
             text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            # Allow scans to run during refactors where tracked files are already deleted
+            # in the working tree but not yet committed.
+            continue
         except UnicodeDecodeError:
             continue
         except Exception as exc:
