@@ -1864,7 +1864,49 @@ def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_ad
     assert req.instance_disk_pvc == "img-src-update-bootorder-check-1"
 
 
-def test_user_vm_launch_with_img_update_prefix_template_still_uses_isolated_disk(login_user: TestClient, monkeypatch):
+def test_admin_template_catalog_hides_system_image_update_templates(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-admin-update-hidden-check-1",
+                name="Windows 11",
+                filename="windows-11-admin-hidden.qcow2",
+                checksum="sha256:img-admin-update-hidden-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-admin-update-hidden-check-1",
+            )
+        )
+        session.add(
+            Template(
+                id="img-update-admin-hidden-check-1",
+                name="Image Update: Hidden",
+                description="System-managed template for updating image Windows 11",
+                os_type="windows",
+                image_id="img-admin-update-hidden-check-1",
+                cpu_cores=2,
+                ram_mb=4096,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=120,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="guacamole",
+            )
+        )
+        session.commit()
+
+    listed = login_admin.get("/admin/templates")
+    assert listed.status_code == 200, listed.text
+    ids = {item["id"] for item in listed.json()}
+    assert "img-update-admin-hidden-check-1" not in ids
+
+    updated = login_admin.patch(
+        "/admin/templates/img-update-admin-hidden-check-1",
+        json={"enabled": False},
+    )
+    assert updated.status_code == 403, updated.text
+
+
+def test_user_templates_hide_system_image_update_templates(login_user: TestClient):
     with Session(engine) as session:
         session.add(
             Image(
@@ -1894,20 +1936,43 @@ def test_user_vm_launch_with_img_update_prefix_template_still_uses_isolated_disk
         )
         session.commit()
 
-    captured = {}
+    listed = login_user.get("/user/templates")
+    assert listed.status_code == 200, listed.text
+    ids = {item["id"] for item in listed.json()}
+    assert "img-update-user-prefix-check-1" not in ids
 
-    def _create_pod(req):
-        captured["req"] = req
-        return PodStatus(instance_id=req.instance_id, phase="pending", disk_pvc=f"pvc-{req.instance_id[:8]}")
 
-    monkeypatch.setattr(kube, "create_pod", _create_pod)
-
-    launched = login_user.post("/user/templates/img-update-user-prefix-check-1/start")
-    assert launched.status_code == 201, launched.text
-    req = captured.get("req")
-    assert req is not None
-    assert req.image_source_pvc == "img-src-user-update-prefix-check-1"
-    assert req.instance_disk_pvc is None
+def test_user_cannot_start_system_image_update_template(login_user: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-user-update-prefix-check-2",
+                name="Windows 11",
+                filename="windows-11-user-prefix-2.qcow2",
+                checksum="sha256:img-user-update-prefix-check-2",
+                size_bytes=1024,
+                source_pvc="img-src-user-update-prefix-check-2",
+            )
+        )
+        session.add(
+            Template(
+                id="img-update-user-prefix-check-2",
+                name="User Windows Template",
+                description="System-managed template for updating image Windows 11",
+                os_type="windows",
+                image_id="img-user-update-prefix-check-2",
+                cpu_cores=2,
+                ram_mb=4096,
+                auto_delete_minutes=60,
+                idle_timeout_minutes=30,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.commit()
+    launched = login_user.post("/user/templates/img-update-user-prefix-check-2/start")
+    assert launched.status_code == 404, launched.text
 
 
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):

@@ -32,6 +32,7 @@ from ..models import (
     VMTemplateLaunchPreflightCheck,
 )
 from ..network_modes import normalize_vm_network_mode
+from ..rbac import Permission, has_permission
 from ..secret_codec import decrypt_secret, secret_is_configured
 from ..services.launch_lock import lock_user_launch_slot
 from ..services.labinstance_crd import (
@@ -629,17 +630,17 @@ def _vm_boot_order_for_launch(template: Template, image: Image) -> str | None:
 
 
 _SYSTEM_IMAGE_UPDATE_TEMPLATE_ID_PREFIX = "img-update-"
-_SYSTEM_IMAGE_UPDATE_DESCRIPTION_PREFIX = "system-managed template for updating image "
 
 
 def _is_system_image_update_template(template: Template | None) -> bool:
     if template is None:
         return False
     template_id = str(getattr(template, "id", "") or "").strip().lower()
-    if not template_id.startswith(_SYSTEM_IMAGE_UPDATE_TEMPLATE_ID_PREFIX):
-        return False
-    description = str(getattr(template, "description", "") or "").strip().lower()
-    return description.startswith(_SYSTEM_IMAGE_UPDATE_DESCRIPTION_PREFIX)
+    return template_id.startswith(_SYSTEM_IMAGE_UPDATE_TEMPLATE_ID_PREFIX)
+
+
+def _can_use_image_update_source_pvc(template: Template | None, user: User) -> bool:
+    return _is_system_image_update_template(template) and has_permission(user, Permission.IMAGES_WRITE)
 
 
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
@@ -877,7 +878,11 @@ def list_available_templates(
     templates = session.exec(
         select(Template).where(Template.enabled == True).where(Template.tenant.in_(tenant_scope))  # noqa: E712
     ).all()
-    templates = [record for record in templates if _template_enabled_for_namespace(record, selected_namespace)]
+    templates = [
+        record
+        for record in templates
+        if _template_enabled_for_namespace(record, selected_namespace) and not _is_system_image_update_template(record)
+    ]
     return [
         VMTemplate(
             id=record.id,
@@ -922,6 +927,8 @@ def preflight_template_launch(
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(Template, template_id)
     if not template or not template.enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    if _is_system_image_update_template(template) and not has_permission(user, Permission.IMAGES_WRITE):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_namespace = _template_namespace(template)
     if not _template_enabled_for_namespace(template, selected_namespace):
@@ -1593,6 +1600,8 @@ def start_vm(
     template = session.get(Template, template_id)
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    if _is_system_image_update_template(template) and not has_permission(user, Permission.IMAGES_WRITE):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_namespace = _template_namespace(template)
     if not _template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
@@ -1697,7 +1706,7 @@ def start_vm(
     pod_status: PodStatus | None = None
     disk_pvc: str | None = None
     if use_legacy_orchestration:
-        use_source_pvc_direct = _is_system_image_update_template(template)
+        use_source_pvc_direct = _can_use_image_update_source_pvc(template, user)
         warm_pool_pvc: str | None = None
         instance_disk_pvc: str | None = None
         if use_source_pvc_direct:
@@ -1902,6 +1911,8 @@ def restart_vm(
     privileged_runtime = _vm_uses_privileged_runtime()
     if not template or not template.enabled:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
+    if _is_system_image_update_template(template) and not has_permission(user, Permission.IMAGES_WRITE):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
     template_namespace = _template_namespace(template)
     if not _template_enabled_for_namespace(template, selected_namespace):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found or disabled")
@@ -1981,7 +1992,7 @@ def restart_vm(
     pod_status: PodStatus | None = None
     disk_pvc = record.disk_pvc
     if use_legacy_orchestration:
-        use_source_pvc_direct = _is_system_image_update_template(template)
+        use_source_pvc_direct = _can_use_image_update_source_pvc(template, user)
         # Ensure any old pod with the same name is removed before re-create.
         try:
             runtime_kube.delete_pod(
@@ -2125,7 +2136,7 @@ def delete_vm(
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     if use_legacy_orchestration:
-        keep_disk = _is_system_image_update_template(template)
+        keep_disk = _can_use_image_update_source_pvc(template, user)
         try:
             runtime_kube.delete_pod(
                 instance_id,

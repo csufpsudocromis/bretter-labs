@@ -6512,6 +6512,16 @@ def _template_enabled_namespaces_json(namespaces: list[str]) -> str:
     return json.dumps(normalize_namespace_scopes(namespaces), separators=(",", ":"))
 
 
+_IMAGE_UPDATE_TEMPLATE_ID_PREFIX = "img-update-"
+
+
+def _is_system_image_update_template(record: Template | None) -> bool:
+    if record is None:
+        return False
+    template_id = str(getattr(record, "id", "") or "").strip().lower()
+    return template_id.startswith(_IMAGE_UPDATE_TEMPLATE_ID_PREFIX)
+
+
 def _assert_actor_can_manage_template_namespaces(actor: User, namespaces: list[str]) -> None:
     if is_platform_admin(actor):
         return
@@ -6723,6 +6733,7 @@ def list_templates(
         record
         for record in templates
         if _template_visible_for_actor(record, actor, requested_namespace=requested_namespace)
+        and not _is_system_image_update_template(record)
     ]
     return [_template_to_model(record) for record in visible]
 
@@ -6744,6 +6755,11 @@ def update_template(
     record = session.get(Template, template_id)
     if not record or not _tenant_scoped_record(record, actor, include_global=True):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    if _is_system_image_update_template(record):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system-managed image update templates can only be launched from admin/images",
+        )
     if not _namespace_scoped_record(record, actor) and not namespace_enable_only:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
@@ -6915,6 +6931,11 @@ def delete_template(
         or not _namespace_scoped_record(record, actor)
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
+    if _is_system_image_update_template(record):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="system-managed image update templates can only be launched from admin/images",
+        )
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
     referenced_instances = session.exec(select(Instance).where(Instance.template_id == record.id)).all()
     if referenced_instances:
