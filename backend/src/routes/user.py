@@ -619,6 +619,16 @@ def _image_boot_order(record: Image) -> str | None:
     return None
 
 
+def _vm_boot_order_for_launch(template: Template, image: Image) -> str | None:
+    if _image_installer_iso_filename(image):
+        # Image update sessions should always boot installer media first when present,
+        # even for uploaded images that were later attached to an update ISO.
+        template_id = str(getattr(template, "id", "") or "").strip().lower()
+        if template_id.startswith("img-update-"):
+            return "dc"
+    return _image_boot_order(image)
+
+
 def _kube_for_instance_cluster(session: Session, cluster_id: str):
     try:
         return kube_service_for_cluster(session, cluster_id)
@@ -1696,7 +1706,7 @@ def start_vm(
             rdp_default_username=rdp_default_username,
             rdp_default_password=rdp_default_password,
             installer_iso_filename=_image_installer_iso_filename(image) or None,
-            boot_order=_image_boot_order(image),
+            boot_order=_vm_boot_order_for_launch(template, image),
             namespace=runtime_namespace,
         )
         try:
@@ -1979,7 +1989,7 @@ def restart_vm(
             rdp_default_username=rdp_default_username,
             rdp_default_password=rdp_default_password,
             installer_iso_filename=_image_installer_iso_filename(image) or None,
-            boot_order=_image_boot_order(image),
+            boot_order=_vm_boot_order_for_launch(template, image),
             namespace=runtime_namespace,
         )
         try:

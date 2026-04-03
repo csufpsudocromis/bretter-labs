@@ -1722,6 +1722,44 @@ def test_admin_create_image_from_iso_returns_validation_error_detail(login_admin
     assert "validation failed: qemu-img test failure" in created.json()["detail"]
 
 
+def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-update-bootorder-check-1",
+                name="Windows 11",
+                filename="windows-11.qcow2",
+                checksum="sha256:img-update-bootorder-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-update-bootorder-check-1",
+                source_kind="uploaded",
+                installer_iso_id="iso-update-bootorder-check-1",
+                installer_iso_filename="installer-win11.iso",
+                installer_os_type="windows",
+                installer_disk_size_gib=64,
+            )
+        )
+        session.commit()
+
+    captured = {}
+
+    def _create_pod(req):
+        captured["req"] = req
+        return PodStatus(instance_id=req.instance_id, phase="pending", disk_pvc=f"pvc-{req.instance_id[:8]}")
+
+    monkeypatch.setattr(kube, "create_pod", _create_pod)
+
+    launched = login_admin.post(
+        "/admin/images/img-update-bootorder-check-1/launch-update",
+        json={"os_type": "windows", "console_provider": "guacamole"},
+    )
+    assert launched.status_code == 201, launched.text
+    req = captured.get("req")
+    assert req is not None
+    assert req.installer_iso_filename == "installer-win11.iso"
+    assert req.boot_order == "dc"
+
+
 def test_team_namespace_quota_caps_launch_and_idle_timeout(login_user: TestClient):
     _seed_vm_template()
     _seed_container_template()
