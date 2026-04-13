@@ -98,6 +98,7 @@ from ..rbac import (
     set_role_definition,
 )
 from ..services.labimageimport_crd import (
+    delete_labimageimport_best_effort,
     image_import_writes_crd,
     patch_labimageimport_status_for_task,
     upsert_labimageimport_for_task,
@@ -5558,6 +5559,7 @@ def cleanup_operation_upload_task(
             except Exception as exc:
                 logger.warning("Failed to remove upload artifact %s for task %s: %s", candidate, task.id, exc)
 
+    crd_task_id = str(task.id)
     _cleanup_task_jobs(task)
     _record_admin_audit_event(
         session,
@@ -5570,6 +5572,9 @@ def cleanup_operation_upload_task(
     )
     session.delete(task)
     session.commit()
+    # Remove the CRD shadow object too; otherwise a stale LabImageImport can keep
+    # recreating CDI importer resources even after the operation task is removed.
+    delete_labimageimport_best_effort(crd_task_id)
     return AdminOperationActionResult(
         ok=True,
         detail="Upload task cleanup completed.",
