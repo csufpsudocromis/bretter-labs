@@ -386,6 +386,17 @@ def _reconcile_managed_namespace(row: ManagedNamespace) -> None:
     )
 
 
+def _ensure_control_namespace_managed_row(session: Session) -> None:
+    default_namespace = normalize_namespace(getattr(settings, "kube_namespace", None)) or "labs"
+    existing = session.exec(select(ManagedNamespace).where(ManagedNamespace.namespace == default_namespace)).first()
+    if existing is not None:
+        return
+    payload = ManagedNamespaceCreate(namespace=default_namespace, enabled=True)
+    row = _apply_create_payload(payload)
+    session.add(row)
+    session.commit()
+
+
 def _parse_enabled_namespaces(raw: str | None) -> list[str]:
     payload = str(raw or "").strip()
     if not payload:
@@ -1008,6 +1019,8 @@ def list_managed_namespaces(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> list[ManagedNamespaceOut]:
+    if is_platform_admin(actor):
+        _ensure_control_namespace_managed_row(session)
     stmt = select(ManagedNamespace)
     scope = _namespace_scope_for_actor(actor)
     if scope is not None:
@@ -1029,6 +1042,8 @@ def list_managed_namespace_observability(
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
 ) -> list[ManagedNamespaceObservabilityOut]:
+    if is_platform_admin(actor):
+        _ensure_control_namespace_managed_row(session)
     stmt = select(ManagedNamespace)
     scope = _namespace_scope_for_actor(actor)
     if scope is not None:

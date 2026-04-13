@@ -16,6 +16,13 @@ from src.tables import (
 from src.time_utils import utc_now
 
 
+def test_admin_managed_namespaces_auto_include_control_namespace(login_admin: TestClient) -> None:
+    listed = login_admin.get("/admin/settings/namespaces")
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert any(row["namespace"] == "labs" for row in rows)
+
+
 def test_admin_managed_namespace_crud(login_admin: TestClient, monkeypatch) -> None:
     monkeypatch.setattr(admin_namespaces_routes, "_reconcile_managed_namespace", lambda _row: None)
 

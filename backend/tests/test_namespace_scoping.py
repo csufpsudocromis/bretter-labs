@@ -220,3 +220,48 @@ def test_user_running_labs_do_not_cross_list_from_template_enabled_namespace(
 
     stopped = login_user.post("/user/pods/inst-vm-visible/stop", headers={"X-Bretter-Namespace": "test-namespace"})
     assert stopped.status_code == 404, stopped.text
+
+
+def test_user_running_labs_follow_launch_namespace_even_when_runtime_namespace_falls_back_to_labs(
+    login_user: TestClient,
+) -> None:
+    _seed_vm_template(
+        image_id="img-vm-launch-ns", template_id="tmpl-vm-launch-ns", namespace="labs", shared_catalog=True
+    )
+    with Session(engine) as session:
+        user = session.get(User, "alice")
+        assert user is not None
+        user.namespace_scopes_json = json.dumps(["labs", "test-namespace"])
+
+        session.add(
+            Instance(
+                id="inst-vm-launch-ns",
+                template_id="tmpl-vm-launch-ns",
+                owner="alice",
+                tenant="global",
+                launch_namespace="test-namespace",
+                namespace="labs-vm-priv-default",
+                cluster_id="local",
+                status="running",
+                disk_pvc="pvc-inst-vm-launch-ns",
+                started_at=utc_now(),
+                last_active_at=utc_now(),
+                console_url="/user/pods/inst-vm-launch-ns/connect/vnc.html",
+            )
+        )
+        session.add(user)
+        session.commit()
+
+    listed_test_ns = login_user.get("/user/pods", headers={"X-Bretter-Namespace": "test-namespace"})
+    assert listed_test_ns.status_code == 200, listed_test_ns.text
+    rows_test_ns = listed_test_ns.json()
+    ids_test_ns = {row["id"] for row in rows_test_ns}
+    assert "inst-vm-launch-ns" in ids_test_ns
+    target = next((row for row in rows_test_ns if row["id"] == "inst-vm-launch-ns"), None)
+    assert target is not None
+    assert target["namespace"] == "test-namespace"
+
+    listed_labs = login_user.get("/user/pods", headers={"X-Bretter-Namespace": "labs"})
+    assert listed_labs.status_code == 200, listed_labs.text
+    ids_labs = {row["id"] for row in listed_labs.json()}
+    assert "inst-vm-launch-ns" not in ids_labs

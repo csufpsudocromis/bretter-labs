@@ -142,6 +142,7 @@ class Instance(SQLModel, table=True):
     template_id: str = Field(foreign_key="template.id")
     owner: str = Field(foreign_key="user.username")
     tenant: str = Field(default="default", index=True)
+    launch_namespace: str = Field(default="labs", index=True)
     namespace: str = Field(default="labs", index=True)
     cluster_id: str = Field(default="local", index=True)
     status: str = "pending"

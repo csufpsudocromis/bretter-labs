@@ -1817,6 +1817,8 @@ def _ensure_instance_columns() -> None:
             cur.execute("ALTER TABLE instance ADD COLUMN disk_pvc TEXT")
         if "tenant" not in cols:
             cur.execute("ALTER TABLE instance ADD COLUMN tenant TEXT DEFAULT 'default'")
+        if "launch_namespace" not in cols:
+            cur.execute("ALTER TABLE instance ADD COLUMN launch_namespace TEXT DEFAULT 'labs'")
         if "namespace" not in cols:
             cur.execute("ALTER TABLE instance ADD COLUMN namespace TEXT DEFAULT 'labs'")
         if "cluster_id" not in cols:
@@ -1825,6 +1827,11 @@ def _ensure_instance_columns() -> None:
         if "tenant" in cols:
             cur.execute("UPDATE instance SET tenant = 'default' WHERE tenant IS NULL OR trim(tenant) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_tenant ON instance(tenant)")
+        if "launch_namespace" in cols:
+            cur.execute(
+                "UPDATE instance SET launch_namespace = namespace WHERE launch_namespace IS NULL OR trim(launch_namespace) = ''"
+            )
+            cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_launch_namespace ON instance(launch_namespace)")
         if "namespace" in cols:
             cur.execute("UPDATE instance SET namespace = 'labs' WHERE namespace IS NULL OR trim(namespace) = ''")
             cur.execute("CREATE INDEX IF NOT EXISTS ix_instance_namespace ON instance(namespace)")

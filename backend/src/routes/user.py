@@ -508,13 +508,21 @@ def _resolve_vm_runtime_namespace_for_image(runtime_kube, desired_namespace: str
     return source_namespace
 
 
-def _instance_namespace(record: Instance, user: User | None = None) -> str:
+def _instance_runtime_namespace(record: Instance, user: User | None = None) -> str:
     explicit = str(getattr(record, "namespace", "") or "").strip()
     if explicit:
         return explicit
     if user is not None:
         return _vm_runtime_namespace(user)
     return str(settings.kube_namespace or "labs").strip() or "labs"
+
+
+def _instance_launch_namespace(record: Instance, user: User | None = None) -> str:
+    explicit = str(getattr(record, "launch_namespace", "") or "").strip()
+    if explicit:
+        return explicit
+    # Backward-compatibility for rows created before launch_namespace existed.
+    return _instance_runtime_namespace(record, user)
 
 
 def _instance_visible_in_namespace(
@@ -526,7 +534,7 @@ def _instance_visible_in_namespace(
     selected = normalize_namespace(selected_namespace)
     if not selected:
         return False
-    instance_ns = normalize_namespace(_instance_namespace(record, user))
+    instance_ns = normalize_namespace(_instance_launch_namespace(record, user))
     return instance_ns == selected
 
 
@@ -1011,7 +1019,7 @@ def list_user_pods(
             session.add(record)
             changed = True
         tmpl = templates.get(record.template_id)
-        record_namespace = _instance_namespace(record, user)
+        record_namespace = _instance_runtime_namespace(record, user)
         instance_cluster_id = _instance_cluster_id(record)
         runtime_kube = _kube_for_instance_cluster(session, instance_cluster_id)
         console_provider = normalize_vm_console_provider(
@@ -1074,7 +1082,7 @@ def list_user_pods(
                 tenant=normalize_tenant(
                     getattr(record, "tenant", None), default=normalize_tenant(user.team, default="default")
                 ),
-                namespace=_instance_namespace(record, user),
+                namespace=_instance_launch_namespace(record, user),
                 cluster_id=_instance_cluster_id(record),
                 status=record.status,
                 status_stage=stage,
@@ -1127,8 +1135,8 @@ def issue_vm_connect_token(
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
     idle_minutes = _namespace_vm_idle_timeout_minutes(session, selected_namespace, template)
-    instance_namespace = _instance_namespace(record, user)
-    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
+    instance_namespace = _instance_runtime_namespace(record, user)
+    idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), selected_namespace)
     if idle_cap is not None:
         idle_minutes = min(idle_minutes, idle_cap)
     console_provider = normalize_vm_console_provider(
@@ -1243,7 +1251,7 @@ async def proxy_vm_console(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
-    instance_namespace = _instance_namespace(record, user)
+    instance_namespace = _instance_runtime_namespace(record, user)
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
@@ -1251,8 +1259,9 @@ async def proxy_vm_console(
     normalized_path = proxy_path.strip("/")
     if not normalized_path:
         template = session.get(Template, record.template_id)
-        idle_minutes = _namespace_vm_idle_timeout_minutes(session, instance_namespace, template)
-        idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), instance_namespace)
+        display_namespace = _instance_launch_namespace(record, user)
+        idle_minutes = _namespace_vm_idle_timeout_minutes(session, display_namespace, template)
+        idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), display_namespace)
         if idle_cap is not None:
             idle_minutes = min(idle_minutes, idle_cap)
         console_provider = normalize_vm_console_provider(
@@ -1387,7 +1396,7 @@ async def proxy_vm_console_ws(
         ws_metrics.record_disconnect(resource_type, direction="downstream", code="4409")
         await websocket.close(code=4409, reason="instance is not running")
         return
-    instance_namespace = _instance_namespace(record, user)
+    instance_namespace = _instance_runtime_namespace(record, user)
     record.last_active_at = utc_now()
     session.add(record)
     session.commit()
@@ -1766,6 +1775,7 @@ def start_vm(
         template_id=template.id,
         owner=user.username,
         tenant=user_tenant,
+        launch_namespace=selected_namespace,
         namespace=runtime_namespace,
         cluster_id=selected_cluster_id,
         status="pending",
@@ -1809,7 +1819,7 @@ def start_vm(
         template_id=instance.template_id,
         owner=instance.owner,
         tenant=normalize_tenant(getattr(instance, "tenant", None), default=user_tenant),
-        namespace=str(getattr(instance, "namespace", "") or runtime_namespace),
+        namespace=str(getattr(instance, "launch_namespace", "") or selected_namespace),
         cluster_id=_instance_cluster_id(instance),
         status=instance.status,
         status_stage=stage,
@@ -1834,7 +1844,7 @@ def stop_vm(
         user, request=request, fallback_namespace=tenant_namespace_for_user(user)
     )
     template = session.get(Template, record.template_id)
-    instance_namespace = _instance_namespace(record, user)
+    instance_namespace = _instance_runtime_namespace(record, user)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
@@ -1871,7 +1881,7 @@ def stop_vm(
         tenant=normalize_tenant(
             getattr(record, "tenant", None), default=normalize_tenant(user.team, default="default")
         ),
-        namespace=instance_namespace,
+        namespace=_instance_launch_namespace(record, user),
         cluster_id=_instance_cluster_id(record),
         status=record.status,
         status_stage=stage,
@@ -2059,6 +2069,7 @@ def restart_vm(
 
     record.status = "pending"
     record.tenant = user_tenant
+    record.launch_namespace = selected_namespace
     record.namespace = runtime_namespace
     record.cluster_id = selected_cluster_id
     record.disk_pvc = disk_pvc
@@ -2096,7 +2107,7 @@ def restart_vm(
         template_id=record.template_id,
         owner=record.owner,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=user_tenant),
-        namespace=runtime_namespace,
+        namespace=_instance_launch_namespace(record, user),
         cluster_id=_instance_cluster_id(record),
         status=record.status,
         status_stage=stage,
@@ -2123,7 +2134,7 @@ def delete_vm(
     template = session.get(Template, record.template_id)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    instance_namespace = _instance_namespace(record, user)
+    instance_namespace = _instance_runtime_namespace(record, user)
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
