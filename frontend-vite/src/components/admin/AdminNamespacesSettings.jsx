@@ -386,16 +386,6 @@ const AdminNamespacesSettings = () => {
     if (value === null || value === undefined || value === "") return "Unlimited";
     return `${value}${suffix}`;
   };
-  const pctLabel = (value) => `${Number(value || 0).toFixed(1)}%`;
-  const formatDuration = (seconds) => {
-    const total = Math.max(0, Number(seconds || 0));
-    if (!Number.isFinite(total) || total <= 0) return "0s";
-    const mins = Math.floor(total / 60);
-    const rem = Math.floor(total % 60);
-    if (mins <= 0) return `${rem}s`;
-    return `${mins}m ${rem}s`;
-  };
-
   return (
     <div>
       <h2>Managed Namespaces</h2>
@@ -774,68 +764,6 @@ const AdminNamespacesSettings = () => {
               </div>
             ))}
           </div>
-          {observabilityRows.length > 0 && (
-            <div className="card" style={{ marginTop: "1rem" }}>
-              <h4>Namespace Health Cards</h4>
-              <div className="tile-grid">
-                {observabilityRows.map((item) => (
-                  <div key={`obs-${item.namespace}`} className="tile template-tile">
-                    <div className="tile-header">
-                      <h4>{item.namespace}</h4>
-                      <span className={`badge ${item.present_in_cluster ? "success" : "warn"}`}>
-                        {item.present_in_cluster ? "Present" : "Missing"}
-                      </span>
-                    </div>
-                    <div className="small muted">
-                      Running: {item.running_total_instances} | Failed: {item.failed_total_instances} | Queued CT:{" "}
-                      {item.queued_container_instances}
-                    </div>
-                    <div className="small muted">
-                      SLO ({item.slo_window_minutes || 60}m): VM fail{" "}
-                      {Number(item.vm_launch_failure_rate_pct || 0).toFixed(2)}% ({item.vm_launches_failed}/
-                      {item.vm_launches_total}) | Upload fail{" "}
-                      {Number(item.upload_finalize_failure_rate_pct || 0).toFixed(2)}% ({item.upload_finalizes_failed}/
-                      {item.upload_finalizes_total})
-                    </div>
-                    <div className="small muted">
-                      Queue oldest pending: {formatDuration(item.queue_oldest_pending_seconds)} | Error budget
-                      remaining: {Number(item.error_budget_remaining_pct || 0).toFixed(2)}%
-                    </div>
-                    <div className="small muted">
-                      Quota usage: labs {item.quota_current_concurrent_labs}/
-                      {limitLabel(item.quota_max_concurrent_labs)} ({pctLabel(item.quota_concurrent_usage_pct)}) | CPU{" "}
-                      {item.quota_current_cpu_millicores}m/{limitLabel(item.quota_max_cpu_millicores, "m")} (
-                      {pctLabel(item.quota_cpu_usage_pct)}) | RAM {item.quota_current_memory_mb}MB/
-                      {limitLabel(item.quota_max_memory_mb, "MB")} ({pctLabel(item.quota_memory_usage_pct)})
-                    </div>
-                    <div className="small muted">
-                      Pending PVCs: {item.pending_pvc_count} | Oldest import pending:{" "}
-                      {formatDuration(item.image_import_oldest_pending_seconds)} | Recent failures (60m):{" "}
-                      {item.recent_failures_60m}
-                    </div>
-                    <div className="small muted">
-                      Upload tasks pending: {item.image_upload_tasks_pending} | failed: {item.image_upload_tasks_failed}
-                    </div>
-                    <div className="small muted">
-                      Quota: {item.resource_quota_present ? "ok" : "missing"} | LimitRange:{" "}
-                      {item.limit_range_present ? "ok" : "missing"} | Netpol: {item.network_policy_count}
-                    </div>
-                    <div className="small muted">
-                      Drift: {item.drift_count || 0} | Alert route key: {item.alert_route_key || "-"}
-                    </div>
-                    {item.required_network_policies_missing?.length > 0 && (
-                      <div className="small muted">
-                        Missing policies: {item.required_network_policies_missing.join(", ")}
-                      </div>
-                    )}
-                    {item.drift_items?.length > 0 && (
-                      <div className="small muted">Drift details: {item.drift_items.join(" | ")}</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>
