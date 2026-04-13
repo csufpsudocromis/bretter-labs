@@ -23,12 +23,28 @@ const namespaceFromPath = () => {
 
 api.interceptors.request.use((config) => {
   const namespace = namespaceFromPath();
-  const headers = { ...(config.headers || {}) };
-  if (namespace) {
-    headers["X-Bretter-Namespace"] = namespace;
+  if (!namespace) {
+    return config;
   }
-  return { ...config, headers };
+  if (config.headers && typeof config.headers.set === "function") {
+    config.headers.set("X-Bretter-Namespace", namespace);
+  } else {
+    config.headers = {
+      ...(config.headers || {}),
+      "X-Bretter-Namespace": namespace,
+    };
+  }
+  return config;
 });
+
+const namespaceFromRequestConfig = (config) => {
+  const headers = config?.headers;
+  if (!headers) return "";
+  if (typeof headers.get === "function") {
+    return String(headers.get("X-Bretter-Namespace") || headers.get("x-bretter-namespace") || "").trim();
+  }
+  return String(headers["X-Bretter-Namespace"] || headers["x-bretter-namespace"] || "").trim();
+};
 
 api.interceptors.response.use(
   (response) => response,
@@ -53,7 +69,7 @@ api.interceptors.response.use(
       );
     }
     if (status === 403 && typeof window !== "undefined") {
-      const namespace = namespaceFromPath();
+      const namespace = namespaceFromPath() || namespaceFromRequestConfig(error?.config);
       const fallback = namespace
         ? `Access denied for namespace "${namespace}".`
         : "Access denied for the requested namespace or action.";
