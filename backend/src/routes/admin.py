@@ -6327,6 +6327,26 @@ def save_image_update_vm(
         write_crd_shadow = vm_orchestration_writes_crd()
         if use_legacy_orchestration:
             try:
+                runtime_kube.stop_pod(
+                    active_instance.id,
+                    str(getattr(active_instance, "owner", "") or ""),
+                    namespace=instance_namespace,
+                )
+            except ApiException as exc:
+                if exc.status not in {404, 409, 422}:
+                    logger.warning(
+                        "Failed to stop update VM pod %s before delete: %s",
+                        active_instance.id,
+                        exc,
+                        exc_info=True,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to stop update VM pod %s before delete.",
+                    active_instance.id,
+                    exc_info=True,
+                )
+            try:
                 runtime_kube.delete_pod(
                     active_instance.id,
                     str(getattr(active_instance, "owner", "") or ""),

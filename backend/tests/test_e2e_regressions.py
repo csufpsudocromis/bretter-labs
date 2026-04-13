@@ -1909,8 +1909,18 @@ def test_admin_save_update_vm_stops_instance_and_refreshes_clone_pool(login_admi
 
     class _RuntimeKubeStub:
         def __init__(self):
+            self.stop_calls = []
             self.delete_calls = []
             self.ensure_calls = []
+
+        def stop_pod(self, instance_id, owner, namespace=None):
+            self.stop_calls.append(
+                {
+                    "instance_id": instance_id,
+                    "owner": owner,
+                    "namespace": namespace,
+                }
+            )
 
         def delete_pod(
             self,
@@ -1948,6 +1958,13 @@ def test_admin_save_update_vm_stops_instance_and_refreshes_clone_pool(login_admi
     assert "Stopped update VM" in payload["detail"]
     assert "Refreshed clone pools for 1 template(s)." in payload["detail"]
 
+    assert runtime.stop_calls == [
+        {
+            "instance_id": "inst-save-update-check-1",
+            "owner": "admin",
+            "namespace": "labs",
+        }
+    ]
     assert runtime.delete_calls == [
         {
             "instance_id": "inst-save-update-check-1",
