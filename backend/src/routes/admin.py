@@ -6675,9 +6675,8 @@ def rename_image(
             requested_iso_image_id == current_installer_iso_id
             and current_installer_iso_id
             and current_installer_iso_filename
-            and "/" not in current_installer_iso_filename
         ):
-            # No ISO change requested and media already exists on the source PVC.
+            # No ISO change requested; keep existing metadata/path.
             pass
         else:
             image_namespace = _record_namespace(record)
@@ -6696,11 +6695,9 @@ def rename_image(
             except Exception:
                 iso_rel_path = f"{Path(settings.iso_storage_root).name}/{iso_record.filename}"
             record.installer_iso_id = iso_record.id
-            installer_iso_filename = _materialize_installer_iso_for_image(
-                image=record,
-                source_relative_path=iso_rel_path,
-            )
-            record.installer_iso_filename = installer_iso_filename
+            # Keep save/edit latency low by storing a library-relative path.
+            # launch-update materializes this into the source PVC before pod create.
+            record.installer_iso_filename = iso_rel_path
 
     if record.filename != new_filename:
         src_path = _image_dir() / record.filename

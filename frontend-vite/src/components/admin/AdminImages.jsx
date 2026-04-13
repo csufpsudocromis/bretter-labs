@@ -28,6 +28,7 @@ const AdminImages = () => {
   const [editDefaultRamMb, setEditDefaultRamMb] = useState(4096);
   const [editUpdateIsoImageId, setEditUpdateIsoImageId] = useState("");
   const [editOriginal, setEditOriginal] = useState(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const [creatingImage, setCreatingImage] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createIsoId, setCreateIsoId] = useState("");
@@ -277,6 +278,7 @@ const AdminImages = () => {
   };
 
   const saveEdit = async () => {
+    setSavingEdit(true);
     try {
       const payload = {};
       const normalizedCpu = Math.max(1, Number(editDefaultCpuCores || 2));
@@ -311,6 +313,8 @@ const AdminImages = () => {
       load();
     } catch (err) {
       setError(err.response?.data?.detail || "Update failed");
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -558,8 +562,10 @@ const AdminImages = () => {
                   </label>
                 )}
                 <div className="actions">
-                  <button onClick={saveEdit}>Save</button>
-                  <button className="ghost" onClick={cancelEdit}>
+                  <button onClick={saveEdit} disabled={savingEdit}>
+                    {savingEdit ? "Saving..." : "Save"}
+                  </button>
+                  <button className="ghost" onClick={cancelEdit} disabled={savingEdit}>
                     Cancel
                   </button>
                 </div>

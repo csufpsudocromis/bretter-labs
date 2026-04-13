@@ -1968,7 +1968,7 @@ def test_admin_edit_image_does_not_recopy_same_installer_iso(login_admin: TestCl
     assert body["installer_iso_id"] == "iso-image-edit-same-check-1"
 
 
-def test_admin_edit_image_switches_iso_and_materializes_media_on_source_pvc(login_admin: TestClient, monkeypatch):
+def test_admin_edit_image_switches_iso_without_immediate_copy(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(
             IsoImage(
@@ -2011,16 +2011,14 @@ def test_admin_edit_image_switches_iso_and_materializes_media_on_source_pvc(logi
         },
     )
     assert updated.status_code == 200, updated.text
-    assert len(copy_calls) == 1
-    assert copy_calls[0]["source_claim"] == settings.kube_image_pvc
-    assert copy_calls[0]["target_claim"] == "img-src-edit-switch-iso-check-1"
-    assert copy_calls[0]["source_relative_path"].endswith("/win-drivers.iso")
+    assert copy_calls == []
     body = updated.json()
     assert body["installer_iso_id"] == "iso-image-edit-switch-check-1"
-    assert body["installer_iso_filename"] == "installer-iso-imag-win-drivers.iso"
+    assert body["installer_iso_filename"].endswith("/win-drivers.iso")
+    assert body["installer_iso_filename"].startswith("iso-images/")
 
 
-def test_admin_edit_image_with_legacy_iso_path_recopies_same_iso(login_admin: TestClient, monkeypatch):
+def test_admin_edit_image_with_legacy_iso_path_does_not_recopy_same_iso(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(
             IsoImage(
@@ -2061,10 +2059,8 @@ def test_admin_edit_image_with_legacy_iso_path_recopies_same_iso(login_admin: Te
         },
     )
     assert updated.status_code == 200, updated.text
-    assert len(copy_calls) == 1
-    assert copy_calls[0]["source_relative_path"] == "iso-images/legacy-driver.iso"
-    assert copy_calls[0]["target_claim"] == "img-src-edit-legacy-iso-check-1"
-    assert updated.json()["installer_iso_filename"] == "installer-iso-imag-legacy-driver.iso"
+    assert copy_calls == []
+    assert updated.json()["installer_iso_filename"] == "iso-images/legacy-driver.iso"
 
 
 def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_admin: TestClient, monkeypatch):
