@@ -167,7 +167,7 @@ POD_READY_WAIT_SECONDS = 120
 POD_READY_SLEEP = 2
 FINALIZE_JOB_TIMEOUT_SECONDS = 3 * 60 * 60
 COPY_JOB_TIMEOUT_SECONDS = 3 * 60 * 60
-TASK_RETENTION_HOURS = 24
+TASK_RETENTION_SECONDS = 300
 FINALIZE_MAX_RETRIES = max(0, int(getattr(settings, "image_finalize_max_retries", 3) or 3))
 FINALIZE_RETRY_BASE_SECONDS = max(5, int(getattr(settings, "image_finalize_retry_base_seconds", 15) or 15))
 FINALIZE_RETRY_MAX_SECONDS = max(30, int(getattr(settings, "image_finalize_retry_max_seconds", 600) or 600))
@@ -2800,7 +2800,7 @@ echo "BLABS_OUTPUT_SHA256=${sha}"
         ),
         spec=client.V1JobSpec(
             backoff_limit=1,
-            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            ttl_seconds_after_finished=TASK_RETENTION_SECONDS,
             active_deadline_seconds=FINALIZE_JOB_TIMEOUT_SECONDS,
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels={"upload-task": task.id, "job-type": "image-finalize"}),
@@ -2940,7 +2940,7 @@ echo "BLABS_OUTPUT_SHA256=${sha}"
         ),
         spec=client.V1JobSpec(
             backoff_limit=1,
-            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            ttl_seconds_after_finished=TASK_RETENTION_SECONDS,
             active_deadline_seconds=FINALIZE_JOB_TIMEOUT_SECONDS,
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels={"upload-task": task.id, "job-type": "image-finalize"}),
@@ -3106,7 +3106,7 @@ echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
         ),
         spec=client.V1JobSpec(
             backoff_limit=1,
-            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            ttl_seconds_after_finished=TASK_RETENTION_SECONDS,
             active_deadline_seconds=COPY_JOB_TIMEOUT_SECONDS,
             template=client.V1PodTemplateSpec(
                 metadata=client.V1ObjectMeta(labels={"upload-task": task.id, "job-type": "image-copy"}),
@@ -3819,7 +3819,7 @@ echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
         spec=client.V1JobSpec(
             backoff_limit=1,
             active_deadline_seconds=COPY_JOB_TIMEOUT_SECONDS,
-            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            ttl_seconds_after_finished=TASK_RETENTION_SECONDS,
             template=client.V1PodTemplateSpec(spec=spec),
         ),
     )
@@ -3927,7 +3927,7 @@ echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
         spec=client.V1JobSpec(
             backoff_limit=1,
             active_deadline_seconds=COPY_JOB_TIMEOUT_SECONDS,
-            ttl_seconds_after_finished=TASK_RETENTION_HOURS * 3600,
+            ttl_seconds_after_finished=TASK_RETENTION_SECONDS,
             template=client.V1PodTemplateSpec(spec=spec),
         ),
     )
