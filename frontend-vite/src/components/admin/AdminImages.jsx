@@ -8,6 +8,14 @@ const formatGiB = (value) => {
   return `${(bytes / 1024 ** 3).toFixed(bytes >= 10 * 1024 ** 3 ? 0 : 1)} GiB`;
 };
 
+const suggestCopyFilename = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const dot = raw.lastIndexOf(".");
+  if (dot <= 0) return `${raw}-copy`;
+  return `${raw.slice(0, dot)}-copy${raw.slice(dot)}`;
+};
+
 const AdminImages = () => {
   const [images, setImages] = useState([]);
   const [isoImages, setIsoImages] = useState([]);
@@ -29,6 +37,10 @@ const AdminImages = () => {
   const [editUpdateIsoImageId, setEditUpdateIsoImageId] = useState("");
   const [editOriginal, setEditOriginal] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [copySourceId, setCopySourceId] = useState(null);
+  const [copyName, setCopyName] = useState("");
+  const [copyFilename, setCopyFilename] = useState("");
+  const [savingCopy, setSavingCopy] = useState(false);
   const [creatingImage, setCreatingImage] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createIsoId, setCreateIsoId] = useState("");
@@ -260,6 +272,9 @@ const AdminImages = () => {
   };
 
   const startEdit = (img) => {
+    setCopySourceId(null);
+    setCopyName("");
+    setCopyFilename("");
     setEditId(img.id);
     setEditName(img.name);
     setEditFilename(img.filename || img.name);
@@ -275,6 +290,50 @@ const AdminImages = () => {
       defaultRamMb: Math.max(512, Number(img.update_ram_mb_default || 4096)),
       updateIsoImageId: String(img.installer_iso_id || ""),
     });
+  };
+
+  const startCopy = (img) => {
+    setEditId(null);
+    setEditOriginal(null);
+    setEditName("");
+    setEditFilename("");
+    const sourceName = String(img.name || "").trim();
+    setCopySourceId(img.id);
+    setCopyName(sourceName ? `${sourceName} Copy` : "Image Copy");
+    setCopyFilename(suggestCopyFilename(img.filename || ""));
+    setMessage("");
+    setError("");
+  };
+
+  const cancelCopy = () => {
+    setCopySourceId(null);
+    setCopyName("");
+    setCopyFilename("");
+  };
+
+  const saveCopy = async () => {
+    const sourceId = String(copySourceId || "").trim();
+    if (!sourceId || !copyName.trim() || !copyFilename.trim()) {
+      setError("Copy name and filename are required");
+      return;
+    }
+    setSavingCopy(true);
+    setMessage("");
+    setError("");
+    try {
+      const payload = {
+        name: copyName.trim(),
+        filename: copyFilename.trim(),
+      };
+      const res = await api.post(`/admin/images/${sourceId}/copy`, payload);
+      setMessage(`Created copy ${res?.data?.name || payload.name}`);
+      cancelCopy();
+      load();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Create copy failed");
+    } finally {
+      setSavingCopy(false);
+    }
   };
 
   const saveEdit = async () => {
@@ -572,7 +631,34 @@ const AdminImages = () => {
               </div>
             </>
           )}
-          {!editId && (
+          {!editId && copySourceId && (
+            <>
+              <hr />
+              <h3>Create Copy of Golden Image</h3>
+              <div className="form">
+                <label>
+                  New name
+                  <input value={copyName} onChange={(event) => setCopyName(event.target.value)} />
+                </label>
+                <label>
+                  New filename
+                  <input value={copyFilename} onChange={(event) => setCopyFilename(event.target.value)} />
+                </label>
+                <div className="muted small">
+                  A copy requires a unique name and filename. The new image keeps the same disk content and defaults.
+                </div>
+                <div className="actions">
+                  <button onClick={saveCopy} disabled={savingCopy || !copyName.trim() || !copyFilename.trim()}>
+                    {savingCopy ? "Copying..." : "Create Copy"}
+                  </button>
+                  <button className="ghost" onClick={cancelCopy} disabled={savingCopy}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+          {!editId && !copySourceId && (
             <>
               <hr />
               <h3>Create Image</h3>
@@ -679,6 +765,13 @@ const AdminImages = () => {
                   <div className="actions">
                     <button className="ghost" onClick={() => startEdit(img)}>
                       Edit
+                    </button>
+                    <button
+                      className="ghost"
+                      onClick={() => startCopy(img)}
+                      disabled={Boolean(launchingImageId) || Boolean(savingImageId) || savingCopy}
+                    >
+                      {savingCopy && copySourceId === img.id ? "Copying..." : "Create Copy"}
                     </button>
                     {(() => {
                       const hasPendingUpdate = Boolean(updateSessionByImage?.[img.id]);

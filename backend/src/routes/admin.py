@@ -4223,6 +4223,12 @@ class ImageRename(BaseModel):
     skip_validation: bool = False
 
 
+class ImageCopyRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    filename: str = Field(min_length=1, max_length=255)
+    skip_validation: bool = False
+
+
 class IsoImageRename(BaseModel):
     name: str | None = None
     description: str | None = Field(default=None, max_length=1024)
@@ -6222,6 +6228,202 @@ def create_image_from_iso(
         checksum=record.checksum,
         size_bytes=record.size_bytes,
         created_at=record.created_at,
+    )
+
+
+@router.post(
+    "/images/{image_id}/copy",
+    response_model=ImageCreateResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def copy_image(
+    image_id: str,
+    payload: ImageCopyRequest,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> ImageCreateResponse:
+    record = session.get(Image, image_id)
+    if (
+        not record
+        or not _tenant_scoped_record(record, actor, include_global=True)
+        or not _namespace_scoped_record(record, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    image_namespace = _record_namespace(record)
+    if not settings.kube_vm_storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="clone-based VM storage is required; configure BLABS_KUBE_VM_STORAGE_CLASS",
+        )
+    if not settings.kube_image_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="BLABS_KUBE_IMAGE_PVC is required for image copy",
+        )
+
+    new_name = str(payload.name or "").strip()
+    raw_filename = str(payload.filename or "").strip()
+    new_filename = Path(raw_filename).name
+    if not new_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
+    if not new_filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="filename is required")
+    if Path(new_filename).suffix.lower() not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="invalid image type")
+
+    existing = session.exec(
+        select(Image)
+        .where(Image.filename == new_filename)
+        .where(Image.namespace == image_namespace)
+        .where(Image.id != image_id)
+    ).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="filename already exists")
+    if _exists_on_pvc(new_filename):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="filename already exists on storage")
+
+    source_filename = Path(str(getattr(record, "filename", "") or "").strip()).name
+    source_claim = str(getattr(record, "source_pvc", "") or "").strip()
+    source_claim_for_copy = ""
+    if source_claim and _exists_on_pvc(source_filename, claim_name=source_claim):
+        source_claim_for_copy = source_claim
+    elif _exists_on_pvc(source_filename):
+        source_claim_for_copy = settings.kube_image_pvc
+    if not source_claim_for_copy:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="source image file not found on storage")
+
+    image_size_bytes = int(getattr(record, "size_bytes", 0) or 0)
+    if image_size_bytes <= 0:
+        try:
+            image_size_bytes = _pvc_file_size(source_filename, claim_name=source_claim_for_copy)
+        except Exception:
+            image_size_bytes = 0
+    if image_size_bytes > 0:
+        _ensure_free_space(image_size_bytes, context=f"copying image {source_filename}")
+
+    copied_to_library = False
+    new_source_pvc = ""
+    image_copy_id = str(uuid4())
+    installer_iso_filename = str(getattr(record, "installer_iso_filename", "") or "").strip()
+    try:
+        _copy_pvc_path_to_pvc(
+            source_claim=source_claim_for_copy,
+            source_relative_path=source_filename,
+            target_claim=settings.kube_image_pvc,
+            target_filename=new_filename,
+        )
+        copied_to_library = True
+        if not payload.skip_validation:
+            _validate_file_on_pvc(new_filename)
+        if image_size_bytes <= 0:
+            image_size_bytes = _pvc_file_size(new_filename)
+
+        new_source_pvc = _ensure_image_source_pvc_claim(image_copy_id, max(1, image_size_bytes))
+        _copy_pvc_path_to_pvc(
+            source_claim=settings.kube_image_pvc,
+            source_relative_path=new_filename,
+            target_claim=new_source_pvc,
+            target_filename=new_filename,
+        )
+
+        if installer_iso_filename and "/" not in installer_iso_filename:
+            installer_source_claim = source_claim_for_copy
+            if not _exists_on_pvc(installer_iso_filename, claim_name=installer_source_claim):
+                installer_source_claim = settings.kube_image_pvc
+            if not _exists_on_pvc(installer_iso_filename, claim_name=installer_source_claim):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="installer ISO media is missing; clear mounted ISO or reattach before copying",
+                )
+            _copy_pvc_path_to_pvc(
+                source_claim=installer_source_claim,
+                source_relative_path=installer_iso_filename,
+                target_claim=new_source_pvc,
+                target_filename=Path(installer_iso_filename).name,
+            )
+            installer_iso_filename = Path(installer_iso_filename).name
+    except Exception as exc:
+        if new_source_pvc:
+            try:
+                kube._client().delete_namespaced_persistent_volume_claim(
+                    name=new_source_pvc,
+                    namespace=settings.kube_namespace,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to cleanup source PVC after image copy error image=%s pvc=%s",
+                    image_id,
+                    new_source_pvc,
+                    exc_info=True,
+                )
+        if copied_to_library:
+            try:
+                _with_pvc_helper(["/bin/sh", "-c", f"rm -f /images/{shlex.quote(new_filename)}"], capture_output=False)
+            except Exception:
+                logger.warning(
+                    "Failed to cleanup copied image file after image copy error image=%s filename=%s",
+                    image_id,
+                    new_filename,
+                    exc_info=True,
+                )
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"image copy failed: {exc}"
+        ) from exc
+
+    copied = Image(
+        id=image_copy_id,
+        name=new_name,
+        filename=new_filename,
+        tenant=managed_tenant,
+        namespace=image_namespace,
+        shared_catalog=_record_shared_catalog(record),
+        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
+        source_kind=str(getattr(record, "source_kind", "") or "uploaded"),
+        installer_iso_id=(str(getattr(record, "installer_iso_id", "") or "").strip() or None),
+        installer_iso_filename=(installer_iso_filename or None),
+        installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
+        installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
+        update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
+        update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
+        source_pvc=new_source_pvc,
+        checksum=str(getattr(record, "checksum", "") or ""),
+        size_bytes=max(0, int(image_size_bytes)),
+        created_at=utc_now(),
+    )
+    session.add(copied)
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=managed_tenant,
+        action="copy",
+        target_type="image",
+        target_id=copied.id,
+        detail=f"namespace={image_namespace} source_image_id={record.id} filename={copied.filename}",
+    )
+    session.commit()
+    session.refresh(copied)
+    return ImageCreateResponse(
+        id=copied.id,
+        name=copied.name,
+        filename=copied.filename,
+        tenant=normalize_tenant(getattr(copied, "tenant", None), default=GLOBAL_TENANT),
+        namespace=_record_namespace(copied),
+        shared_catalog=_record_shared_catalog(copied),
+        cluster_id=str(getattr(copied, "cluster_id", "") or local_cluster_id()),
+        source_kind=str(getattr(copied, "source_kind", "") or "uploaded"),
+        installer_iso_id=(str(getattr(copied, "installer_iso_id", "") or "").strip() or None),
+        installer_iso_filename=(str(getattr(copied, "installer_iso_filename", "") or "").strip() or None),
+        installer_os_type=(str(getattr(copied, "installer_os_type", "") or "").strip() or None),
+        installer_disk_size_gib=(int(getattr(copied, "installer_disk_size_gib", 0) or 0) or None),
+        update_cpu_cores_default=int(getattr(copied, "update_cpu_cores_default", 0) or 2),
+        update_ram_mb_default=int(getattr(copied, "update_ram_mb_default", 0) or 4096),
+        checksum=copied.checksum,
+        size_bytes=copied.size_bytes,
+        created_at=copied.created_at,
     )
 
 

@@ -1977,6 +1977,125 @@ def test_admin_create_image_from_iso_returns_validation_error_detail(login_admin
     assert "validation failed: qemu-img test failure" in created.json()["detail"]
 
 
+def test_admin_copy_image_creates_identical_copy(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-copy-source-1",
+                name="Windows Base",
+                filename="windows-base.qcow2",
+                checksum="sha256:img-copy-source-1",
+                size_bytes=2048,
+                source_pvc="img-src-copy-source-1",
+                source_kind="scratch",
+                installer_iso_id="iso-copy-source-1",
+                installer_iso_filename="installer-win.iso",
+                installer_os_type="windows",
+                installer_disk_size_gib=64,
+                update_cpu_cores_default=4,
+                update_ram_mb_default=8192,
+            )
+        )
+        session.commit()
+
+    copy_calls: list[dict[str, str]] = []
+
+    def _fake_exists(filename: str, *, claim_name: str | None = None) -> bool:
+        claim = str(claim_name or settings.kube_image_pvc)
+        name = str(filename or "")
+        if name == "windows-base-copy.qcow2" and claim == settings.kube_image_pvc:
+            return False
+        if name == "windows-base.qcow2" and claim in {"img-src-copy-source-1", settings.kube_image_pvc}:
+            return True
+        if name == "installer-win.iso" and claim in {"img-src-copy-source-1", settings.kube_image_pvc}:
+            return True
+        return False
+
+    monkeypatch.setattr(admin_routes, "_exists_on_pvc", _fake_exists)
+    monkeypatch.setattr(admin_routes, "_copy_pvc_path_to_pvc", lambda **kwargs: copy_calls.append(kwargs))
+    monkeypatch.setattr(
+        admin_routes, "_ensure_image_source_pvc_claim", lambda *_args, **_kwargs: "img-src-copy-target-1"
+    )
+    monkeypatch.setattr(admin_routes, "_validate_file_on_pvc", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(admin_routes, "_ensure_free_space", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(admin_routes, "_pvc_file_size", lambda *_args, **_kwargs: 2048)
+
+    copied = login_admin.post(
+        "/admin/images/img-copy-source-1/copy",
+        json={"name": "Windows Base Copy", "filename": "windows-base-copy.qcow2"},
+    )
+    assert copied.status_code == 201, copied.text
+    body = copied.json()
+    assert body["name"] == "Windows Base Copy"
+    assert body["filename"] == "windows-base-copy.qcow2"
+    assert body["source_kind"] == "scratch"
+    assert body["installer_iso_filename"] == "installer-win.iso"
+    assert body["update_cpu_cores_default"] == 4
+    assert body["update_ram_mb_default"] == 8192
+
+    with Session(engine) as session:
+        copied_record = session.get(Image, body["id"])
+        assert copied_record is not None
+        assert copied_record.name == "Windows Base Copy"
+        assert copied_record.filename == "windows-base-copy.qcow2"
+        assert copied_record.source_pvc == "img-src-copy-target-1"
+        assert copied_record.source_kind == "scratch"
+        assert copied_record.installer_iso_filename == "installer-win.iso"
+        assert copied_record.update_cpu_cores_default == 4
+        assert copied_record.update_ram_mb_default == 8192
+
+    assert any(
+        call["source_claim"] == "img-src-copy-source-1"
+        and call["source_relative_path"] == "windows-base.qcow2"
+        and call["target_claim"] == settings.kube_image_pvc
+        and call["target_filename"] == "windows-base-copy.qcow2"
+        for call in copy_calls
+    )
+    assert any(
+        call["source_claim"] == settings.kube_image_pvc
+        and call["source_relative_path"] == "windows-base-copy.qcow2"
+        and call["target_claim"] == "img-src-copy-target-1"
+        and call["target_filename"] == "windows-base-copy.qcow2"
+        for call in copy_calls
+    )
+    assert any(
+        call["source_relative_path"] == "installer-win.iso"
+        and call["target_claim"] == "img-src-copy-target-1"
+        and call["target_filename"] == "installer-win.iso"
+        for call in copy_calls
+    )
+
+
+def test_admin_copy_image_rejects_duplicate_filename(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-copy-conflict-source-1",
+                name="Source",
+                filename="source-copy-conflict.qcow2",
+                checksum="sha256:img-copy-conflict-source-1",
+                size_bytes=1024,
+            )
+        )
+        session.add(
+            Image(
+                id="img-copy-conflict-existing-1",
+                name="Existing",
+                filename="already-exists.qcow2",
+                checksum="sha256:img-copy-conflict-existing-1",
+                size_bytes=2048,
+            )
+        )
+        session.commit()
+
+    copied = login_admin.post(
+        "/admin/images/img-copy-conflict-source-1/copy",
+        json={"name": "Source Copy", "filename": "already-exists.qcow2"},
+    )
+    assert copied.status_code == 409, copied.text
+    assert "filename already exists" in copied.json()["detail"]
+
+
 def test_admin_iso_image_description_roundtrip(login_admin: TestClient):
     with Session(engine) as session:
         session.add(
