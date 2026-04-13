@@ -6565,7 +6565,13 @@ def delete_image(
     ):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
-    in_use_by_templates = session.exec(select(Template).where(Template.image_id == image_id)).all()
+    referenced_templates = session.exec(select(Template).where(Template.image_id == image_id)).all()
+    system_update_templates = [
+        template for template in referenced_templates if _is_system_image_update_template(template)
+    ]
+    in_use_by_templates = [
+        template for template in referenced_templates if not _is_system_image_update_template(template)
+    ]
     if in_use_by_templates:
         names = [str(template.name or template.id) for template in in_use_by_templates[:3]]
         suffix = "" if len(in_use_by_templates) <= 3 else ", ..."
@@ -6573,6 +6579,26 @@ def delete_image(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"image is in use by templates: {', '.join(names)}{suffix}",
         )
+    if system_update_templates:
+        system_template_ids = [template.id for template in system_update_templates]
+        referenced_instances = session.exec(select(Instance).where(Instance.template_id.in_(system_template_ids))).all()
+        terminal_statuses = {"stopped", "completed", "failed", "error"}
+        active_instances = [
+            instance
+            for instance in referenced_instances
+            if str(getattr(instance, "status", "") or "").strip().lower() not in terminal_statuses
+        ]
+        if active_instances:
+            ids = [str(instance.id) for instance in active_instances[:3]]
+            suffix = "" if len(active_instances) <= 3 else ", ..."
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"image update vm is still active for this image: {', '.join(ids)}{suffix}",
+            )
+        for instance in referenced_instances:
+            session.delete(instance)
+        for template in system_update_templates:
+            session.delete(template)
     safe_filename = Path(record.filename).name
     dest_path = _image_dir() / safe_filename
     if dest_path.exists():

@@ -8,6 +8,7 @@ from sqlmodel import Session
 from src.auth import connect_token_storage_key, hash_password, lookup_session_token
 from src.config import settings
 from src.db import engine
+import src.routes.admin as admin_routes
 from src.rbac import Role
 from src.services.kubernetes import PodStatus, kube
 from src.tables import (
@@ -1588,6 +1589,101 @@ def test_admin_delete_image_rejects_when_template_references_it(login_admin: Tes
     deleted = login_admin.delete("/admin/images/img-delete-check-1")
     assert deleted.status_code == 409, deleted.text
     assert "image is in use by templates" in deleted.json()["detail"]
+
+
+def test_admin_delete_image_cleans_up_system_update_template_references(
+    login_admin: TestClient,
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(admin_routes, "_image_dir", lambda: tmp_path)
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-delete-system-update-1",
+                name="Delete System Update Image",
+                filename="delete-system-update.qcow2",
+                checksum="sha256:delete-system-update",
+                size_bytes=2048,
+                source_pvc="",
+            )
+        )
+        session.add(
+            Template(
+                id="img-update-delete-system-update-1",
+                name="Image Update: Delete System Update Image",
+                description="system managed update template",
+                os_type="windows",
+                image_id="img-delete-system-update-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=False,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-system-update-1",
+                template_id="img-update-delete-system-update-1",
+                owner="admin",
+                status="stopped",
+            )
+        )
+        session.commit()
+
+    deleted = login_admin.delete("/admin/images/img-delete-system-update-1")
+    assert deleted.status_code == 204, deleted.text
+
+    with Session(engine) as session:
+        assert session.get(Image, "img-delete-system-update-1") is None
+        assert session.get(Template, "img-update-delete-system-update-1") is None
+        assert session.get(Instance, "vm-delete-system-update-1") is None
+
+
+def test_admin_delete_image_rejects_when_system_update_vm_still_active(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-delete-system-update-active-1",
+                name="Delete System Update Active Image",
+                filename="delete-system-update-active.qcow2",
+                checksum="sha256:delete-system-update-active",
+                size_bytes=2048,
+                source_pvc="",
+            )
+        )
+        session.add(
+            Template(
+                id="img-update-delete-system-update-active-1",
+                name="Image Update: Delete System Update Active Image",
+                description="system managed update template",
+                os_type="windows",
+                image_id="img-delete-system-update-active-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=False,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.add(
+            Instance(
+                id="vm-delete-system-update-active-1",
+                template_id="img-update-delete-system-update-active-1",
+                owner="admin",
+                status="running",
+            )
+        )
+        session.commit()
+
+    deleted = login_admin.delete("/admin/images/img-delete-system-update-active-1")
+    assert deleted.status_code == 409, deleted.text
+    assert "image update vm is still active" in deleted.json()["detail"].lower()
 
 
 def test_admin_delete_template_rejects_when_active_instance_references_it(login_admin: TestClient):
