@@ -4137,8 +4137,8 @@ metadata:
 spec:
   schedule: "${POSTGRES_BACKUP_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       ttlSecondsAfterFinished: 86400
@@ -4221,8 +4221,8 @@ metadata:
 spec:
   schedule: "${POSTGRES_BACKUP_REPLICATION_SCHEDULE}"
   concurrencyPolicy: Forbid
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       ttlSecondsAfterFinished: 86400
