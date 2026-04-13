@@ -70,6 +70,7 @@ class Image(SQLModel, table=True):
 class IsoImage(SQLModel, table=True):
     id: str = Field(primary_key=True, index=True)
     name: str
+    description: str = ""
     filename: str
     tenant: str = Field(default="global", index=True)
     namespace: str = Field(default="labs", index=True)

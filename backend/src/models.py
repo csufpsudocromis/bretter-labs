@@ -292,6 +292,7 @@ class ImageCreateResponse(ImageMeta):
 class IsoImageMeta(BaseModel):
     id: str
     name: str
+    description: str = ""
     filename: str
     tenant: str = "global"
     namespace: str = "labs"

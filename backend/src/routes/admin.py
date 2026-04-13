@@ -1775,6 +1775,33 @@ def _ensure_image_columns() -> None:
             pass
 
 
+def _ensure_iso_image_columns() -> None:
+    if not SQLITE_DB:
+        return
+    db_path = settings.database_path
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        tables = {row[0] for row in cur.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "isoimage" not in tables:
+            return
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(isoimage)")}
+        if "description" not in cols:
+            cur.execute("ALTER TABLE isoimage ADD COLUMN description TEXT DEFAULT ''")
+            conn.commit()
+            cols = {row[1] for row in cur.execute("PRAGMA table_info(isoimage)")}
+        if "description" in cols:
+            cur.execute("UPDATE isoimage SET description = '' WHERE description IS NULL")
+            conn.commit()
+    except Exception:
+        logger.exception("Failed to ensure iso image columns")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def _ensure_instance_columns() -> None:
     if not SQLITE_DB:
         return
@@ -1998,6 +2025,7 @@ def _ensure_admin_audit_table() -> None:
 _ensure_config_columns()
 _ensure_template_columns()
 _ensure_image_columns()
+_ensure_iso_image_columns()
 _ensure_instance_columns()
 _ensure_upload_task_columns()
 _ensure_admin_audit_table()
@@ -4154,6 +4182,7 @@ class ImageRename(BaseModel):
 
 class IsoImageRename(BaseModel):
     name: str | None = None
+    description: str | None = Field(default=None, max_length=1024)
     shared_catalog: bool | None = None
 
 
@@ -4902,6 +4931,7 @@ def _iso_to_model(record: IsoImage) -> IsoImageMeta:
     return IsoImageMeta(
         id=record.id,
         name=record.name,
+        description=str(getattr(record, "description", "") or ""),
         filename=record.filename,
         tenant=normalize_tenant(getattr(record, "tenant", None), default=GLOBAL_TENANT),
         namespace=_record_namespace(record),
@@ -4940,6 +4970,7 @@ def upload_iso_image(
     request: Request,
     file: UploadFile = File(...),
     name: str | None = Query(default=None),
+    description: str | None = Query(default=None, max_length=1024),
     shared_catalog: bool = Query(default=False),
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
@@ -4998,6 +5029,7 @@ def upload_iso_image(
     record = IsoImage(
         id=str(uuid4()),
         name=str(name or original_name).strip() or original_name,
+        description=str(description or "").strip(),
         filename=stored_filename,
         tenant=resource_tenant,
         namespace=resource_namespace,
@@ -5050,6 +5082,8 @@ def update_iso_image(
         if not trimmed_name:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name cannot be empty")
         record.name = trimmed_name
+    if payload.description is not None:
+        record.description = str(payload.description or "").strip()
     if payload.shared_catalog is not None:
         record.shared_catalog = bool(payload.shared_catalog)
     session.add(record)

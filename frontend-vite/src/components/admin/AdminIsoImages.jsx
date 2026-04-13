@@ -12,6 +12,7 @@ const AdminIsoImages = () => {
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadName, setUploadName] = useState("");
+  const [uploadDescription, setUploadDescription] = useState("");
   const [uploadSharedCatalog, setUploadSharedCatalog] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -19,6 +20,7 @@ const AdminIsoImages = () => {
   const [error, setError] = useState("");
   const [editId, setEditId] = useState("");
   const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
   const [editSharedCatalog, setEditSharedCatalog] = useState(false);
 
   const load = async () => {
@@ -53,6 +55,9 @@ const AdminIsoImages = () => {
       if (uploadName.trim()) {
         params.set("name", uploadName.trim());
       }
+      if (uploadDescription.trim()) {
+        params.set("description", uploadDescription.trim());
+      }
       if (isPlatformAdmin && uploadSharedCatalog) {
         params.set("shared_catalog", "true");
       }
@@ -67,6 +72,7 @@ const AdminIsoImages = () => {
       });
       setUploadFile(null);
       setUploadName("");
+      setUploadDescription("");
       setUploadSharedCatalog(false);
       setMessage("ISO uploaded");
       load();
@@ -81,19 +87,24 @@ const AdminIsoImages = () => {
   const startEdit = (row) => {
     setEditId(row.id);
     setEditName(String(row.name || ""));
+    setEditDescription(String(row.description || ""));
     setEditSharedCatalog(Boolean(row.shared_catalog));
   };
 
   const cancelEdit = () => {
     setEditId("");
     setEditName("");
+    setEditDescription("");
     setEditSharedCatalog(false);
   };
 
   const saveEdit = async () => {
     if (!editId) return;
     try {
-      const payload = { name: editName.trim() || "ISO image" };
+      const payload = {
+        name: editName.trim() || "ISO image",
+        description: editDescription.trim(),
+      };
       if (isPlatformAdmin) {
         payload.shared_catalog = Boolean(editSharedCatalog);
       }
@@ -130,6 +141,16 @@ const AdminIsoImages = () => {
                 <label>
                   Name
                   <input value={editName} onChange={(event) => setEditName(event.target.value)} />
+                </label>
+                <label>
+                  Description
+                  <textarea
+                    rows={3}
+                    maxLength={1024}
+                    value={editDescription}
+                    onChange={(event) => setEditDescription(event.target.value)}
+                    placeholder="Optional notes (drivers, OS build, language, etc.)"
+                  />
                 </label>
                 {isPlatformAdmin && (
                   <label>
@@ -170,6 +191,16 @@ const AdminIsoImages = () => {
                   placeholder={uploadFile?.name || "Windows 11 Installer"}
                 />
               </label>
+              <label>
+                Description
+                <textarea
+                  rows={3}
+                  maxLength={1024}
+                  value={uploadDescription}
+                  onChange={(event) => setUploadDescription(event.target.value)}
+                  placeholder="Optional notes (drivers, OS build, language, etc.)"
+                />
+              </label>
               {isPlatformAdmin && (
                 <label>
                   Catalog scope
@@ -203,6 +234,7 @@ const AdminIsoImages = () => {
                   <span className="muted small">{gib(row.size_bytes)}</span>
                 </div>
                 <div className="muted small">{row.filename}</div>
+                {row.description ? <div className="muted small">{row.description}</div> : null}
                 <div className="muted small">{row.shared_catalog ? "Shared catalog" : "Namespace-owned catalog"}</div>
                 <div className="actions">
                   <button className="ghost" onClick={() => startEdit(row)}>

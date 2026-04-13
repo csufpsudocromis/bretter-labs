@@ -1722,6 +1722,40 @@ def test_admin_create_image_from_iso_returns_validation_error_detail(login_admin
     assert "validation failed: qemu-img test failure" in created.json()["detail"]
 
 
+def test_admin_iso_image_description_roundtrip(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            IsoImage(
+                id="iso-description-check-1",
+                name="Windows 11 ISO",
+                description="Initial description",
+                filename="windows-11.iso",
+                checksum="sha256:iso-description-check-1",
+                size_bytes=1024,
+            )
+        )
+        session.commit()
+
+    listed = login_admin.get("/admin/iso-images")
+    assert listed.status_code == 200, listed.text
+    rows = [row for row in listed.json() if row.get("id") == "iso-description-check-1"]
+    assert len(rows) == 1
+    assert rows[0]["description"] == "Initial description"
+
+    updated = login_admin.patch(
+        "/admin/iso-images/iso-description-check-1",
+        json={"name": "Windows 11 ISO", "description": "Windows 11 24H2 + VirtIO driver pack"},
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert body["description"] == "Windows 11 24H2 + VirtIO driver pack"
+
+    with Session(engine) as session:
+        record = session.get(IsoImage, "iso-description-check-1")
+        assert record is not None
+        assert record.description == "Windows 11 24H2 + VirtIO driver pack"
+
+
 def test_admin_edit_image_does_not_recopy_same_installer_iso(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(
