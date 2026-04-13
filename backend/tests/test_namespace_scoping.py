@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 
 from src.db import engine
-from src.tables import ContainerImage, ContainerTemplate, Image, Instance, Template, User
+from src.tables import ContainerImage, ContainerTemplate, Image, Instance, ManagedNamespace, Template, User
 from src.time_utils import utc_now
 
 
@@ -265,3 +265,22 @@ def test_user_running_labs_follow_launch_namespace_even_when_runtime_namespace_f
     assert listed_labs.status_code == 200, listed_labs.text
     ids_labs = {row["id"] for row in listed_labs.json()}
     assert "inst-vm-launch-ns" not in ids_labs
+
+
+def test_user_endpoints_reject_disabled_namespace(login_user: TestClient) -> None:
+    _seed_vm_template(image_id="img-disabled-ns", template_id="tmpl-disabled-ns", namespace="labs")
+    with Session(engine) as session:
+        user = session.get(User, "alice")
+        assert user is not None
+        user.namespace_scopes_json = json.dumps(["labs"])
+        session.add(user)
+        session.add(ManagedNamespace(id="mn-labs-disabled", namespace="labs", enabled=False))
+        session.commit()
+
+    templates = login_user.get("/user/templates", headers={"X-Bretter-Namespace": "labs"})
+    assert templates.status_code == 403, templates.text
+    assert "disabled" in str(templates.json().get("detail", "")).lower()
+
+    pods = login_user.get("/user/pods", headers={"X-Bretter-Namespace": "labs"})
+    assert pods.status_code == 403, pods.text
+    assert "disabled" in str(pods.json().get("detail", "")).lower()

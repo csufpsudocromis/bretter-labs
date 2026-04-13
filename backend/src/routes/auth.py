@@ -47,7 +47,7 @@ from ..services.ldap_auth import (
 )
 from ..services.team_quotas import normalize_team
 from ..services.tenant_context import user_namespace_scopes
-from ..tables import Config, OIDCLoginState, User
+from ..tables import Config, ManagedNamespace, OIDCLoginState, User
 from ..time_utils import utc_now
 
 router = APIRouter()
@@ -76,10 +76,19 @@ def _oidc_role_priority(role: str) -> int:
     return score
 
 
-def _ensure_namespace_admin_scopes_or_raise(user: User) -> None:
+def _filter_disabled_namespace_scopes(session: Session, scopes: list[str]) -> list[str]:
+    normalized = [str(item or "").strip().lower() for item in scopes if str(item or "").strip()]
+    if not normalized:
+        return []
+    rows = session.exec(select(ManagedNamespace).where(ManagedNamespace.namespace.in_(normalized))).all()
+    enabled_by_namespace = {str(row.namespace or "").strip().lower(): bool(row.enabled) for row in rows}
+    return [namespace for namespace in normalized if enabled_by_namespace.get(namespace, True)]
+
+
+def _ensure_namespace_admin_scopes_or_raise(user: User, session: Session) -> None:
     if role_for_user(user) != Role.NAMESPACE_ADMIN:
         return
-    if user_namespace_scopes(user):
+    if _filter_disabled_namespace_scopes(session, user_namespace_scopes(user)):
         return
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
@@ -87,9 +96,11 @@ def _ensure_namespace_admin_scopes_or_raise(user: User) -> None:
     )
 
 
-def _user_out(user: User) -> UserOut:
+def _user_out(user: User, session: Session) -> UserOut:
     role = role_for_user(user)
-    namespace_scopes = user_namespace_scopes(user) if role != Role.PLATFORM_ADMIN else []
+    namespace_scopes = (
+        _filter_disabled_namespace_scopes(session, user_namespace_scopes(user)) if role != Role.PLATFORM_ADMIN else []
+    )
     return UserOut(
         username=user.username,
         role=role,
@@ -464,12 +475,12 @@ def login(
             session.add(user)
             session.commit()
             session.refresh(user)
-        _ensure_namespace_admin_scopes_or_raise(user)
+        _ensure_namespace_admin_scopes_or_raise(user, session)
         _clear_login_failures(rate_key)
         token = issue_token(session, user.username)
         set_auth_cookie(response, token)
         _audit_auth_event(event="login", outcome="success", request=request, username=user.username, source="local")
-        return {"user": _user_out(user)}
+        return {"user": _user_out(user, session)}
 
     cfg = session.get(Config, 1) or Config(id=1)
     session.add(cfg)
@@ -562,17 +573,17 @@ def login(
         session.add(user)
         session.commit()
         session.refresh(user)
-    _ensure_namespace_admin_scopes_or_raise(user)
+    _ensure_namespace_admin_scopes_or_raise(user, session)
     token = issue_token(session, user.username)
     set_auth_cookie(response, token)
     _clear_login_failures(rate_key)
     _audit_auth_event(event="login", outcome="success", request=request, username=user.username, source="ldap")
-    return {"user": _user_out(user)}
+    return {"user": _user_out(user, session)}
 
 
 @router.get("/me", response_model=UserOut)
-def me(user: User = Depends(require_user)) -> UserOut:
-    return _user_out(user)
+def me(user: User = Depends(require_user), session: Session = Depends(get_session)) -> UserOut:
+    return _user_out(user, session)
 
 
 @router.get("/sso/start")
@@ -713,7 +724,7 @@ def sso_callback(
         session.add(user)
         session.commit()
         session.refresh(user)
-    _ensure_namespace_admin_scopes_or_raise(user)
+    _ensure_namespace_admin_scopes_or_raise(user, session)
     token = issue_token(session, user.username)
     response = RedirectResponse(url=return_to or _sanitize_return_to("/", request), status_code=status.HTTP_302_FOUND)
     set_auth_cookie(response, token)

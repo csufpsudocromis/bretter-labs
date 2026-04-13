@@ -99,18 +99,18 @@ const AppShell = () => {
   }, [user]);
   const preferredUserNamespace = userNamespaceScopes[0] || "";
   const rememberedNamespace = normalizeNamespace(selectedNamespace);
-  const activeNamespace = pathNamespace || rememberedNamespace || preferredUserNamespace;
+  const activeNamespaceCandidate = pathNamespace || rememberedNamespace || preferredUserNamespace;
   const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
   const namespaceOptions = useMemo(() => {
     const merged = new Set([
       ...userNamespaceScopes,
       ...(Array.isArray(availableNamespaces) ? availableNamespaces.map((ns) => normalizeNamespace(ns)) : []),
     ]);
-    if (activeNamespace) {
-      merged.add(activeNamespace);
-    }
     return [...merged].filter(Boolean).sort();
-  }, [userNamespaceScopes, availableNamespaces, activeNamespace]);
+  }, [userNamespaceScopes, availableNamespaces]);
+  const activeNamespace = namespaceOptions.includes(activeNamespaceCandidate)
+    ? activeNamespaceCandidate
+    : namespaceOptions[0] || "";
   const namespacePrefix = namespacePath(activeNamespace);
   const userRootPath = namespacePrefix || "/";
   const adminRootPath = namespacePrefix ? `${namespacePrefix}/admin` : "/admin";

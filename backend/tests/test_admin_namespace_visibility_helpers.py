@@ -71,6 +71,25 @@ def test_template_namespace_catalog_skips_cluster_namespace_listing(login_admin,
     assert "labs" in values
 
 
+def test_template_namespace_catalog_filters_disabled_managed_namespaces(login_admin, monkeypatch) -> None:
+    with Session(engine) as session:
+        session.add(ManagedNamespace(id=str(uuid4()), namespace="labs", enabled=False))
+        session.add(ManagedNamespace(id=str(uuid4()), namespace="enabled-ns", enabled=True))
+        session.add(TeamQuota(id=str(uuid4()), team="default", namespace="enabled-ns"))
+        session.add(TeamQuota(id=str(uuid4()), team="default", namespace="labs"))
+        session.commit()
+
+    def _unexpected_kube_client():  # pragma: no cover - should never execute
+        raise AssertionError("template namespace catalog should not enumerate all cluster namespaces")
+
+    monkeypatch.setattr(admin_routes.kube, "_client", _unexpected_kube_client)
+    response = login_admin.get("/admin/template-namespaces")
+    assert response.status_code == 200, response.text
+    values = response.json()
+    assert "enabled-ns" in values
+    assert "labs" not in values
+
+
 def test_quota_namespace_catalog_skips_cluster_namespace_listing(login_admin, monkeypatch) -> None:
     with Session(engine) as session:
         session.add(ManagedNamespace(id=str(uuid4()), namespace="labs-namespace"))

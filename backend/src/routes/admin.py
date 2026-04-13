@@ -4373,6 +4373,16 @@ def _collect_known_lab_namespaces(session: Session) -> list[str]:
     return sorted(available)
 
 
+def _filter_enabled_managed_namespaces(session: Session, namespaces: list[str]) -> list[str]:
+    normalized = [normalize_namespace(item) for item in namespaces]
+    candidates = [item for item in normalized if item]
+    if not candidates:
+        return []
+    rows = session.exec(select(ManagedNamespace).where(ManagedNamespace.namespace.in_(candidates))).all()
+    enabled_by_namespace = {normalize_namespace(row.namespace): bool(row.enabled) for row in rows}
+    return [namespace for namespace in candidates if enabled_by_namespace.get(namespace, True)]
+
+
 @router.get(
     "/quota-namespaces",
     response_model=list[str],
@@ -4385,9 +4395,9 @@ def list_quota_namespaces(
     if not is_platform_admin(actor):
         scope = sorted(_namespace_scope_for_actor(actor) or [])
         if scope:
-            return scope
-        return [normalize_namespace(tenant_namespace_for_team(actor.team))]
-    return _collect_known_lab_namespaces(session)
+            return _filter_enabled_managed_namespaces(session, scope)
+        return _filter_enabled_managed_namespaces(session, [normalize_namespace(tenant_namespace_for_team(actor.team))])
+    return _filter_enabled_managed_namespaces(session, _collect_known_lab_namespaces(session))
 
 
 @router.get(
@@ -4401,8 +4411,8 @@ def list_template_namespaces(
 ) -> list[str]:
     scope = _namespace_scope_for_actor(actor)
     if scope is not None:
-        return sorted(scope)
-    return _collect_known_lab_namespaces(session)
+        return _filter_enabled_managed_namespaces(session, sorted(scope))
+    return _filter_enabled_managed_namespaces(session, _collect_known_lab_namespaces(session))
 
 
 @router.get(

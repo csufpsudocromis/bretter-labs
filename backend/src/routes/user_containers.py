@@ -59,6 +59,7 @@ from ..tables import ContainerImage as ContainerImageTable
 from ..tables import ContainerInstance as ContainerInstanceTable
 from ..tables import ContainerTemplate as ContainerTemplateTable
 from ..tables import Instance
+from ..tables import ManagedNamespace
 from ..tables import User
 from ..time_utils import utc_now
 
@@ -83,6 +84,28 @@ _HOP_BY_HOP_HEADERS = {
 _TLS_LIKELY_PORTS = {443, 8443, 9443, 6901, 4902}
 _CONNECT_READINESS_CACHE_LOCK = threading.Lock()
 _CONNECT_READINESS_CACHE: dict[str, tuple[float, bool, str]] = {}
+
+
+def _namespace_enabled_for_user_runtime(session: Session, namespace: str) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return False
+    row = session.exec(select(ManagedNamespace).where(ManagedNamespace.namespace == selected)).first()
+    if row is None:
+        return True
+    return bool(getattr(row, "enabled", True))
+
+
+def _resolve_selected_namespace(session: Session, user: User, request: Request) -> str:
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    if not _namespace_enabled_for_user_runtime(session, selected_namespace):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f'namespace "{selected_namespace}" is disabled',
+        )
+    return selected_namespace
 
 
 def _namespace_container_idle_timeout_minutes(
@@ -1815,9 +1838,7 @@ def list_user_container_templates(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerTemplateView]:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     runtime_namespace = _container_runtime_namespace(user, namespace=selected_namespace)
     namespace_policy = get_namespace_runtime_policy(session, selected_namespace)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), runtime_namespace)
@@ -1854,9 +1875,7 @@ def list_user_containers(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[ContainerInstanceView]:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     config = session.get(Config, 1) or Config()
     max_concurrency = int(config.max_concurrent_vms)
     active_count = _active_workload_count(session)
@@ -2152,9 +2171,7 @@ def start_container_template(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> ContainerInstanceView:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     runtime_namespace = _container_runtime_namespace(user, namespace=selected_namespace)
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
     template = session.get(ContainerTemplateTable, template_id)
@@ -2377,9 +2394,7 @@ def stop_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     instance_namespace = _container_instance_namespace(record, user)
     if normalize_namespace(instance_namespace) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
@@ -2413,9 +2428,7 @@ def restart_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     runtime_namespace = _container_instance_namespace(record, user)
     if normalize_namespace(runtime_namespace) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
@@ -2637,9 +2650,7 @@ def delete_container(
     record = session.get(ContainerInstanceTable, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     instance_namespace = _container_instance_namespace(record, user)
     if normalize_namespace(instance_namespace) != selected_namespace:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="container instance not found")

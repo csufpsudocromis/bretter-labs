@@ -65,7 +65,15 @@ from ..services.tenant_context import (
     vm_runtime_namespace_for_user,
 )
 from ..services import ws_metrics
-from ..tables import Config, ContainerInstance as ContainerInstanceTable, Image, Instance, Template, User
+from ..tables import (
+    Config,
+    ContainerInstance as ContainerInstanceTable,
+    Image,
+    Instance,
+    ManagedNamespace,
+    Template,
+    User,
+)
 from ..time_utils import utc_now
 
 router = APIRouter()
@@ -86,6 +94,28 @@ _HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+
+def _namespace_enabled_for_user_runtime(session: Session, namespace: str) -> bool:
+    selected = normalize_namespace(namespace)
+    if not selected:
+        return False
+    row = session.exec(select(ManagedNamespace).where(ManagedNamespace.namespace == selected)).first()
+    if row is None:
+        return True
+    return bool(getattr(row, "enabled", True))
+
+
+def _resolve_selected_namespace(session: Session, user: User, request: Request) -> str:
+    selected_namespace = resolve_resource_namespace(
+        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
+    )
+    if not _namespace_enabled_for_user_runtime(session, selected_namespace):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f'namespace "{selected_namespace}" is disabled',
+        )
+    return selected_namespace
 
 
 def _public_scheme() -> str:
@@ -870,9 +900,7 @@ def list_available_templates(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[VMTemplate]:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     team_idle_cap = team_idle_timeout_cap(session, getattr(user, "team", None), quota_namespace)
     tenant_scope = {
@@ -923,9 +951,7 @@ def preflight_template_launch(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> VMTemplateLaunchPreflight:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
     user_tenant = normalize_tenant(getattr(user, "team", None), default="default")
@@ -999,9 +1025,7 @@ def list_user_pods(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> list[VMInstance]:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     templates = {t.id: t for t in session.exec(select(Template)).all()}
     instances = session.exec(select(Instance).where(Instance.owner == user.username)).all()
     instances = [
@@ -1105,9 +1129,7 @@ def record_vm_activity(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     template = session.get(Template, record.template_id)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
@@ -1126,9 +1148,7 @@ def issue_vm_connect_token(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     template = session.get(Template, record.template_id)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
@@ -1591,9 +1611,7 @@ def start_vm(
     user: User = Depends(require_user),
     session: Session = Depends(get_session),
 ) -> VMInstance:
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
     privileged_runtime = _vm_uses_privileged_runtime()
@@ -1840,9 +1858,7 @@ def stop_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     template = session.get(Template, record.template_id)
     instance_namespace = _instance_runtime_namespace(record, user)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
@@ -1902,9 +1918,7 @@ def restart_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     template = session.get(Template, record.template_id)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
@@ -2128,9 +2142,7 @@ def delete_vm(
     record = session.get(Instance, instance_id)
     if not record or record.owner != user.username:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
-    selected_namespace = resolve_resource_namespace(
-        user, request=request, fallback_namespace=tenant_namespace_for_user(user)
-    )
+    selected_namespace = _resolve_selected_namespace(session, user, request)
     template = session.get(Template, record.template_id)
     if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")

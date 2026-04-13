@@ -17,6 +17,7 @@ from src.tables import (
     ContainerTemplate,
     Image,
     IsoImage,
+    ManagedNamespace,
     Instance,
     TeamQuota,
     Template,
@@ -320,6 +321,26 @@ def test_namespace_admin_login_returns_namespace_scopes(client: TestClient) -> N
     payload = login.json()["user"]
     assert payload["role"] == "namespace_admin"
     assert payload["namespace_scopes"] == ["test-namespace"]
+
+
+def test_login_and_me_filter_disabled_namespace_scopes(client: TestClient) -> None:
+    with Session(engine) as session:
+        user = session.get(User, "alice")
+        assert user is not None
+        user.namespace_scopes_json = '["labs","enabled-ns"]'
+        session.add(user)
+        session.add(ManagedNamespace(id="mn-disabled-labs", namespace="labs", enabled=False))
+        session.add(ManagedNamespace(id="mn-enabled-ns", namespace="enabled-ns", enabled=True))
+        session.commit()
+
+    login = client.post("/auth/login", json={"username": "alice", "password": "password"})
+    assert login.status_code == 200, login.text
+    payload = login.json()["user"]
+    assert payload["namespace_scopes"] == ["enabled-ns"]
+
+    me = client.get("/auth/me")
+    assert me.status_code == 200, me.text
+    assert me.json()["namespace_scopes"] == ["enabled-ns"]
 
 
 def test_namespace_admin_login_rejects_empty_namespace_scopes(client: TestClient) -> None:
