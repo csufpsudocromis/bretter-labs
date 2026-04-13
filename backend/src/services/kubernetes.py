@@ -129,6 +129,53 @@ class KubernetesService:
     def _control_namespace(self) -> str:
         return str(settings.kube_namespace or "labs").strip() or "labs"
 
+    def _is_node_ready_schedulable(self, node_name: str) -> bool:
+        core = self._client()
+        safe_name = str(node_name or "").strip()
+        if not safe_name:
+            return False
+        try:
+            node = core.read_node(name=safe_name)
+        except ApiException:
+            return False
+        if bool(getattr(node.spec, "unschedulable", False)):
+            return False
+        for condition in node.status.conditions or []:
+            if condition.type == "Ready":
+                return condition.status == "True"
+        return False
+
+    def _attached_node_for_pvc(self, claim_name: str, namespace: str) -> str | None:
+        core = self._client()
+        pvc_name = str(claim_name or "").strip()
+        ns = self._namespace(namespace)
+        if not pvc_name:
+            return None
+        try:
+            pvc = core.read_namespaced_persistent_volume_claim(name=pvc_name, namespace=ns)
+        except ApiException:
+            return None
+        pv_name = str(getattr(pvc.spec, "volume_name", "") or "").strip()
+        if not pv_name:
+            return None
+        try:
+            storage = client.StorageV1Api()
+            attachments = storage.list_volume_attachment().items
+        except Exception:
+            return None
+        for attachment in attachments:
+            source = getattr(getattr(attachment, "spec", None), "source", None)
+            attached_pv = str(getattr(source, "persistent_volume_name", "") or "").strip()
+            if attached_pv != pv_name:
+                continue
+            attached = bool(getattr(getattr(attachment, "status", None), "attached", False))
+            if not attached:
+                continue
+            node_name = str(getattr(getattr(attachment, "spec", None), "node_name", "") or "").strip()
+            if node_name and self._is_node_ready_schedulable(node_name):
+                return node_name
+        return None
+
     def _safe_owner(self, owner: str) -> str:
         safe_owner = re.sub(r"[^a-z0-9-]+", "-", (owner or "").lower()).strip("-")
         return safe_owner or "user"
@@ -1279,21 +1326,46 @@ class KubernetesService:
                 ),
             ],
         }
+        preferred_attached_node = self._attached_node_for_pvc(instance_disk_pvc, namespace=namespace)
+        pod_anti_affinity = None
         if settings.vm_runner_anti_affinity_enabled:
-            spec_kwargs["affinity"] = client.V1Affinity(
-                pod_anti_affinity=client.V1PodAntiAffinity(
-                    preferred_during_scheduling_ignored_during_execution=[
-                        client.V1WeightedPodAffinityTerm(
-                            weight=100,
-                            pod_affinity_term=client.V1PodAffinityTerm(
-                                label_selector=client.V1LabelSelector(
-                                    match_labels={"app.kubernetes.io/component": "vm-runner"}
-                                ),
-                                topology_key="kubernetes.io/hostname",
+            pod_anti_affinity = client.V1PodAntiAffinity(
+                preferred_during_scheduling_ignored_during_execution=[
+                    client.V1WeightedPodAffinityTerm(
+                        weight=100,
+                        pod_affinity_term=client.V1PodAffinityTerm(
+                            label_selector=client.V1LabelSelector(
+                                match_labels={"app.kubernetes.io/component": "vm-runner"}
                             ),
-                        )
-                    ]
-                )
+                            topology_key="kubernetes.io/hostname",
+                        ),
+                    )
+                ]
+            )
+        node_affinity = None
+        if preferred_attached_node:
+            # Warm-pool PVCs can stay attached to a node briefly after clone/previous use.
+            # Prefer that node to avoid long attach/detach loops that look like launch hangs.
+            node_affinity = client.V1NodeAffinity(
+                preferred_during_scheduling_ignored_during_execution=[
+                    client.V1PreferredSchedulingTerm(
+                        weight=100,
+                        preference=client.V1NodeSelectorTerm(
+                            match_expressions=[
+                                client.V1NodeSelectorRequirement(
+                                    key="kubernetes.io/hostname",
+                                    operator="In",
+                                    values=[preferred_attached_node],
+                                )
+                            ]
+                        ),
+                    )
+                ]
+            )
+        if pod_anti_affinity or node_affinity:
+            spec_kwargs["affinity"] = client.V1Affinity(
+                pod_anti_affinity=pod_anti_affinity,
+                node_affinity=node_affinity,
             )
         if settings.vm_runner_topology_spread_enabled:
             spec_kwargs["topology_spread_constraints"] = [
