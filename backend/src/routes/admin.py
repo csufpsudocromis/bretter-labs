@@ -3957,6 +3957,42 @@ echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
     raise RuntimeError(f"copy job failed for {target_name}: {err.strip() or 'job failed'}")
 
 
+def _normalize_pvc_relative_path(raw_path: str) -> str:
+    normalized = str(raw_path or "").strip().lstrip("/").replace("\\", "/")
+    if not normalized:
+        raise RuntimeError("source relative path is required")
+    if ".." in Path(normalized).parts:
+        raise RuntimeError("source relative path contains invalid traversal segments")
+    return normalized
+
+
+def _materialize_installer_iso_for_image(*, image: Image, source_relative_path: str) -> str:
+    source_pvc = str(getattr(image, "source_pvc", "") or "").strip()
+    if not source_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image is not ready for clone-based launch; re-import or re-upload the image",
+        )
+    if not settings.kube_image_pvc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="BLABS_KUBE_IMAGE_PVC is required to attach installer ISO media",
+        )
+    normalized_relative_path = _normalize_pvc_relative_path(source_relative_path)
+    source_name = Path(normalized_relative_path).name
+    iso_id_prefix = str(getattr(image, "installer_iso_id", "") or "").strip()[:8]
+    if not iso_id_prefix:
+        iso_id_prefix = str(getattr(image, "id", "") or uuid4().hex)[:8]
+    target_filename = f"installer-{iso_id_prefix}-{source_name}"
+    _copy_pvc_path_to_pvc(
+        source_claim=settings.kube_image_pvc,
+        source_relative_path=normalized_relative_path,
+        target_claim=source_pvc,
+        target_filename=target_filename,
+    )
+    return target_filename
+
+
 def _create_blank_disk_on_source_pvc(
     *,
     source_pvc: str,
@@ -6214,6 +6250,23 @@ def launch_image_update_vm(
             status_code=status.HTTP_409_CONFLICT,
             detail="image is not ready for clone-based launch; re-import or re-upload the image",
         )
+    current_installer_iso_filename = str(getattr(image, "installer_iso_filename", "") or "").strip()
+    if current_installer_iso_filename and "/" in current_installer_iso_filename:
+        # Backward-compatible migration path: older records can store ISO library-relative paths.
+        # Materialize media into the image source PVC so CD attach works in any runtime namespace.
+        try:
+            image.installer_iso_filename = _materialize_installer_iso_for_image(
+                image=image,
+                source_relative_path=current_installer_iso_filename,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"failed to materialize installer ISO: {exc}",
+            ) from exc
+        session.add(image)
+        session.commit()
+        session.refresh(image)
 
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(image, "tenant", None))
     image_namespace = _record_namespace(image)
@@ -6622,8 +6675,9 @@ def rename_image(
             requested_iso_image_id == current_installer_iso_id
             and current_installer_iso_id
             and current_installer_iso_filename
+            and "/" not in current_installer_iso_filename
         ):
-            # No ISO change requested; avoid re-copying installer media into the source PVC.
+            # No ISO change requested and media already exists on the source PVC.
             pass
         else:
             image_namespace = _record_namespace(record)
@@ -6641,9 +6695,11 @@ def rename_image(
                 )
             except Exception:
                 iso_rel_path = f"{Path(settings.iso_storage_root).name}/{iso_record.filename}"
-            # Keep edit operations fast by storing the ISO library-relative path and mounting it directly at launch.
-            installer_iso_filename = iso_rel_path
             record.installer_iso_id = iso_record.id
+            installer_iso_filename = _materialize_installer_iso_for_image(
+                image=record,
+                source_relative_path=iso_rel_path,
+            )
             record.installer_iso_filename = installer_iso_filename
 
     if record.filename != new_filename:

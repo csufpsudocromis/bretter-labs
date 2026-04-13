@@ -541,6 +541,9 @@ const AdminImages = () => {
                       </option>
                     ))}
                   </select>
+                  <div className="muted small">
+                    Non-bootable ISOs are still mounted as CD media; update VMs fall back to disk boot automatically.
+                  </div>
                 </label>
                 {isPlatformAdmin && (
                   <label>

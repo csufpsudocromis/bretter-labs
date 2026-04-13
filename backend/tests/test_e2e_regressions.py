@@ -1968,7 +1968,7 @@ def test_admin_edit_image_does_not_recopy_same_installer_iso(login_admin: TestCl
     assert body["installer_iso_id"] == "iso-image-edit-same-check-1"
 
 
-def test_admin_edit_image_switches_iso_without_immediate_copy(login_admin: TestClient, monkeypatch):
+def test_admin_edit_image_switches_iso_and_materializes_media_on_source_pvc(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(
             IsoImage(
@@ -2011,11 +2011,60 @@ def test_admin_edit_image_switches_iso_without_immediate_copy(login_admin: TestC
         },
     )
     assert updated.status_code == 200, updated.text
-    assert copy_calls == []
+    assert len(copy_calls) == 1
+    assert copy_calls[0]["source_claim"] == settings.kube_image_pvc
+    assert copy_calls[0]["target_claim"] == "img-src-edit-switch-iso-check-1"
+    assert copy_calls[0]["source_relative_path"].endswith("/win-drivers.iso")
     body = updated.json()
     assert body["installer_iso_id"] == "iso-image-edit-switch-check-1"
-    assert body["installer_iso_filename"].endswith("/win-drivers.iso")
-    assert body["installer_iso_filename"].startswith("iso-images/")
+    assert body["installer_iso_filename"] == "installer-iso-imag-win-drivers.iso"
+
+
+def test_admin_edit_image_with_legacy_iso_path_recopies_same_iso(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            IsoImage(
+                id="iso-image-edit-legacy-check-1",
+                name="Windows Driver ISO",
+                filename="legacy-driver.iso",
+                checksum="sha256:iso-image-edit-legacy-check-1",
+                size_bytes=2048,
+            )
+        )
+        session.add(
+            Image(
+                id="img-edit-legacy-iso-check-1",
+                name="Windows 11",
+                filename="windows-11-legacy.qcow2",
+                checksum="sha256:img-edit-legacy-iso-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-edit-legacy-iso-check-1",
+                installer_iso_id="iso-image-edit-legacy-check-1",
+                installer_iso_filename="iso-images/legacy-driver.iso",
+            )
+        )
+        session.commit()
+
+    copy_calls: list[dict[str, str]] = []
+
+    def _capture_copy(**kwargs):
+        copy_calls.append(kwargs)
+
+    monkeypatch.setattr("src.routes.admin._copy_pvc_path_to_pvc", _capture_copy)
+
+    updated = login_admin.patch(
+        "/admin/images/img-edit-legacy-iso-check-1",
+        json={
+            "name": "Windows 11",
+            "filename": "windows-11-legacy.qcow2",
+            "update_iso_image_id": "iso-image-edit-legacy-check-1",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert len(copy_calls) == 1
+    assert copy_calls[0]["source_relative_path"] == "iso-images/legacy-driver.iso"
+    assert copy_calls[0]["target_claim"] == "img-src-edit-legacy-iso-check-1"
+    assert updated.json()["installer_iso_filename"] == "installer-iso-imag-legacy-driver.iso"
 
 
 def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_admin: TestClient, monkeypatch):
@@ -2055,6 +2104,52 @@ def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_ad
     assert req.installer_iso_filename == "installer-win11.iso"
     assert req.boot_order == "dc"
     assert req.instance_disk_pvc == "img-src-update-bootorder-check-1"
+
+
+def test_admin_launch_update_vm_materializes_legacy_installer_iso_path(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-update-legacy-iso-check-1",
+                name="Windows 11",
+                filename="windows-11-legacy.qcow2",
+                checksum="sha256:img-update-legacy-iso-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-update-legacy-iso-check-1",
+                source_kind="uploaded",
+                installer_iso_id="iso-update-legacy-check-1",
+                installer_iso_filename="iso-images/win-drivers.iso",
+                installer_os_type="windows",
+                installer_disk_size_gib=64,
+            )
+        )
+        session.commit()
+
+    captured: dict[str, object] = {}
+
+    def _capture_copy(**kwargs):
+        captured["copy"] = kwargs
+
+    def _create_pod(req):
+        captured["req"] = req
+        return PodStatus(instance_id=req.instance_id, phase="pending", disk_pvc=f"pvc-{req.instance_id[:8]}")
+
+    monkeypatch.setattr("src.routes.admin._copy_pvc_path_to_pvc", _capture_copy)
+    monkeypatch.setattr(kube, "create_pod", _create_pod)
+
+    launched = login_admin.post(
+        "/admin/images/img-update-legacy-iso-check-1/launch-update",
+        json={"os_type": "windows", "console_provider": "guacamole"},
+    )
+    assert launched.status_code == 201, launched.text
+    copy_kwargs = captured.get("copy")
+    assert isinstance(copy_kwargs, dict)
+    assert copy_kwargs["source_relative_path"] == "iso-images/win-drivers.iso"
+    assert copy_kwargs["target_claim"] == "img-src-update-legacy-iso-check-1"
+    req = captured.get("req")
+    assert req is not None
+    assert req.installer_iso_filename == "installer-iso-upda-win-drivers.iso"
+    assert req.boot_order == "dc"
 
 
 def test_admin_save_update_vm_stops_instance_and_refreshes_clone_pool(login_admin: TestClient, monkeypatch):
