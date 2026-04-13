@@ -8,7 +8,7 @@
 appTemplateValues:
   # Reference production coordinates used for baseline validation.
   # Treat these as site-specific and override via your production overlay.
-  CONTROL_NODE: control-plane-1
+  CONTROL_NODE: cbekube1
   NODE_EXTERNAL_HOST: labs-gateway.internal
   RUNNER_NODE_SELECTOR_VALUE: runner-pool
   VM_STORAGE_CLASS: prod-vm-storage
