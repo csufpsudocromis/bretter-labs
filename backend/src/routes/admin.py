@@ -4164,6 +4164,10 @@ class ImageLaunchUpdateRequest(BaseModel):
     console_provider: str | None = Field(default=None, pattern="^(spice|guacamole|guacamole_rdp)$")
 
 
+class ImageSaveUpdateRequest(BaseModel):
+    instance_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class DirectUploadStart(BaseModel):
     filename: str
     size_bytes: int
@@ -6254,6 +6258,169 @@ def launch_image_update_vm(
     )
     session.commit()
     return instance
+
+
+@router.post(
+    "/images/{image_id}/save-update",
+    response_model=AdminOperationActionResult,
+    dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
+)
+def save_image_update_vm(
+    image_id: str,
+    payload: ImageSaveUpdateRequest | None = None,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> AdminOperationActionResult:
+    image = session.get(Image, image_id)
+    if (
+        not image
+        or not _tenant_scoped_record(image, actor, include_global=True)
+        or not _namespace_scoped_record(image, actor)
+    ):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="image not found")
+
+    managed_tenant = assert_actor_can_manage_tenant(actor, getattr(image, "tenant", None))
+    image_namespace = _record_namespace(image)
+    source_pvc = str(getattr(image, "source_pvc", "") or "").strip()
+    template_id = f"img-update-{image.id}"
+    requested_instance_id = str(getattr(payload, "instance_id", "") or "").strip()
+
+    update_instances = session.exec(
+        select(Instance).where(Instance.template_id == template_id).order_by(Instance.started_at.desc())
+    ).all()
+    if requested_instance_id:
+        update_instances = [
+            record for record in update_instances if str(getattr(record, "id", "") or "") == requested_instance_id
+        ]
+        if not update_instances:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="update VM instance not found")
+
+    active_statuses = {"queued", "pending", "running", "unknown"}
+    active_instance = next(
+        (
+            record
+            for record in update_instances
+            if str(getattr(record, "status", "") or "").strip().lower() in active_statuses
+        ),
+        None,
+    )
+
+    stopped_instance_id = ""
+    if active_instance is not None:
+        instance_namespace = str(getattr(active_instance, "namespace", "") or settings.kube_namespace).strip()
+        instance_cluster_id = str(getattr(active_instance, "cluster_id", "") or local_cluster_id()).strip()
+        if not instance_cluster_id:
+            instance_cluster_id = local_cluster_id()
+        try:
+            runtime_kube = kube_service_for_cluster(
+                session,
+                instance_cluster_id,
+                require_runtime_enabled=False,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"failed to prepare runtime client: {exc}",
+            ) from exc
+
+        use_legacy_orchestration = vm_orchestration_uses_legacy_path()
+        write_crd_shadow = vm_orchestration_writes_crd()
+        if use_legacy_orchestration:
+            try:
+                runtime_kube.delete_pod(
+                    active_instance.id,
+                    str(getattr(active_instance, "owner", "") or ""),
+                    disk_pvc=getattr(active_instance, "disk_pvc", None),
+                    namespace=instance_namespace,
+                    delete_disk_pvc=False,
+                )
+            except ApiException as exc:
+                if exc.status not in {404, 409, 422}:
+                    raise HTTPException(
+                        status_code=status.HTTP_502_BAD_GATEWAY,
+                        detail=f"failed to stop update VM pod: {exc.reason or exc.status}",
+                    ) from exc
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"failed to stop update VM pod: {exc}",
+                ) from exc
+        if write_crd_shadow:
+            try:
+                if use_legacy_orchestration:
+                    delete_vm_labinstance_best_effort(active_instance.id, namespace=instance_namespace)
+                else:
+                    delete_vm_labinstance(active_instance.id, namespace=instance_namespace, missing_ok=True)
+            except Exception:
+                logger.warning(
+                    "Failed to clean up LabInstance shadow for saved image update VM %s",
+                    active_instance.id,
+                    exc_info=True,
+                )
+        active_instance.status = "stopped"
+        active_instance.last_active_at = utc_now()
+        session.add(active_instance)
+        stopped_instance_id = active_instance.id
+
+    refreshed_template_count = 0
+    if source_pvc:
+        dependent_templates = session.exec(select(Template).where(Template.image_id == image.id)).all()
+        for record in dependent_templates:
+            if _is_system_image_update_template(record):
+                continue
+            template_cluster_id = (
+                str(getattr(record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id()
+            )
+            try:
+                runtime_kube = kube_service_for_cluster(
+                    session,
+                    template_cluster_id,
+                    require_runtime_enabled=False,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prepare runtime client for warm-pool refresh template=%s cluster=%s",
+                    record.id,
+                    template_cluster_id,
+                    exc_info=True,
+                )
+                continue
+            desired_pool = max(0, int(getattr(record, "preclone_pool_size", 0) or 0))
+            try:
+                runtime_kube.ensure_warm_pool(record.id, source_pvc, 0)
+                if desired_pool > 0:
+                    runtime_kube.ensure_warm_pool(record.id, source_pvc, desired_pool)
+                refreshed_template_count += 1
+            except Exception:
+                logger.warning(
+                    "Failed to refresh warm-pool clones for template=%s image=%s",
+                    record.id,
+                    image.id,
+                    exc_info=True,
+                )
+
+    detail_parts = []
+    if stopped_instance_id:
+        detail_parts.append(f"Stopped update VM {stopped_instance_id[:8]}.")
+    else:
+        detail_parts.append("No active update VM was running.")
+    detail_parts.append(f"Refreshed clone pools for {refreshed_template_count} template(s).")
+    detail = " ".join(detail_parts)
+
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        tenant=managed_tenant,
+        action="save_update",
+        target_type="image",
+        target_id=image.id,
+        detail=(
+            f"namespace={image_namespace} template_id={template_id} "
+            f"stopped_instance_id={stopped_instance_id or '-'} refreshed_templates={refreshed_template_count}"
+        ),
+    )
+    session.commit()
+    return AdminOperationActionResult(ok=True, detail=detail)
 
 
 @router.delete(

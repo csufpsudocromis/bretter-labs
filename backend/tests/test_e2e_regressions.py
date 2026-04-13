@@ -1864,6 +1864,110 @@ def test_admin_launch_update_vm_boots_installer_iso_for_uploaded_images(login_ad
     assert req.instance_disk_pvc == "img-src-update-bootorder-check-1"
 
 
+def test_admin_save_update_vm_stops_instance_and_refreshes_clone_pool(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-save-update-check-1",
+                name="Windows 11",
+                filename="windows-11-save.qcow2",
+                checksum="sha256:img-save-update-check-1",
+                size_bytes=1024,
+                source_pvc="img-src-save-update-check-1",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-save-update-check-1",
+                name="Windows Lab",
+                description="Template using image update source",
+                os_type="windows",
+                image_id="img-save-update-check-1",
+                cpu_cores=2,
+                ram_mb=4096,
+                auto_delete_minutes=60,
+                idle_timeout_minutes=60,
+                preclone_pool_size=2,
+                preclone_pool_max=2,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="guacamole",
+            )
+        )
+        session.add(
+            Instance(
+                id="inst-save-update-check-1",
+                template_id="img-update-img-save-update-check-1",
+                owner="admin",
+                status="running",
+                namespace="labs",
+                cluster_id="local",
+                disk_pvc="img-src-save-update-check-1",
+            )
+        )
+        session.commit()
+
+    class _RuntimeKubeStub:
+        def __init__(self):
+            self.delete_calls = []
+            self.ensure_calls = []
+
+        def delete_pod(
+            self,
+            instance_id,
+            owner,
+            disk_pvc=None,
+            namespace=None,
+            delete_disk_pvc=True,
+        ):
+            self.delete_calls.append(
+                {
+                    "instance_id": instance_id,
+                    "owner": owner,
+                    "disk_pvc": disk_pvc,
+                    "namespace": namespace,
+                    "delete_disk_pvc": delete_disk_pvc,
+                }
+            )
+
+        def ensure_warm_pool(self, template_id, image_source_pvc, desired):
+            self.ensure_calls.append((template_id, image_source_pvc, desired))
+
+    runtime = _RuntimeKubeStub()
+    monkeypatch.setattr("src.routes.admin.kube_service_for_cluster", lambda *_args, **_kwargs: runtime)
+    monkeypatch.setattr("src.routes.admin.vm_orchestration_uses_legacy_path", lambda: True)
+    monkeypatch.setattr("src.routes.admin.vm_orchestration_writes_crd", lambda: False)
+
+    saved = login_admin.post(
+        "/admin/images/img-save-update-check-1/save-update",
+        json={"instance_id": "inst-save-update-check-1"},
+    )
+    assert saved.status_code == 200, saved.text
+    payload = saved.json()
+    assert payload["ok"] is True
+    assert "Stopped update VM" in payload["detail"]
+    assert "Refreshed clone pools for 1 template(s)." in payload["detail"]
+
+    assert runtime.delete_calls == [
+        {
+            "instance_id": "inst-save-update-check-1",
+            "owner": "admin",
+            "disk_pvc": "img-src-save-update-check-1",
+            "namespace": "labs",
+            "delete_disk_pvc": False,
+        }
+    ]
+    assert runtime.ensure_calls == [
+        ("tmpl-save-update-check-1", "img-src-save-update-check-1", 0),
+        ("tmpl-save-update-check-1", "img-src-save-update-check-1", 2),
+    ]
+
+    with Session(engine) as session:
+        record = session.get(Instance, "inst-save-update-check-1")
+        assert record is not None
+        assert record.status == "stopped"
+
+
 def test_admin_template_catalog_hides_system_image_update_templates(login_admin: TestClient):
     with Session(engine) as session:
         session.add(

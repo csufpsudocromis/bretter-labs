@@ -37,6 +37,8 @@ const AdminImages = () => {
   const [createDefaultRamMb, setCreateDefaultRamMb] = useState(4096);
   const [createSharedCatalog, setCreateSharedCatalog] = useState(false);
   const [launchingImageId, setLaunchingImageId] = useState("");
+  const [savingImageId, setSavingImageId] = useState("");
+  const [updateSessionByImage, setUpdateSessionByImage] = useState({});
 
   const load = async () => {
     try {
@@ -45,7 +47,18 @@ const AdminImages = () => {
         api.get("/admin/iso-images"),
         api.get("/auth/me"),
       ]);
-      setImages(Array.isArray(res.data) ? res.data : []);
+      const imageRows = Array.isArray(res.data) ? res.data : [];
+      setImages(imageRows);
+      setUpdateSessionByImage((current) => {
+        const validIds = new Set(imageRows.map((row) => String(row.id || "")));
+        const next = {};
+        Object.entries(current || {}).forEach(([imageId, instanceId]) => {
+          if (validIds.has(imageId)) {
+            next[imageId] = instanceId;
+          }
+        });
+        return next;
+      });
       const isoRows = Array.isArray(isoRes.data) ? isoRes.data : [];
       setIsoImages(isoRows);
       if (!createIsoId && isoRows.length > 0) {
@@ -415,6 +428,13 @@ const AdminImages = () => {
         throw new Error(`VM console is still starting after ${elapsedSeconds}s. ${waitDetail}`);
       }
       setMessage(`Update VM started (${String(instance.id || "").slice(0, 8)})`);
+      const launchedId = String(instance.id || "").trim();
+      if (launchedId) {
+        setUpdateSessionByImage((current) => ({
+          ...(current || {}),
+          [img.id]: launchedId,
+        }));
+      }
     } catch (err) {
       if (!blockedPopup) {
         try {
@@ -426,6 +446,28 @@ const AdminImages = () => {
       setError(err.response?.data?.detail || err.message || "Failed to launch update VM");
     } finally {
       setLaunchingImageId("");
+    }
+  };
+
+  const saveVmUpdate = async (img) => {
+    setSavingImageId(img.id);
+    setMessage("");
+    setError("");
+    try {
+      const activeInstanceId = String(updateSessionByImage?.[img.id] || "").trim();
+      const payload = activeInstanceId ? { instance_id: activeInstanceId } : {};
+      const res = await api.post(`/admin/images/${img.id}/save-update`, payload);
+      setUpdateSessionByImage((current) => {
+        const next = { ...(current || {}) };
+        delete next[img.id];
+        return next;
+      });
+      setMessage(res?.data?.detail || "VM update saved");
+      load();
+    } catch (err) {
+      setError(err.response?.data?.detail || "Failed to save VM update");
+    } finally {
+      setSavingImageId("");
     }
   };
 
@@ -629,13 +671,30 @@ const AdminImages = () => {
                     <button className="ghost" onClick={() => startEdit(img)}>
                       Edit
                     </button>
+                    {(() => {
+                      const hasPendingUpdate = Boolean(updateSessionByImage?.[img.id]);
+                      let actionLabel = "Update VM";
+                      if (launchingImageId === img.id) {
+                        actionLabel = "Launching...";
+                      } else if (savingImageId === img.id) {
+                        actionLabel = "Saving...";
+                      } else if (hasPendingUpdate) {
+                        actionLabel = "Save VM Update";
+                      }
+                      return (
+                        <button
+                          onClick={() => (hasPendingUpdate ? saveVmUpdate(img) : launchForUpdate(img))}
+                          disabled={Boolean(launchingImageId) || Boolean(savingImageId)}
+                        >
+                          {actionLabel}
+                        </button>
+                      );
+                    })()}
                     <button
-                      onClick={() => launchForUpdate(img)}
-                      disabled={Boolean(launchingImageId) && launchingImageId !== img.id}
+                      className="danger"
+                      onClick={() => remove(img.id)}
+                      disabled={Boolean(launchingImageId) || Boolean(savingImageId)}
                     >
-                      {launchingImageId === img.id ? "Launching..." : "Launch update VM"}
-                    </button>
-                    <button className="danger" onClick={() => remove(img.id)}>
                       Delete
                     </button>
                   </div>
