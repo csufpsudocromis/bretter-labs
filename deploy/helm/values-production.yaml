@@ -16,7 +16,7 @@ appTemplateValues:
   BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend-runtime:v0.3.1-copybtn-20260413201957@sha256:69c54dde5d5996203edf99d46f28f268c4dc0172e2f3c0c2f558be6859408cb9
   BACKEND_ADMIN_IMAGE: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1-copybtn-20260413201957@sha256:5c6a20412d8764c71eacf070e13f8c287e15239408282ba48317eaa2b64b65ae
   FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1-copybtn-20260413201957@sha256:b773bb02f720a2ea64e95b00f9601ae3af474d2ef31213adba3de6ca82247ea1
-  RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76
+  RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1-copybtn-20260413201957@sha256:ceab170a9f039f21b297a5d8dd1a100ec4a18915d4f38db5c1f28464e0ef52ee
   BACKEND_REPLICAS: "1"
   FRONTEND_REPLICAS: "2"
   # Production baseline keeps conservative autoscaling bounds; tune in site overlay.
