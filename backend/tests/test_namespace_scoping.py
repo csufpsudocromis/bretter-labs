@@ -181,7 +181,7 @@ def test_user_container_templates_list_honors_enabled_namespace_allowlist(login_
     assert list_forbidden.status_code == 403, list_forbidden.text
 
 
-def test_user_running_labs_include_template_enabled_namespace_even_with_runtime_namespace_fallback(
+def test_user_running_labs_do_not_cross_list_from_template_enabled_namespace(
     login_user: TestClient,
 ) -> None:
     _seed_vm_template(image_id="img-vm-visible", template_id="tmpl-vm-visible", namespace="labs", shared_catalog=True)
@@ -216,7 +216,7 @@ def test_user_running_labs_include_template_enabled_namespace_even_with_runtime_
     listed = login_user.get("/user/pods", headers={"X-Bretter-Namespace": "test-namespace"})
     assert listed.status_code == 200, listed.text
     ids = {row["id"] for row in listed.json()}
-    assert "inst-vm-visible" in ids
+    assert "inst-vm-visible" not in ids
 
     stopped = login_user.post("/user/pods/inst-vm-visible/stop", headers={"X-Bretter-Namespace": "test-namespace"})
-    assert stopped.status_code == 200, stopped.text
+    assert stopped.status_code == 404, stopped.text

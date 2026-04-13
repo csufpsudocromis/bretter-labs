@@ -521,17 +521,13 @@ def _instance_visible_in_namespace(
     record: Instance,
     *,
     selected_namespace: str,
-    template: Template | None = None,
+    user: User | None = None,
 ) -> bool:
     selected = normalize_namespace(selected_namespace)
     if not selected:
         return False
-    instance_ns = normalize_namespace(getattr(record, "namespace", None))
-    if instance_ns == selected:
-        return True
-    if template is not None and _template_enabled_for_namespace(template, selected):
-        return True
-    return False
+    instance_ns = normalize_namespace(_instance_namespace(record, user))
+    return instance_ns == selected
 
 
 def _instance_cluster_id(record: Instance) -> str:
@@ -1003,9 +999,7 @@ def list_user_pods(
     instances = [
         record
         for record in instances
-        if _instance_visible_in_namespace(
-            record, selected_namespace=selected_namespace, template=templates.get(record.template_id)
-        )
+        if _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user)
     ]
     changed = False
     to_delete: list[Instance] = []
@@ -1066,9 +1060,7 @@ def list_user_pods(
         instances = [
             record
             for record in instances
-            if _instance_visible_in_namespace(
-                record, selected_namespace=selected_namespace, template=templates.get(record.template_id)
-            )
+            if _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user)
         ]
 
     items: list[VMInstance] = []
@@ -1109,7 +1101,7 @@ def record_vm_activity(
         user, request=request, fallback_namespace=tenant_namespace_for_user(user)
     )
     template = session.get(Template, record.template_id)
-    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     record.last_active_at = utc_now()
     session.add(record)
@@ -1130,7 +1122,7 @@ def issue_vm_connect_token(
         user, request=request, fallback_namespace=tenant_namespace_for_user(user)
     )
     template = session.get(Template, record.template_id)
-    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     if record.status not in {"pending", "running"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="instance is not running")
@@ -1843,7 +1835,7 @@ def stop_vm(
     )
     template = session.get(Template, record.template_id)
     instance_namespace = _instance_namespace(record, user)
-    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
@@ -1904,7 +1896,7 @@ def restart_vm(
         user, request=request, fallback_namespace=tenant_namespace_for_user(user)
     )
     template = session.get(Template, record.template_id)
-    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     runtime_namespace = _vm_runtime_namespace(user, namespace=selected_namespace)
     quota_namespace = _vm_quota_namespace(user, namespace=selected_namespace)
@@ -2129,7 +2121,7 @@ def delete_vm(
         user, request=request, fallback_namespace=tenant_namespace_for_user(user)
     )
     template = session.get(Template, record.template_id)
-    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, template=template):
+    if not _instance_visible_in_namespace(record, selected_namespace=selected_namespace, user=user):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="instance not found")
     instance_namespace = _instance_namespace(record, user)
     runtime_kube = _kube_for_instance_cluster(session, _instance_cluster_id(record))
