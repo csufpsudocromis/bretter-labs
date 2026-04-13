@@ -13,9 +13,9 @@ appTemplateValues:
   RUNNER_NODE_SELECTOR_VALUE: runner-pool
   VM_STORAGE_CLASS: prod-vm-storage
   # Production profile requires immutable digest pins.
-  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend-runtime:v0.3.1-save-stopdelete-20260413145606@sha256:64121f36fc83d9ce5b833540db3ea671c3eb75927fc687c58d85b6d5058c94e1
-  BACKEND_ADMIN_IMAGE: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1-save-stopdelete-20260413145606@sha256:fbd890952f43257c2a88c17baf051e558cecef372c0d3ba59fc855eea530b2b1
-  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1-save-update-20260413144519@sha256:8ce70ce017265c2a661938d504adeef939bb6ec3b42663ad3df38a0880ceb243
+  BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend-runtime:v0.3.1-iso-desc-20260413150714@sha256:35a3dba27659c106092e7da4f299d1cfbb15de4daeca063f51aaf07bbae1045d
+  BACKEND_ADMIN_IMAGE: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1-iso-desc-20260413150714@sha256:6fe105646da9dfb22200d6b395a1a4d040e308e3e60e3f89eabc7d88f189ecab
+  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1-iso-desc-20260413150714@sha256:75534ae8fe20eae81d39654aae66aa6b4a8168a2eca426a2ab25e1e599eddd6d
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76
   BACKEND_REPLICAS: "1"
   FRONTEND_REPLICAS: "2"
