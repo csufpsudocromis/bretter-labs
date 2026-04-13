@@ -15,7 +15,7 @@ appTemplateValues:
   # Production profile requires immutable digest pins.
   BACKEND_IMAGE: ghcr.io/csufpsudocromis/bretter-backend-runtime:v0.3.1-nsfilter-20260403152015@sha256:7b9cf60aea2aa7a7a3c2ddb32c066ec1259b8f8fa2a512cbe6900602dbf47e3b
   BACKEND_ADMIN_IMAGE: ghcr.io/csufpsudocromis/bretter-backend:v0.3.1-nsfilter-20260403152015@sha256:289281cbf3a8c8c4ab34c7ff911048606c10e8cd5b503a9e03ae9c1932eee90c
-  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1-adminops-20260402221341@sha256:221ce25760de3e90c73f0a17bd7c64ef31b2058cf67a075f7258f64dad13da1c
+  FRONTEND_IMAGE: ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1-iso-tile-20260413070345@sha256:5df7440651ad4d145f0ef96fce05640e9b903d686ffc7545418004df7554e4b3
   RUNNER_IMAGE: ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1@sha256:5a96b3743e1dabd2ae82f481edadc1cdbbd869a15b91891828a7e41305a40e76
   BACKEND_REPLICAS: "1"
   FRONTEND_REPLICAS: "2"
