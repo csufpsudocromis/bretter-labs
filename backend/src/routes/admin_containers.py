@@ -5,6 +5,7 @@ import sqlite3
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ..auth import require_permission, require_user
@@ -847,9 +848,33 @@ def delete_container_image(
             session.delete(instance)
         for template in template_refs:
             session.delete(template)
+        # Persist child deletes first to avoid FK ordering edge-cases on PostgreSQL.
+        session.commit()
+        record = session.get(ContainerImageTable, image_id)
+        if not record:
+            return
 
-    session.delete(record)
-    session.commit()
+    try:
+        session.delete(record)
+        session.commit()
+    except IntegrityError as exc:
+        session.rollback()
+        remaining = session.exec(
+            select(ContainerTemplateTable).where(ContainerTemplateTable.container_image_id == image_id)
+        ).all()
+        if remaining:
+            names = sorted({(row.name or row.id).strip() for row in remaining})
+            sample = ", ".join(names[:3])
+            if len(names) > 3:
+                sample = f"{sample}, +{len(names) - 3} more"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"container image is still used by container templates: {sample}",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="failed to delete container image",
+        ) from exc
 
 
 @router.post(

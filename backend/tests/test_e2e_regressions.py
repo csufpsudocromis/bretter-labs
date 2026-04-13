@@ -571,6 +571,50 @@ def test_platform_admin_can_expand_namespace_owned_container_template_enablement
     assert body["shared_catalog"] is True
 
 
+def test_admin_can_delete_container_image_with_non_active_template_references(login_admin: TestClient):
+    with Session(engine) as session:
+        session.add(
+            ContainerImage(
+                id="img-delete-ct-1",
+                name="Delete CT Image",
+                image_ref="docker.io/library/nginx:1.27",
+                namespace="labs",
+            )
+        )
+        session.add(
+            ContainerTemplate(
+                id="tmpl-delete-ct-1",
+                template_key="delete-ct",
+                version=1,
+                is_default=True,
+                name="Delete CT Template",
+                description="deletion cascade check",
+                container_image_id="img-delete-ct-1",
+                cpu_millicores=500,
+                memory_mb=512,
+                container_port=80,
+                healthcheck_protocol="tcp",
+                healthcheck_path="/",
+                startup_timeout_seconds=300,
+                expose_strategy="nodeport",
+                network_mode="bridge",
+                enabled=False,
+                namespace="labs",
+                shared_catalog=False,
+                enabled_namespaces_json='["labs"]',
+                idle_timeout_minutes=30,
+            )
+        )
+        session.commit()
+
+    delete = login_admin.delete("/admin/container-images/img-delete-ct-1")
+    assert delete.status_code == 204, delete.text
+
+    with Session(engine) as session:
+        assert session.get(ContainerImage, "img-delete-ct-1") is None
+        assert session.get(ContainerTemplate, "tmpl-delete-ct-1") is None
+
+
 def test_namespace_admin_can_toggle_namespace_owned_vm_template_enabled_state(client: TestClient):
     with Session(engine) as session:
         session.add(
