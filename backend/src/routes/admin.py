@@ -6883,12 +6883,18 @@ def create_template(
         if not enabled_namespaces:
             enabled_namespaces = [resource_namespace]
     else:
-        if enabled_namespaces and enabled_namespaces != [resource_namespace]:
+        cross_namespace_targets = bool(enabled_namespaces and enabled_namespaces != [resource_namespace])
+        if cross_namespace_targets and is_platform_admin(actor):
+            # Platform admins can promote a namespace template to shared catalog scope
+            # by selecting explicit enabled namespaces across namespaces.
+            requested_shared_catalog = True
+        elif cross_namespace_targets:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="namespace-owned template can only target its own namespace",
             )
-        enabled_namespaces = [resource_namespace]
+        if not requested_shared_catalog:
+            enabled_namespaces = [resource_namespace]
     _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
     pool_min = int(payload.preclone_pool_size or 0)
     pool_max = int(payload.preclone_pool_max or 0)
@@ -7032,12 +7038,18 @@ def update_template(
         _assert_actor_can_manage_template_namespaces(actor, enabled_namespaces)
 
     if not next_shared_catalog:
-        if enabled_namespaces and enabled_namespaces != [next_namespace]:
+        cross_namespace_targets = bool(enabled_namespaces and enabled_namespaces != [next_namespace])
+        if cross_namespace_targets and is_platform_admin(actor):
+            # Allow platform admins to broaden scope without forcing a separate
+            # shared_catalog toggle step in the UI.
+            next_shared_catalog = True
+        elif cross_namespace_targets:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="namespace-owned template can only target its own namespace",
             )
-        enabled_namespaces = [next_namespace]
+        if not next_shared_catalog:
+            enabled_namespaces = [next_namespace]
 
     if payload.enabled is True and not enabled_namespaces:
         raise HTTPException(

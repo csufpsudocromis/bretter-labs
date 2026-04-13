@@ -477,6 +477,100 @@ def test_namespace_admin_can_only_manage_container_template_enablement_within_sc
     assert "namespace enablement access denied" in denied.json()["detail"]
 
 
+def test_platform_admin_can_expand_namespace_owned_vm_template_enablement(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-enable-vm-platform-1",
+                name="Enable VM Platform Image",
+                filename="enable-vm-platform.qcow2",
+                checksum="sha256:enable-vm-platform",
+                size_bytes=2048,
+                source_pvc="golden-images-vm-platform",
+                namespace="labs-team-red",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-enable-vm-platform-1",
+                name="Enable VM Platform Template",
+                description="platform scope promotion",
+                os_type="windows",
+                image_id="img-enable-vm-platform-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                enabled=True,
+                namespace="labs-team-red",
+                shared_catalog=False,
+                enabled_namespaces_json='["labs-team-red"]',
+            )
+        )
+        session.commit()
+
+    admin_login = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert admin_login.status_code == 200, admin_login.text
+
+    updated = client.patch(
+        "/admin/templates/tmpl-enable-vm-platform-1",
+        json={"enabled_namespaces": ["labs-team-red", "labs"]},
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert set(body["enabled_namespaces"]) == {"labs-team-red", "labs"}
+    assert body["shared_catalog"] is True
+
+
+def test_platform_admin_can_expand_namespace_owned_container_template_enablement(client: TestClient):
+    with Session(engine) as session:
+        session.add(
+            ContainerImage(
+                id="img-enable-ct-platform-1",
+                name="Enable CT Platform Image",
+                image_ref="docker.io/library/nginx:stable",
+                namespace="labs-team-red",
+            )
+        )
+        session.add(
+            ContainerTemplate(
+                id="tmpl-enable-ct-platform-1",
+                template_key="enable-ct-platform",
+                version=1,
+                is_default=True,
+                name="Enable CT Platform Template",
+                description="platform scope promotion",
+                container_image_id="img-enable-ct-platform-1",
+                cpu_millicores=500,
+                memory_mb=512,
+                container_port=80,
+                healthcheck_protocol="tcp",
+                healthcheck_path="/",
+                startup_timeout_seconds=300,
+                expose_strategy="nodeport",
+                network_mode="bridge",
+                enabled=True,
+                namespace="labs-team-red",
+                shared_catalog=False,
+                enabled_namespaces_json='["labs-team-red"]',
+                idle_timeout_minutes=30,
+            )
+        )
+        session.commit()
+
+    admin_login = client.post("/auth/login", json={"username": "admin", "password": "admin"})
+    assert admin_login.status_code == 200, admin_login.text
+
+    updated = client.patch(
+        "/admin/container-templates/tmpl-enable-ct-platform-1",
+        json={"enabled_namespaces": ["labs-team-red", "labs"]},
+    )
+    assert updated.status_code == 200, updated.text
+    body = updated.json()
+    assert set(body["enabled_namespaces"]) == {"labs-team-red", "labs"}
+    assert body["shared_catalog"] is True
+
+
 def test_namespace_admin_can_toggle_namespace_owned_vm_template_enabled_state(client: TestClient):
     with Session(engine) as session:
         session.add(
