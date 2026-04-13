@@ -85,12 +85,19 @@ const NamespaceDirectory = ({ namespaces }) => {
 
   const load = useCallback(
     async (isCancelled = () => false) => {
+      if (targets.length === 0) {
+        if (!isCancelled()) {
+          setRows([]);
+          setError("");
+          setLoading(false);
+        }
+        return;
+      }
       setLoading(true);
       setError("");
       try {
-        const effectiveTargets = targets.length > 0 ? targets : [""];
         const summaries = await Promise.all(
-          effectiveTargets.map(async (namespace) => {
+          targets.map(async (namespace) => {
             const headers = namespaceHeaders(namespace);
             const link = namespace ? `/ns/${encodeURIComponent(namespace)}` : "/";
             try {
