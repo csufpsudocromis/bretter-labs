@@ -48,6 +48,15 @@ NAMESPACE=labs ./scripts/diagnose_connectivity.sh
 This captures websocket metrics (`blabs_ws_proxy_*`), backend websocket log sample, monitoring rule wiring,
 runtime secret wiring checks, and namespace admission-control presence (`ResourceQuota`, `LimitRange`, baseline `NetworkPolicy` set) in one reportable pass.
 
+One-command incident support bundle:
+
+```bash
+NAMESPACE=labs ./scripts/export_support_bundle.sh
+```
+
+This captures namespace inventory/events, failed jobs, Alertmanager snapshot, and core deployment log tails into
+`artifacts/support-bundles/support-bundle-<namespace>-<timestamp>.tar.gz`.
+
 To diagnose a specific runtime namespace:
 
 ```bash

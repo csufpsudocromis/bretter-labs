@@ -154,6 +154,8 @@ Monitoring/ops:
 - `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
 - `IMAGE_UPLOAD_TASK_RETENTION_HOURS` (default `168`; stale completed/failed upload tasks are cleaned by watchdog)
 - `IMAGE_UPLOAD_TASK_CLEANUP_BATCH` (default `25`; max stale upload tasks cleaned per watchdog cycle)
+- `IMAGE_UPLOAD_WATCHDOG_FINALIZE_STALL_SECONDS` (default `1800`; finalize-stage heartbeat stall threshold)
+- `IMAGE_UPLOAD_WATCHDOG_IMPORT_STALL_SECONDS` (default `1800`; import-stage heartbeat stall threshold)
 - `POST_DEPLOY_AUTH_SECRET_NAME`
 - `POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY`, `POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY`
 - `POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY`, `POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY`

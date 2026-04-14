@@ -12,6 +12,7 @@ Last reviewed: April 3, 2026.
 
 - Admin setup: [Setup and Configuration](Setup-and-Configuration)
 - Operations/SRE: [Operations Runbook](Operations-Runbook)
+- Incident triage bundle: [Support Bundle Runbook](Support-Bundle-Runbook)
 - Restore/DR ops: [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - Secrets/Ops: [Secret Operations Runbook](Secret-Operations-Runbook)
 - Alert routing: [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
@@ -40,6 +41,7 @@ Last reviewed: April 3, 2026.
 - [Production Readiness Checklist](Production-Readiness-Checklist)
 - [Upgrade and Rollback](Upgrade-and-Rollback)
 - [Operations Runbook](Operations-Runbook)
+- [Support Bundle Runbook](Support-Bundle-Runbook)
 - [Alert Routing and Receiver Defaults](Alert-Routing-and-Receiver-Defaults)
 - [Restore Drill and Backup SOP](Restore-Drill-and-Backup-SOP)
 - [Secret Operations Runbook](Secret-Operations-Runbook)

@@ -139,7 +139,7 @@ def test_vm_template_preflight_returns_placement_error(login_user: TestClient, m
     assert payload["checks"][0]["status"] == "error"
 
 
-def test_start_vm_does_not_preflight_block_on_node_admission_failure(login_user: TestClient, monkeypatch) -> None:
+def test_start_vm_preflight_blocks_on_node_admission_failure(login_user: TestClient, monkeypatch) -> None:
     _seed_vm_template()
     fake_kube = _FakeKube(runner_pull_ok=True)
     monkeypatch.setattr(user_routes.k8s_client, "StorageV1Api", _FakeStorageApi)
@@ -161,9 +161,9 @@ def test_start_vm_does_not_preflight_block_on_node_admission_failure(login_user:
     monkeypatch.setattr(user_routes, "vm_orchestration_writes_crd", lambda: False)
 
     response = login_user.post("/user/templates/tmpl-preflight-1/start")
-    assert response.status_code == 201, response.text
+    assert response.status_code == 503, response.text
     payload = response.json()
-    assert payload["status"] == "pending"
+    assert "nodes unavailable" in str(payload.get("detail", "")).lower()
 
 
 def test_status_feedback_maps_unbound_pvc_to_building_with_elapsed_hint() -> None:

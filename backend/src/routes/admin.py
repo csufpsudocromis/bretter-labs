@@ -183,6 +183,14 @@ TASK_RETENTION_SECONDS = 300
 FINALIZE_MAX_RETRIES = max(0, int(getattr(settings, "image_finalize_max_retries", 3) or 3))
 FINALIZE_RETRY_BASE_SECONDS = max(5, int(getattr(settings, "image_finalize_retry_base_seconds", 15) or 15))
 FINALIZE_RETRY_MAX_SECONDS = max(30, int(getattr(settings, "image_finalize_retry_max_seconds", 600) or 600))
+FINALIZE_STALL_SECONDS = max(
+    FINALIZE_RETRY_BASE_SECONDS * 2,
+    int(getattr(settings, "image_upload_watchdog_finalize_stall_seconds", 1800) or 1800),
+)
+IMPORT_STALL_SECONDS = max(
+    FINALIZE_RETRY_BASE_SECONDS * 2,
+    int(getattr(settings, "image_upload_watchdog_import_stall_seconds", 1800) or 1800),
+)
 UPLOAD_TASK_RETENTION_HOURS = max(0, int(getattr(settings, "image_upload_task_retention_hours", 168) or 168))
 UPLOAD_TASK_CLEANUP_BATCH = max(1, int(getattr(settings, "image_upload_task_cleanup_batch", 25) or 25))
 UPLOAD_STAGE_UPLOADED = "uploaded"
@@ -1902,6 +1910,8 @@ def _ensure_upload_task_columns() -> None:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN last_retry_error TEXT")
         if "finalize_started_at" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN finalize_started_at TIMESTAMP")
+        if "last_heartbeat_at" not in cols:
+            to_add.append("ALTER TABLE imageuploadtask ADD COLUMN last_heartbeat_at TIMESTAMP")
         if "tenant" not in cols:
             to_add.append("ALTER TABLE imageuploadtask ADD COLUMN tenant TEXT DEFAULT 'global'")
         if "namespace" not in cols:
@@ -1924,6 +1934,15 @@ def _ensure_upload_task_columns() -> None:
             cur.execute(
                 "UPDATE imageuploadtask SET max_retries = ? WHERE max_retries IS NULL OR max_retries < 0",
                 (FINALIZE_MAX_RETRIES,),
+            )
+        if "last_heartbeat_at" in cols:
+            cur.execute(
+                "UPDATE imageuploadtask SET last_heartbeat_at = updated_at "
+                "WHERE last_heartbeat_at IS NULL AND updated_at IS NOT NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS ix_imageuploadtask_last_heartbeat_at "
+                "ON imageuploadtask(last_heartbeat_at)"
             )
         if "tenant" in cols:
             cur.execute("UPDATE imageuploadtask SET tenant = 'global' WHERE tenant IS NULL OR trim(tenant) = ''")
@@ -2263,6 +2282,7 @@ def _upload_task_out(task: ImageUploadTask) -> ImageUploadTaskStatus:
         next_retry_at=getattr(task, "next_retry_at", None),
         last_retry_error=getattr(task, "last_retry_error", None),
         image_id=task.image_id,
+        last_heartbeat_at=getattr(task, "last_heartbeat_at", None),
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
@@ -2367,6 +2387,7 @@ def _update_upload_task(
     upload_pvc: str | None = None,
     finalize_job: str | None = None,
     copy_job: str | None = None,
+    last_heartbeat_at: datetime | None = None,
 ) -> None:
     with session_scope() as session:
         task = session.get(ImageUploadTask, task_id)
@@ -2408,7 +2429,12 @@ def _update_upload_task(
             task.finalize_job = finalize_job
         if copy_job is not None:
             task.copy_job = copy_job
-        task.updated_at = utc_now()
+        stamp = utc_now()
+        if last_heartbeat_at is not None:
+            task.last_heartbeat_at = last_heartbeat_at
+        elif str(task.status or "").strip().lower() not in {"completed", "failed"}:
+            task.last_heartbeat_at = stamp
+        task.updated_at = stamp
         session.add(task)
         session.commit()
 
@@ -3080,6 +3106,7 @@ def _ensure_upload_task_finalize_job(task: ImageUploadTask, *, force_recreate: b
         task.finalize_started_at = utc_now()
     task.detail = "Finalizing image format/checksum on cluster"
     task.updated_at = utc_now()
+    task.last_heartbeat_at = task.updated_at
 
 
 def _create_task_copy_job(task: ImageUploadTask) -> tuple[str, str]:
@@ -3222,7 +3249,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
 
 
 def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUploadTask:
-    if task.status in {"completed", "failed", UPLOAD_STAGE_COPYING}:
+    if task.status in {"completed", "failed"}:
         return task
 
     batch = client.BatchV1Api()
@@ -3244,11 +3271,22 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.stage = task.status
 
     def _commit_task() -> ImageUploadTask:
-        task.updated_at = utc_now()
+        stamp = utc_now()
+        task.last_heartbeat_at = stamp
+        task.updated_at = stamp
         session.add(task)
         session.commit()
         session.refresh(task)
         return task
+
+    def _heartbeat_age_seconds() -> int:
+        heartbeat_at = getattr(task, "last_heartbeat_at", None) or getattr(task, "updated_at", None) or task.created_at
+        if heartbeat_at is None:
+            return 0
+        try:
+            return max(0, int((now - heartbeat_at).total_seconds()))
+        except Exception:
+            return 0
 
     def _schedule_import_retry_or_fail(*, failure_detail: str, latest_error: str, final_detail: str) -> ImageUploadTask:
         task.last_retry_error = (str(latest_error or failure_detail).strip() or failure_detail)[:4096]
@@ -3332,6 +3370,54 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
 
     if task.status == "finalizing":
         finalize_log = ""
+        heartbeat_age_seconds = _heartbeat_age_seconds()
+        if heartbeat_age_seconds >= FINALIZE_STALL_SECONDS and not task.next_retry_at:
+            task.last_retry_error = (
+                f"watchdog heartbeat timeout while finalizing ({heartbeat_age_seconds}s without progress update)"
+            )
+            if task.retry_count < task.max_retries:
+                task.retry_count += 1
+                backoff = _retry_backoff_seconds(task.retry_count)
+                task.next_retry_at = now + timedelta(seconds=backoff)
+                task.detail = (
+                    f"Finalize heartbeat stalled; retrying in {backoff}s "
+                    f"(attempt {task.retry_count}/{task.max_retries})"
+                )
+                task.error_message = None
+                task.stage = UPLOAD_STAGE_NORMALIZING
+                _commit_task()
+                return task
+            task.status = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
+            task.detail = "Finalize stalled and exceeded retry budget"
+            task.error_message = task.last_retry_error
+            _commit_task()
+            return task
+        if task.next_retry_at:
+            if now < task.next_retry_at:
+                wait_seconds = max(1, int((task.next_retry_at - now).total_seconds()))
+                task.detail = (
+                    f"Finalize retry scheduled in {wait_seconds}s " f"(attempt {task.retry_count}/{task.max_retries})"
+                )
+                task.error_message = None
+                task.stage = UPLOAD_STAGE_NORMALIZING
+                _commit_task()
+                return task
+            try:
+                _ensure_upload_task_finalize_job(task, force_recreate=True)
+            except Exception as exc:
+                task.status = "failed"
+                task.stage = UPLOAD_STAGE_FAILED
+                task.detail = "Failed to resubmit finalize job"
+                task.error_message = str(exc)
+                _commit_task()
+                return task
+            task.next_retry_at = None
+            task.detail = f"Retrying finalize job (attempt {task.retry_count}/{task.max_retries})"
+            task.error_message = None
+            task.stage = UPLOAD_STAGE_NORMALIZING
+            _commit_task()
+            return task
         if task.finalize_started_at and (now - task.finalize_started_at).total_seconds() > max(
             FINALIZE_JOB_TIMEOUT_SECONDS + 300, FINALIZE_JOB_TIMEOUT_SECONDS
         ):
@@ -3359,32 +3445,6 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             latest_error = (finalize_log.strip() or "finalize job failed")[:4096]
             task.last_retry_error = latest_error
             if task.retry_count < task.max_retries:
-                if task.next_retry_at and now < task.next_retry_at:
-                    wait_seconds = max(1, int((task.next_retry_at - now).total_seconds()))
-                    task.detail = (
-                        f"Finalize retry scheduled in {wait_seconds}s "
-                        f"(attempt {task.retry_count}/{task.max_retries})"
-                    )
-                    task.error_message = None
-                    task.stage = UPLOAD_STAGE_NORMALIZING
-                    _commit_task()
-                    return task
-                if task.next_retry_at and now >= task.next_retry_at:
-                    try:
-                        _ensure_upload_task_finalize_job(task, force_recreate=True)
-                    except Exception as exc:
-                        task.status = "failed"
-                        task.stage = UPLOAD_STAGE_FAILED
-                        task.detail = "Failed to resubmit finalize job"
-                        task.error_message = str(exc)
-                        _commit_task()
-                        return task
-                    task.next_retry_at = None
-                    task.detail = f"Retrying finalize job (attempt {task.retry_count}/{task.max_retries})"
-                    task.error_message = None
-                    task.stage = UPLOAD_STAGE_NORMALIZING
-                    _commit_task()
-                    return task
                 task.retry_count += 1
                 backoff = _retry_backoff_seconds(task.retry_count)
                 task.next_retry_at = now + timedelta(seconds=backoff)
@@ -3486,6 +3546,14 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             return task
 
     if task.status == "importing":
+        heartbeat_age_seconds = _heartbeat_age_seconds()
+        if heartbeat_age_seconds >= IMPORT_STALL_SECONDS and not task.next_retry_at:
+            return _schedule_import_retry_or_fail(
+                failure_detail="Clone source seed heartbeat stalled",
+                latest_error=f"watchdog heartbeat timeout while importing ({heartbeat_age_seconds}s without progress)",
+                final_detail="Clone source seed stalled after retries",
+            )
+
         if task.next_retry_at:
             if now < task.next_retry_at:
                 wait_seconds = max(1, int((task.next_retry_at - now).total_seconds()))
@@ -3612,6 +3680,14 @@ def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUpload
             task.detail = "Failed to register image metadata"
             task.error_message = str(exc)
             _commit_task()
+    if task.status == UPLOAD_STAGE_COPYING:
+        heartbeat_age_seconds = _heartbeat_age_seconds()
+        if heartbeat_age_seconds >= IMPORT_STALL_SECONDS:
+            task.status = "failed"
+            task.stage = UPLOAD_STAGE_FAILED
+            task.detail = "Image copy stalled; retry from image actions"
+            task.error_message = f"copy worker heartbeat timeout ({heartbeat_age_seconds}s without progress update)"
+            _commit_task()
     return task
 
 
@@ -3653,6 +3729,7 @@ def run_upload_task_watchdog(
                 failed_task.stage = UPLOAD_STAGE_FAILED
                 failed_task.detail = "Watchdog refresh failed"
                 failed_task.error_message = str(exc)[:4096]
+                failed_task.last_heartbeat_at = utc_now()
                 failed_task.updated_at = utc_now()
                 session.add(failed_task)
                 session.commit()
@@ -5514,6 +5591,7 @@ def upload_image(
         last_retry_error=None,
         finalize_started_at=utc_now(),
         image_id=image_id,
+        last_heartbeat_at=utc_now(),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
@@ -5540,6 +5618,7 @@ def upload_image(
         task.stage = UPLOAD_STAGE_FAILED
         task.detail = "Failed to submit finalize job"
         task.error_message = str(exc)
+        task.last_heartbeat_at = utc_now()
         task.updated_at = utc_now()
         session.add(task)
         session.commit()
@@ -5605,6 +5684,7 @@ def start_direct_upload(
         retry_count=0,
         max_retries=FINALIZE_MAX_RETRIES,
         image_id=str(uuid4()),
+        last_heartbeat_at=utc_now(),
         created_at=utc_now(),
         updated_at=utc_now(),
     )
@@ -5626,6 +5706,7 @@ def start_direct_upload(
         token = _request_direct_upload_token(task.upload_pvc)
         task.detail = "Uploading image directly to CDI DataVolume"
         task.stage = UPLOAD_STAGE_UPLOADED
+        task.last_heartbeat_at = utc_now()
         task.updated_at = utc_now()
         session.add(task)
         session.commit()
@@ -5635,6 +5716,7 @@ def start_direct_upload(
         task.stage = UPLOAD_STAGE_FAILED
         task.detail = "Failed to initialize direct CDI upload"
         task.error_message = str(exc)
+        task.last_heartbeat_at = utc_now()
         task.updated_at = utc_now()
         session.add(task)
         session.commit()
@@ -5660,8 +5742,6 @@ def get_upload_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
     if not _tenant_scoped_record(task, actor, include_global=False) or not _namespace_scoped_record(task, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
-    if str(getattr(task, "status", "") or "").strip().lower() == UPLOAD_STAGE_COPYING:
-        return _upload_task_out(task)
     try:
         task = _refresh_upload_task(task, session)
     except Exception as exc:
@@ -5670,6 +5750,7 @@ def get_upload_task(
         task.stage = UPLOAD_STAGE_FAILED
         task.detail = "Internal error while refreshing upload task"
         task.error_message = str(exc)
+        task.last_heartbeat_at = utc_now()
         task.updated_at = utc_now()
         session.add(task)
         session.commit()
@@ -5732,8 +5813,18 @@ def retry_operation_upload_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
 
     status_name = str(getattr(task, "status", "") or "").strip().lower()
+    stage_name = str(getattr(task, "stage", "") or "").strip().lower()
+    detail_text = str(getattr(task, "detail", "") or "").strip().lower()
+    is_copy_task = (
+        status_name == UPLOAD_STAGE_COPYING or stage_name == UPLOAD_STAGE_COPYING or "image copy" in detail_text
+    )
     if status_name == "completed":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="upload task is already completed")
+    if is_copy_task:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="image copy tasks are retried from the source image action",
+        )
     if status_name == "uploading":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -5744,6 +5835,7 @@ def retry_operation_upload_task(
     task.next_retry_at = None
     task.last_retry_error = None
     task.error_message = None
+    task.last_heartbeat_at = utc_now()
     task.updated_at = utc_now()
     if status_name == "importing":
         task.status = "importing"
@@ -5812,6 +5904,7 @@ def cancel_operation_upload_task(
     task.error_message = "canceled by admin"
     task.last_retry_error = "canceled by admin"
     task.next_retry_at = None
+    task.last_heartbeat_at = utc_now()
     task.updated_at = utc_now()
     session.add(task)
     _record_admin_audit_event(
@@ -6827,6 +6920,7 @@ def copy_image(
         retry_count=0,
         max_retries=0,
         image_id=str(uuid4()),
+        last_heartbeat_at=utc_now(),
         created_at=utc_now(),
         updated_at=utc_now(),
     )

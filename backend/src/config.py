@@ -152,6 +152,8 @@ class Settings(BaseSettings):
     image_upload_watchdog_enabled: bool = True
     image_upload_watchdog_max_tasks: int = 25
     image_upload_watchdog_stale_seconds: int = 45
+    image_upload_watchdog_finalize_stall_seconds: int = 1800
+    image_upload_watchdog_import_stall_seconds: int = 1800
     image_upload_task_retention_hours: int = 168
     image_upload_task_cleanup_batch: int = 25
     image_import_progress_step_percent: int = 3

@@ -236,6 +236,35 @@ def _status_feedback(
     return "unknown", "VM status is unknown."
 
 
+def _is_storage_launch_error(detail: str) -> bool:
+    text = str(detail or "").lower()
+    return any(
+        token in text
+        for token in (
+            "persistentvolumeclaim",
+            "unbound immediate",
+            "storageclass",
+            "failed to provision volume",
+            "no persistent volumes available",
+            "volumeattachment",
+            "mountvolume",
+            "attachvolume",
+            "kube_vm_storage_class",
+            "clone-based vm launch",
+            "source pvc",
+        )
+    )
+
+
+def _normalize_vm_launch_error_detail(detail: str) -> str:
+    message = str(detail or "").strip()
+    if not message:
+        return "VM launch failed."
+    if _is_storage_launch_error(message):
+        return "Waiting for storage resources. " "Check VM storage class/PVC provisioning health and retry launch."
+    return message
+
+
 def _require_clone_ready(image: Image) -> None:
     if not image.source_pvc:
         raise HTTPException(
@@ -1738,6 +1767,13 @@ def start_vm(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
+    node_ok, node_detail = evaluate_node_launch_admission(runtime_kube)
+    if not node_ok:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=node_detail)
+    pvc_ok, pvc_detail = evaluate_vm_storage_launch_admission(runtime_kube, namespace=runtime_namespace)
+    if not pvc_ok:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=pvc_detail)
+
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     instance_id = str(uuid4())
@@ -1784,7 +1820,7 @@ def start_vm(
         )
         try:
             pod_status = runtime_kube.create_pod(pod_request)
-        except Exception:
+        except Exception as exc:
             if warm_pool_pvc:
                 try:
                     runtime_kube._client().delete_namespaced_persistent_volume_claim(
@@ -1793,7 +1829,10 @@ def start_vm(
                     )
                 except Exception:
                     pass
-            raise
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_normalize_vm_launch_error_detail(str(exc)),
+            ) from exc
         disk_pvc = pod_status.disk_pvc
         # Keep VM console service internal; browser access goes through authenticated backend proxy.
         service_name = f"svc-{instance_id[:8]}"
@@ -2028,6 +2067,13 @@ def restart_vm(
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
+    node_ok, node_detail = evaluate_node_launch_admission(runtime_kube)
+    if not node_ok:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=node_detail)
+    pvc_ok, pvc_detail = evaluate_vm_storage_launch_admission(runtime_kube, namespace=runtime_namespace)
+    if not pvc_ok:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=pvc_detail)
+
     use_legacy_orchestration = vm_orchestration_uses_legacy_path()
     write_crd_shadow = vm_orchestration_writes_crd()
     console_provider = normalize_vm_console_provider(getattr(template, "console_provider", "spice"))
@@ -2085,7 +2131,7 @@ def restart_vm(
         )
         try:
             pod_status = runtime_kube.create_pod(pod_request)
-        except Exception:
+        except Exception as exc:
             if warm_pool_pvc:
                 try:
                     runtime_kube._client().delete_namespaced_persistent_volume_claim(
@@ -2094,7 +2140,10 @@ def restart_vm(
                     )
                 except Exception:
                     pass
-            raise
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=_normalize_vm_launch_error_detail(str(exc)),
+            ) from exc
         disk_pvc = pod_status.disk_pvc
         service_name = f"svc-{instance_id[:8]}"
         runtime_kube.create_service_for_pod(

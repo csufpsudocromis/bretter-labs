@@ -104,6 +104,7 @@ class ImageUploadTask(SQLModel, table=True):
     upload_pvc: Optional[str] = None
     finalize_job: Optional[str] = None
     copy_job: Optional[str] = None
+    last_heartbeat_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 

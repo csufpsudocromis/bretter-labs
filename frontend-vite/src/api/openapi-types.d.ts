@@ -2568,6 +2568,8 @@ export interface components {
             filename: string;
             /** Image Id */
             image_id?: string | null;
+            /** Last Heartbeat At */
+            last_heartbeat_at?: string | null;
             /** Last Retry Error */
             last_retry_error?: string | null;
             /**

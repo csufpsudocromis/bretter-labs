@@ -233,6 +233,7 @@ Proof artifact and operator docs:
 - CRD canary script: [scripts/crd_canary_labinstance.sh](scripts/crd_canary_labinstance.sh)
 - One-command websocket/connect diagnostics: [scripts/diagnose_connectivity.sh](scripts/diagnose_connectivity.sh)
   - Includes runtime secret wiring and namespace admission-control presence checks (`ResourceQuota`, `LimitRange`, baseline `NetworkPolicy` set)
+- Support bundle export (pods/events/jobs/alerts/log tails): [scripts/export_support_bundle.sh](scripts/export_support_bundle.sh)
 - LabImageImport controller smoke: [scripts/smoke_labimageimport_controller.sh](scripts/smoke_labimageimport_controller.sh)
 - Tenant isolation impersonation smoke: [scripts/smoke_tenant_isolation_impersonation.sh](scripts/smoke_tenant_isolation_impersonation.sh)
 - Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
@@ -326,6 +327,8 @@ Proof artifact and operator docs:
 | `RUNTIME_SECRETS_ENCRYPTION_KEY_KEY` | `secrets_encryption_key` | Data key inside `RUNTIME_SECRETS_SECRET_NAME` used for `BLABS_SECRETS_ENCRYPTION_KEY` |
 | `IMAGE_UPLOAD_TASK_RETENTION_HOURS` | `168` | Retention window for completed/failed upload task rows before watchdog cleanup removes stale tasks |
 | `IMAGE_UPLOAD_TASK_CLEANUP_BATCH` | `25` | Max terminal upload tasks cleaned per watchdog cycle |
+| `IMAGE_UPLOAD_WATCHDOG_FINALIZE_STALL_SECONDS` | `1800` | Mark/retry finalize tasks when heartbeat is stale for too long |
+| `IMAGE_UPLOAD_WATCHDOG_IMPORT_STALL_SECONDS` | `1800` | Mark/retry import/seed tasks when heartbeat is stale for too long |
 | `CONTAINER_SIGNATURE_VERIFICATION_ENABLED` | `0` | Must be `1` when `PRODUCTION_PROFILE=1`; enforces cosign verification for container image registration/update |
 | `CONTAINER_SIGNATURE_KEY_REF` | `/etc/bretter-signing/cosign.pub` | Cosign public key path used for verification in hardened profiles |
 | `CONTAINER_SIGNATURE_KEY_SECRET_NAME` | `bretter-cosign-public-key` | Secret mounted at `/etc/bretter-signing` to provide the public key file referenced by `CONTAINER_SIGNATURE_KEY_REF` |
@@ -550,7 +553,7 @@ Release workflow hardening:
 - Production digest auto-pin writes release-tagged digest refs (`<repo>:vX.Y.Z@sha256:...`) for runtime/admin/frontend/runner images.
 - Production deploy workflow gates rollout proof on authenticated synthetic checks for VM launch, Guacamole RDP frame render, and admin image upload/finalize/delete.
 - Production deploy workflow runs automatically only for release digest-promotion commits (or explicit workflow dispatch).
-- Staged promotion workflow (`.github/workflows/promote-staging-to-production.yml`) runs staging preflight + go-live proof before allowing production deployment.
+- Staged promotion workflow (`.github/workflows/promote-staging-to-production.yml`) supports optional `release_tag` promotion (staging -> production) and verifies immutable digest-pinned image refs before deploy.
 
 For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
 

@@ -2349,6 +2349,18 @@
             ],
             "title": "Image Id"
           },
+          "last_heartbeat_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Heartbeat At"
+          },
           "last_retry_error": {
             "anyOf": [
               {

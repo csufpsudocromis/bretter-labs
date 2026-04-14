@@ -321,6 +321,7 @@ class ImageUploadTaskStatus(BaseModel):
     next_retry_at: datetime | None = None
     last_retry_error: str | None = None
     image_id: str | None = None
+    last_heartbeat_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -483,7 +483,10 @@ def main() -> int:
                     ".github/workflows/deploy-production.yml must enforce post-deploy upload/finalize synthetic gate "
                     f"(missing marker: {marker})."
                 )
-        if "PASS: post-deploy synthetic user flow check" not in deploy_workflow:
+        if (
+            "PASS: post-deploy synthetic user flow check" not in deploy_workflow
+            and "scripts/verify_synthetic_gate_report.py" not in deploy_workflow
+        ):
             errors.append(
                 ".github/workflows/deploy-production.yml must fail the deploy when post-deploy synthetic user flow is missing/failed."
             )
@@ -507,7 +510,10 @@ def main() -> int:
                     ".github/workflows/promote-staging-to-production.yml must include staged promotion gate markers "
                     f"(missing marker: {marker})."
                 )
-        if "PASS: post-deploy synthetic user flow check" not in promotion_workflow:
+        if (
+            "PASS: post-deploy synthetic user flow check" not in promotion_workflow
+            and "scripts/verify_synthetic_gate_report.py" not in promotion_workflow
+        ):
             errors.append(
                 ".github/workflows/promote-staging-to-production.yml must enforce post-deploy synthetic success before promotion."
             )
