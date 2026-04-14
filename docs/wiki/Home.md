@@ -6,7 +6,7 @@ GitHub wiki:
 
 - https://github.com/csufpsudocromis/bretter-labs/wiki
 
-Last reviewed: April 3, 2026.
+Last reviewed: April 14, 2026.
 
 ## Audience paths
 
@@ -19,6 +19,7 @@ Last reviewed: April 3, 2026.
 - Troubleshooting: [Error Catalog](Error-Catalog) + [Operations Runbook](Operations-Runbook)
 - Websocket/connect triage: [WebSocket Reliability and Diagnostics](WebSocket-Reliability-and-Diagnostics)
 - Developer: [Connect Flow Deep Dive](Connect-Flow-Deep-Dive) + [Template Best Practices](Template-Best-Practices)
+- Image operations: [Golden Image and ISO Operations](Golden-Image-and-ISO-Operations) + [VM Image Formats](VM-Image-Formats)
 - Console/RDP operations: [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - Security: [Security and Auth](Security-and-Auth) + [LDAP Authentication](LDAP-Authentication) + [Hardened Deployment Guide](Hardened-Deployment-Guide)
 - GitHub/release ops: [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
@@ -56,6 +57,7 @@ Last reviewed: April 3, 2026.
 - [Console Providers and RDP Operations](Console-Providers-and-RDP-Operations)
 - [Template Best Practices](Template-Best-Practices)
 - [VM Image Formats](VM-Image-Formats)
+- [Golden Image and ISO Operations](Golden-Image-and-ISO-Operations)
 - [Container Labs](Container-Labs)
 - [Scaling and Quotas](Scaling-and-Quotas)
 - [Security and Auth](Security-and-Auth)
@@ -99,6 +101,7 @@ Reference pages:
 - Namespace switcher in the top header for scoped admin users (`/ns/<namespace>/...`)
 - Namespace directory at `/` shows launchable labs and running labs across assigned namespaces
 - Namespace selector/catalog APIs (`/admin/template-namespaces`, `/admin/quota-namespaces`) return lab-managed namespaces only and intentionally exclude unrelated system namespaces (`kube-*`, `default`, `cdi`, etc.)
+- ISO image catalog and golden-image update workflow support admin/namespace-admin image maintenance without mutating user runtime overlays
 - Backend/frontend autoscaling controls via HPA (`*_HPA_MIN/MAX_REPLICAS`, CPU utilization targets) plus `UVICORN_WORKERS`
 - Default ingress NetworkPolicies with explicit app allow rules
 - Error log cap/rotation at 10MB with paging (50 entries/page)

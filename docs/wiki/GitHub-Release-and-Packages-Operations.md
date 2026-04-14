@@ -1,6 +1,6 @@
 # GitHub Release and Packages Operations
 
-Last reviewed: March 26, 2026.
+Last reviewed: April 14, 2026.
 
 This page is the operator runbook for repository metadata, releases, CI guardrails, and GHCR package publishing.
 
@@ -20,6 +20,10 @@ Source of truth:
 
 - `VERSION` (semantic version)
 - `CHANGELOG.md` (Keep a Changelog format)
+
+Current release baseline in this repository:
+
+- `0.6.1`
 
 Release workflow:
 
@@ -44,6 +48,14 @@ Tag push triggers:
 Workflow:
 
 - `.github/workflows/publish-and-pin-images.yml`
+
+Published package set:
+
+- `ghcr.io/<namespace>/bretter-backend` (admin-tools image)
+- `ghcr.io/<namespace>/bretter-backend-admin` (compatibility alias tag)
+- `ghcr.io/<namespace>/bretter-backend-runtime` (runtime-only backend image)
+- `ghcr.io/<namespace>/bretter-frontend`
+- `ghcr.io/<namespace>/win-vm-runner`
 
 Pipeline gates:
 
@@ -147,6 +159,8 @@ After publish/release:
 2. Latest publish run is green.
 3. GHCR package timestamps updated for:
    - `bretter-backend`
+   - `bretter-backend-admin` (compatibility alias)
+   - `bretter-backend-runtime`
    - `bretter-frontend`
    - `win-vm-runner`
 4. Package pages show source repo linkage.

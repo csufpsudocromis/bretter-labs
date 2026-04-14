@@ -72,6 +72,8 @@ _User view: launch feedback and in-browser connect workflow._
 ### Admin features
 
 - VM image upload and normalization
+- ISO image library management (`/admin/iso-images`) for install/update media
+- Golden image lifecycle controls in `/admin/images` (create from ISO, edit metadata/hardware, copy image, and admin update VM save flow)
 - VM templates and container templates
 - Per-template VM console provider selection (`spice`, `guacamole`/VNC, or `guacamole_rdp`)
 - Container image registry management
@@ -534,14 +536,14 @@ Publish images + auto-pin production digests:
 ```bash
 # Automatic on merge to main:
 # - .github/workflows/publish-and-pin-images.yml
-# - uses VERSION + short commit SHA (for example 0.3.1-a1b2c3d4e5f6)
+# - uses VERSION + short commit SHA (for example 0.6.1-a1b2c3d4e5f6)
 # - builds/pushes/signs/scans images
 # - commits digest pins back into deploy/helm/values-production.yaml
 #
 # GitHub Actions workflow dispatch:
 # .github/workflows/publish-and-pin-images.yml
 # Inputs:
-#   version=0.3.1
+#   version=0.6.1
 #   image_namespace=<ghcr-namespace>
 #   commit_digest_update=true
 ```
@@ -655,16 +657,19 @@ Common issues:
 
 Primary container images are published to GHCR:
 
-- `ghcr.io/csufpsudocromis/bretter-backend`
+- `ghcr.io/csufpsudocromis/bretter-backend` (admin-tools image)
+- `ghcr.io/csufpsudocromis/bretter-backend-admin` (compatibility tag alias for admin-tools image)
+- `ghcr.io/csufpsudocromis/bretter-backend-runtime`
 - `ghcr.io/csufpsudocromis/bretter-frontend`
 - `ghcr.io/csufpsudocromis/win-vm-runner`
 
-Quick pull examples:
+Quick pull examples (`0.6.1`):
 
 ```bash
-docker pull ghcr.io/csufpsudocromis/bretter-backend:v0.3.1
-docker pull ghcr.io/csufpsudocromis/bretter-frontend:v0.3.1
-docker pull ghcr.io/csufpsudocromis/win-vm-runner:v0.3.1
+docker pull ghcr.io/csufpsudocromis/bretter-backend:v0.6.1
+docker pull ghcr.io/csufpsudocromis/bretter-backend-runtime:v0.6.1
+docker pull ghcr.io/csufpsudocromis/bretter-frontend:v0.6.1
+docker pull ghcr.io/csufpsudocromis/win-vm-runner:v0.6.1
 ```
 
 GitHub package listing:
@@ -705,6 +710,7 @@ Token hygiene:
 - Operator CRD versioning plan: [docs/wiki/Operator-CRD-Versioning-Plan.md](docs/wiki/Operator-CRD-Versioning-Plan.md)
 - Tenant isolation runbook: [docs/wiki/Tenant-Isolation-and-Namespaces.md](docs/wiki/Tenant-Isolation-and-Namespaces.md)
 - Namespace lifecycle/recovery runbook: [docs/wiki/Namespace-Lifecycle-and-Recovery.md](docs/wiki/Namespace-Lifecycle-and-Recovery.md)
+- Golden image/ISO operations: [docs/wiki/Golden-Image-and-ISO-Operations.md](docs/wiki/Golden-Image-and-ISO-Operations.md)
 - Restore drill SOP: [docs/wiki/Restore-Drill-and-Backup-SOP.md](docs/wiki/Restore-Drill-and-Backup-SOP.md)
 - API contract guardrails: [docs/wiki/API-Contract-and-Drift-Guardrails.md](docs/wiki/API-Contract-and-Drift-Guardrails.md)
 - Upgrade procedure: [docs/upgrade-path.md](docs/upgrade-path.md)

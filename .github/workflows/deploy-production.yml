@@ -18,7 +18,7 @@ on:
         required: false
         default: "bretter-labs"
       release_tag:
-        description: "Optional release tag to deploy (for example: v0.3.1)"
+        description: "Optional release tag to deploy (for example: v0.6.1)"
         required: false
         default: ""
 

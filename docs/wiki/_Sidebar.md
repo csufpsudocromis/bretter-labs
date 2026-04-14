@@ -26,6 +26,7 @@
 - [Template Best Practices](Template-Best-Practices)
 - [Security and Auth](Security-and-Auth)
 - [LDAP Authentication](LDAP-Authentication)
+- [Golden Image and ISO Operations](Golden-Image-and-ISO-Operations)
 - [Community and Roadmap](Community-and-Roadmap)
 - [GitHub Release and Packages Operations](GitHub-Release-and-Packages-Operations)
 - [Scaling and Quotas](Scaling-and-Quotas)

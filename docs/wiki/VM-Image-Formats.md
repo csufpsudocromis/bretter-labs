@@ -100,5 +100,6 @@ kubectl describe nodes | rg -n 'DiskPressure|nodefs|imagefs'
 
 ## Related pages
 
+- [Golden Image and ISO Operations](Golden-Image-and-ISO-Operations)
 - [Operations Runbook](Operations-Runbook)
 - [Setup and Configuration](Setup-and-Configuration)
