@@ -244,7 +244,8 @@ Proof artifact and operator docs:
 - Staging failure drill workflow: [.github/workflows/staging-failure-drills.yml](.github/workflows/staging-failure-drills.yml)
 - Playwright Guacamole RDP smoke workflow: [.github/workflows/playwright-rdp-smoke.yml](.github/workflows/playwright-rdp-smoke.yml)
 - Production deploy workflow: [.github/workflows/deploy-production.yml](.github/workflows/deploy-production.yml)
-- Config drift workflow + script: [.github/workflows/config-drift-check.yml](.github/workflows/config-drift-check.yml), [scripts/check_live_config_drift.py](scripts/check_live_config_drift.py)
+- Live post-deploy smoke gate workflow: [.github/workflows/live-post-deploy-smoke-gate.yml](.github/workflows/live-post-deploy-smoke-gate.yml)
+- Config drift workflows + scripts: [.github/workflows/config-drift-check.yml](.github/workflows/config-drift-check.yml), [scripts/check_live_config_drift.py](scripts/check_live_config_drift.py), [scripts/check_platform_state_drift.py](scripts/check_platform_state_drift.py)
 - SLO dashboard pack: [deploy/monitoring/grafana-userflow-slo-dashboard.yaml](deploy/monitoring/grafana-userflow-slo-dashboard.yaml)
 - Default report dir: [artifacts/go-live/](artifacts/go-live/)
 - Production values reference: [docs/wiki/Production-Helm-Values-Reference.md](docs/wiki/Production-Helm-Values-Reference.md)
@@ -552,8 +553,10 @@ Release workflow hardening:
 - Published images include SBOM + provenance attestations.
 - Production digest auto-pin writes release-tagged digest refs (`<repo>:vX.Y.Z@sha256:...`) for runtime/admin/frontend/runner images.
 - Production deploy workflow gates rollout proof on authenticated synthetic checks for VM launch, Guacamole RDP frame render, and admin image upload/finalize/delete.
+- Production go-live proof provisions an ephemeral synthetic probe user each run and retires (rotate/delete) it after the smoke flow.
 - Production deploy workflow runs automatically only for release digest-promotion commits (or explicit workflow dispatch).
 - Staged promotion workflow (`.github/workflows/promote-staging-to-production.yml`) supports optional `release_tag` promotion (staging -> production) and verifies immutable digest-pinned image refs before deploy.
+- Deploy/promotion/config-drift workflows now include platform state drift gating (`scripts/check_platform_state_drift.py`) for managed namespaces, template bindings, and image source PVC presence.
 
 For GHCR publish reliability with pre-existing private packages, set repo Actions secrets:
 

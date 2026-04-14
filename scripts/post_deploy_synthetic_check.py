@@ -486,6 +486,28 @@ def _normalized_namespace_list(raw_values: Any) -> list[str]:
     return out
 
 
+def _select_active_namespace(*, preferred_namespace: str, me_payload: dict[str, Any]) -> tuple[str, list[str]]:
+    enabled_namespaces = _normalized_namespace_list(
+        me_payload.get("enabled_namespaces") or me_payload.get("namespace_scopes") or []
+    )
+    default_namespace = str(me_payload.get("default_namespace") or "").strip().lower()
+    preferred = str(preferred_namespace or "").strip().lower()
+
+    if preferred:
+        if enabled_namespaces and preferred not in enabled_namespaces:
+            _fail(
+                f"SYNTHETIC_NAMESPACE={preferred!r} is not in enabled namespaces: "
+                + ", ".join(enabled_namespaces or ["<none>"])
+            )
+        return preferred, enabled_namespaces
+
+    if enabled_namespaces:
+        return enabled_namespaces[0], enabled_namespaces
+    if default_namespace:
+        return default_namespace, enabled_namespaces
+    return "", enabled_namespaces
+
+
 def _run_namespace_switch_probe(
     *,
     session: requests.Session,
@@ -599,6 +621,7 @@ def main() -> int:
     run_namespace_switch_probe = _bool_env("SYNTHETIC_RUN_NAMESPACE_SWITCH_PROBE", True)
     image_upload_timeout_seconds = max(60, int(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS") or "1200"))
     post_vm_grace_seconds = max(0, int(os.environ.get("SYNTHETIC_POST_VM_GRACE_SECONDS") or "20"))
+    preferred_namespace = str(os.environ.get("SYNTHETIC_NAMESPACE") or "").strip()
     single_lab_limit_message = "you already have a virtual lab running"
 
     if not api_base:
@@ -648,9 +671,13 @@ def main() -> int:
         if me.status_code != 200:
             _fail(f"/auth/me failed after login ({me.status_code}): {me.text[:300]}")
         me_payload = me.json() or {}
-        enabled_namespaces = _normalized_namespace_list(
-            me_payload.get("enabled_namespaces") or me_payload.get("namespace_scopes") or []
+        active_namespace, enabled_namespaces = _select_active_namespace(
+            preferred_namespace=preferred_namespace,
+            me_payload=me_payload,
         )
+        if active_namespace:
+            session.headers["X-Bretter-Namespace"] = active_namespace
+            print(f"INFO: synthetic check namespace: {active_namespace}")
         if run_namespace_switch_probe:
             _run_namespace_switch_probe(
                 session=session,

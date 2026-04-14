@@ -165,7 +165,18 @@ if [ "$proof_exit" -eq 0 ] && [ "$synthetic_gate_exit" -eq 0 ]; then
   fi
 fi
 
+platform_drift_exit=0
 if [ "$proof_exit" -eq 0 ] && [ "$synthetic_gate_exit" -eq 0 ] && [ "$drift_exit" -eq 0 ]; then
+  if python3 "$ROOT_DIR/scripts/check_platform_state_drift.py" \
+    --namespace "$NAMESPACE" >>"$report_path" 2>&1; then
+    log "PASS: platform state drift gate passed."
+  else
+    platform_drift_exit=$?
+    log "FAIL: platform state drift gate failed."
+  fi
+fi
+
+if [ "$proof_exit" -eq 0 ] && [ "$synthetic_gate_exit" -eq 0 ] && [ "$drift_exit" -eq 0 ] && [ "$platform_drift_exit" -eq 0 ]; then
   log "Report written to: $report_path"
   exit 0
 fi
@@ -177,6 +188,9 @@ if [ "$ROLLBACK_ON_PROOF_FAILURE" -ne 1 ]; then
   if [ "$synthetic_gate_exit" -ne 0 ]; then
     fail "rollback disabled after synthetic gate verification failure."
   fi
+  if [ "$platform_drift_exit" -ne 0 ]; then
+    fail "rollback disabled after platform state drift gate failure."
+  fi
   fail "rollback disabled after live config drift failure."
 fi
 if [ -z "$pre_revision" ]; then
@@ -185,6 +199,9 @@ if [ -z "$pre_revision" ]; then
   fi
   if [ "$synthetic_gate_exit" -ne 0 ]; then
     fail "cannot rollback automatically after synthetic gate verification failure (no previous Helm revision)."
+  fi
+  if [ "$platform_drift_exit" -ne 0 ]; then
+    fail "cannot rollback automatically after platform state drift gate failure (no previous Helm revision)."
   fi
   fail "cannot rollback automatically after live config drift failure (no previous Helm revision)."
 fi
@@ -205,6 +222,9 @@ if [ "$rollback_exit" -ne 0 ]; then
   if [ "$synthetic_gate_exit" -ne 0 ]; then
     fail "synthetic gate verification failed and rollback to revision ${pre_revision} also failed."
   fi
+  if [ "$platform_drift_exit" -ne 0 ]; then
+    fail "platform state drift gate failed and rollback to revision ${pre_revision} also failed."
+  fi
   fail "live config drift gate failed and rollback to revision ${pre_revision} also failed."
 fi
 
@@ -213,5 +233,8 @@ if [ "$proof_exit" -ne 0 ]; then
 fi
 if [ "$synthetic_gate_exit" -ne 0 ]; then
   fail "synthetic gate verification failed; release was rolled back to revision ${pre_revision}."
+fi
+if [ "$platform_drift_exit" -ne 0 ]; then
+  fail "platform state drift gate failed; release was rolled back to revision ${pre_revision}."
 fi
 fail "live config drift gate failed; release was rolled back to revision ${pre_revision}."

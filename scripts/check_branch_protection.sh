@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_SLUG="${REPO_SLUG:-}"
 TARGET_BRANCH="${TARGET_BRANCH:-main}"
-REQUIRED_CHECKS="${REQUIRED_CHECKS:-guardrails,userflow-smoke,synthetic,restore-drill,rdp-smoke}"
+REQUIRED_CHECKS="${REQUIRED_CHECKS:-guardrails,userflow-smoke,synthetic,live-smoke-gate,restore-drill,rdp-smoke}"
 
 if [ -z "${GH_TOKEN:-}" ]; then
   echo "ERROR: GH_TOKEN is required." >&2

@@ -93,6 +93,7 @@ def main() -> int:
     deploy_production_workflow_path = root / ".github" / "workflows" / "deploy-production.yml"
     promotion_workflow_path = root / ".github" / "workflows" / "promote-staging-to-production.yml"
     post_deploy_synthetic_workflow_path = root / ".github" / "workflows" / "post-deploy-synthetic.yml"
+    live_smoke_gate_workflow_path = root / ".github" / "workflows" / "live-post-deploy-smoke-gate.yml"
     nightly_restore_workflow_path = root / ".github" / "workflows" / "nightly-restore-drill.yml"
     deploy_userflow_workflow_path = root / ".github" / "workflows" / "deploy-userflow-smoke.yml"
     playwright_rdp_workflow_path = root / ".github" / "workflows" / "playwright-rdp-smoke.yml"
@@ -476,6 +477,7 @@ def main() -> int:
             "SYNTHETIC_IMAGE_UPLOAD_FILE=",
             "SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS=",
             "qemu-img create -f qcow2",
+            "scripts/check_platform_state_drift.py",
         )
         for marker in required_deploy_markers:
             if marker not in deploy_workflow:
@@ -504,6 +506,7 @@ def main() -> int:
             "scripts/deploy_preflight.sh",
             "scripts/production_go_live_proof.sh",
             "scripts/deploy_production_safe.sh",
+            "scripts/check_platform_state_drift.py",
         ):
             if marker not in promotion_workflow:
                 errors.append(
@@ -526,15 +529,21 @@ def main() -> int:
             "backend/tests/test_namespace_authz_matrix.py",
             "backend/tests/test_namespace_scoping.py",
             "backend/tests/test_namespace_contracts.py",
+            "backend/tests/test_rbac_role_endpoint_matrix.py",
         ):
             if marker not in ci_guardrails_workflow:
                 errors.append(
                     ".github/workflows/ci-guardrails.yml must keep namespace authz/scope/contract regression tests "
                     f"(missing marker: {marker})."
                 )
+        if "scripts/check_platform_state_drift.py" not in ci_guardrails_workflow:
+            errors.append(
+                ".github/workflows/ci-guardrails.yml must include scripts/check_platform_state_drift.py in formatting checks."
+            )
 
     for workflow_path, label in (
         (post_deploy_synthetic_workflow_path, "post-deploy synthetic"),
+        (live_smoke_gate_workflow_path, "live post-deploy smoke gate"),
         (nightly_restore_workflow_path, "nightly restore drill"),
     ):
         if not workflow_path.exists():
@@ -553,6 +562,23 @@ def main() -> int:
             errors.append(
                 ".github/workflows/post-deploy-synthetic.yml must enable namespace switch probing in synthetic checks."
             )
+        if label == "live post-deploy smoke gate":
+            if "production_go_live_proof.sh" not in workflow_text:
+                errors.append(
+                    ".github/workflows/live-post-deploy-smoke-gate.yml must run scripts/production_go_live_proof.sh."
+                )
+            if "verify_synthetic_gate_report.py" not in workflow_text:
+                errors.append(
+                    ".github/workflows/live-post-deploy-smoke-gate.yml must verify synthetic smoke report coverage."
+                )
+            if "pull_request:" not in workflow_text or "main" not in workflow_text:
+                errors.append(
+                    ".github/workflows/live-post-deploy-smoke-gate.yml must run on pull_request to main as a required gate."
+                )
+            if "push:" not in workflow_text or "main" not in workflow_text:
+                errors.append(
+                    ".github/workflows/live-post-deploy-smoke-gate.yml must run on push to main as a required gate."
+                )
         if label == "nightly restore drill":
             if 'default: "true"' not in workflow_text:
                 errors.append(".github/workflows/nightly-restore-drill.yml must default require_backup_cronjob=true.")

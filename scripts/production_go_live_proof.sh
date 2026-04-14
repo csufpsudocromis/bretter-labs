@@ -33,6 +33,8 @@ SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK="${SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK:-0}
 SYNTHETIC_IMAGE_UPLOAD_FILE="${SYNTHETIC_IMAGE_UPLOAD_FILE:-}"
 SYNTHETIC_IMAGE_UPLOAD_NAME="${SYNTHETIC_IMAGE_UPLOAD_NAME:-}"
 SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS="${SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS:-1200}"
+SYNTHETIC_USE_EPHEMERAL_USER="${SYNTHETIC_USE_EPHEMERAL_USER:-1}"
+SYNTHETIC_PROBE_USERNAME="${SYNTHETIC_PROBE_USERNAME:-__blabs_synthetic_probe}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="${REPORT_DIR}/production-go-live-${timestamp}.txt"
@@ -92,6 +94,272 @@ secret_data_value_plain() {
     return 1
   fi
   printf '%s' "$encoded" | base64 -d 2>/dev/null || return 1
+}
+
+ephemeral_synth_provisioned=0
+ephemeral_synth_username=""
+ephemeral_synth_password=""
+ephemeral_synth_namespace=""
+ephemeral_synth_scopes=""
+
+provision_ephemeral_synthetic_user() {
+  local payload
+  payload="$(
+    python3 - "$NAMESPACE" "$SYNTHETIC_PROBE_USERNAME" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+
+namespace = str(sys.argv[1] if len(sys.argv) > 1 else "labs").strip() or "labs"
+username = str(sys.argv[2] if len(sys.argv) > 2 else "__blabs_synthetic_probe").strip() or "__blabs_synthetic_probe"
+
+worker = f"""
+import json
+import secrets
+from collections import Counter
+
+from sqlmodel import Session, select
+
+from src.auth import hash_password
+from src.db import engine
+from src.tables import ConnectToken, ContainerTemplate, Instance, ManagedNamespace, Template, Token, User
+
+def _decode_namespaces(raw):
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    try:
+        payload = json.loads(text)
+    except Exception:
+        return []
+    if not isinstance(payload, list):
+        return []
+    values = []
+    for item in payload:
+        name = str(item or "").strip().lower()
+        if not name or name in values:
+            continue
+        values.append(name)
+    return values
+
+def _template_counts(rows):
+    counts = Counter()
+    for row in rows:
+        if not bool(getattr(row, "enabled", False)):
+            continue
+        namespaces = _decode_namespaces(getattr(row, "enabled_namespaces_json", "[]"))
+        for namespace in namespaces:
+            counts[namespace] += 1
+    return counts
+
+probe_username = {username!r}
+with Session(engine) as session:
+    managed_rows = session.exec(select(ManagedNamespace)).all()
+    enabled_managed = sorted(
+        {{str(row.namespace or "").strip().lower() for row in managed_rows if bool(getattr(row, "enabled", True))}}
+    )
+    vm_counts = _template_counts(session.exec(select(Template)).all())
+    container_counts = _template_counts(session.exec(select(ContainerTemplate)).all())
+
+    dual_ready = [ns for ns in enabled_managed if vm_counts.get(ns, 0) > 0 and container_counts.get(ns, 0) > 0]
+    if dual_ready:
+        candidate_scopes = dual_ready[:2]
+    else:
+        any_ready = [ns for ns in enabled_managed if vm_counts.get(ns, 0) > 0 or container_counts.get(ns, 0) > 0]
+        if any_ready:
+            candidate_scopes = any_ready[:2]
+        elif enabled_managed:
+            candidate_scopes = enabled_managed[:1]
+        else:
+            candidate_scopes = ["labs"]
+
+    active_namespace = candidate_scopes[0]
+    password = secrets.token_urlsafe(24)
+
+    user = session.get(User, probe_username)
+    if user is None:
+        user = User(
+            username=probe_username,
+            password_hash=hash_password(password),
+            role="user",
+            team="default",
+            namespace_scopes_json=json.dumps(candidate_scopes),
+            is_admin=False,
+            force_password_change=False,
+        )
+        session.add(user)
+    else:
+        user.password_hash = hash_password(password)
+        user.role = "user"
+        user.is_admin = False
+        user.force_password_change = False
+        user.namespace_scopes_json = json.dumps(candidate_scopes)
+        if not str(getattr(user, "team", "") or "").strip():
+            user.team = "default"
+        session.add(user)
+
+    for token in session.exec(select(Token).where(Token.username == probe_username)).all():
+        session.delete(token)
+    for token in session.exec(select(ConnectToken).where(ConnectToken.username == probe_username)).all():
+        session.delete(token)
+
+    session.commit()
+    print(
+        json.dumps(
+            {{
+                "username": probe_username,
+                "password": password,
+                "namespace": active_namespace,
+                "scopes": candidate_scopes,
+            }}
+        )
+    )
+"""
+
+encoded = base64.b64encode(worker.encode("utf-8")).decode("ascii")
+command = [
+    "kubectl",
+    "-n",
+    namespace,
+    "exec",
+    "deploy/bretter-backend",
+    "--",
+    "env",
+    "PYTHONPATH=/app/backend",
+    "python",
+    "-c",
+    f"import base64; exec(base64.b64decode('{encoded}').decode('utf-8'))",
+]
+proc = subprocess.run(command, capture_output=True, text=True)
+if proc.returncode != 0:
+    message = (proc.stderr or proc.stdout or "failed to provision synthetic user").strip()
+    raise SystemExit(message)
+lines = [line.strip() for line in str(proc.stdout or "").splitlines() if line.strip()]
+if not lines:
+    raise SystemExit("synthetic user provisioning returned empty output")
+payload = json.loads(lines[-1])
+print(json.dumps(payload))
+PY
+  )" || return 1
+
+  ephemeral_synth_username="$(python3 - "$payload" <<'PY'
+import json
+import sys
+print(str((json.loads(sys.argv[1]) or {}).get("username") or ""), end="")
+PY
+)"
+  ephemeral_synth_password="$(python3 - "$payload" <<'PY'
+import json
+import sys
+print(str((json.loads(sys.argv[1]) or {}).get("password") or ""), end="")
+PY
+)"
+  ephemeral_synth_namespace="$(python3 - "$payload" <<'PY'
+import json
+import sys
+print(str((json.loads(sys.argv[1]) or {}).get("namespace") or ""), end="")
+PY
+)"
+  ephemeral_synth_scopes="$(python3 - "$payload" <<'PY'
+import json
+import sys
+payload = json.loads(sys.argv[1]) or {}
+scopes = payload.get("scopes") or []
+if not isinstance(scopes, list):
+    scopes = []
+normalized = []
+for item in scopes:
+    value = str(item or "").strip().lower()
+    if value and value not in normalized:
+        normalized.append(value)
+print(",".join(normalized), end="")
+PY
+)"
+  if [ -z "$ephemeral_synth_username" ] || [ -z "$ephemeral_synth_password" ]; then
+    return 1
+  fi
+  ephemeral_synth_provisioned=1
+  return 0
+}
+
+retire_ephemeral_synthetic_user() {
+  if [ "$ephemeral_synth_provisioned" -ne 1 ] || [ -z "$ephemeral_synth_username" ]; then
+    return 0
+  fi
+  python3 - "$NAMESPACE" "$ephemeral_synth_username" <<'PY'
+import base64
+import json
+import subprocess
+import sys
+
+namespace = str(sys.argv[1] if len(sys.argv) > 1 else "labs").strip() or "labs"
+username = str(sys.argv[2] if len(sys.argv) > 2 else "").strip()
+if not username:
+    raise SystemExit(0)
+
+worker = f"""
+import json
+import secrets
+from sqlmodel import Session, select
+
+from src.auth import hash_password
+from src.db import engine
+from src.tables import ConnectToken, ContainerInstance, Instance, Token, User
+
+probe_username = {username!r}
+with Session(engine) as session:
+    for token in session.exec(select(Token).where(Token.username == probe_username)).all():
+        session.delete(token)
+    for token in session.exec(select(ConnectToken).where(ConnectToken.username == probe_username)).all():
+        session.delete(token)
+
+    user = session.get(User, probe_username)
+    if user is None:
+        session.commit()
+        print(json.dumps({{"deleted": False, "rotated": False, "reason": "missing"}}))
+    else:
+        active_vm = session.exec(select(Instance.id).where(Instance.owner == probe_username).limit(1)).first()
+        active_container = (
+            session.exec(select(ContainerInstance.id).where(ContainerInstance.owner == probe_username).limit(1)).first()
+        )
+        if active_vm is None and active_container is None:
+            session.delete(user)
+            session.commit()
+            print(json.dumps({{"deleted": True, "rotated": True}}))
+        else:
+            user.password_hash = hash_password(secrets.token_urlsafe(32))
+            user.namespace_scopes_json = "[]"
+            user.force_password_change = False
+            user.role = "user"
+            user.is_admin = False
+            session.add(user)
+            session.commit()
+            print(json.dumps({{"deleted": False, "rotated": True, "reason": "active_instances"}}))
+"""
+
+encoded = base64.b64encode(worker.encode("utf-8")).decode("ascii")
+command = [
+    "kubectl",
+    "-n",
+    namespace,
+    "exec",
+    "deploy/bretter-backend",
+    "--",
+    "env",
+    "PYTHONPATH=/app/backend",
+    "python",
+    "-c",
+    f"import base64; exec(base64.b64decode('{encoded}').decode('utf-8'))",
+]
+proc = subprocess.run(command, capture_output=True, text=True)
+if proc.returncode != 0:
+    message = (proc.stderr or proc.stdout or "failed to retire synthetic user").strip()
+    raise SystemExit(message)
+lines = [line.strip() for line in str(proc.stdout or "").splitlines() if line.strip()]
+if lines:
+    print(lines[-1])
+PY
 }
 
 log "Production go-live proof started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -718,8 +986,29 @@ log "CORS origins seen in backend env: ${cors_allowed_origins:-<none>}"
 if [ -z "$node_external_host" ]; then
   fail_check "post-deploy synthetic user flow check (missing NODE_EXTERNAL_HOST)"
 else
-  synthetic_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY" || true)"
-  synthetic_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" || true)"
+  synthetic_username=""
+  synthetic_password=""
+  synthetic_namespace=""
+  case "$(printf '%s' "$SYNTHETIC_USE_EPHEMERAL_USER" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes | on)
+      if provision_ephemeral_synthetic_user; then
+        synthetic_username="$ephemeral_synth_username"
+        synthetic_password="$ephemeral_synth_password"
+        synthetic_namespace="$ephemeral_synth_namespace"
+        log "Provisioned ephemeral synthetic user '${synthetic_username}' for namespace '${synthetic_namespace:-auto}'."
+      else
+        fail_check "post-deploy synthetic user flow check (failed to provision ephemeral synthetic user)"
+      fi
+      ;;
+    0 | false | no | off)
+      synthetic_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY" || true)"
+      synthetic_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY" || true)"
+      ;;
+    *)
+      fail_check "SYNTHETIC_USE_EPHEMERAL_USER must be one of: 0, 1, true, false"
+      ;;
+  esac
+
   lab_admin_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_LAB_ADMIN_USERNAME_KEY" || true)"
   lab_admin_password="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_LAB_ADMIN_PASSWORD_KEY" || true)"
   namespace_admin_username="$(secret_data_value_plain "$NAMESPACE" "$POST_DEPLOY_AUTH_SECRET_NAME" "$POST_DEPLOY_AUTH_NAMESPACE_ADMIN_USERNAME_KEY" || true)"
@@ -735,6 +1024,7 @@ else
       SYNTHETIC_API_BASE="${public_scheme}://${node_external_host}:30073/api" \
       SYNTHETIC_USERNAME="$synthetic_username" \
       SYNTHETIC_PASSWORD="$synthetic_password" \
+      SYNTHETIC_NAMESPACE="$synthetic_namespace" \
       SYNTHETIC_VERIFY_TLS=0 \
       SYNTHETIC_REQUIRE_TEMPLATES=1 \
       SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK="${SYNTHETIC_REQUIRE_IMAGE_UPLOAD_CHECK}" \
@@ -746,6 +1036,14 @@ else
       SYNTHETIC_NAMESPACE_ADMIN_USERNAME="${namespace_admin_username}" \
       SYNTHETIC_NAMESPACE_ADMIN_PASSWORD="${namespace_admin_password}" \
       "$ROOT_DIR/scripts/post_deploy_synthetic_check.py"
+  fi
+
+  if [ "$ephemeral_synth_provisioned" -eq 1 ]; then
+    if retire_ephemeral_synthetic_user >>"$report_path" 2>&1; then
+      pass_check "ephemeral synthetic user retire/rotation"
+    else
+      fail_check "ephemeral synthetic user retire/rotation"
+    fi
   fi
 fi
 

@@ -65,11 +65,14 @@ Use this checklist before first production deployment and for each release.
 - Ensure CI deploy proof path validates authenticated synthetic VM launch, Guacamole RDP frame, and admin image upload/finalize/delete.
 - Verify synthetic gate report coverage explicitly:
   - `python3 scripts/verify_synthetic_gate_report.py --report artifacts/go-live/production-go-live-<timestamp>.txt --require-image-upload-check`
+- Verify platform catalog/state drift explicitly:
+  - `python3 scripts/check_platform_state_drift.py --namespace labs --report artifacts/go-live/platform-state-drift.json`
 - If using `ORCHESTRATION_BACKEND=dual|crd`, run operator canary:
   - `NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh`
 - Run post-deploy API health, admin API smoke, and synthetic checks.
 - Ensure release-branch required checks include post-deploy synthetic + restore drill + Playwright RDP smoke workflows.
 - Use staged promotion workflow (`.github/workflows/promote-staging-to-production.yml`) to gate production deploy on staging preflight + go-live proof; pass `release_tag` for explicit staging->production tag promotion.
+- Keep live smoke gate workflow enabled (`.github/workflows/live-post-deploy-smoke-gate.yml`) so production synthetic checks remain a required CI signal.
 - Verify release digest refs before promotion:
   - `python3 scripts/verify_release_digest_refs.py --values-file deploy/helm/values-production.yaml --require-tag vX.Y.Z`
 - Verify recurring probe CronJobs are healthy (`bretter-ghcr-access-check`, `bretter-slo-vm-launch`, `bretter-slo-rdp-readiness`, `bretter-slo-upload-finalize`).

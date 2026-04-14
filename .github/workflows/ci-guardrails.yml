@@ -112,7 +112,7 @@ jobs:
         run: ./scripts/check_alembic_postgres.sh
 
       - name: Check Python formatting
-        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py scripts/check_openapi_drift.py scripts/export_openapi_schema.py scripts/post_deploy_synthetic_check.py scripts/check_live_config_drift.py scripts/namespace_config_backup.py scripts/verify_synthetic_gate_report.py scripts/verify_release_digest_refs.py
+        run: .venv/bin/black --check backend/src backend/tests scripts/check_release_discipline.py scripts/bump_version.py scripts/validate_production_profile.py scripts/update_production_image_digests.py scripts/backfill_labinstances_from_db.py scripts/lint_crd_schema.py scripts/check_no_plaintext_tokens.py scripts/check_openapi_drift.py scripts/export_openapi_schema.py scripts/post_deploy_synthetic_check.py scripts/check_platform_state_drift.py scripts/check_live_config_drift.py scripts/namespace_config_backup.py scripts/verify_synthetic_gate_report.py scripts/verify_release_digest_refs.py
 
       - name: Run namespace authz regression gate
         run: |
@@ -121,7 +121,8 @@ jobs:
             backend/tests/test_namespace_scoping.py \
             backend/tests/test_namespace_contracts.py \
             backend/tests/test_namespace_contract_matrix.py \
-            backend/tests/test_vm_storage_guardrails.py
+            backend/tests/test_vm_storage_guardrails.py \
+            backend/tests/test_rbac_role_endpoint_matrix.py
 
       - name: Run pip-audit
         run: |

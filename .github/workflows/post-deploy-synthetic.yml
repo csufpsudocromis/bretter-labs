@@ -3,9 +3,11 @@ name: Post-Deploy Synthetic Check
 on:
   pull_request:
     branches:
+      - main
       - "release/**"
   push:
     branches:
+      - main
       - "release/**"
   workflow_dispatch:
     inputs:

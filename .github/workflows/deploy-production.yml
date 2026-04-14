@@ -167,6 +167,13 @@ jobs:
           fi
           "${cmd[@]}" | tee /tmp/deploy-production-drift.txt
 
+      - name: Check platform state drift
+        run: |
+          set -euo pipefail
+          python3 scripts/check_platform_state_drift.py \
+            --namespace "${NAMESPACE}" \
+            --report /tmp/platform-state-drift.json
+
       - name: Upload deployment reports
         if: always()
         uses: actions/upload-artifact@65462800fd760344b1a7b4382951275a0abb4808 # v4.3.3
@@ -175,4 +182,5 @@ jobs:
           path: |
             artifacts/go-live/
             /tmp/deploy-production-drift.txt
+            /tmp/platform-state-drift.json
           if-no-files-found: warn

@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_SLUG="${REPO_SLUG:-}"
 TARGET_BRANCH="${TARGET_BRANCH:-main}"
-REQUIRED_CHECKS="${REQUIRED_CHECKS:-guardrails,userflow-smoke,synthetic,restore-drill,rdp-smoke}"
+REQUIRED_CHECKS="${REQUIRED_CHECKS:-guardrails,userflow-smoke,synthetic,live-smoke-gate,restore-drill,rdp-smoke}"
 DRY_RUN="${DRY_RUN:-0}"
 REQUIRE_APPROVING_REVIEWS="${REQUIRE_APPROVING_REVIEWS:-1}"
 REQUIRED_APPROVING_REVIEW_COUNT="${REQUIRED_APPROVING_REVIEW_COUNT:-1}"

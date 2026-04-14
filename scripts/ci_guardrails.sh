@@ -48,6 +48,7 @@ fi
   scripts/check_openapi_drift.py \
   scripts/export_openapi_schema.py \
   scripts/post_deploy_synthetic_check.py \
+  scripts/check_platform_state_drift.py \
   scripts/check_live_config_drift.py \
   scripts/namespace_config_backup.py \
   scripts/verify_synthetic_gate_report.py \
