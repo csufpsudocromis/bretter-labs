@@ -88,6 +88,11 @@ from ..models import (
     VMTemplate,
     VMTemplateCreate,
     VMTemplateUpdate,
+    StorageCapacityRead,
+    StorageHeadroomRead,
+    StoragePVCEntry,
+    StorageResizeRequest,
+    StorageResizeResult,
 )
 from ..network_modes import normalize_vm_network_mode
 from ..rbac import (
@@ -169,6 +174,7 @@ QCOW2_CONVERSION_SUFFIXES = {".vhd", ".vhdx", ".vdi"}
 MIN_FREE_UPLOAD_BYTES = 18 * 1024 * 1024 * 1024  # keep nodefs above kubelet disk-pressure headroom
 SOURCE_PVC_OVERHEAD_BYTES = 1024 * 1024 * 1024  # account for filesystem metadata/lost+found overhead
 MIN_UPLOAD_PVC_GIB = max(1, int(getattr(settings, "min_upload_pvc_gib", 80) or 80))
+GIB_BYTES = 1024 * 1024 * 1024
 SITE_BACKGROUND_MAX_BYTES = 20 * 1024 * 1024
 SITE_BACKGROUND_ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 SITE_BACKGROUND_PUBLIC_PREFIX = "/user/site-assets/"
@@ -1050,6 +1056,249 @@ def _build_storage_validation(
     return checks, warnings
 
 
+def _bytes_to_gib_ceil(value: int) -> int:
+    if value <= 0:
+        return 1
+    return max(1, int(math.ceil(float(value) / float(GIB_BYTES))))
+
+
+def _storage_category_for_pvc(name: str, kube_image_pvc: str) -> tuple[str, str]:
+    lowered = name.lower()
+    if name == kube_image_pvc:
+        return "golden_image_library", "Golden Image Library"
+    if lowered.startswith("img-src-"):
+        return "image_source", "Image Source"
+    if lowered.startswith("pool-"):
+        return "warm_pool_clone", "Warm Pool Clone"
+    if lowered.startswith("vm-disk-"):
+        return "runtime_vm_disk", "Running VM Disk"
+    if "postgres" in lowered and "backup" in lowered:
+        return "postgres_backup", "Postgres Backup"
+    if "postgres" in lowered:
+        return "postgres_data", "Postgres Data"
+    if "iso" in lowered:
+        return "iso_library", "ISO Library"
+    if "backend" in lowered:
+        return "backend_data", "Backend Data"
+    return "other", "Other"
+
+
+def _category_resize_policy(category: str) -> tuple[bool, str]:
+    if category == "warm_pool_clone":
+        return False, "Warm-pool clone PVCs are auto-managed by template pool settings."
+    if category == "runtime_vm_disk":
+        return False, "Runtime VM disks are ephemeral per-instance PVCs."
+    if category in {"backend_data", "postgres_data", "golden_image_library"}:
+        return (
+            False,
+            "Platform-managed storage volume. Resize through the underlying storage backend workflow, not PVC grow.",
+        )
+    return True, ""
+
+
+def _build_storage_capacity(*, kube_namespace: str, kube_image_pvc: str) -> StorageCapacityRead:
+    capacity = StorageCapacityRead(namespace=kube_namespace)
+    warnings: list[str] = []
+
+    longhorn = _collect_longhorn_storage_summary()
+    if longhorn.get("available"):
+        total_capacity = int(longhorn.get("capacity_bytes") or 0)
+        total_free = int(longhorn.get("free_bytes") or 0)
+        total_used = int(longhorn.get("used_bytes") or max(total_capacity - total_free, 0))
+        total_allocated = int(longhorn.get("allocated_bytes") or total_used)
+        capacity.headroom = StorageHeadroomRead(
+            provider="longhorn",
+            detail=_to_str(longhorn.get("detail")) or "Longhorn metrics loaded.",
+            capacity_bytes=total_capacity,
+            allocated_bytes=max(total_allocated, total_used),
+            used_bytes=total_used,
+            free_unallocated_bytes=total_free,
+            utilization_pct=float(longhorn.get("utilization_pct") or 0.0),
+            risk=_to_str(longhorn.get("risk")) or _risk_level_for_pct(float(longhorn.get("utilization_pct") or 0.0)),
+        )
+    else:
+        capacity.headroom = StorageHeadroomRead(
+            provider="unknown",
+            detail=_to_str(longhorn.get("detail")) or "Storage headroom metrics unavailable.",
+            risk="unknown",
+        )
+        warnings.append("Longhorn capacity metrics unavailable; resize max guidance is estimated.")
+
+    longhorn_usage_by_pvc: dict[str, int] = {}
+    longhorn_usage_available = False
+    if longhorn.get("available"):
+        longhorn_usage_by_pvc, longhorn_usage_available, longhorn_usage_warning = _collect_longhorn_pvc_usage(
+            namespace=kube_namespace
+        )
+        if longhorn_usage_warning:
+            warnings.append(longhorn_usage_warning)
+
+    try:
+        core = kube._client()
+    except Exception as exc:
+        capacity.warnings = [f"Kubernetes client unavailable: {exc}", *warnings]
+        return capacity
+
+    try:
+        pvc_items = core.list_namespaced_persistent_volume_claim(namespace=kube_namespace).items
+    except ApiException as exc:
+        capacity.warnings = [f"Unable to list PVCs in {kube_namespace}: {exc.reason or exc.status}", *warnings]
+        return capacity
+    except Exception as exc:
+        capacity.warnings = [f"Unable to list PVCs in {kube_namespace}: {exc}", *warnings]
+        return capacity
+
+    claim_users: dict[str, list[str]] = defaultdict(list)
+    try:
+        pods = core.list_namespaced_pod(namespace=kube_namespace).items
+        for pod in pods:
+            pod_name = _to_str(getattr(pod.metadata, "name", "")) or "pod"
+            pod_phase = _to_str(getattr(pod.status, "phase", "")) or "Unknown"
+            pod_ref = f"{pod_name} ({pod_phase})"
+            for volume in pod.spec.volumes or []:
+                pvc_ref = getattr(volume, "persistent_volume_claim", None)
+                claim_name = _to_str(getattr(pvc_ref, "claim_name", "")) if pvc_ref else ""
+                if not claim_name:
+                    continue
+                if pod_ref not in claim_users[claim_name]:
+                    claim_users[claim_name].append(pod_ref)
+    except Exception:
+        warnings.append("Unable to map active pod usage for PVCs; resize safety hints may be limited.")
+
+    storage_classes = sorted(
+        {
+            _to_str(getattr(pvc.spec, "storage_class_name", ""))
+            for pvc in pvc_items
+            if _to_str(getattr(pvc.spec, "storage_class_name", ""))
+        }
+    )
+    sc_allows_resize: dict[str, bool | None] = {}
+    if storage_classes:
+        storage_v1 = client.StorageV1Api(core.api_client)
+        for sc_name in storage_classes:
+            try:
+                sc_obj = storage_v1.read_storage_class(name=sc_name)
+                sc_allows_resize[sc_name] = bool(getattr(sc_obj, "allow_volume_expansion", False))
+            except ApiException as exc:
+                # Legacy clusters may retain PVCs bound to old class names; infer via PV when possible.
+                if int(getattr(exc, "status", 0) or 0) == 404:
+                    sc_allows_resize[sc_name] = None
+                else:
+                    sc_allows_resize[sc_name] = False
+                    warnings.append(f"StorageClass {sc_name} lookup failed ({exc.reason or exc.status}).")
+            except Exception as exc:
+                sc_allows_resize[sc_name] = False
+                warnings.append(f"StorageClass {sc_name} lookup failed ({exc}).")
+
+    pv_by_name: dict[str, client.V1PersistentVolume] = {}
+    pv_lookup_available = False
+    try:
+        for pv in core.list_persistent_volume().items:
+            pv_name = _to_str(getattr(pv.metadata, "name", ""))
+            if pv_name:
+                pv_by_name[pv_name] = pv
+        pv_lookup_available = True
+    except Exception:
+        pv_lookup_available = False
+
+    free_gib_longhorn = max(0, int((capacity.headroom.free_unallocated_bytes or 0) // GIB_BYTES))
+    entries: list[StoragePVCEntry] = []
+    for pvc in sorted(pvc_items, key=lambda row: _to_str(getattr(row.metadata, "name", ""))):
+        name = _to_str(getattr(pvc.metadata, "name", ""))
+        if not name:
+            continue
+        phase = _to_str(getattr(pvc.status, "phase", "")) or "Unknown"
+        storage_class = _to_str(getattr(pvc.spec, "storage_class_name", "")) or "unspecified"
+        requested_raw = ""
+        if pvc.spec and pvc.spec.resources and pvc.spec.resources.requests:
+            requested_raw = _to_str(pvc.spec.resources.requests.get("storage"))
+        capacity_raw = ""
+        if pvc.status and pvc.status.capacity:
+            capacity_raw = _to_str(pvc.status.capacity.get("storage"))
+        requested_bytes = _parse_bytes(requested_raw)
+        capacity_bytes = _parse_bytes(capacity_raw)
+        current_bytes = requested_bytes or capacity_bytes
+        current_size_gib = _bytes_to_gib_ceil(current_bytes)
+        category, category_label = _storage_category_for_pvc(name, kube_image_pvc)
+        category_resize_allowed, category_reason = _category_resize_policy(category)
+        allow_resize = True
+        resize_reason = ""
+        if phase.lower() != "bound":
+            allow_resize = False
+            resize_reason = "PVC must be Bound before resizing."
+        elif storage_class == "unspecified":
+            allow_resize = False
+            resize_reason = "StorageClass is not set; expansion support cannot be verified."
+        else:
+            sc_resize_supported = sc_allows_resize.get(storage_class, False)
+            if sc_resize_supported is None:
+                volume_name = _to_str(getattr(pvc.spec, "volume_name", "")) if pvc.spec else ""
+                if volume_name and pv_lookup_available:
+                    pv = pv_by_name.get(volume_name)
+                    driver = _to_str(getattr(getattr(getattr(pv, "spec", None), "csi", None), "driver", ""))
+                    provisioned_by = _to_str(
+                        getattr(getattr(pv, "metadata", None), "annotations", {}).get(
+                            "pv.kubernetes.io/provisioned-by", ""
+                        )
+                    )
+                    driver_hint = f"{driver} {provisioned_by}".lower()
+                    if "longhorn" in driver_hint:
+                        allow_resize = True
+                        resize_reason = ""
+                    else:
+                        allow_resize = False
+                        resize_reason = (
+                            f"StorageClass {storage_class} is missing and resize support could not be inferred"
+                            f" from bound PV {volume_name}."
+                        )
+                else:
+                    allow_resize = False
+                    resize_reason = f"StorageClass {storage_class} is missing; expansion support cannot be verified."
+            elif not sc_resize_supported:
+                allow_resize = False
+                resize_reason = f"StorageClass {storage_class} does not advertise allowVolumeExpansion."
+        if not category_resize_allowed:
+            allow_resize = False
+            resize_reason = category_reason
+
+        max_recommended_size_gib = current_size_gib
+        if allow_resize:
+            if "longhorn" in storage_class.lower():
+                max_recommended_size_gib = current_size_gib + max(10, free_gib_longhorn)
+            else:
+                max_recommended_size_gib = current_size_gib + 200
+        used_bytes = 0
+        used_bytes_known = False
+        if longhorn_usage_available and name in longhorn_usage_by_pvc:
+            used_bytes = int(longhorn_usage_by_pvc.get(name) or 0)
+            used_bytes_known = True
+        used_by = claim_users.get(name, [])
+        entries.append(
+            StoragePVCEntry(
+                pvc_name=name,
+                namespace=kube_namespace,
+                category=category,
+                category_label=category_label,
+                phase=phase,
+                storage_class=storage_class,
+                requested_bytes=requested_bytes,
+                capacity_bytes=capacity_bytes,
+                used_bytes=used_bytes,
+                used_bytes_known=used_bytes_known,
+                current_size_gib=current_size_gib,
+                min_size_gib=current_size_gib,
+                max_recommended_size_gib=max_recommended_size_gib,
+                used_by=used_by[:10],
+                allow_resize=allow_resize,
+                resize_reason=resize_reason,
+            )
+        )
+
+    capacity.pvcs = entries
+    capacity.warnings = warnings
+    return capacity
+
+
 def _storage_settings_view(cfg: Config | None) -> StorageSettingsRead:
     storage_root, kube_image_pvc, kube_vm_storage_class, sources = _effective_storage_values(cfg)
     checks, warnings = _build_storage_validation(
@@ -1058,6 +1307,14 @@ def _storage_settings_view(cfg: Config | None) -> StorageSettingsRead:
         kube_image_pvc=kube_image_pvc,
         kube_vm_storage_class=kube_vm_storage_class,
     )
+    capacity = _build_storage_capacity(
+        kube_namespace=settings.kube_namespace,
+        kube_image_pvc=kube_image_pvc,
+    )
+    combined_warnings = list(warnings)
+    for warning in capacity.warnings:
+        if warning not in combined_warnings:
+            combined_warnings.append(warning)
     return StorageSettingsRead(
         storage_root=storage_root,
         kube_namespace=settings.kube_namespace,
@@ -1065,7 +1322,8 @@ def _storage_settings_view(cfg: Config | None) -> StorageSettingsRead:
         kube_vm_storage_class=kube_vm_storage_class,
         sources=sources,
         checks=checks,
-        warnings=warnings,
+        warnings=combined_warnings,
+        capacity=capacity,
     )
 
 
@@ -4284,12 +4542,21 @@ def _wait_for_pvc_deleted(core: client.CoreV1Api, claim_name: str, timeout_secon
     raise RuntimeError(f"timed out waiting for PVC {claim_name} to delete")
 
 
-def _ensure_image_source_pvc_claim(image_id: str, size_bytes: int) -> str:
+def _ensure_image_source_pvc_claim(
+    image_id: str,
+    size_bytes: int,
+    *,
+    desired_size_gib: int | None = None,
+    strict_size: bool = False,
+) -> str:
     if not settings.kube_vm_storage_class:
         raise RuntimeError("BLABS_KUBE_VM_STORAGE_CLASS is required for clone-based disks")
 
     claim_name = _source_pvc_name(image_id)
-    requested_gi = _requested_upload_pvc_gi(size_bytes)
+    if desired_size_gib is not None:
+        requested_gi = max(1, int(desired_size_gib))
+    else:
+        requested_gi = _requested_upload_pvc_gi(size_bytes)
     requested_bytes = requested_gi * (1024**3)
     core = kube._client()
     existing_pvc = None
@@ -4303,12 +4570,14 @@ def _ensure_image_source_pvc_claim(image_id: str, size_bytes: int) -> str:
         if existing_pvc.spec and existing_pvc.spec.resources and existing_pvc.spec.resources.requests:
             existing_request = existing_pvc.spec.resources.requests.get("storage")
         existing_bytes = int(parse_quantity(existing_request)) if existing_request else 0
-        if existing_bytes < requested_bytes:
+        must_recreate = existing_bytes < requested_bytes or (strict_size and existing_bytes != requested_bytes)
+        if must_recreate:
             logger.warning(
-                "Recreating source PVC %s with larger capacity (current=%s bytes, required=%s bytes)",
+                "Recreating source PVC %s with updated capacity (current=%s bytes, required=%s bytes, strict=%s)",
                 claim_name,
                 existing_bytes,
                 requested_bytes,
+                strict_size,
             )
             core.delete_namespaced_persistent_volume_claim(name=claim_name, namespace=settings.kube_namespace)
             _wait_for_pvc_deleted(core, claim_name)
@@ -6504,7 +6773,12 @@ def create_image_from_iso(
         filename = _image_filename_from_name(f"{payload.name}-{uuid4().hex[:6]}", suffix=".qcow2")
 
     image_id = str(uuid4())
-    source_pvc = _ensure_image_source_pvc_claim(image_id, int(payload.drive_size_gib) * (1024**3))
+    source_pvc = _ensure_image_source_pvc_claim(
+        image_id,
+        int(payload.drive_size_gib) * (1024**3),
+        desired_size_gib=int(payload.drive_size_gib),
+        strict_size=True,
+    )
     _create_blank_disk_on_source_pvc(
         source_pvc=source_pvc,
         filename=filename,
@@ -6713,7 +6987,12 @@ def _run_image_copy_task(
 
         if image_size_bytes <= 0:
             image_size_bytes = _pvc_file_size(target_filename)
-        new_source_pvc = _ensure_image_source_pvc_claim(target_image_id, max(1, image_size_bytes))
+        new_source_pvc = _ensure_image_source_pvc_claim(
+            target_image_id,
+            max(1, image_size_bytes),
+            desired_size_gib=installer_disk_size_gib,
+            strict_size=installer_disk_size_gib is not None,
+        )
         _set_progress(51, "Seeding clone source PVC (51% complete)")
         _copy_pvc_path_to_pvc(
             source_claim=settings.kube_image_pvc,
@@ -7635,6 +7914,57 @@ def _template_to_model(record: Template) -> VMTemplate:
     )
 
 
+def _reconcile_template_warm_pool_now(
+    session: Session,
+    template_record: Template,
+    *,
+    previous_image_id: str | None = None,
+) -> None:
+    runtime_kube = kube_service_for_cluster(
+        session,
+        str(getattr(template_record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id(),
+        require_runtime_enabled=False,
+    )
+    if not hasattr(runtime_kube, "ensure_warm_pool"):
+        return
+
+    current_image = session.get(Image, template_record.image_id)
+    current_source_pvc = str(getattr(current_image, "source_pvc", "") or "").strip()
+
+    previous_source_pvc = ""
+    previous_image_key = str(previous_image_id or "").strip()
+    if previous_image_key and previous_image_key != str(template_record.image_id):
+        previous_image = session.get(Image, previous_image_key)
+        previous_source_pvc = str(getattr(previous_image, "source_pvc", "") or "").strip()
+
+    if previous_source_pvc and previous_source_pvc != current_source_pvc:
+        runtime_kube.ensure_warm_pool(template_record.id, previous_source_pvc, 0)
+
+    desired_pool = max(0, int(getattr(template_record, "preclone_pool_size", 0) or 0))
+    if not bool(getattr(template_record, "enabled", False)):
+        desired_pool = 0
+    if desired_pool > 0 and not current_source_pvc:
+        raise RuntimeError("template image source PVC is missing; cannot reconcile pre-clone pool")
+
+    seed_source = current_source_pvc or previous_source_pvc or "img-src-placeholder"
+    runtime_kube.ensure_warm_pool(template_record.id, seed_source, desired_pool)
+
+
+def _delete_template_warm_pool_now(session: Session, template_record: Template) -> None:
+    runtime_kube = kube_service_for_cluster(
+        session,
+        str(getattr(template_record, "cluster_id", "") or local_cluster_id()).strip() or local_cluster_id(),
+        require_runtime_enabled=False,
+    )
+    if hasattr(runtime_kube, "delete_template_warm_pool"):
+        runtime_kube.delete_template_warm_pool(template_record.id, include_claimed=True)
+        return
+    if hasattr(runtime_kube, "ensure_warm_pool"):
+        current_image = session.get(Image, template_record.image_id)
+        seed_source = str(getattr(current_image, "source_pvc", "") or "").strip() or "img-src-placeholder"
+        runtime_kube.ensure_warm_pool(template_record.id, seed_source, 0)
+
+
 @router.post(
     "/templates",
     response_model=VMTemplate,
@@ -7797,6 +8127,9 @@ def update_template(
 ) -> VMTemplate:
     updates = payload.model_dump(exclude_unset=True)
     namespace_enable_only = set(updates).issubset({"enabled_namespaces", "shared_catalog"})
+    warm_pool_reconcile_requested = bool(
+        {"preclone_pool_size", "preclone_pool_max", "enabled", "image_id"} & set(updates.keys())
+    )
 
     record = session.get(Template, template_id)
     if not record or not _tenant_scoped_record(record, actor, include_global=True):
@@ -7809,6 +8142,7 @@ def update_template(
     if not _namespace_scoped_record(record, actor) and not namespace_enable_only:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="template not found")
     managed_tenant = assert_actor_can_manage_tenant(actor, getattr(record, "tenant", None))
+    previous_image_id = str(getattr(record, "image_id", "") or "").strip()
     next_tenant = managed_tenant
     next_namespace = _record_namespace(record)
     next_shared_catalog = bool(getattr(record, "shared_catalog", False))
@@ -7960,6 +8294,26 @@ def update_template(
             f"name={record.name} image_id={record.image_id} enabled={record.enabled}"
         ),
     )
+    if warm_pool_reconcile_requested:
+        try:
+            _reconcile_template_warm_pool_now(
+                session,
+                record,
+                previous_image_id=(
+                    previous_image_id if previous_image_id and previous_image_id != record.image_id else None
+                ),
+            )
+        except AttributeError:
+            logger.warning(
+                "Skipped immediate pre-clone pool reconcile for template %s because runtime client lacks warm-pool APIs.",
+                record.id,
+                exc_info=True,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"failed to reconcile pre-clone pool: {exc}",
+            ) from exc
     session.commit()
     session.refresh(record)
     return _template_to_model(record)
@@ -8065,6 +8419,19 @@ def delete_template(
                 )
         for instance in referenced_instances:
             session.delete(instance)
+    try:
+        _delete_template_warm_pool_now(session, record)
+    except AttributeError:
+        logger.warning(
+            "Skipped pre-clone pool cleanup for template %s because runtime client lacks warm-pool APIs.",
+            record.id,
+            exc_info=True,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"failed to clean pre-clone pool for template: {exc}",
+        ) from exc
     _record_admin_audit_event(
         session,
         actor=actor.username,
@@ -8142,7 +8509,10 @@ def _pending_reason_for_pod(pod: client.V1Pod) -> tuple[str, str]:
 
 
 def _collect_metrics_usage() -> tuple[dict[str, dict[str, int]], dict[tuple[str, str], dict[str, int]], bool, str]:
-    custom = client.CustomObjectsApi()
+    try:
+        custom = client.CustomObjectsApi(kube._client().api_client)
+    except Exception as exc:
+        return {}, {}, False, f"metrics-server unavailable: {exc}"
     node_usage: dict[str, dict[str, int]] = {}
     pod_usage: dict[tuple[str, str], dict[str, int]] = {}
     try:
@@ -8189,6 +8559,7 @@ def _collect_longhorn_storage_summary() -> dict:
         "node_count": 0,
         "volume_count": 0,
         "capacity_bytes": 0,
+        "allocated_bytes": 0,
         "free_bytes": 0,
         "used_bytes": 0,
         "utilization_pct": 0.0,
@@ -8200,7 +8571,11 @@ def _collect_longhorn_storage_summary() -> dict:
         "volume_states": {},
         "nodes": [],
     }
-    custom = client.CustomObjectsApi()
+    try:
+        custom = client.CustomObjectsApi(kube._client().api_client)
+    except Exception as exc:
+        summary["detail"] = f"Longhorn metrics unavailable: {exc}"
+        return summary
     last_error = ""
     for version in ("v1beta2", "v1beta1"):
         try:
@@ -8266,8 +8641,14 @@ def _collect_longhorn_storage_summary() -> dict:
             robustness = Counter()
             states = Counter()
             detached_unknown = 0
+            allocated_bytes = 0
             for item in volume_items:
+                spec_obj = item.get("spec") or {}
                 status_obj = item.get("status") or {}
+                try:
+                    allocated_bytes += max(0, int(spec_obj.get("size") or 0))
+                except Exception:
+                    pass
                 state = (_to_str(status_obj.get("state")) or "unknown").lower()
                 robustness_state = (_to_str(status_obj.get("robustness")) or "unknown").lower()
                 states[state] += 1
@@ -8293,6 +8674,7 @@ def _collect_longhorn_storage_summary() -> dict:
                     "node_count": len(nodes_items),
                     "volume_count": len(volume_items),
                     "capacity_bytes": total_capacity,
+                    "allocated_bytes": allocated_bytes,
                     "free_bytes": total_free,
                     "used_bytes": used_bytes,
                     "utilization_pct": utilization_pct,
@@ -8312,6 +8694,37 @@ def _collect_longhorn_storage_summary() -> dict:
     if last_error:
         summary["detail"] = f"Longhorn metrics unavailable: {last_error}"
     return summary
+
+
+def _collect_longhorn_pvc_usage(*, namespace: str) -> tuple[dict[str, int], bool, str]:
+    try:
+        custom = client.CustomObjectsApi(kube._client().api_client)
+    except Exception as exc:
+        return {}, False, f"Longhorn per-PVC usage metrics unavailable: {exc}"
+    last_error = ""
+    for version in ("v1beta2", "v1beta1"):
+        try:
+            volumes_payload = custom.list_cluster_custom_object(group="longhorn.io", version=version, plural="volumes")
+            usage_by_pvc: dict[str, int] = {}
+            for item in volumes_payload.get("items", []):
+                status_obj = item.get("status") or {}
+                kube_status = status_obj.get("kubernetesStatus") or {}
+                pvc_namespace = _to_str(kube_status.get("namespace"))
+                pvc_name = _to_str(kube_status.get("pvcName"))
+                if pvc_namespace != namespace or not pvc_name:
+                    continue
+                try:
+                    actual_size = max(0, int(status_obj.get("actualSize") or 0))
+                except Exception:
+                    actual_size = 0
+                usage_by_pvc[pvc_name] = actual_size
+            return usage_by_pvc, True, ""
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+    if last_error:
+        return {}, False, f"Longhorn per-PVC usage metrics unavailable: {last_error}"
+    return {}, False, "Longhorn per-PVC usage metrics unavailable."
 
 
 def _build_resource_recommendations(utilization: dict, pending: dict, nodes: list[dict], longhorn: dict) -> list[dict]:
@@ -8990,6 +9403,115 @@ def update_storage_settings(
         kube_vm_storage_class=kube_vm_storage_class,
     )
     return _storage_settings_view(cfg)
+
+
+@router.post(
+    "/settings/storage/resize",
+    response_model=StorageResizeResult,
+    dependencies=[Depends(require_permission(Permission.SETTINGS_WRITE))],
+)
+def resize_storage_pvc(
+    payload: StorageResizeRequest,
+    session: Session = Depends(get_session),
+    actor: User = Depends(require_user),
+) -> StorageResizeResult:
+    target_namespace = _to_str(payload.namespace) or settings.kube_namespace
+    if target_namespace != settings.kube_namespace:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"storage resize is currently limited to namespace {settings.kube_namespace}.",
+        )
+
+    cfg = session.get(Config, 1)
+    _, kube_image_pvc, _, _ = _effective_storage_values(cfg)
+    category, _ = _storage_category_for_pvc(payload.pvc_name, kube_image_pvc)
+    category_resize_allowed, category_reason = _category_resize_policy(category)
+    if not category_resize_allowed:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=category_reason)
+
+    core = kube._client()
+    try:
+        pvc = core.read_namespaced_persistent_volume_claim(name=payload.pvc_name, namespace=target_namespace)
+    except ApiException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"PVC {payload.pvc_name} not found in {target_namespace}: {exc.reason or exc.status}",
+        ) from exc
+
+    phase = _to_str(getattr(pvc.status, "phase", "")) or "Unknown"
+    if phase.lower() != "bound":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"PVC {payload.pvc_name} must be Bound before resizing (current phase: {phase}).",
+        )
+
+    requested_raw = ""
+    if pvc.spec and pvc.spec.resources and pvc.spec.resources.requests:
+        requested_raw = _to_str(pvc.spec.resources.requests.get("storage"))
+    capacity_raw = ""
+    if pvc.status and pvc.status.capacity:
+        capacity_raw = _to_str(pvc.status.capacity.get("storage"))
+    existing_bytes = _parse_bytes(requested_raw) or _parse_bytes(capacity_raw)
+    existing_size_gib = _bytes_to_gib_ceil(existing_bytes)
+    target_size_gib = int(payload.target_size_gib)
+    if target_size_gib <= existing_size_gib:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"target_size_gib must be greater than current size ({existing_size_gib}Gi). "
+                "Shrink is not supported in-place; use migration workflow."
+            ),
+        )
+
+    storage_class = _to_str(getattr(pvc.spec, "storage_class_name", ""))
+    if not storage_class:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PVC has no storageClass; expansion support cannot be verified.",
+        )
+    try:
+        storage_v1 = client.StorageV1Api(core.api_client)
+        storage_class_obj = storage_v1.read_storage_class(name=storage_class)
+        if not bool(getattr(storage_class_obj, "allow_volume_expansion", False)):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"StorageClass {storage_class} does not allow volume expansion.",
+            )
+    except ApiException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Failed to read StorageClass {storage_class}: {exc.reason or exc.status}",
+        ) from exc
+
+    target_size = f"{target_size_gib}Gi"
+    try:
+        core.patch_namespaced_persistent_volume_claim(
+            name=payload.pvc_name,
+            namespace=target_namespace,
+            body={"spec": {"resources": {"requests": {"storage": target_size}}}},
+        )
+    except ApiException as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"PVC resize request failed: {exc.reason or exc.status}",
+        ) from exc
+
+    _record_admin_audit_event(
+        session,
+        actor=actor.username,
+        action="update",
+        target_type="storage_resize",
+        target_id=payload.pvc_name,
+        detail=f"namespace={target_namespace} old_size_gib={existing_size_gib} new_size_gib={target_size_gib}",
+    )
+    session.commit()
+    return StorageResizeResult(
+        pvc_name=payload.pvc_name,
+        namespace=target_namespace,
+        old_size_gib=existing_size_gib,
+        new_size_gib=target_size_gib,
+        detail=("Resize request submitted. Filesystem/PVC status may take a few minutes to reflect the new capacity."),
+    )
 
 
 @router.get(

@@ -668,6 +668,62 @@ class KubernetesService:
                 if exc.status != 409:
                     raise
 
+    def delete_template_warm_pool(
+        self,
+        template_id: str,
+        *,
+        include_claimed: bool = True,
+        namespace: str | None = None,
+    ) -> int:
+        core = self._client()
+        ns = self._namespace(namespace)
+        selector = f"blabs-pool=true,template-id={template_id}"
+        deleted = 0
+        for pvc in core.list_namespaced_persistent_volume_claim(namespace=ns, label_selector=selector).items:
+            if pvc.metadata and pvc.metadata.deletion_timestamp:
+                continue
+            labels = dict(pvc.metadata.labels or {})
+            state = str(labels.get("pool-state", "") or "").strip().lower()
+            if state == "claimed" and not include_claimed:
+                continue
+            try:
+                core.delete_namespaced_persistent_volume_claim(
+                    name=pvc.metadata.name,
+                    namespace=ns,
+                )
+                deleted += 1
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+        return deleted
+
+    def cleanup_orphan_warm_pool(self, valid_template_ids: set[str], *, namespace: str | None = None) -> int:
+        core = self._client()
+        ns = self._namespace(namespace)
+        valid_ids = {str(item or "").strip() for item in valid_template_ids if str(item or "").strip()}
+        deleted = 0
+        for pvc in core.list_namespaced_persistent_volume_claim(namespace=ns, label_selector="blabs-pool=true").items:
+            if pvc.metadata and pvc.metadata.deletion_timestamp:
+                continue
+            labels = dict(pvc.metadata.labels or {})
+            template_id = str(labels.get("template-id", "") or "").strip()
+            state = str(labels.get("pool-state", "") or "").strip().lower()
+            if state == "claimed":
+                # Claimed pool PVCs can still back live instances; only trim ready-orphan pool claims here.
+                continue
+            if template_id and template_id in valid_ids:
+                continue
+            try:
+                core.delete_namespaced_persistent_volume_claim(
+                    name=pvc.metadata.name,
+                    namespace=ns,
+                )
+                deleted += 1
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+        return deleted
+
     def check_vm_runner_image_pullability(
         self,
         *,
@@ -2216,6 +2272,10 @@ exit "$rc"
                 self.ensure_warm_pool(tmpl.id, image.source_pvc, desired)
             except Exception:
                 logger.warning("Failed to reconcile warm pool for template %s", tmpl.id, exc_info=True)
+        try:
+            self.cleanup_orphan_warm_pool(set(templates.keys()))
+        except Exception:
+            logger.warning("Failed to clean orphan warm pool PVCs", exc_info=True)
         if stale_instances or stale_container_instances:
             session.commit()
 

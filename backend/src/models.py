@@ -655,6 +655,57 @@ class StorageValidationCheck(BaseModel):
     detail: str
 
 
+class StorageHeadroomRead(BaseModel):
+    provider: str = "unknown"
+    detail: str = ""
+    capacity_bytes: int = 0
+    allocated_bytes: int = 0
+    used_bytes: int = 0
+    free_unallocated_bytes: int = 0
+    utilization_pct: float = 0.0
+    risk: str = "unknown"
+
+
+class StoragePVCEntry(BaseModel):
+    pvc_name: str
+    namespace: str
+    category: str
+    category_label: str
+    phase: str = ""
+    storage_class: str = ""
+    requested_bytes: int = 0
+    capacity_bytes: int = 0
+    used_bytes: int = 0
+    used_bytes_known: bool = False
+    current_size_gib: int = 0
+    min_size_gib: int = 1
+    max_recommended_size_gib: int = 1
+    used_by: list[str] = Field(default_factory=list)
+    allow_resize: bool = False
+    resize_reason: str = ""
+
+
+class StorageCapacityRead(BaseModel):
+    namespace: str = ""
+    headroom: StorageHeadroomRead = Field(default_factory=StorageHeadroomRead)
+    pvcs: list[StoragePVCEntry] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StorageResizeRequest(BaseModel):
+    pvc_name: str = Field(..., min_length=1, max_length=253)
+    namespace: Optional[str] = Field(default=None, min_length=1, max_length=63)
+    target_size_gib: int = Field(..., ge=1, le=1_000_000)
+
+
+class StorageResizeResult(BaseModel):
+    pvc_name: str
+    namespace: str
+    old_size_gib: int
+    new_size_gib: int
+    detail: str = ""
+
+
 class StorageSettingsRead(BaseModel):
     storage_root: str
     kube_namespace: str
@@ -663,6 +714,7 @@ class StorageSettingsRead(BaseModel):
     sources: dict[str, str] = Field(default_factory=dict)
     checks: list[StorageValidationCheck] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    capacity: StorageCapacityRead = Field(default_factory=StorageCapacityRead)
 
 
 class StorageSettingsUpdate(BaseModel):

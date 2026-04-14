@@ -4508,8 +4508,243 @@
         "title": "SiteSettings",
         "type": "object"
       },
+      "StorageCapacityRead": {
+        "properties": {
+          "headroom": {
+            "$ref": "#/components/schemas/StorageHeadroomRead"
+          },
+          "namespace": {
+            "default": "",
+            "title": "Namespace",
+            "type": "string"
+          },
+          "pvcs": {
+            "items": {
+              "$ref": "#/components/schemas/StoragePVCEntry"
+            },
+            "title": "Pvcs",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "title": "StorageCapacityRead",
+        "type": "object"
+      },
+      "StorageHeadroomRead": {
+        "properties": {
+          "allocated_bytes": {
+            "default": 0,
+            "title": "Allocated Bytes",
+            "type": "integer"
+          },
+          "capacity_bytes": {
+            "default": 0,
+            "title": "Capacity Bytes",
+            "type": "integer"
+          },
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "free_unallocated_bytes": {
+            "default": 0,
+            "title": "Free Unallocated Bytes",
+            "type": "integer"
+          },
+          "provider": {
+            "default": "unknown",
+            "title": "Provider",
+            "type": "string"
+          },
+          "risk": {
+            "default": "unknown",
+            "title": "Risk",
+            "type": "string"
+          },
+          "used_bytes": {
+            "default": 0,
+            "title": "Used Bytes",
+            "type": "integer"
+          },
+          "utilization_pct": {
+            "default": 0.0,
+            "title": "Utilization Pct",
+            "type": "number"
+          }
+        },
+        "title": "StorageHeadroomRead",
+        "type": "object"
+      },
+      "StoragePVCEntry": {
+        "properties": {
+          "allow_resize": {
+            "default": false,
+            "title": "Allow Resize",
+            "type": "boolean"
+          },
+          "capacity_bytes": {
+            "default": 0,
+            "title": "Capacity Bytes",
+            "type": "integer"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "category_label": {
+            "title": "Category Label",
+            "type": "string"
+          },
+          "current_size_gib": {
+            "default": 0,
+            "title": "Current Size Gib",
+            "type": "integer"
+          },
+          "max_recommended_size_gib": {
+            "default": 1,
+            "title": "Max Recommended Size Gib",
+            "type": "integer"
+          },
+          "min_size_gib": {
+            "default": 1,
+            "title": "Min Size Gib",
+            "type": "integer"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "phase": {
+            "default": "",
+            "title": "Phase",
+            "type": "string"
+          },
+          "pvc_name": {
+            "title": "Pvc Name",
+            "type": "string"
+          },
+          "requested_bytes": {
+            "default": 0,
+            "title": "Requested Bytes",
+            "type": "integer"
+          },
+          "resize_reason": {
+            "default": "",
+            "title": "Resize Reason",
+            "type": "string"
+          },
+          "storage_class": {
+            "default": "",
+            "title": "Storage Class",
+            "type": "string"
+          },
+          "used_by": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By",
+            "type": "array"
+          },
+          "used_bytes": {
+            "default": 0,
+            "title": "Used Bytes",
+            "type": "integer"
+          },
+          "used_bytes_known": {
+            "default": false,
+            "title": "Used Bytes Known",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pvc_name",
+          "namespace",
+          "category",
+          "category_label"
+        ],
+        "title": "StoragePVCEntry",
+        "type": "object"
+      },
+      "StorageResizeRequest": {
+        "properties": {
+          "namespace": {
+            "anyOf": [
+              {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Namespace"
+          },
+          "pvc_name": {
+            "maxLength": 253,
+            "minLength": 1,
+            "title": "Pvc Name",
+            "type": "string"
+          },
+          "target_size_gib": {
+            "maximum": 1000000.0,
+            "minimum": 1.0,
+            "title": "Target Size Gib",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "pvc_name",
+          "target_size_gib"
+        ],
+        "title": "StorageResizeRequest",
+        "type": "object"
+      },
+      "StorageResizeResult": {
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "namespace": {
+            "title": "Namespace",
+            "type": "string"
+          },
+          "new_size_gib": {
+            "title": "New Size Gib",
+            "type": "integer"
+          },
+          "old_size_gib": {
+            "title": "Old Size Gib",
+            "type": "integer"
+          },
+          "pvc_name": {
+            "title": "Pvc Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pvc_name",
+          "namespace",
+          "old_size_gib",
+          "new_size_gib"
+        ],
+        "title": "StorageResizeResult",
+        "type": "object"
+      },
       "StorageSettingsRead": {
         "properties": {
+          "capacity": {
+            "$ref": "#/components/schemas/StorageCapacityRead"
+          },
           "checks": {
             "items": {
               "$ref": "#/components/schemas/StorageValidationCheck"
@@ -10460,6 +10695,65 @@
           }
         },
         "summary": "Update Storage Settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/settings/storage/resize": {
+      "post": {
+        "operationId": "resize_storage_pvc_admin_settings_storage_resize_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageResizeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageResizeResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resize Storage Pvc",
         "tags": [
           "admin"
         ]

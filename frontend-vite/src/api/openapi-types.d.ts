@@ -959,6 +959,23 @@ export interface paths {
         patch: operations["update_storage_settings_admin_settings_storage_patch"];
         trace?: never;
     };
+    "/admin/settings/storage/resize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resize Storage Pvc */
+        post: operations["resize_storage_pvc_admin_settings_storage_resize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/team-quotas": {
         parameters: {
             query?: never;
@@ -3683,8 +3700,143 @@ export interface components {
             /** Theme Tile Opacity */
             theme_tile_opacity: number;
         };
+        /** StorageCapacityRead */
+        StorageCapacityRead: {
+            headroom?: components["schemas"]["StorageHeadroomRead"];
+            /**
+             * Namespace
+             * @default
+             */
+            namespace: string;
+            /** Pvcs */
+            pvcs?: components["schemas"]["StoragePVCEntry"][];
+            /** Warnings */
+            warnings?: string[];
+        };
+        /** StorageHeadroomRead */
+        StorageHeadroomRead: {
+            /**
+             * Allocated Bytes
+             * @default 0
+             */
+            allocated_bytes: number;
+            /**
+             * Capacity Bytes
+             * @default 0
+             */
+            capacity_bytes: number;
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Free Unallocated Bytes
+             * @default 0
+             */
+            free_unallocated_bytes: number;
+            /**
+             * Provider
+             * @default unknown
+             */
+            provider: string;
+            /**
+             * Risk
+             * @default unknown
+             */
+            risk: string;
+            /**
+             * Utilization Pct
+             * @default 0
+             */
+            utilization_pct: number;
+        };
+        /** StoragePVCEntry */
+        StoragePVCEntry: {
+            /**
+             * Allow Resize
+             * @default false
+             */
+            allow_resize: boolean;
+            /**
+             * Capacity Bytes
+             * @default 0
+             */
+            capacity_bytes: number;
+            /** Category */
+            category: string;
+            /** Category Label */
+            category_label: string;
+            /**
+             * Current Size Gib
+             * @default 0
+             */
+            current_size_gib: number;
+            /**
+             * Max Recommended Size Gib
+             * @default 1
+             */
+            max_recommended_size_gib: number;
+            /**
+             * Min Size Gib
+             * @default 1
+             */
+            min_size_gib: number;
+            /** Namespace */
+            namespace: string;
+            /**
+             * Phase
+             * @default
+             */
+            phase: string;
+            /** Pvc Name */
+            pvc_name: string;
+            /**
+             * Requested Bytes
+             * @default 0
+             */
+            requested_bytes: number;
+            /**
+             * Resize Reason
+             * @default
+             */
+            resize_reason: string;
+            /**
+             * Storage Class
+             * @default
+             */
+            storage_class: string;
+            /** Used By */
+            used_by?: string[];
+        };
+        /** StorageResizeRequest */
+        StorageResizeRequest: {
+            /** Namespace */
+            namespace?: string | null;
+            /** Pvc Name */
+            pvc_name: string;
+            /** Target Size Gib */
+            target_size_gib: number;
+        };
+        /** StorageResizeResult */
+        StorageResizeResult: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /** Namespace */
+            namespace: string;
+            /** New Size Gib */
+            new_size_gib: number;
+            /** Old Size Gib */
+            old_size_gib: number;
+            /** Pvc Name */
+            pvc_name: string;
+        };
         /** StorageSettingsRead */
         StorageSettingsRead: {
+            capacity?: components["schemas"]["StorageCapacityRead"];
             /** Checks */
             checks?: components["schemas"]["StorageValidationCheck"][];
             /** Kube Image Pvc */
@@ -6690,6 +6842,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StorageSettingsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resize_storage_pvc_admin_settings_storage_resize_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StorageResizeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StorageResizeResult"];
                 };
             };
             /** @description Validation Error */

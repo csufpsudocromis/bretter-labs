@@ -1789,6 +1789,51 @@ def test_admin_delete_template_prunes_terminal_instances_then_deletes(login_admi
         assert session.get(Instance, "vm-delete-terminal-check-2") is None
 
 
+def test_admin_delete_template_cleans_preclone_pool(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-template-delete-pool-check-1",
+                name="Template Delete Pool Check Image",
+                filename="template-delete-pool-check.qcow2",
+                checksum="sha256:template-delete-pool-check",
+                size_bytes=4096,
+                source_pvc="img-src-template-delete-pool-check-1",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-delete-pool-check-1",
+                name="Delete Pool Check Template",
+                description="template with pre-clone pool",
+                os_type="windows",
+                image_id="img-template-delete-pool-check-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                preclone_pool_size=2,
+                preclone_pool_max=2,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.commit()
+
+    cleanup_calls: list[tuple[str, bool, str | None]] = []
+
+    class _WarmPoolCleanupRuntime:
+        def delete_template_warm_pool(self, template_id, include_claimed=True, namespace=None):
+            cleanup_calls.append((template_id, bool(include_claimed), namespace))
+
+    monkeypatch.setattr("src.routes.admin.kube_service_for_cluster", lambda *args, **kwargs: _WarmPoolCleanupRuntime())
+
+    deleted = login_admin.delete("/admin/templates/tmpl-delete-pool-check-1")
+    assert deleted.status_code == 204, deleted.text
+    assert cleanup_calls == [("tmpl-delete-pool-check-1", True, None)]
+
+
 def test_admin_force_delete_template_cleans_active_instances_for_platform_admin(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(
@@ -1903,6 +1948,56 @@ def test_admin_force_delete_template_denied_for_non_platform_admin(client: TestC
     assert "only platform admins can force delete" in denied.json()["detail"]
 
 
+def test_admin_update_template_reconciles_preclone_pool_immediately(login_admin: TestClient, monkeypatch):
+    with Session(engine) as session:
+        session.add(
+            Image(
+                id="img-template-update-pool-check-1",
+                name="Template Update Pool Check Image",
+                filename="template-update-pool-check.qcow2",
+                checksum="sha256:template-update-pool-check",
+                size_bytes=4096,
+                source_pvc="img-src-template-update-pool-check-1",
+            )
+        )
+        session.add(
+            Template(
+                id="tmpl-update-pool-check-1",
+                name="Update Pool Check Template",
+                description="template update pool reconcile",
+                os_type="windows",
+                image_id="img-template-update-pool-check-1",
+                cpu_cores=2,
+                ram_mb=2048,
+                auto_delete_minutes=30,
+                idle_timeout_minutes=30,
+                preclone_pool_size=3,
+                preclone_pool_max=3,
+                enabled=True,
+                network_mode="bridge",
+                console_provider="spice",
+            )
+        )
+        session.commit()
+
+    ensure_calls: list[tuple[str, str, int]] = []
+
+    class _WarmPoolReconcileRuntime:
+        def ensure_warm_pool(self, template_id, image_source_pvc, desired):
+            ensure_calls.append((template_id, image_source_pvc, desired))
+
+    monkeypatch.setattr(
+        "src.routes.admin.kube_service_for_cluster", lambda *args, **kwargs: _WarmPoolReconcileRuntime()
+    )
+
+    updated = login_admin.patch(
+        "/admin/templates/tmpl-update-pool-check-1",
+        json={"preclone_pool_size": 1, "preclone_pool_max": 1},
+    )
+    assert updated.status_code == 200, updated.text
+    assert ensure_calls == [("tmpl-update-pool-check-1", "img-src-template-update-pool-check-1", 1)]
+
+
 def test_admin_create_image_from_iso_validates_on_source_pvc(login_admin: TestClient, monkeypatch):
     with Session(engine) as session:
         session.add(
@@ -1917,7 +2012,13 @@ def test_admin_create_image_from_iso_validates_on_source_pvc(login_admin: TestCl
         session.commit()
 
     monkeypatch.setattr(settings, "kube_vm_storage_class", "longhorn-r1")
-    monkeypatch.setattr("src.routes.admin._ensure_image_source_pvc_claim", lambda *_args, **_kwargs: "img-src-test")
+    source_claim_kwargs: dict[str, object] = {}
+
+    def _fake_ensure_source_claim(*_args, **kwargs):
+        source_claim_kwargs.update(kwargs)
+        return "img-src-test"
+
+    monkeypatch.setattr("src.routes.admin._ensure_image_source_pvc_claim", _fake_ensure_source_claim)
     monkeypatch.setattr("src.routes.admin._create_blank_disk_on_source_pvc", lambda **_kwargs: None)
     monkeypatch.setattr("src.routes.admin._copy_pvc_path_to_pvc", lambda **_kwargs: None)
     captured = {}
@@ -1942,6 +2043,8 @@ def test_admin_create_image_from_iso_validates_on_source_pvc(login_admin: TestCl
     assert created.status_code == 201, created.text
     assert captured["filename"] == "windows-11.qcow2"
     assert captured["claim_name"] == "img-src-test"
+    assert source_claim_kwargs.get("desired_size_gib") == 64
+    assert source_claim_kwargs.get("strict_size") is True
 
 
 def test_admin_create_image_from_iso_returns_validation_error_detail(login_admin: TestClient, monkeypatch):
@@ -2018,9 +2121,13 @@ def test_admin_copy_image_creates_identical_copy(login_admin: TestClient, monkey
 
     monkeypatch.setattr(admin_routes, "_exists_on_pvc", _fake_exists)
     monkeypatch.setattr(admin_routes, "_copy_pvc_path_to_pvc", lambda **kwargs: copy_calls.append(kwargs))
-    monkeypatch.setattr(
-        admin_routes, "_ensure_image_source_pvc_claim", lambda *_args, **_kwargs: "img-src-copy-target-1"
-    )
+    source_claim_calls: list[dict[str, object]] = []
+
+    def _fake_ensure_source_claim(*_args, **kwargs):
+        source_claim_calls.append(dict(kwargs))
+        return "img-src-copy-target-1"
+
+    monkeypatch.setattr(admin_routes, "_ensure_image_source_pvc_claim", _fake_ensure_source_claim)
     monkeypatch.setattr(admin_routes, "_validate_file_on_pvc", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(admin_routes, "_ensure_free_space", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(admin_routes, "_pvc_file_size", lambda *_args, **_kwargs: 2048)
@@ -2067,6 +2174,7 @@ def test_admin_copy_image_creates_identical_copy(login_admin: TestClient, monkey
         and call["target_filename"] == "windows-base-copy.qcow2"
         for call in copy_calls
     )
+    assert any(call.get("desired_size_gib") == 64 and call.get("strict_size") is True for call in source_claim_calls)
     assert any(
         call["source_claim"] == settings.kube_image_pvc
         and call["source_relative_path"] == "windows-base-copy.qcow2"
