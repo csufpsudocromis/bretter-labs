@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Response
@@ -177,6 +177,37 @@ def _validate_startup_config() -> None:
         errors.append("BLABS_SECRETS_ENCRYPTION_KEY cannot use weak default values in production.")
     elif len(secrets_encryption_key) < 24:
         errors.append("BLABS_SECRETS_ENCRYPTION_KEY must be at least 24 characters in production.")
+
+    secrets_key_max_age_days = int(getattr(settings, "secrets_encryption_key_max_age_days", 0) or 0)
+    if secrets_key_max_age_days < 0:
+        errors.append("BLABS_SECRETS_ENCRYPTION_KEY_MAX_AGE_DAYS must be >= 0.")
+    elif secrets_key_max_age_days > 0:
+        rotated_at_raw = str(getattr(settings, "secrets_encryption_key_rotated_at", "") or "").strip()
+        if not rotated_at_raw:
+            errors.append(
+                "BLABS_SECRETS_ENCRYPTION_KEY_ROTATED_AT must be set when "
+                "BLABS_SECRETS_ENCRYPTION_KEY_MAX_AGE_DAYS is configured."
+            )
+        else:
+            rotated_at_value = rotated_at_raw[:-1] + "+00:00" if rotated_at_raw.endswith("Z") else rotated_at_raw
+            try:
+                rotated_at = datetime.fromisoformat(rotated_at_value)
+            except ValueError:
+                errors.append(
+                    "BLABS_SECRETS_ENCRYPTION_KEY_ROTATED_AT must be an ISO-8601 timestamp "
+                    "(for example 2026-04-01T12:00:00Z)."
+                )
+            else:
+                if rotated_at.tzinfo is None:
+                    rotated_at = rotated_at.replace(tzinfo=timezone.utc)
+                age_days = (datetime.now(timezone.utc) - rotated_at.astimezone(timezone.utc)).total_seconds() / 86400.0
+                if age_days < -1:
+                    errors.append("BLABS_SECRETS_ENCRYPTION_KEY_ROTATED_AT cannot be in the future.")
+                elif age_days > float(secrets_key_max_age_days):
+                    errors.append(
+                        "BLABS_SECRETS_ENCRYPTION_KEY_ROTATED_AT exceeds "
+                        f"BLABS_SECRETS_ENCRYPTION_KEY_MAX_AGE_DAYS ({secrets_key_max_age_days})."
+                    )
 
     if errors:
         raise RuntimeError("Invalid production startup configuration:\n- " + "\n- ".join(errors))
@@ -384,13 +415,17 @@ async def reaper_loop() -> None:
                         max_tasks=int(getattr(settings, "image_upload_watchdog_max_tasks", 25) or 25),
                         stale_seconds=stale_seconds,
                     )
-                    if watchdog_stats["scanned"] > 0:
+                    if watchdog_stats["scanned"] > 0 or watchdog_stats.get("cleanup_deleted", 0) > 0:
                         logger.info(
-                            "Upload watchdog (backend fallback) scanned=%s completed=%s failed=%s errors=%s stale_seconds=%s",
+                            "Upload watchdog (backend fallback) scanned=%s completed=%s failed=%s errors=%s "
+                            "cleanup_scanned=%s cleanup_deleted=%s cleanup_errors=%s stale_seconds=%s",
                             watchdog_stats["scanned"],
                             watchdog_stats["completed"],
                             watchdog_stats["failed"],
                             watchdog_stats["errors"],
+                            watchdog_stats.get("cleanup_scanned", 0),
+                            watchdog_stats.get("cleanup_deleted", 0),
+                            watchdog_stats.get("cleanup_errors", 0),
                             stale_seconds,
                         )
         except Exception as exc:

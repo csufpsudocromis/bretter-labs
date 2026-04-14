@@ -93,6 +93,7 @@ Reference pages:
 - Optional LDAP auth fallback configured in `/admin/settings/ldap`
 - One active lab per user enforced server-side (VM + container)
 - Namespace-based scaling/quota controls in `/admin/settings/namespaces` (legacy aliases `/admin/scaling-quotas` and `/admin/team-quotas` still route to the same view)
+- Runtime namespace admission enforcement on launch (quota/limits/network-policy/RBAC contract checks with optional auto-reconcile)
 - Namespace switcher in the top header for scoped admin users (`/ns/<namespace>/...`)
 - Namespace directory at `/` shows launchable labs and running labs across assigned namespaces
 - Namespace selector/catalog APIs (`/admin/template-namespaces`, `/admin/quota-namespaces`) return lab-managed namespaces only and intentionally exclude unrelated system namespaces (`kube-*`, `default`, `cdi`, etc.)
@@ -118,6 +119,7 @@ Reference pages:
 - Kind-based tenant impersonation isolation smoke in CI (`scripts/smoke_tenant_isolation_impersonation.sh`)
 - Grafana user-flow SLO dashboard ConfigMap pack applied by setup postdeploy
 - Dedicated LabImageImport controller with leader-election and metrics endpoints
+- Upload-task watchdog retention cleanup for stale terminal tasks (completed/failed) with configurable retention window
 - OpenAPI snapshot + frontend API type drift checks in CI guardrails
 - Explicit PostgreSQL Alembic migration gate in CI (`scripts/check_alembic_postgres.sh`)
 - Tenant isolation audit gate for values/RBAC/network policy posture (`scripts/audit_tenant_isolation.sh`)

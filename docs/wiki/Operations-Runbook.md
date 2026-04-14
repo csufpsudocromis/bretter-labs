@@ -45,7 +45,14 @@ One-command websocket/connect diagnostics:
 NAMESPACE=labs ./scripts/diagnose_connectivity.sh
 ```
 
-This captures websocket metrics (`blabs_ws_proxy_*`), backend websocket log sample, and monitoring rule wiring in one reportable pass.
+This captures websocket metrics (`blabs_ws_proxy_*`), backend websocket log sample, monitoring rule wiring,
+runtime secret wiring checks, and namespace admission-control presence (`ResourceQuota`, `LimitRange`, baseline `NetworkPolicy` set) in one reportable pass.
+
+To diagnose a specific runtime namespace:
+
+```bash
+NAMESPACE=labs RUNTIME_NAMESPACE=labs-team-default ./scripts/diagnose_connectivity.sh
+```
 
 Bootstrap env pruning check (after first bootstrap rollout):
 

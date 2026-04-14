@@ -45,7 +45,7 @@ from ..services.multi_cluster import (
 from ..services.namespace_policies import get_namespace_runtime_policy
 from ..services.resource_guard import check_launch_headroom
 from ..services.team_quotas import enforce_team_quota, normalize_namespace, team_idle_timeout_cap
-from ..services.tenant_namespace_bootstrap import ensure_team_runtime_namespace
+from ..services.tenant_namespace_bootstrap import assert_namespace_admission_ready, ensure_team_runtime_namespace
 from ..services.tenant_context import (
     GLOBAL_TENANT,
     normalize_namespace_scopes,
@@ -1786,6 +1786,7 @@ def _create_container_runtime(
     image_ref: str,
 ) -> tuple[PodStatus, str | None, int]:
     ensure_team_runtime_namespace(runtime_kube, team=team, namespace=namespace)
+    assert_namespace_admission_ready(runtime_kube, team=team, namespace=namespace)
     pod_status = runtime_kube.create_container_pod(
         _container_launch_request(instance_id, owner, template, image_ref, namespace)
     )
@@ -2272,6 +2273,7 @@ def start_container_template(
     runtime_kube = _kube_for_container_cluster(session, selected_cluster_id)
     try:
         ensure_team_runtime_namespace(runtime_kube, team="default", namespace=runtime_namespace)
+        assert_namespace_admission_ready(runtime_kube, team="default", namespace=runtime_namespace)
     except Exception as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 

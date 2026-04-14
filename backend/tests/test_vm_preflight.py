@@ -80,6 +80,7 @@ def test_vm_template_preflight_reports_ready(login_user: TestClient, monkeypatch
     )
     monkeypatch.setattr(user_routes, "_kube_for_instance_cluster", lambda *_args, **_kwargs: fake_kube)
     monkeypatch.setattr(user_routes, "ensure_team_runtime_namespace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(user_routes, "assert_namespace_admission_ready", lambda *_args, **_kwargs: None)
 
     response = login_user.get("/user/templates/tmpl-preflight-1/preflight")
     assert response.status_code == 200, response.text
@@ -89,6 +90,7 @@ def test_vm_template_preflight_reports_ready(login_user: TestClient, monkeypatch
     statuses = {entry["key"]: entry["status"] for entry in payload["checks"]}
     assert statuses["placement"] == "ok"
     assert statuses["namespace"] == "ok"
+    assert statuses["namespace_admission"] == "ok"
     assert statuses["source_pvc"] == "ok"
     assert statuses["storage_class"] == "ok"
     assert statuses["node_admission"] == "ok"
@@ -107,6 +109,7 @@ def test_vm_template_preflight_blocks_on_runner_pull_failure(login_user: TestCli
     )
     monkeypatch.setattr(user_routes, "_kube_for_instance_cluster", lambda *_args, **_kwargs: fake_kube)
     monkeypatch.setattr(user_routes, "ensure_team_runtime_namespace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(user_routes, "assert_namespace_admission_ready", lambda *_args, **_kwargs: None)
 
     response = login_user.get("/user/templates/tmpl-preflight-1/preflight")
     assert response.status_code == 200, response.text
@@ -147,6 +150,7 @@ def test_start_vm_does_not_preflight_block_on_node_admission_failure(login_user:
     )
     monkeypatch.setattr(user_routes, "_kube_for_instance_cluster", lambda *_args, **_kwargs: fake_kube)
     monkeypatch.setattr(user_routes, "ensure_team_runtime_namespace", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(user_routes, "assert_namespace_admission_ready", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(user_routes, "evaluate_node_launch_admission", lambda _kube: (False, "nodes unavailable"))
     monkeypatch.setattr(
         user_routes,

@@ -51,6 +51,8 @@ Core:
 - `TEAM_NAMESPACE_MODE` (`shared`/`per_team`; production default `per_team`)
 - `TEAM_NAMESPACE_PREFIX` (default `labs-team-` in per-team mode)
 - `TEAM_NAMESPACE_BOOTSTRAP_ENABLED` (default `1`; auto-bootstrap per-team runtime namespaces)
+- `NAMESPACE_ADMISSION_ENFORCEMENT_ENABLED` (default `1`; enforce runtime namespace quota/limit/network-policy/RBAC contract before launch)
+- `NAMESPACE_ADMISSION_AUTO_RECONCILE` (default `1`; auto-reconcile namespace controls once before failing launch)
 
 Storage:
 
@@ -90,6 +92,8 @@ Auth/session/cors:
 - `AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS`
 - `AUTH_LOGIN_LOCKOUT_SECONDS`
 - `SECRETS_ENCRYPTION_KEY` (optional bootstrap input; setup writes to runtime secret when provided)
+- `SECRETS_ENCRYPTION_KEY_ROTATED_AT` (optional ISO-8601 key rotation timestamp used by startup age policy)
+- `SECRETS_ENCRYPTION_KEY_MAX_AGE_DAYS` (default `0`; when set >0 startup fails if key rotation age exceeds threshold)
 - `RUNTIME_SECRETS_SECRET_NAME` (default `bretter-runtime-secrets`)
 - `RUNTIME_SECRETS_ENCRYPTION_KEY_KEY` (default `secrets_encryption_key`)
 - `CONTAINER_SIGNATURE_KEY_REF` (required when signature verification is enabled)
@@ -148,6 +152,8 @@ Monitoring/ops:
 - `RUN_POST_DEPLOY_SYNTHETIC_CHECK`
 - `SYNTHETIC_CHECK_REQUIRE_TEMPLATES` (set `1` to require launchable templates during synthetic checks)
 - `SYNTHETIC_CHECK_USERNAME`, `SYNTHETIC_CHECK_PASSWORD`
+- `IMAGE_UPLOAD_TASK_RETENTION_HOURS` (default `168`; stale completed/failed upload tasks are cleaned by watchdog)
+- `IMAGE_UPLOAD_TASK_CLEANUP_BATCH` (default `25`; max stale upload tasks cleaned per watchdog cycle)
 - `POST_DEPLOY_AUTH_SECRET_NAME`
 - `POST_DEPLOY_AUTH_ADMIN_USERNAME_KEY`, `POST_DEPLOY_AUTH_ADMIN_PASSWORD_KEY`
 - `POST_DEPLOY_AUTH_SYNTHETIC_USERNAME_KEY`, `POST_DEPLOY_AUTH_SYNTHETIC_PASSWORD_KEY`

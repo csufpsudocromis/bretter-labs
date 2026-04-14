@@ -85,6 +85,29 @@ def test_startup_validation_requires_secrets_encryption_key_in_production(monkey
         main_module._validate_startup_config()
 
 
+def test_startup_validation_requires_secret_rotation_timestamp_when_age_cap_set(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key_max_age_days", 90)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key_rotated_at", "")
+    with pytest.raises(RuntimeError, match="BLABS_SECRETS_ENCRYPTION_KEY_ROTATED_AT must be set"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_rejects_stale_secret_rotation_timestamp(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key_max_age_days", 30)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key_rotated_at", "2025-01-01T00:00:00Z")
+    with pytest.raises(RuntimeError, match="exceeds BLABS_SECRETS_ENCRYPTION_KEY_MAX_AGE_DAYS"):
+        main_module._validate_startup_config()
+
+
+def test_startup_validation_accepts_fresh_secret_rotation_timestamp(monkeypatch):
+    _set_valid_production_baseline(monkeypatch)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key_max_age_days", 3650)
+    monkeypatch.setattr(main_module.settings, "secrets_encryption_key_rotated_at", "2026-04-10T00:00:00Z")
+    main_module._validate_startup_config()
+
+
 def test_startup_validation_rejects_localhost_cors_origins_in_production(monkeypatch):
     _set_valid_production_baseline(monkeypatch)
     monkeypatch.setattr(main_module.settings, "cors_allowed_origins", "https://localhost:30073")

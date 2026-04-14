@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     team_namespace_mode: str = "shared"  # shared|per_team
     team_namespace_prefix: str = "labs-team-"
     team_namespace_bootstrap_enabled: bool = True
+    namespace_admission_enforcement_enabled: bool = True
+    namespace_admission_auto_reconcile: bool = True
     multi_cluster_local_cluster_id: str = "local"
     multi_cluster_local_region: str = "local"
     # Default Windows to UEFI/q35; can be overridden per environment.
@@ -150,10 +152,14 @@ class Settings(BaseSettings):
     image_upload_watchdog_enabled: bool = True
     image_upload_watchdog_max_tasks: int = 25
     image_upload_watchdog_stale_seconds: int = 45
+    image_upload_task_retention_hours: int = 168
+    image_upload_task_cleanup_batch: int = 25
     image_import_progress_step_percent: int = 3
     vm_connect_insecure_tls: bool = False
     container_connect_insecure_tls: bool = False
     secrets_encryption_key: str = ""
+    secrets_encryption_key_rotated_at: str = ""
+    secrets_encryption_key_max_age_days: int = 0
     runtime_secrets_secret_name: str = "bretter-runtime-secrets"
     runtime_secrets_encryption_key_key: str = "secrets_encryption_key"
     site_assets_dir: str = "/data/site-assets"

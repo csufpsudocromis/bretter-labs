@@ -704,6 +704,73 @@ def ensure_team_runtime_namespace(
         raise RuntimeError(f"failed to bootstrap tenant runtime namespace {target_namespace}: {detail}") from exc
 
 
+def assert_namespace_admission_ready(
+    kube_service,
+    *,
+    team: str | None,
+    namespace: str,
+    privileged_runtime: bool = False,
+    policy: NamespaceBootstrapPolicy | None = None,
+    auto_reconcile: bool | None = None,
+) -> None:
+    if not bool(getattr(settings, "namespace_admission_enforcement_enabled", True)):
+        return
+
+    target_namespace = normalize_namespace(namespace)
+    if not target_namespace:
+        return
+    control_namespace = _control_namespace()
+    if target_namespace == control_namespace:
+        return
+
+    effective_policy = (
+        policy or _managed_namespace_policy(target_namespace) or _default_policy(privileged_runtime=privileged_runtime)
+    )
+    effective_policy = replace(
+        effective_policy,
+        security_profile=(
+            "privileged" if privileged_runtime else _normalize_security_profile(effective_policy.security_profile)
+        ),
+    )
+    team_label = normalize_team(team) if str(team or "").strip() else normalize_team(effective_policy.team_label)
+    drifts = detect_namespace_policy_drift(
+        kube_service,
+        namespace=target_namespace,
+        team_label=team_label,
+        policy=effective_policy,
+    )
+    if not drifts:
+        return
+
+    should_reconcile = (
+        bool(getattr(settings, "namespace_admission_auto_reconcile", True))
+        if auto_reconcile is None
+        else bool(auto_reconcile)
+    )
+    if should_reconcile:
+        ensure_team_runtime_namespace(
+            kube_service,
+            team=team_label,
+            namespace=target_namespace,
+            privileged_runtime=privileged_runtime,
+            policy=effective_policy,
+            enforce_per_team_mode=False,
+        )
+        drifts = detect_namespace_policy_drift(
+            kube_service,
+            namespace=target_namespace,
+            team_label=team_label,
+            policy=effective_policy,
+        )
+        if not drifts:
+            return
+
+    preview = "; ".join(drifts[:6])
+    if len(drifts) > 6:
+        preview = f"{preview}; ... (+{len(drifts) - 6} more)"
+    raise RuntimeError(f"namespace admission controls not ready in {target_namespace}: {preview}")
+
+
 def reconcile_managed_namespace(kube_service, row: ManagedNamespace) -> None:
     policy = _policy_from_managed_namespace(row)
     privileged_runtime = str(policy.security_profile or "").strip().lower() == "privileged"

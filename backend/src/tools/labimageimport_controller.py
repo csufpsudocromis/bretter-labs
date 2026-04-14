@@ -318,11 +318,15 @@ class LabImageImportController:
                     self.metrics.observe(stats)
                     if stats.get("scanned", 0) > 0:
                         logger.info(
-                            "LabImageImport reconcile scanned=%s completed=%s failed=%s errors=%s",
+                            "LabImageImport reconcile scanned=%s completed=%s failed=%s errors=%s "
+                            "cleanup_scanned=%s cleanup_deleted=%s cleanup_errors=%s",
                             stats.get("scanned", 0),
                             stats.get("completed", 0),
                             stats.get("failed", 0),
                             stats.get("errors", 0),
+                            stats.get("cleanup_scanned", 0),
+                            stats.get("cleanup_deleted", 0),
+                            stats.get("cleanup_errors", 0),
                         )
             except Exception:
                 logger.exception("LabImageImport reconcile cycle failed")

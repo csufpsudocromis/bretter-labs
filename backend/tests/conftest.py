@@ -101,6 +101,7 @@ def client(monkeypatch, reset_db):
         "evaluate_vm_storage_launch_admission",
         lambda _kube, namespace: (True, f"PVC admission passed in test fixture ({namespace})."),
     )
+    monkeypatch.setattr(user_routes, "assert_namespace_admission_ready", lambda *_args, **_kwargs: None)
 
     monkeypatch.setattr(
         kube, "create_container_pod", lambda req: PodStatus(instance_id=req.instance_id, phase="pending")
@@ -116,6 +117,7 @@ def client(monkeypatch, reset_db):
         "evaluate_node_launch_admission",
         lambda _kube: (True, "Node admission passed in test fixture."),
     )
+    monkeypatch.setattr(user_container_routes, "assert_namespace_admission_ready", lambda *_args, **_kwargs: None)
 
     with TestClient(app) as test_client:
         yield test_client

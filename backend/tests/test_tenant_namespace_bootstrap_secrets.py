@@ -56,3 +56,54 @@ def test_bootstrap_syncs_runtime_critical_secrets_and_configmaps(monkeypatch) ->
         "bretter-cosign-public-key",
     }
     assert {name for _, _, name in synced_configmaps} == {"spice-embed"}
+
+
+def test_namespace_admission_ready_raises_when_drift_remains(monkeypatch) -> None:
+    monkeypatch.setattr(bootstrap.settings, "namespace_admission_enforcement_enabled", True)
+    monkeypatch.setattr(bootstrap.settings, "namespace_admission_auto_reconcile", False)
+    monkeypatch.setattr(bootstrap.settings, "kube_namespace", "labs")
+
+    monkeypatch.setattr(
+        bootstrap,
+        "detect_namespace_policy_drift",
+        lambda *_args, **_kwargs: ["resource quota is missing", "limit range is missing"],
+    )
+
+    try:
+        bootstrap.assert_namespace_admission_ready(
+            _FakeKubeService(),
+            team="default",
+            namespace="labs-team-default",
+            privileged_runtime=False,
+        )
+        raised = False
+    except RuntimeError as exc:
+        raised = True
+        assert "namespace admission controls not ready" in str(exc)
+    assert raised
+
+
+def test_namespace_admission_ready_auto_reconciles_when_enabled(monkeypatch) -> None:
+    monkeypatch.setattr(bootstrap.settings, "namespace_admission_enforcement_enabled", True)
+    monkeypatch.setattr(bootstrap.settings, "namespace_admission_auto_reconcile", True)
+    monkeypatch.setattr(bootstrap.settings, "kube_namespace", "labs")
+
+    calls = {"detect": 0, "reconcile": 0}
+
+    def _detect(*_args, **_kwargs):
+        calls["detect"] += 1
+        return ["runtime role binding is missing"] if calls["detect"] == 1 else []
+
+    def _reconcile(*_args, **_kwargs):
+        calls["reconcile"] += 1
+
+    monkeypatch.setattr(bootstrap, "detect_namespace_policy_drift", _detect)
+    monkeypatch.setattr(bootstrap, "ensure_team_runtime_namespace", _reconcile)
+
+    bootstrap.assert_namespace_admission_ready(
+        _FakeKubeService(),
+        team="default",
+        namespace="labs-team-default",
+        privileged_runtime=False,
+    )
+    assert calls["reconcile"] == 1

@@ -183,6 +183,8 @@ TASK_RETENTION_SECONDS = 300
 FINALIZE_MAX_RETRIES = max(0, int(getattr(settings, "image_finalize_max_retries", 3) or 3))
 FINALIZE_RETRY_BASE_SECONDS = max(5, int(getattr(settings, "image_finalize_retry_base_seconds", 15) or 15))
 FINALIZE_RETRY_MAX_SECONDS = max(30, int(getattr(settings, "image_finalize_retry_max_seconds", 600) or 600))
+UPLOAD_TASK_RETENTION_HOURS = max(0, int(getattr(settings, "image_upload_task_retention_hours", 168) or 168))
+UPLOAD_TASK_CLEANUP_BATCH = max(1, int(getattr(settings, "image_upload_task_cleanup_batch", 25) or 25))
 UPLOAD_STAGE_UPLOADED = "uploaded"
 UPLOAD_STAGE_NORMALIZING = "normalizing"
 UPLOAD_STAGE_SEEDED = "seeded"
@@ -345,7 +347,8 @@ def _record_visible_for_actor(record: object, actor: User, *, requested_namespac
     if not _tenant_scoped_record(record, actor, include_global=True):
         return False
     if is_platform_admin(actor):
-        # Platform admins always see full catalog regardless of namespace hint/header.
+        # Platform admins have full read scope; endpoint handlers may apply
+        # tighter namespace filtering when a scoped view is requested.
         return True
     scope = _namespace_scope_for_actor(actor)
     record_namespace = _record_namespace(record)
@@ -3627,7 +3630,15 @@ def run_upload_task_watchdog(
         query = query.where(ImageUploadTask.updated_at <= cutoff)
     tasks = session.exec(query.order_by(ImageUploadTask.updated_at.asc()).limit(limit)).all()
 
-    stats = {"scanned": 0, "completed": 0, "failed": 0, "errors": 0}
+    stats = {
+        "scanned": 0,
+        "completed": 0,
+        "failed": 0,
+        "errors": 0,
+        "cleanup_scanned": 0,
+        "cleanup_deleted": 0,
+        "cleanup_errors": 0,
+    }
     for task in tasks:
         stats["scanned"] += 1
         try:
@@ -3653,6 +3664,71 @@ def run_upload_task_watchdog(
             stats["completed"] += 1
         elif current_status == "failed":
             stats["failed"] += 1
+    cleanup_stats = run_upload_task_retention_cleanup(
+        session,
+        max_tasks=UPLOAD_TASK_CLEANUP_BATCH,
+        retention_hours=UPLOAD_TASK_RETENTION_HOURS,
+    )
+    stats["cleanup_scanned"] = cleanup_stats["scanned"]
+    stats["cleanup_deleted"] = cleanup_stats["deleted"]
+    stats["cleanup_errors"] = cleanup_stats["errors"]
+    return stats
+
+
+def run_upload_task_retention_cleanup(
+    session: Session,
+    *,
+    max_tasks: int | None = None,
+    retention_hours: int | None = None,
+) -> dict[str, int]:
+    retention = max(0, int(retention_hours or 0))
+    if retention <= 0:
+        return {"scanned": 0, "deleted": 0, "errors": 0}
+
+    limit = max(1, int(max_tasks or 1))
+    cutoff = utc_now() - timedelta(hours=retention)
+    rows = session.exec(
+        select(ImageUploadTask)
+        .where(ImageUploadTask.status.in_(["completed", "failed"]))
+        .where(ImageUploadTask.updated_at <= cutoff)
+        .order_by(ImageUploadTask.updated_at.asc())
+        .limit(limit)
+    ).all()
+
+    stats = {"scanned": 0, "deleted": 0, "errors": 0}
+    for task in rows:
+        stats["scanned"] += 1
+        task_id = str(getattr(task, "id", "") or "")
+        try:
+            filename = Path(str(getattr(task, "filename", "") or "")).name
+            task_namespace = _record_namespace(task)
+            if filename and str(getattr(task, "status", "") or "").strip().lower() == "failed":
+                image_record = session.exec(
+                    select(Image).where(Image.namespace == task_namespace).where(Image.filename == filename)
+                ).first()
+                if not image_record:
+                    try:
+                        candidate = _image_dir() / filename
+                        if candidate.exists() and candidate.is_file():
+                            candidate.unlink()
+                    except Exception as exc:
+                        logger.warning(
+                            "Upload task retention cleanup could not remove artifact %s for task %s: %s",
+                            filename,
+                            task_id or "<unknown>",
+                            exc,
+                        )
+
+            _cleanup_task_jobs(task)
+            session.delete(task)
+            session.commit()
+            if task_id:
+                delete_labimageimport_best_effort(task_id)
+            stats["deleted"] += 1
+        except Exception as exc:
+            session.rollback()
+            stats["errors"] += 1
+            logger.warning("Upload task retention cleanup failed for %s: %s", task_id or "<unknown>", exc)
     return stats
 
 
@@ -6205,6 +6281,8 @@ def list_images(
         for record in existing_records
         if _record_visible_for_actor(record, actor, requested_namespace=requested_namespace)
     ]
+    if requested_namespace and is_platform_admin(actor):
+        images = [record for record in images if _record_namespace(record) == requested_namespace]
     usage_by_image_id = _image_usage_namespaces_by_image_id(session, actor, {record.id for record in images})
     return [
         ImageMeta(

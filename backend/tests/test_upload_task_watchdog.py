@@ -8,7 +8,8 @@ from src.tables import ImageUploadTask
 from src.time_utils import utc_now
 
 
-def _seed_task(task_id: str, status: str) -> None:
+def _seed_task(task_id: str, status: str, *, updated_at=None) -> None:
+    now = updated_at or utc_now()
     with Session(engine) as session:
         session.add(
             ImageUploadTask(
@@ -19,8 +20,8 @@ def _seed_task(task_id: str, status: str) -> None:
                 status=status,
                 stage=status,
                 detail="seed",
-                created_at=utc_now(),
-                updated_at=utc_now(),
+                created_at=now,
+                updated_at=now,
             )
         )
         session.commit()
@@ -101,3 +102,27 @@ def test_upload_watchdog_stale_filter_scans_only_old_tasks(monkeypatch) -> None:
     assert seen_ids == ["task-stale"]
     assert stats["scanned"] == 1
     assert stats["errors"] == 0
+
+
+def test_upload_watchdog_retention_cleanup_removes_old_terminal_tasks(monkeypatch) -> None:
+    old_time = utc_now() - timedelta(hours=24)
+    _seed_task("task-old-completed", "completed", updated_at=old_time)
+    _seed_task("task-old-failed", "failed", updated_at=old_time)
+    _seed_task("task-fresh-completed", "completed", updated_at=utc_now())
+    monkeypatch.setattr(admin_routes, "_cleanup_task_jobs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(admin_routes, "delete_labimageimport_best_effort", lambda *_args, **_kwargs: None)
+
+    with Session(engine) as session:
+        stats = admin_routes.run_upload_task_retention_cleanup(
+            session,
+            retention_hours=12,
+            max_tasks=10,
+        )
+
+    assert stats["scanned"] == 2
+    assert stats["deleted"] == 2
+    assert stats["errors"] == 0
+    with Session(engine) as session:
+        assert session.get(ImageUploadTask, "task-old-completed") is None
+        assert session.get(ImageUploadTask, "task-old-failed") is None
+        assert session.get(ImageUploadTask, "task-fresh-completed") is not None

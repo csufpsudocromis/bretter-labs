@@ -229,6 +229,7 @@ Proof artifact and operator docs:
 - Staging failure drill script: [scripts/failure_drill_control_plane.sh](scripts/failure_drill_control_plane.sh)
 - CRD canary script: [scripts/crd_canary_labinstance.sh](scripts/crd_canary_labinstance.sh)
 - One-command websocket/connect diagnostics: [scripts/diagnose_connectivity.sh](scripts/diagnose_connectivity.sh)
+  - Includes runtime secret wiring and namespace admission-control presence checks (`ResourceQuota`, `LimitRange`, baseline `NetworkPolicy` set)
 - LabImageImport controller smoke: [scripts/smoke_labimageimport_controller.sh](scripts/smoke_labimageimport_controller.sh)
 - Tenant isolation impersonation smoke: [scripts/smoke_tenant_isolation_impersonation.sh](scripts/smoke_tenant_isolation_impersonation.sh)
 - Pre-deploy script: [scripts/deploy_preflight.sh](scripts/deploy_preflight.sh)
@@ -271,6 +272,8 @@ Proof artifact and operator docs:
 | `TEAM_NAMESPACE_MODE` | `shared` | Runtime namespace model (`shared` or `per_team`); production hardening requires `per_team` (namespace-first isolation) |
 | `TEAM_NAMESPACE_PREFIX` | `labs-team-` | Namespace prefix used by per-team namespace scaffolding |
 | `TEAM_NAMESPACE_BOOTSTRAP_ENABLED` | `1` | Auto-bootstrap per-team runtime namespaces (RBAC/quota/network policy/secret sync); required in production profile |
+| `NAMESPACE_ADMISSION_ENFORCEMENT_ENABLED` | `1` | Enforce namespace admission contract before launch (quota/limits/network-policy/runtime RBAC drift checks) |
+| `NAMESPACE_ADMISSION_AUTO_RECONCILE` | `1` | Attempt one automatic namespace reconcile before failing launch when admission controls drift |
 | `REQUIRE_SCHEMA_READY` | `1` | Fail backend startup if Alembic head/table state is not fully ready |
 | `EXPECTED_ALEMBIC_REVISION` | empty | Optional explicit Alembic revision id expected at startup |
 | `TLS_ENABLED` | `1` | Enable TLS secret/bootstrap behavior |
@@ -312,8 +315,12 @@ Proof artifact and operator docs:
 | `VM_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip VM upstream TLS verification |
 | `CONTAINER_CONNECT_INSECURE_TLS` | `0` | Dev-only opt-in to skip container upstream TLS verification |
 | `SECRETS_ENCRYPTION_KEY` | empty | Optional bootstrap input for setup; when set, setup writes it into the runtime secret (`RUNTIME_SECRETS_SECRET_NAME`) and it is not committed in values files |
+| `SECRETS_ENCRYPTION_KEY_ROTATED_AT` | empty | Optional ISO-8601 rotation timestamp for runtime secret key age enforcement (used when max-age is set) |
+| `SECRETS_ENCRYPTION_KEY_MAX_AGE_DAYS` | `0` | Optional startup gate for maximum allowed age of runtime encryption key (`0` disables age check) |
 | `RUNTIME_SECRETS_SECRET_NAME` | `bretter-runtime-secrets` | Kubernetes secret name that provides `BLABS_SECRETS_ENCRYPTION_KEY` to backend |
 | `RUNTIME_SECRETS_ENCRYPTION_KEY_KEY` | `secrets_encryption_key` | Data key inside `RUNTIME_SECRETS_SECRET_NAME` used for `BLABS_SECRETS_ENCRYPTION_KEY` |
+| `IMAGE_UPLOAD_TASK_RETENTION_HOURS` | `168` | Retention window for completed/failed upload task rows before watchdog cleanup removes stale tasks |
+| `IMAGE_UPLOAD_TASK_CLEANUP_BATCH` | `25` | Max terminal upload tasks cleaned per watchdog cycle |
 | `CONTAINER_SIGNATURE_VERIFICATION_ENABLED` | `0` | Must be `1` when `PRODUCTION_PROFILE=1`; enforces cosign verification for container image registration/update |
 | `CONTAINER_SIGNATURE_KEY_REF` | `/etc/bretter-signing/cosign.pub` | Cosign public key path used for verification in hardened profiles |
 | `CONTAINER_SIGNATURE_KEY_SECRET_NAME` | `bretter-cosign-public-key` | Secret mounted at `/etc/bretter-signing` to provide the public key file referenced by `CONTAINER_SIGNATURE_KEY_REF` |
