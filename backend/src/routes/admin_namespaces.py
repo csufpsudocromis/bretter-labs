@@ -137,7 +137,7 @@ def _validate_netpol_setting(actor: User, *, enforce_network_policies: bool) -> 
         return
     if not _can_write_unsafe_netpol(actor):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="disabling default network policies is not allowed for this environment/role",
         )
 
@@ -145,10 +145,10 @@ def _validate_netpol_setting(actor: User, *, enforce_network_policies: bool) -> 
 def _normalize_namespace_name_or_raise(raw: str | None) -> str:
     value = normalize_namespace(raw)
     if not value:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="namespace is required")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="namespace is required")
     if len(value) > 63 or _NAMESPACE_NAME_RE.fullmatch(value) is None:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="namespace must be a valid DNS-1123 label (max 63 chars)",
         )
     return value

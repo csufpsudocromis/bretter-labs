@@ -182,7 +182,7 @@ def actor_can_access_namespace(actor: User, namespace: str | None) -> bool:
 def assert_actor_can_access_namespace(actor: User, namespace: str | None) -> str:
     normalized = normalize_namespace(namespace)
     if not normalized:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="namespace is required")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="namespace is required")
     if not actor_can_access_namespace(actor, normalized):
         actor_scope = actor_namespace_scopes(actor)
         logger.warning(

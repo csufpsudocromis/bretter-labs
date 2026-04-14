@@ -41,6 +41,9 @@ cd bretter-labs
 ./scripts/setup.sh
 ```
 
+Default deploy mode pushes images (`PUSH_IMAGES=1`), so provide `GHCR_USERNAME` + `GHCR_TOKEN` (or pre-login with `podman login ghcr.io`).
+For local/dev no-registry workflows, override with `PUSH_IMAGES=0 LOAD_LOCAL_IMAGES=1`.
+
 Then open `https://<NODE_EXTERNAL_HOST>:30073` and sign in with the bootstrap admin credentials printed by setup.
 
 ### Architecture at a glance
@@ -300,8 +303,10 @@ Proof artifact and operator docs:
 | `FRONTEND_HPA_MAX_REPLICAS` | `FRONTEND_REPLICAS` | Frontend HPA upper bound |
 | `FRONTEND_HPA_TARGET_CPU_UTILIZATION_PERCENT` | `70` | Frontend HPA CPU target percent |
 | `UVICORN_WORKERS` | `1` | Uvicorn worker processes per backend pod |
-| `LOAD_LOCAL_IMAGES` | `1` | Build/import local images into cluster runtime |
-| `PUSH_IMAGES` | `0` | Build and push images to registry |
+| `LOAD_LOCAL_IMAGES` | `0` | Build/import local images into cluster runtime (dev/local fallback path) |
+| `PUSH_IMAGES` | `1` | Build and push images to registry (default non-interactive deploy path) |
+| `GHCR_USERNAME` | empty | Required with `GHCR_TOKEN` when `PUSH_IMAGES=1` (or pre-login via `podman login ghcr.io`) |
+| `GHCR_TOKEN` | empty | Required with `GHCR_USERNAME` when `PUSH_IMAGES=1` (PAT with `write:packages`) |
 | `CREATE_PULL_SECRET` | `0` | Create/update `ghcr-creds` pull secret |
 | `ALLOW_MUTABLE_IMAGE_TAGS` | `0` | Dev-only override to permit mutable image refs like `:latest` |
 | `PRUNE_BOOTSTRAP_ADMIN_ENV` | `1` | Remove `BLABS_ADMIN_DEFAULT_PASSWORD` from backend deployment after initial bootstrap rollout |
@@ -383,7 +388,7 @@ Proof artifact and operator docs:
 | `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP` | `1` | `1`: setup can bootstrap auth secret from env credentials, `0`: require pre-provisioned secret (recommended for production) |
 | `ALERTMANAGER_WEBHOOK_RECEIVER_ENABLED` | `0` | Enable Alertmanager webhook receiver routing in setup-managed monitoring values |
 | `ALERTMANAGER_WEBHOOK_SECRET_NAME` | empty | Secret name containing webhook URL used when webhook receiver is enabled |
-| `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` automatically during `postdeploy` when enabled |
+| `RUN_PRODUCTION_GO_LIVE_PROOF` | `PRODUCTION_PROFILE` | Run `scripts/production_go_live_proof.sh` during `postdeploy` (`1` required when `PRODUCTION_PROFILE=1`) |
 | `PRODUCTION_GO_LIVE_REPORT_DIR` | `artifacts/go-live` | Output directory for go-live proof reports |
 | `PRODUCTION_GO_LIVE_HEALTH_TIMEOUT_SECONDS` | `120` | API health timeout budget for go-live proof |
 | `RUN_RESTORE_DRILL` | `0` | Optional: run PostgreSQL restore drill as part of go-live proof |
@@ -431,7 +436,7 @@ Production note:
 - Provide `SECRETS_ENCRYPTION_KEY` only at deploy time (or pre-create `RUNTIME_SECRETS_SECRET_NAME`).
 - Provide signature key material via `CONTAINER_SIGNATURE_PUBLIC_KEY_FILE` (or pre-create `CONTAINER_SIGNATURE_KEY_SECRET_NAME`).
 - In production profile, set explicit `CONTROL_NODE`, `NODE_EXTERNAL_HOST`, `RUNNER_NODE_SELECTOR_VALUE`, and `VM_STORAGE_CLASS`; setup now fails fast if they are missing or placeholder values.
-- `RUN_PRODUCTION_GO_LIVE_PROOF` defaults to `1` when `PRODUCTION_PROFILE=1`, so `postdeploy` now includes live go/no-go verification by default.
+- `RUN_PRODUCTION_GO_LIVE_PROOF=1` is enforced when `PRODUCTION_PROFILE=1`; production deploys fail fast if go-live proof is disabled.
 - For CI/CD production rollouts, use `scripts/deploy_production_safe.sh` (atomic Helm upgrade + go-live proof + auto-rollback on proof failure).
 - Validate backup retention on-cluster with `scripts/validate_backup_retention.sh` (wired into `.github/workflows/nightly-restore-drill.yml`).
 - Alert noise suppression for expected cronjob pods can be tuned with:
@@ -573,7 +578,7 @@ NAMESPACE=labs ./scripts/production_go_live_proof.sh
 
 Deploy-time proof:
 
-- `SETUP_PHASES=deploy,postdeploy PRODUCTION_PROFILE=1 ./scripts/setup.sh` runs the same proof automatically unless `RUN_PRODUCTION_GO_LIVE_PROOF=0`.
+- `SETUP_PHASES=deploy,postdeploy PRODUCTION_PROFILE=1 ./scripts/setup.sh` runs the same proof automatically (required in production profile).
 - `RUN_POST_DEPLOY_ADMIN_API_SMOKE_CHECK=1` additionally verifies authenticated `/admin/*` read-path health.
 - `RUN_RESTORE_DRILL=1` optionally includes a PostgreSQL logical restore drill in go-live proof output.
 - CI includes an explicit PostgreSQL Alembic migration gate via `scripts/check_alembic_postgres.sh`.

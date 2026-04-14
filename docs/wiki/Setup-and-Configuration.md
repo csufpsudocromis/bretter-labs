@@ -260,9 +260,11 @@ ENABLE_MONITORING=1 \
 - Use `deploy/helm/values-production-site.template.yaml` to create site overlays (for example `deploy/helm/values-prod-site.yaml`) and validate with `-f` layering.
 - Setup phases can be run independently via `SETUP_PHASES` (`prereqs`, `deploy`, `postdeploy`, or `all`).
 - `SETUP_DRY_RUN=1` performs validation and phase planning without cluster/package changes.
+- Setup defaults to registry push mode (`PUSH_IMAGES=1`, `LOAD_LOCAL_IMAGES=0`) for non-interactive deploys; set `GHCR_USERNAME` + `GHCR_TOKEN` (or pre-login with `podman login ghcr.io`).
+- For local/dev clusters without registry publish, use `PUSH_IMAGES=0 LOAD_LOCAL_IMAGES=1`.
 - Use `python3 scripts/validate_production_profile.py --strict -f deploy/helm/values-production.yaml` before production rollouts (add additional `-f <site-values>.yaml` overlays when used).
 - Use `NAMESPACE=labs ./scripts/deploy_preflight.sh` before rollout to enforce merged-values validation, secret wiring, and per-node image pullability.
-- `postdeploy` now runs `scripts/production_go_live_proof.sh` automatically when `RUN_PRODUCTION_GO_LIVE_PROOF=1` (default in production profile).
+- `postdeploy` runs `scripts/production_go_live_proof.sh` automatically when `RUN_PRODUCTION_GO_LIVE_PROOF=1` (required when `PRODUCTION_PROFILE=1`).
 - In go-live proof, `RUN_CRD_OPERATOR_CANARY=auto` runs LabInstance canary only when `bretter-labinstance-operator` is present/ready; use `RUN_CRD_OPERATOR_CANARY=1` to force strict canary gating.
 - `postdeploy` also runs a runner image startup smoke pod by default (`RUN_POST_DEPLOY_RUNNER_SMOKE_CHECK=1`).
 - Production metrics-server should run with `METRICS_SERVER_INSECURE_TLS=0`; use kubelet serving certs with valid SANs (the setup-installed CSR approver helps with future kubelet-serving cert rotation).
@@ -285,6 +287,7 @@ ENABLE_MONITORING=1 \
 - Admin container image registration uses direct OCI image references; if signature verification returns `no signatures found`, registration continues with warning-only policy messaging.
 - In production profile, post-deploy authenticated checks require explicit non-bootstrap credentials (`ADMIN_API_SMOKE_PASSWORD`/`SYNTHETIC_CHECK_PASSWORD`) or secret-backed auth via `POST_DEPLOY_AUTH_SECRET_NAME`.
 - Production profile requires `RUN_POST_DEPLOY_SYNTHETIC_CHECK=1` and `SYNTHETIC_CHECK_REQUIRE_TEMPLATES=1`.
+- Production profile also requires `RUN_PRODUCTION_GO_LIVE_PROOF=1`; setup fails fast if go-live proof is disabled.
 - In non-production profiles, if setup generated a new bootstrap admin secret and explicit check credentials were not set, setup can auto-disable authenticated checks to avoid false failures.
 - To run synthetic validation on existing deployments, set `SYNTHETIC_CHECK_PASSWORD` explicitly (and `SYNTHETIC_CHECK_USERNAME` if not `admin`).
 - For production RDP connect-latency probe auth, use pre-provisioned secret mode: `USERFLOW_SLO_API_AUTH_MANAGED_BY_SETUP=0`.

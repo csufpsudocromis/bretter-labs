@@ -180,9 +180,9 @@ def _normalize_container_image_ref(value: str) -> str:
     if not ref:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="image_ref is required")
     if " " in ref:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="image_ref cannot contain spaces")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="image_ref cannot contain spaces")
     if not _IMAGE_REF_RE.match(ref):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="image_ref format looks invalid")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="image_ref format looks invalid")
     if "@" in ref:
         return ref
     tail = ref.rsplit("/", 1)[-1]
@@ -204,7 +204,7 @@ def _validate_env(env_map: dict[str, str]) -> dict[str, str]:
             continue
         if not _ENV_KEY_RE.match(key):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"invalid env var name: {key}",
             )
         validated[key] = str(raw_value)
@@ -236,19 +236,19 @@ def _enforce_registry_policy(image_ref: str) -> None:
     if "*" in allowed:
         if bool(getattr(settings, "production_profile", False)) and _is_local_dev_image_ref(image_ref):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="local/dev image references are not allowed in production profile",
             )
         return
     registry = _registry_from_ref(image_ref)
     if registry not in allowed:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"registry {registry or 'unknown'} is not allowed by policy",
         )
     if bool(getattr(settings, "production_profile", False)) and _is_local_dev_image_ref(image_ref):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="local/dev image references are not allowed in production profile",
         )
 
@@ -269,7 +269,7 @@ def _verify_image_signature(image_ref: str) -> str | None:
             logger.warning("Container image %s has no signatures; allowing registration by policy.", image_ref)
             return warning
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(detail or "signature verification failed")[:500],
         ) from exc
     return warning
@@ -1018,13 +1018,13 @@ def create_container_template(
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"container template tenant {resource_tenant} cannot use image tenant {image_tenant}",
         )
     image_namespace = _record_namespace(image)
     if image_namespace != resource_namespace and not _record_shared_catalog(image):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"container template namespace {resource_namespace} cannot use namespace-owned image namespace "
                 f"{image_namespace}; mark image as shared catalog or pick an image in {resource_namespace}"
@@ -1042,7 +1042,7 @@ def create_container_template(
             requested_shared_catalog = True
         elif cross_namespace_targets:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="namespace-owned template can only target its own namespace",
             )
         if not requested_shared_catalog:
@@ -1186,7 +1186,7 @@ def update_container_template(
             next_shared_catalog = True
         elif cross_namespace_targets:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="namespace-owned template can only target its own namespace",
             )
         if not next_shared_catalog:
@@ -1194,7 +1194,7 @@ def update_container_template(
 
     if updates.get("enabled") is True and not enabled_namespaces:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="enabled template must include at least one enabled namespace",
         )
 
@@ -1212,13 +1212,13 @@ def update_container_template(
         image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
         if image_tenant not in {next_tenant, GLOBAL_TENANT}:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
         image_namespace = _record_namespace(image)
         if image_namespace != next_namespace and not _record_shared_catalog(image):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"container template namespace {next_namespace} cannot use namespace-owned image namespace "
                     f"{image_namespace}; mark image as shared catalog or keep template in {image_namespace}"
@@ -1287,13 +1287,13 @@ def update_container_template(
         image_tenant = normalize_tenant(getattr(image_for_tenant, "tenant", None), default=GLOBAL_TENANT)
         if image_tenant not in {next_tenant, GLOBAL_TENANT}:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"container template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
         image_namespace = _record_namespace(image_for_tenant)
         if image_namespace != next_namespace and not _record_shared_catalog(image_for_tenant):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"container template namespace {next_namespace} cannot use namespace-owned image namespace "
                     f"{image_namespace}; mark image as shared catalog or keep template in {image_namespace}"

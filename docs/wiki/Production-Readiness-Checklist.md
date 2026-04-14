@@ -61,7 +61,7 @@ Use this checklist before first production deployment and for each release.
   - `python3 scripts/lint_crd_schema.py`
   - `kubectl apply --dry-run=server -k deploy/crds`
 - Run `scripts/production_go_live_proof.sh` after rollout and archive the generated report.
-- Keep `RUN_PRODUCTION_GO_LIVE_PROOF=1` for production postdeploy automation (default when `PRODUCTION_PROFILE=1`).
+- Keep `RUN_PRODUCTION_GO_LIVE_PROOF=1` for production postdeploy automation (required when `PRODUCTION_PROFILE=1`).
 - Ensure CI deploy proof path validates authenticated synthetic VM launch, Guacamole RDP frame, and admin image upload/finalize/delete.
 - If using `ORCHESTRATION_BACKEND=dual|crd`, run operator canary:
   - `NAMESPACE=labs CRD_CANARY_TEMPLATE_ID=<template-id> ./scripts/crd_canary_labinstance.sh`

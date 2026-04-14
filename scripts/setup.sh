@@ -48,8 +48,8 @@ SETUP_DRY_RUN="${SETUP_DRY_RUN:-0}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
 APPLY_GOLDEN_PVC="${APPLY_GOLDEN_PVC:-0}"
 APPLY_GOLDEN_HOSTPATH="${APPLY_GOLDEN_HOSTPATH:-1}"
-PUSH_IMAGES="${PUSH_IMAGES:-0}"
-LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-1}"
+PUSH_IMAGES="${PUSH_IMAGES:-1}"
+LOAD_LOCAL_IMAGES="${LOAD_LOCAL_IMAGES:-0}"
 PRELOAD_RUNNER_ON_ALL_NODES="${PRELOAD_RUNNER_ON_ALL_NODES:-1}"
 CREATE_PULL_SECRET="${CREATE_PULL_SECRET:-0}"
 CONTROL_NODE="${CONTROL_NODE:-}"
@@ -1513,7 +1513,7 @@ validate_production_go_live_proof_config() {
 
   if [ "$RUN_PRODUCTION_GO_LIVE_PROOF" -eq 0 ]; then
     if [ "$PRODUCTION_PROFILE" -eq 1 ]; then
-      warn "RUN_PRODUCTION_GO_LIVE_PROOF=0 disables automatic production go-live verification."
+      fail "RUN_PRODUCTION_GO_LIVE_PROOF must be 1 when PRODUCTION_PROFILE=1."
     fi
     return
   fi
@@ -3800,18 +3800,20 @@ ensure_ghcr_login() {
   local ghcr_user="${GHCR_USERNAME:-}"
   local ghcr_token="${GHCR_TOKEN:-}"
 
-  if [ -z "$ghcr_user" ]; then
-    read -r -p "GHCR username: " ghcr_user
-  fi
-  if [ -z "$ghcr_token" ]; then
-    read -r -s -p "GHCR token (write:packages): " ghcr_token
-    echo
-  fi
-  if [ -z "$ghcr_user" ] || [ -z "$ghcr_token" ]; then
-    fail "GHCR credentials are required for image push or pull-secret creation."
+  if [ -n "$ghcr_user" ] || [ -n "$ghcr_token" ]; then
+    if [ -z "$ghcr_user" ] || [ -z "$ghcr_token" ]; then
+      fail "Set both GHCR_USERNAME and GHCR_TOKEN together (or neither) for non-interactive setup."
+    fi
+    echo "$ghcr_token" | podman login ghcr.io --username "$ghcr_user" --password-stdin
+    return
   fi
 
-  echo "$ghcr_token" | podman login ghcr.io --username "$ghcr_user" --password-stdin
+  if podman login --get-login ghcr.io >/dev/null 2>&1; then
+    log "Using existing podman ghcr.io login credentials."
+    return
+  fi
+
+  fail "GHCR credentials are required for image push. Set GHCR_USERNAME and GHCR_TOKEN, or pre-login with: podman login ghcr.io"
 }
 
 build_images() {

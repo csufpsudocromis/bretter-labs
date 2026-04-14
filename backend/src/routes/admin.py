@@ -4488,7 +4488,7 @@ def _normalize_user_namespace_scopes_payload(values: list[str] | None) -> list[s
     try:
         return normalize_namespace_scopes(values)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
 
 def _user_out(user: User) -> UserOut:
@@ -4669,7 +4669,7 @@ def create_role_definition(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="platform admin required")
     role_id = str(payload.role or "").strip().lower()
     if not role_id:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="role id is required")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="role id is required")
     existing = {row.role for row in _role_catalog_rows()}
     if role_id in existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="role already exists")
@@ -4681,7 +4681,7 @@ def create_role_definition(
             permissions=list(payload.permissions or []),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     _save_role_definitions_config(session)
     _record_admin_audit_event(
@@ -4735,7 +4735,7 @@ def update_role_definition(
             permissions=next_permissions,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     _save_role_definitions_config(session)
     _record_admin_audit_event(
@@ -4780,7 +4780,7 @@ def remove_role_definition(
     try:
         delete_role_definition(normalized_role)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     _save_role_definitions_config(session)
     _record_admin_audit_event(
@@ -4810,7 +4810,7 @@ def add_user(
     try:
         role = normalize_requested_role(payload.role, payload.is_admin)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
     team = normalize_team("default")
     if not _actor_can_assign_role(actor, role):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
@@ -4885,7 +4885,7 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient user scope")
     new_username = payload.username or username
     if payload.username is not None and (len(payload.username) < 3 or len(payload.username) > 64):
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid username length")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid username length")
     if new_username != username:
         existing = session.get(User, new_username)
         if existing:
@@ -4905,7 +4905,7 @@ def update_user(
         try:
             role = normalize_requested_role(payload.role, payload.is_admin)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
         if not _actor_can_assign_role(actor, role):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="insufficient role assignment scope")
         role_changed = role != resulting_role
@@ -5266,7 +5266,7 @@ def upload_iso_image(
                 size_bytes += len(chunk)
                 if size_bytes > upload_max_bytes:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail=f"ISO too large for namespace {resource_namespace} (max {upload_max_bytes} bytes)",
                     )
                 sha256.update(chunk)
@@ -5344,7 +5344,7 @@ def update_iso_image(
     if payload.name is not None:
         trimmed_name = str(payload.name or "").strip()
         if not trimmed_name:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="name cannot be empty")
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="name cannot be empty")
         record.name = trimmed_name
     if payload.description is not None:
         record.description = str(payload.description or "").strip()
@@ -5454,7 +5454,7 @@ def upload_image(
                 written += len(chunk)
                 if written > upload_max_bytes:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail=f"image too large for namespace {resource_namespace} (max {upload_max_bytes} bytes)",
                     )
                 buffer.write(chunk)
@@ -5585,7 +5585,7 @@ def start_direct_upload(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="size_bytes must be > 0")
     if payload.size_bytes > MAX_UPLOAD_BYTES:
         raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             detail="image too large (max 60GB)",
         )
 
@@ -5939,7 +5939,7 @@ def retry_operation_launch_task(
 ) -> AdminOperationActionResult:
     normalized_kind = str(kind or "").strip().lower()
     if normalized_kind not in {"vm", "container"}:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="kind must be vm or container")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="kind must be vm or container")
 
     if normalized_kind == "vm":
         record = session.get(Instance, task_id)
@@ -5998,7 +5998,7 @@ def cancel_operation_launch_task(
     elif normalized_kind == "container":
         record = session.get(ContainerInstanceTable, task_id)
     else:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="kind must be vm or container")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="kind must be vm or container")
     if (
         not record
         or not _record_visible_for_actor(record, actor, requested_namespace=None)
@@ -6061,7 +6061,7 @@ def cleanup_operation_launch_task(
     elif normalized_kind == "container":
         record = session.get(ContainerInstanceTable, task_id)
     else:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="kind must be vm or container")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="kind must be vm or container")
     if (
         not record
         or not _record_visible_for_actor(record, actor, requested_namespace=None)
@@ -7572,14 +7572,14 @@ def create_template(
     image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
     if image_tenant not in {resource_tenant, GLOBAL_TENANT}:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=f"template tenant {resource_tenant} cannot use image tenant {image_tenant}",
         )
     image_namespace = _record_namespace(image)
     image_shared_catalog = _record_shared_catalog(image)
     if image_namespace != resource_namespace and not image_shared_catalog:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail=(
                 f"template namespace {resource_namespace} cannot use namespace-owned image namespace "
                 f"{image_namespace}; mark image as shared catalog or pick an image in {resource_namespace}"
@@ -7602,7 +7602,7 @@ def create_template(
             requested_shared_catalog = True
         elif cross_namespace_targets:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="namespace-owned template can only target its own namespace",
             )
         if not requested_shared_catalog:
@@ -7612,7 +7612,7 @@ def create_template(
     pool_max = int(payload.preclone_pool_max or 0)
     if pool_max < pool_min:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="preclone_pool_max must be greater than or equal to preclone_pool_size",
         )
     record = Template(
@@ -7757,7 +7757,7 @@ def update_template(
             next_shared_catalog = True
         elif cross_namespace_targets:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="namespace-owned template can only target its own namespace",
             )
         if not next_shared_catalog:
@@ -7765,7 +7765,7 @@ def update_template(
 
     if payload.enabled is True and not enabled_namespaces:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="enabled template must include at least one enabled namespace",
         )
 
@@ -7789,13 +7789,13 @@ def update_template(
         image_tenant = normalize_tenant(getattr(image, "tenant", None), default=GLOBAL_TENANT)
         if image_tenant not in {next_tenant, GLOBAL_TENANT}:
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=f"template tenant {next_tenant} cannot use image tenant {image_tenant}",
             )
         image_namespace = _record_namespace(image)
         if image_namespace != next_namespace and not _record_shared_catalog(image):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"template namespace {next_namespace} cannot use namespace-owned image namespace "
                     f"{image_namespace}; mark image as shared catalog or keep template in {image_namespace}"
@@ -7809,7 +7809,7 @@ def update_template(
         image_namespace = _record_namespace(existing_image)
         if image_namespace != next_namespace and not _record_shared_catalog(existing_image):
             raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail=(
                     f"template namespace {next_namespace} cannot use namespace-owned image namespace "
                     f"{image_namespace}; mark image as shared catalog or keep template in {image_namespace}"
@@ -7834,7 +7834,7 @@ def update_template(
         next_max = payload.preclone_pool_max
     if next_max < next_min:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="preclone_pool_max must be greater than or equal to preclone_pool_size",
         )
     record.preclone_pool_size = next_min
@@ -8651,7 +8651,7 @@ def list_admin_audit_events(
     namespace_raw = str(namespace or "").strip()
     namespace_filter = normalize_namespace(namespace_raw) if namespace_raw else ""
     if namespace_raw and not namespace_filter:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid namespace filter")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="invalid namespace filter")
 
     namespace_scope = _namespace_scope_for_actor(user)
     if not is_platform_admin(user):
@@ -8972,7 +8972,7 @@ def upload_site_background(
                 total += len(chunk)
                 if total > SITE_BACKGROUND_MAX_BYTES:
                     raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
                         detail="background image exceeds 20 MB limit",
                     )
                 out.write(chunk)
@@ -9197,7 +9197,7 @@ def update_sso_settings(
         default_role = normalize_requested_role(payload.sso_default_role)
         role_mappings = _normalize_sso_role_mappings(payload.sso_role_mappings)
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from exc
 
     role_claim = str(payload.sso_role_claim or "").strip() or "groups"
     cfg = session.get(Config, 1) or Config(id=1)
@@ -9282,7 +9282,7 @@ def update_ldap_settings(
     user_filter = str(payload.ldap_user_filter or "").strip() or "(uid={username})"
     if "{username}" not in user_filter:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="ldap_user_filter must include {username} placeholder.",
         )
     cfg = session.get(Config, 1) or Config(id=1)
