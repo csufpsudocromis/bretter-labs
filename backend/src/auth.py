@@ -77,6 +77,9 @@ def revoke_tokens(session: Session, username: str) -> None:
     tokens = session.exec(select(Token).where(Token.username == username)).all()
     for token in tokens:
         session.delete(token)
+    connect_tokens = session.exec(select(ConnectToken).where(ConnectToken.username == username)).all()
+    for token in connect_tokens:
+        session.delete(token)
     session.commit()
 
 

@@ -79,6 +79,11 @@ const formatDependencyChecks = (items) =>
   (items || []).map((item) => `${item.host}:${item.port}:${item.timeout_seconds || 90}`).join("\n");
 const toCpuCores = (millicores) => Math.max(1, Math.round((Number(millicores) || 1000) / 1000));
 const toMillicores = (cores) => Math.max(1, parseInt(cores, 10) || 1) * 1000;
+const RequiredIndicator = () => (
+  <span className="required-indicator" aria-hidden="true">
+    <span className="required-star">*</span> required
+  </span>
+);
 
 const AdminContainerTemplates = () => {
   const [templates, setTemplates] = useState([]);
@@ -289,8 +294,12 @@ const AdminContainerTemplates = () => {
           <h3>{editingId ? "Edit container template" : "Create container template"}</h3>
           <div className="form container-template-form">
             <label>
-              Name
-              <input value={form.name} onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))} />
+              Name <RequiredIndicator />
+              <input
+                required
+                value={form.name}
+                onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+              />
             </label>
             <label className="span-2">
               Description
@@ -301,8 +310,9 @@ const AdminContainerTemplates = () => {
               />
             </label>
             <label>
-              Container image
+              Container image <RequiredIndicator />
               <select
+                required
                 value={form.container_image_id}
                 onChange={(e) => setForm((prev) => ({ ...prev, container_image_id: e.target.value }))}
               >

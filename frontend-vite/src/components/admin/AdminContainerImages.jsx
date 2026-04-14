@@ -25,6 +25,12 @@ const normalizeSignatureWarning = (warning) => {
   return text.endsWith(".") ? text : `${text}.`;
 };
 
+const RequiredIndicator = () => (
+  <span className="required-indicator" aria-hidden="true">
+    <span className="required-star">*</span> required
+  </span>
+);
+
 const AdminContainerImages = () => {
   const [images, setImages] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -202,7 +208,7 @@ const AdminContainerImages = () => {
           <h3>Add container image</h3>
           <div className="form">
             <label>
-              Name
+              Name (optional)
               <input
                 value={form.name}
                 placeholder="nginx"
@@ -210,8 +216,9 @@ const AdminContainerImages = () => {
               />
             </label>
             <label>
-              Image reference
+              Image reference <RequiredIndicator />
               <input
+                required
                 value={form.image_ref}
                 placeholder="ghcr.io/org/app:1.2.3"
                 onChange={(e) => setForm((prev) => ({ ...prev, image_ref: e.target.value }))}
@@ -300,6 +307,12 @@ const AdminContainerImages = () => {
                     <div className="muted small">
                       Scan: {img.last_scan_status || "never"}
                       {img.last_scan_at ? ` (${new Date(img.last_scan_at).toLocaleString()})` : ""}
+                    </div>
+                    <div className="muted small">
+                      Used by namespaces:{" "}
+                      {Array.isArray(img.used_by_namespaces) && img.used_by_namespaces.length > 0
+                        ? img.used_by_namespaces.join(", ")
+                        : "-"}
                     </div>
                     {img.last_scan_summary && <div className="muted small">{img.last_scan_summary}</div>}
                     <div className="actions container-image-actions">

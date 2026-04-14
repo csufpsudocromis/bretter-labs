@@ -719,11 +719,24 @@ def reconcile_managed_namespace(kube_service, row: ManagedNamespace) -> None:
 
 def reconcile_all_managed_namespaces(kube_service) -> list[NamespaceReconcileResult]:
     results: list[NamespaceReconcileResult] = []
+    control_namespace = _control_namespace()
     with session_scope() as session:
         rows = session.exec(select(ManagedNamespace).where(ManagedNamespace.enabled == True)).all()  # noqa: E712
         for row in rows:
             namespace = normalize_namespace(getattr(row, "namespace", None))
             if not namespace:
+                continue
+            if namespace == control_namespace:
+                row.last_reconciled_at = utc_now()
+                row.updated_at = row.last_reconciled_at
+                session.add(row)
+                results.append(
+                    NamespaceReconcileResult(
+                        namespace=namespace,
+                        ok=True,
+                        detail="skipped drift enforcement for control namespace",
+                    )
+                )
                 continue
             policy = _policy_from_managed_namespace(row)
             team_label = normalize_team(getattr(row, "team_label", "default"))

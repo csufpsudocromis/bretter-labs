@@ -57,7 +57,8 @@ fi
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q \
   backend/tests/test_namespace_authz_matrix.py \
-  backend/tests/test_namespace_scoping.py
+  backend/tests/test_namespace_scoping.py \
+  backend/tests/test_namespace_contracts.py
 
 PYTHONPATH="$ROOT_DIR/backend" "$PYTHON_BIN" -m pytest -q backend/tests
 

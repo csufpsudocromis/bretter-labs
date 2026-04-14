@@ -56,6 +56,8 @@ const resolveThemeImageUrl = (value) => {
   return `${apiBase}/${raw}`;
 };
 
+const ALL_NAMESPACES_VALUE = "__all__";
+
 const roleDisplay = (user) => {
   const raw = String(user?.role || "").trim();
   if (!raw) return user?.is_admin ? "admin" : "";
@@ -94,27 +96,42 @@ const AppShell = () => {
   const namespaceMatch = String(location?.pathname || "").match(/^\/(?:ns|namespace)\/([^/]+)/i);
   const pathNamespace = normalizeNamespace(namespaceMatch?.[1]);
   const userNamespaceScopes = useMemo(() => {
+    const enabled = Array.isArray(user?.enabled_namespaces)
+      ? user.enabled_namespaces.map((ns) => normalizeNamespace(ns)).filter(Boolean)
+      : [];
+    if (enabled.length > 0) {
+      return [...new Set(enabled)];
+    }
     if (!Array.isArray(user?.namespace_scopes)) return [];
     return [...new Set(user.namespace_scopes.map((ns) => normalizeNamespace(ns)).filter(Boolean))];
   }, [user]);
-  const preferredUserNamespace = userNamespaceScopes[0] || "";
-  const rememberedNamespace = normalizeNamespace(selectedNamespace);
-  const activeNamespaceCandidate = pathNamespace || rememberedNamespace || preferredUserNamespace;
+  const preferredUserNamespace = normalizeNamespace(user?.default_namespace) || userNamespaceScopes[0] || "";
+  const selectedNamespaceRaw = String(selectedNamespace || "").trim();
+  const selectedAllNamespaces = selectedNamespaceRaw === ALL_NAMESPACES_VALUE;
+  const rememberedNamespace = selectedAllNamespaces ? "" : normalizeNamespace(selectedNamespaceRaw);
+  const activeNamespaceCandidate =
+    pathNamespace || (selectedAllNamespaces ? "" : rememberedNamespace || preferredUserNamespace);
   const canAccessAdmin = Boolean(user?.can_access_admin ?? user?.is_admin);
   const namespaceOptions = useMemo(() => {
-    const merged = new Set([
-      ...userNamespaceScopes,
-      ...(Array.isArray(availableNamespaces) ? availableNamespaces.map((ns) => normalizeNamespace(ns)) : []),
-    ]);
+    const adminNamespaces = Array.isArray(availableNamespaces)
+      ? [...new Set(availableNamespaces.map((ns) => normalizeNamespace(ns)).filter(Boolean))]
+      : [];
+    if (canAccessAdmin && adminNamespaces.length > 0) {
+      return adminNamespaces.sort();
+    }
+    const merged = new Set([...userNamespaceScopes, ...adminNamespaces]);
     return [...merged].filter(Boolean).sort();
-  }, [userNamespaceScopes, availableNamespaces]);
+  }, [userNamespaceScopes, availableNamespaces, canAccessAdmin]);
   const activeNamespace = namespaceOptions.includes(activeNamespaceCandidate)
     ? activeNamespaceCandidate
-    : namespaceOptions[0] || "";
+    : selectedAllNamespaces && !pathNamespace
+      ? ""
+      : namespaceOptions[0] || "";
   const namespacePrefix = namespacePath(activeNamespace);
   const userRootPath = namespacePrefix || "/";
   const adminRootPath = namespacePrefix ? `${namespacePrefix}/admin` : "/admin";
-  const namespaceLabel = activeNamespace || "unscoped";
+  const namespaceLabel = activeNamespace || "all";
+  const namespaceDropdownValue = pathNamespace || (selectedAllNamespaces ? ALL_NAMESPACES_VALUE : namespaceLabel);
   const canSwitchNamespace = namespaceOptions.length > 0;
 
   useEffect(() => {
@@ -151,6 +168,9 @@ const AppShell = () => {
       return;
     }
     setSelectedNamespace((prev) => {
+      if (String(prev || "").trim() === ALL_NAMESPACES_VALUE) {
+        return ALL_NAMESPACES_VALUE;
+      }
       const normalizedPrev = normalizeNamespace(prev);
       if (normalizedPrev && userNamespaceScopes.includes(normalizedPrev)) {
         return normalizedPrev;
@@ -215,14 +235,17 @@ const AppShell = () => {
       const nextRole = String(nextUser?.role || "")
         .trim()
         .toLowerCase();
-      const nextScopes = Array.isArray(nextUser?.namespace_scopes)
-        ? nextUser.namespace_scopes.map((ns) => normalizeNamespace(ns)).filter(Boolean)
-        : [];
+      const nextScopes = Array.isArray(nextUser?.enabled_namespaces)
+        ? nextUser.enabled_namespaces.map((ns) => normalizeNamespace(ns)).filter(Boolean)
+        : Array.isArray(nextUser?.namespace_scopes)
+          ? nextUser.namespace_scopes.map((ns) => normalizeNamespace(ns)).filter(Boolean)
+          : [];
+      const nextDefault = normalizeNamespace(nextUser?.default_namespace) || nextScopes[0] || "";
       setUser(nextUser);
       setError(null);
       if (nextRole === "namespace_admin" && nextScopes.length > 0) {
-        setSelectedNamespace(nextScopes[0]);
-        navigate(withNamespacePath(location.pathname, nextScopes[0]));
+        setSelectedNamespace(nextDefault);
+        navigate(withNamespacePath(location.pathname, nextDefault));
       } else {
         navigate(userRootPath);
       }
@@ -238,12 +261,20 @@ const AppShell = () => {
       .trim()
       .toLowerCase();
     if (role !== "namespace_admin") return;
-    const targetNamespace = rememberedNamespace || preferredUserNamespace;
+    const targetNamespace = selectedAllNamespaces ? "" : rememberedNamespace || preferredUserNamespace;
     if (!targetNamespace) return;
     if (String(location.pathname || "/") === "/") return;
     if (pathNamespace === targetNamespace) return;
     navigate(withNamespacePath(location.pathname, targetNamespace), { replace: true });
-  }, [user, rememberedNamespace, preferredUserNamespace, pathNamespace, location.pathname, navigate]);
+  }, [
+    user,
+    rememberedNamespace,
+    preferredUserNamespace,
+    pathNamespace,
+    location.pathname,
+    navigate,
+    selectedAllNamespaces,
+  ]);
 
   useEffect(() => {
     const loadSite = async () => {
@@ -330,7 +361,14 @@ const AppShell = () => {
   };
 
   const switchNamespace = (nextNamespace) => {
-    const next = normalizeNamespace(nextNamespace);
+    const raw = String(nextNamespace || "").trim();
+    if (!raw || raw === ALL_NAMESPACES_VALUE) {
+      setError(null);
+      setSelectedNamespace(ALL_NAMESPACES_VALUE);
+      navigate("/");
+      return;
+    }
+    const next = normalizeNamespace(raw);
     if (!next) return;
     setError(null);
     setSelectedNamespace(next);
@@ -354,10 +392,11 @@ const AppShell = () => {
               <span className="namespace-switch">
                 <span className="small namespace-switch-label">Namespace:</span>
                 <select
-                  value={activeNamespace}
+                  value={namespaceDropdownValue}
                   onChange={(e) => switchNamespace(e.target.value)}
-                  disabled={namespaceOptions.length < 2}
+                  disabled={namespaceOptions.length < 1}
                 >
+                  <option value={ALL_NAMESPACES_VALUE}>All</option>
                   {namespaceOptions.map((entry) => (
                     <option key={entry} value={entry}>
                       {entry}
@@ -405,7 +444,7 @@ const AppShell = () => {
                   path="/admin"
                   element={
                     <section className="card">
-                      <AdminDashboard />
+                      <AdminDashboard user={user} />
                     </section>
                   }
                 />
@@ -413,7 +452,7 @@ const AppShell = () => {
                   path="/ns/:namespace/admin"
                   element={
                     <section className="card">
-                      <AdminDashboard />
+                      <AdminDashboard user={user} />
                     </section>
                   }
                 />
@@ -629,7 +668,7 @@ const AppShell = () => {
                   path="/admin/settings"
                   element={
                     <section className="card">
-                      <AdminSettingsLanding />
+                      <AdminSettingsLanding user={user} />
                     </section>
                   }
                 />
@@ -637,7 +676,7 @@ const AppShell = () => {
                   path="/ns/:namespace/admin/settings"
                   element={
                     <section className="card">
-                      <AdminSettingsLanding />
+                      <AdminSettingsLanding user={user} />
                     </section>
                   }
                 />

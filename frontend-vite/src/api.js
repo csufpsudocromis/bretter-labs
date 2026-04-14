@@ -24,6 +24,20 @@ const namespaceFromPath = () => {
 api.interceptors.request.use((config) => {
   const namespace = namespaceFromPath();
   if (!namespace) {
+    const explicitNamespace =
+      (config.headers && typeof config.headers.get === "function"
+        ? config.headers.get("X-Bretter-Namespace") || config.headers.get("x-bretter-namespace")
+        : config.headers?.["X-Bretter-Namespace"] || config.headers?.["x-bretter-namespace"]) || "";
+    if (String(explicitNamespace).trim()) {
+      return config;
+    }
+    if (config.headers && typeof config.headers.delete === "function") {
+      config.headers.delete("X-Bretter-Namespace");
+      config.headers.delete("x-bretter-namespace");
+    } else if (config.headers) {
+      delete config.headers["X-Bretter-Namespace"];
+      delete config.headers["x-bretter-namespace"];
+    }
     return config;
   }
   if (config.headers && typeof config.headers.set === "function") {

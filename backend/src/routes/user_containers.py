@@ -2080,7 +2080,35 @@ def list_user_containers(
                     access_map[record.id] = None
             except ApiException as exc:
                 if exc.status != 404:
-                    raise
+                    logger.warning(
+                        "Container service reconciliation failed for instance %s in namespace %s: %s",
+                        record.id,
+                        record_namespace,
+                        exc,
+                    )
+                    diagnostics = diagnostics_map.get(record.id, [])
+                    diagnostics_map[record.id] = [*diagnostics, f"service reconcile warning: {exc}"]
+                    if mapped == "running":
+                        feedback[record.id] = (
+                            "starting",
+                            "Container pod is running; waiting for service endpoint.",
+                        )
+                access_map[record.id] = None
+            except Exception as exc:
+                logger.warning(
+                    "Container service reconciliation failed for instance %s in namespace %s: %s",
+                    record.id,
+                    record_namespace,
+                    exc,
+                    exc_info=True,
+                )
+                diagnostics = diagnostics_map.get(record.id, [])
+                diagnostics_map[record.id] = [*diagnostics, f"service reconcile warning: {exc}"]
+                if mapped == "running":
+                    feedback[record.id] = (
+                        "starting",
+                        "Container pod is running; waiting for service endpoint.",
+                    )
                 access_map[record.id] = None
         else:
             access_map[record.id] = None

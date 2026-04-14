@@ -47,6 +47,7 @@ jobs:
       SYNTHETIC_TIMEOUT_SECONDS: ${{ github.event.inputs.timeout_seconds || '900' }}
       SYNTHETIC_POLL_SECONDS: "3"
       SYNTHETIC_RDP_MARKER_TIMEOUT_SECONDS: "180"
+      SYNTHETIC_RUN_NAMESPACE_SWITCH_PROBE: "true"
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4

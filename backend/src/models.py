@@ -36,6 +36,8 @@ class UserOut(BaseModel):
     role: str
     team: str
     namespace_scopes: list[str] = Field(default_factory=list)
+    default_namespace: str = ""
+    enabled_namespaces: list[str] = Field(default_factory=list)
     is_admin: bool
     force_password_change: bool
     permissions: list[str] = Field(default_factory=list)
@@ -280,6 +282,7 @@ class ImageMeta(BaseModel):
     installer_disk_size_gib: int | None = None
     update_cpu_cores_default: int = 2
     update_ram_mb_default: int = 4096
+    used_by_namespaces: list[str] = Field(default_factory=list)
     checksum: str
     size_bytes: int
     created_at: datetime
@@ -383,6 +386,7 @@ class ContainerImageMeta(BaseModel):
     last_scan_at: Optional[datetime] = None
     last_scan_status: str = "never"
     last_scan_summary: str = ""
+    used_by_namespaces: list[str] = Field(default_factory=list)
     created_at: datetime
 
 

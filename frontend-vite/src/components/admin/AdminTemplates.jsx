@@ -7,6 +7,12 @@ const consoleProviderLabel = (provider) => {
   return "SPICE";
 };
 
+const RequiredIndicator = () => (
+  <span className="required-indicator" aria-hidden="true">
+    <span className="required-star">*</span> required
+  </span>
+);
+
 const DEFAULT_FORM = {
   name: "",
   description: "",
@@ -296,8 +302,8 @@ const AdminTemplates = () => {
           <h3>{editingId ? "Edit template" : "Create template"}</h3>
           <div className="form">
             <label>
-              Name
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              Name <RequiredIndicator />
+              <input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
             </label>
             <label>
               Description
@@ -315,8 +321,8 @@ const AdminTemplates = () => {
               </select>
             </label>
             <label>
-              Image
-              <select value={form.image_id} onChange={(e) => setForm({ ...form, image_id: e.target.value })}>
+              Image <RequiredIndicator />
+              <select required value={form.image_id} onChange={(e) => setForm({ ...form, image_id: e.target.value })}>
                 <option value="">Select image</option>
                 {imageRows.map((img) => (
                   <option key={img.id} value={img.id}>

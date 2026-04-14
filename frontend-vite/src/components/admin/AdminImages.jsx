@@ -16,6 +16,12 @@ const suggestCopyFilename = (value) => {
   return `${raw.slice(0, dot)}-copy${raw.slice(dot)}`;
 };
 
+const RequiredIndicator = () => (
+  <span className="required-indicator" aria-hidden="true">
+    <span className="required-star">*</span> required
+  </span>
+);
+
 const AdminImages = () => {
   const [images, setImages] = useState([]);
   const [isoImages, setIsoImages] = useState([]);
@@ -40,7 +46,11 @@ const AdminImages = () => {
   const [copySourceId, setCopySourceId] = useState(null);
   const [copyName, setCopyName] = useState("");
   const [copyFilename, setCopyFilename] = useState("");
+  const [copySharedCatalog, setCopySharedCatalog] = useState(false);
   const [savingCopy, setSavingCopy] = useState(false);
+  const [copyTaskId, setCopyTaskId] = useState("");
+  const [copyProgress, setCopyProgress] = useState(0);
+  const [copyDetail, setCopyDetail] = useState("");
   const [creatingImage, setCreatingImage] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createIsoId, setCreateIsoId] = useState("");
@@ -154,6 +164,25 @@ const AdminImages = () => {
         throw new Error(task.error || "Upload finalize failed");
       }
       await sleep(2000);
+    }
+  };
+
+  const waitForCopyTask = async (taskId) => {
+    for (;;) {
+      const res = await api.get(`/admin/images/upload-tasks/${taskId}`);
+      const task = res?.data || {};
+      if (Number.isFinite(task.progress_percent)) {
+        setCopyProgress(Math.min(100, Math.max(0, Math.round(task.progress_percent))));
+      }
+      setCopyDetail(String(task.detail || "").trim());
+      const status = String(task.status || "")
+        .trim()
+        .toLowerCase();
+      if (status === "completed") return task;
+      if (status === "failed") {
+        throw new Error(String(task.error || task.detail || "Create copy failed"));
+      }
+      await sleep(1500);
     }
   };
 
@@ -301,6 +330,10 @@ const AdminImages = () => {
     setCopySourceId(img.id);
     setCopyName(sourceName ? `${sourceName} Copy` : "Image Copy");
     setCopyFilename(suggestCopyFilename(img.filename || ""));
+    setCopySharedCatalog(Boolean(img.shared_catalog));
+    setCopyTaskId("");
+    setCopyProgress(0);
+    setCopyDetail("");
     setMessage("");
     setError("");
   };
@@ -309,6 +342,10 @@ const AdminImages = () => {
     setCopySourceId(null);
     setCopyName("");
     setCopyFilename("");
+    setCopySharedCatalog(false);
+    setCopyTaskId("");
+    setCopyProgress(0);
+    setCopyDetail("");
   };
 
   const saveCopy = async () => {
@@ -318,6 +355,9 @@ const AdminImages = () => {
       return;
     }
     setSavingCopy(true);
+    setCopyTaskId("");
+    setCopyProgress(0);
+    setCopyDetail("");
     setMessage("");
     setError("");
     try {
@@ -325,14 +365,30 @@ const AdminImages = () => {
         name: copyName.trim(),
         filename: copyFilename.trim(),
       };
-      const res = await api.post(`/admin/images/${sourceId}/copy`, payload);
-      setMessage(`Created copy ${res?.data?.name || payload.name}`);
+      if (isPlatformAdmin) {
+        payload.shared_catalog = Boolean(copySharedCatalog);
+      }
+      const kickoff = await api.post(`/admin/images/${sourceId}/copy`, payload);
+      const taskId = String(kickoff?.data?.task_id || "").trim();
+      if (!taskId) {
+        throw new Error("Copy task did not start");
+      }
+      setCopyTaskId(taskId);
+      if (Number.isFinite(kickoff?.data?.progress_percent)) {
+        setCopyProgress(Math.min(100, Math.max(0, Math.round(kickoff.data.progress_percent))));
+      }
+      setCopyDetail(String(kickoff?.data?.detail || "").trim());
+      await waitForCopyTask(taskId);
+      setMessage(`Created copy ${payload.name}`);
       cancelCopy();
       load();
     } catch (err) {
-      setError(err.response?.data?.detail || "Create copy failed");
+      setError(err.response?.data?.detail || err.message || "Create copy failed");
     } finally {
       setSavingCopy(false);
+      setCopyTaskId("");
+      setCopyProgress(0);
+      setCopyDetail("");
     }
   };
 
@@ -542,7 +598,10 @@ const AdminImages = () => {
       <div className="grid">
         <div>
           <h3>Upload image</h3>
-          <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          <label>
+            Image file <RequiredIndicator />
+            <input required type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
           <button onClick={upload} disabled={!file || uploading}>
             {!uploading && "Upload"}
             {uploading && uploadStage === "uploading" && `Uploading (${progress}%)`}
@@ -637,24 +696,42 @@ const AdminImages = () => {
               <h3>Create Copy of Golden Image</h3>
               <div className="form">
                 <label>
-                  New name
-                  <input value={copyName} onChange={(event) => setCopyName(event.target.value)} />
+                  New name <RequiredIndicator />
+                  <input required value={copyName} onChange={(event) => setCopyName(event.target.value)} />
                 </label>
                 <label>
-                  New filename
-                  <input value={copyFilename} onChange={(event) => setCopyFilename(event.target.value)} />
+                  New filename <RequiredIndicator />
+                  <input required value={copyFilename} onChange={(event) => setCopyFilename(event.target.value)} />
                 </label>
+                {isPlatformAdmin && (
+                  <label>
+                    Catalog scope
+                    <select
+                      value={copySharedCatalog ? "shared" : "namespace"}
+                      onChange={(event) => setCopySharedCatalog(event.target.value === "shared")}
+                    >
+                      <option value="namespace">Namespace-owned</option>
+                      <option value="shared">Shared (cross-namespace)</option>
+                    </select>
+                  </label>
+                )}
                 <div className="muted small">
                   A copy requires a unique name and filename. The new image keeps the same disk content and defaults.
                 </div>
                 <div className="actions">
                   <button onClick={saveCopy} disabled={savingCopy || !copyName.trim() || !copyFilename.trim()}>
-                    {savingCopy ? "Copying..." : "Create Copy"}
+                    {savingCopy ? `Copying (${copyProgress}%)` : "Create Copy"}
                   </button>
                   <button className="ghost" onClick={cancelCopy} disabled={savingCopy}>
                     Cancel
                   </button>
                 </div>
+                {savingCopy && (
+                  <div className="muted small">
+                    {copyDetail || `Copying image data (${copyProgress}%)`}
+                    {copyTaskId ? ` (task ${copyTaskId.slice(0, 8)})` : ""}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -663,16 +740,17 @@ const AdminImages = () => {
               <hr />
               <h3>Create Image</h3>
               <label>
-                Name
+                Name <RequiredIndicator />
                 <input
+                  required
                   value={createName}
                   onChange={(event) => setCreateName(event.target.value)}
                   placeholder="Windows 11 Golden"
                 />
               </label>
               <label>
-                Boot ISO
-                <select value={createIsoId} onChange={(event) => setCreateIsoId(event.target.value)}>
+                Boot ISO <RequiredIndicator />
+                <select required value={createIsoId} onChange={(event) => setCreateIsoId(event.target.value)}>
                   <option value="">Select ISO</option>
                   {isoImages.map((row) => (
                     <option key={row.id} value={row.id}>
@@ -762,7 +840,13 @@ const AdminImages = () => {
                     Update defaults: {Number(img.update_cpu_cores_default || 2)} CPU,{" "}
                     {Number(img.update_ram_mb_default || 4096)} MiB RAM
                   </div>
-                  <div className="actions">
+                  <div className="muted small">
+                    Used by namespaces:{" "}
+                    {Array.isArray(img.used_by_namespaces) && img.used_by_namespaces.length > 0
+                      ? img.used_by_namespaces.join(", ")
+                      : "-"}
+                  </div>
+                  <div className="actions image-tile-actions">
                     <button className="ghost" onClick={() => startEdit(img)}>
                       Edit
                     </button>
@@ -771,7 +855,7 @@ const AdminImages = () => {
                       onClick={() => startCopy(img)}
                       disabled={Boolean(launchingImageId) || Boolean(savingImageId) || savingCopy}
                     >
-                      {savingCopy && copySourceId === img.id ? "Copying..." : "Create Copy"}
+                      {savingCopy && copySourceId === img.id ? `Copying (${copyProgress}%)` : "Create Copy"}
                     </button>
                     {(() => {
                       const hasPendingUpdate = Boolean(updateSessionByImage?.[img.id]);

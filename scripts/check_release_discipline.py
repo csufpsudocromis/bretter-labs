@@ -85,6 +85,7 @@ def main() -> int:
     changelog_path = root / "CHANGELOG.md"
     frontend_pkg_path = root / "frontend-vite" / "package.json"
     frontend_lock_path = root / "frontend-vite" / "package-lock.json"
+    ci_guardrails_workflow_path = root / ".github" / "workflows" / "ci-guardrails.yml"
     values_prod_path = root / "deploy" / "helm" / "values-production.yaml"
     values_prod_site_template_path = root / "deploy" / "helm" / "values-production-site.template.yaml"
     setup_script_path = root / "scripts" / "setup.sh"
@@ -482,6 +483,10 @@ def main() -> int:
                     ".github/workflows/deploy-production.yml must enforce post-deploy upload/finalize synthetic gate "
                     f"(missing marker: {marker})."
                 )
+        if "PASS: post-deploy synthetic user flow check" not in deploy_workflow:
+            errors.append(
+                ".github/workflows/deploy-production.yml must fail the deploy when post-deploy synthetic user flow is missing/failed."
+            )
 
     if not promotion_workflow_path.exists():
         errors.append(".github/workflows/promote-staging-to-production.yml is missing.")
@@ -502,6 +507,25 @@ def main() -> int:
                     ".github/workflows/promote-staging-to-production.yml must include staged promotion gate markers "
                     f"(missing marker: {marker})."
                 )
+        if "PASS: post-deploy synthetic user flow check" not in promotion_workflow:
+            errors.append(
+                ".github/workflows/promote-staging-to-production.yml must enforce post-deploy synthetic success before promotion."
+            )
+
+    if not ci_guardrails_workflow_path.exists():
+        errors.append(".github/workflows/ci-guardrails.yml is missing.")
+    else:
+        ci_guardrails_workflow = _read_text(ci_guardrails_workflow_path)
+        for marker in (
+            "backend/tests/test_namespace_authz_matrix.py",
+            "backend/tests/test_namespace_scoping.py",
+            "backend/tests/test_namespace_contracts.py",
+        ):
+            if marker not in ci_guardrails_workflow:
+                errors.append(
+                    ".github/workflows/ci-guardrails.yml must keep namespace authz/scope/contract regression tests "
+                    f"(missing marker: {marker})."
+                )
 
     for workflow_path, label in (
         (post_deploy_synthetic_workflow_path, "post-deploy synthetic"),
@@ -518,6 +542,10 @@ def main() -> int:
         if "push:" not in workflow_text or "release/**" not in workflow_text:
             errors.append(
                 f"{workflow_path.relative_to(root)} must run on push to release/** for required release gates."
+            )
+        if label == "post-deploy synthetic" and "SYNTHETIC_RUN_NAMESPACE_SWITCH_PROBE" not in workflow_text:
+            errors.append(
+                ".github/workflows/post-deploy-synthetic.yml must enable namespace switch probing in synthetic checks."
             )
         if label == "nightly restore drill":
             if 'default: "true"' not in workflow_text:

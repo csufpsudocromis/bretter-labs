@@ -171,6 +171,19 @@ button:disabled {
   flex: none;
   min-width: 0;
 }
+.actions.image-tile-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.actions.image-tile-actions button {
+  flex: none;
+  min-width: 0;
+}
+@media (max-width: 520px) {
+  .actions.image-tile-actions {
+    grid-template-columns: 1fr;
+  }
+}
 
 .nav {
   display: flex;
@@ -377,6 +390,22 @@ button:disabled {
 .container-template-form textarea {
   width: 100%;
   box-sizing: border-box;
+}
+
+.required-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: 0.25rem;
+  color: #b91c1c;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.required-star {
+  color: #dc2626;
+  font-size: 0.95rem;
+  line-height: 1;
 }
 
 .admin-users-role-editor .tile,

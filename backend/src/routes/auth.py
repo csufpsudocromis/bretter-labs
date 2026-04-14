@@ -46,7 +46,7 @@ from ..services.ldap_auth import (
     missing_required_fields as ldap_missing_required_fields,
 )
 from ..services.team_quotas import normalize_team
-from ..services.tenant_context import user_namespace_scopes
+from ..services.tenant_context import default_namespace, tenant_namespace_for_user, user_namespace_scopes
 from ..tables import Config, ManagedNamespace, OIDCLoginState, User
 from ..time_utils import utc_now
 
@@ -96,16 +96,57 @@ def _ensure_namespace_admin_scopes_or_raise(user: User, session: Session) -> Non
     )
 
 
+def _known_enabled_managed_namespaces(session: Session) -> list[str]:
+    rows = session.exec(select(ManagedNamespace)).all()
+    enabled: list[str] = []
+    for row in rows:
+        namespace = str(getattr(row, "namespace", "") or "").strip().lower()
+        if not namespace:
+            continue
+        if not bool(getattr(row, "enabled", True)):
+            continue
+        if namespace not in enabled:
+            enabled.append(namespace)
+    if not enabled:
+        fallback = str(default_namespace() or "").strip().lower()
+        if fallback:
+            enabled.append(fallback)
+    return enabled
+
+
+def _effective_enabled_namespaces(user: User, session: Session) -> list[str]:
+    role = role_for_user(user)
+    if role == Role.PLATFORM_ADMIN:
+        return _known_enabled_managed_namespaces(session)
+
+    explicit = _filter_disabled_namespace_scopes(session, user_namespace_scopes(user))
+    if explicit:
+        return explicit
+
+    fallback_candidates = [
+        str(tenant_namespace_for_user(user) or "").strip().lower(),
+        str(default_namespace() or "").strip().lower(),
+    ]
+    fallback = _filter_disabled_namespace_scopes(session, fallback_candidates)
+    deduped: list[str] = []
+    for namespace in fallback:
+        if namespace not in deduped:
+            deduped.append(namespace)
+    return deduped
+
+
 def _user_out(user: User, session: Session) -> UserOut:
     role = role_for_user(user)
-    namespace_scopes = (
-        _filter_disabled_namespace_scopes(session, user_namespace_scopes(user)) if role != Role.PLATFORM_ADMIN else []
-    )
+    namespace_scopes = _filter_disabled_namespace_scopes(session, user_namespace_scopes(user))
+    enabled_namespaces = _effective_enabled_namespaces(user, session)
+    default_ns = enabled_namespaces[0] if enabled_namespaces else ""
     return UserOut(
         username=user.username,
         role=role,
         team=normalize_team("default"),
         namespace_scopes=namespace_scopes,
+        default_namespace=default_ns,
+        enabled_namespaces=enabled_namespaces,
         is_admin=can_access_admin(role),
         force_password_change=user.force_password_change,
         permissions=list_permissions_for_role(role),

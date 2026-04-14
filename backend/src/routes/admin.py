@@ -14,10 +14,22 @@ from collections import Counter, defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 from urllib.parse import quote as urlquote
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, Field
 import requests
 from sqlalchemy import text
@@ -176,12 +188,14 @@ UPLOAD_STAGE_NORMALIZING = "normalizing"
 UPLOAD_STAGE_SEEDED = "seeded"
 UPLOAD_STAGE_READY = "ready"
 UPLOAD_STAGE_FAILED = "failed"
-UPLOAD_ACTIVE_STATUSES = {"queued", "uploading", "finalizing", "importing", "pending", "running"}
+UPLOAD_STAGE_COPYING = "copying"
+UPLOAD_ACTIVE_STATUSES = {"queued", "uploading", "finalizing", "importing", "pending", "running", "copying"}
 UPLOAD_FAILED_STATUSES = {"failed", "error"}
 LAUNCH_ACTIVE_STATUSES = {"queued", "pending", "failed", "error"}
 
 _CDI_AVAILABLE: bool | None = None
 FINALIZE_PROGRESS_RE = re.compile(r"(?<![-0-9.])([0-9]+(?:\.[0-9]+)?)\s*/\s*100%")
+COPY_PROGRESS_BYTES_RE = re.compile(r"(\d+)\s+bytes(?:\s|$|\()")
 ALERTS_ERRORS_MAX_LOG_BYTES = 10 * 1024 * 1024
 ERROR_LOG_PAGE_SIZE = 50
 ERROR_LOG_LINE_RE = re.compile(r"(error|exception|traceback|critical|failed)", re.IGNORECASE)
@@ -331,7 +345,8 @@ def _record_visible_for_actor(record: object, actor: User, *, requested_namespac
     if not _tenant_scoped_record(record, actor, include_global=True):
         return False
     if is_platform_admin(actor):
-        return _record_visible_for_namespace(record, requested_namespace)
+        # Platform admins always see full catalog regardless of namespace hint/header.
+        return True
     scope = _namespace_scope_for_actor(actor)
     record_namespace = _record_namespace(record)
     in_scope = scope is None or record_namespace in scope
@@ -2165,6 +2180,11 @@ def _task_stage_progress(task: ImageUploadTask) -> tuple[str, int | None]:
     stage = str(getattr(task, "stage", "") or "").strip().lower()
     if status == "completed":
         return (UPLOAD_STAGE_READY, 100)
+    if status == UPLOAD_STAGE_COPYING:
+        return (
+            UPLOAD_STAGE_COPYING,
+            _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=99),
+        )
     if status == "failed":
         return (
             UPLOAD_STAGE_FAILED,
@@ -2177,8 +2197,21 @@ def _task_stage_progress(task: ImageUploadTask) -> tuple[str, int | None]:
         UPLOAD_STAGE_SEEDED,
         UPLOAD_STAGE_READY,
         UPLOAD_STAGE_FAILED,
+        UPLOAD_STAGE_COPYING,
     }:
-        bounded = 100 if stage == UPLOAD_STAGE_READY else (99 if stage == UPLOAD_STAGE_SEEDED else 100)
+        bounded = (
+            100
+            if stage == UPLOAD_STAGE_READY
+            else (
+                99
+                if stage
+                in {
+                    UPLOAD_STAGE_SEEDED,
+                    UPLOAD_STAGE_COPYING,
+                }
+                else 100
+            )
+        )
         return (stage, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0, upper_bound=bounded))
 
     if status == "uploading":
@@ -2204,6 +2237,8 @@ def _task_stage_progress(task: ImageUploadTask) -> tuple[str, int | None]:
         return (UPLOAD_STAGE_UPLOADED, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
     if stage == "failed":
         return (UPLOAD_STAGE_FAILED, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
+    if stage == UPLOAD_STAGE_COPYING:
+        return (UPLOAD_STAGE_COPYING, _coerce_progress_percent(getattr(task, "progress_percent", 0), default=0))
     return (UPLOAD_STAGE_UPLOADED if status else "queued", getattr(task, "progress_percent", None))
 
 
@@ -2978,6 +3013,21 @@ def _parse_finalize_progress_percent(log_data: str) -> int | None:
     return max(0, min(100, int(progress)))
 
 
+def _parse_copy_progress_percent(log_data: str, *, total_bytes: int) -> int | None:
+    normalized_total = max(0, int(total_bytes))
+    if normalized_total <= 0 or not log_data:
+        return None
+    max_seen = 0
+    for raw in COPY_PROGRESS_BYTES_RE.findall(log_data.replace("\r", "\n")):
+        try:
+            max_seen = max(max_seen, int(raw))
+        except Exception:
+            continue
+    if max_seen <= 0:
+        return None
+    return max(0, min(100, int((max_seen * 100) / normalized_total)))
+
+
 def _finalize_in_checksum_phase(log_data: str) -> bool:
     return "BLABS_PHASE=checksum" in (log_data or "")
 
@@ -3169,7 +3219,7 @@ def _upsert_image_from_task(task: ImageUploadTask, session: Session) -> None:
 
 
 def _refresh_upload_task(task: ImageUploadTask, session: Session) -> ImageUploadTask:
-    if task.status in {"completed", "failed"}:
+    if task.status in {"completed", "failed", UPLOAD_STAGE_COPYING}:
         return task
 
     batch = client.BatchV1Api()
@@ -3866,6 +3916,8 @@ def _copy_pvc_path_to_pvc(
     source_relative_path: str,
     target_claim: str,
     target_filename: str,
+    source_size_bytes: int | None = None,
+    progress_callback: Callable[[int], None] | None = None,
 ) -> None:
     source_rel = str(source_relative_path or "").strip().lstrip("/")
     target_name = Path(str(target_filename or "").strip()).name
@@ -3895,7 +3947,7 @@ if [ ! -f "${src}" ]; then
   echo "BLABS_ERROR=source missing: ${src}"
   exit 20
 fi
-cp -f "${src}" "${dst}"
+dd if="${src}" of="${dst}" bs=8M conv=fsync status=progress 2>&1
 sync
 echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
 """
@@ -3933,11 +3985,52 @@ echo "BLABS_COPY_SIZE=$(wc -c < "${dst}")"
     )
     batch.create_namespaced_job(namespace=settings.kube_namespace, body=body)
 
+    expected_bytes = max(0, int(source_size_bytes or 0))
+    if expected_bytes <= 0:
+        try:
+            expected_bytes = _pvc_file_size(source_rel, claim_name=source_claim)
+        except Exception:
+            expected_bytes = 0
+    last_progress = -1
+    pod_name = ""
     deadline = time.time() + COPY_JOB_TIMEOUT_SECONDS
     while time.time() < deadline:
         job = batch.read_namespaced_job(name=job_name, namespace=settings.kube_namespace)
         phase = _job_phase(job)
+        if progress_callback:
+            try:
+                if not pod_name:
+                    pods = core.list_namespaced_pod(
+                        namespace=settings.kube_namespace,
+                        label_selector=f"job-name={job_name}",
+                    ).items
+                    pod_name = pods[0].metadata.name if pods else ""
+                if pod_name and expected_bytes > 0:
+                    copy_log = core.read_namespaced_pod_log(
+                        name=pod_name,
+                        namespace=settings.kube_namespace,
+                        tail_lines=120,
+                    )
+                    parsed_progress = _parse_copy_progress_percent(copy_log, total_bytes=expected_bytes)
+                    if parsed_progress is None:
+                        try:
+                            copied_bytes = _pvc_file_size(target_name, claim_name=target_claim)
+                            parsed_progress = max(0, min(100, int((copied_bytes * 100) / expected_bytes)))
+                        except Exception:
+                            parsed_progress = None
+                    if parsed_progress is not None:
+                        normalized_progress = max(0, min(100, int(parsed_progress)))
+                        if normalized_progress > last_progress:
+                            last_progress = normalized_progress
+                            progress_callback(normalized_progress)
+            except Exception:
+                pass
         if phase == "succeeded":
+            if progress_callback and last_progress < 100:
+                try:
+                    progress_callback(100)
+                except Exception:
+                    pass
             return
         if phase == "failed":
             break
@@ -4226,6 +4319,7 @@ class ImageRename(BaseModel):
 class ImageCopyRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     filename: str = Field(min_length=1, max_length=255)
+    shared_catalog: bool | None = None
     skip_validation: bool = False
 
 
@@ -4790,6 +4884,41 @@ def remove_user(
     if role_for_user(user) == Role.PLATFORM_ADMIN and username == settings.admin_default_username:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="cannot delete default admin")
     revoke_tokens(session, username)
+    vm_instances = session.exec(select(Instance).where(Instance.owner == username)).all()
+    container_instances = session.exec(
+        select(ContainerInstanceTable).where(ContainerInstanceTable.owner == username)
+    ).all()
+    terminal_statuses = {"stopped", "completed", "failed", "error", "deleted"}
+    active_vm_instances = [
+        record
+        for record in vm_instances
+        if str(getattr(record, "status", "") or "").strip().lower() not in terminal_statuses
+    ]
+    active_container_instances = [
+        record
+        for record in container_instances
+        if str(getattr(record, "status", "") or "").strip().lower() not in terminal_statuses
+    ]
+    if active_vm_instances or active_container_instances:
+        vm_ids = [str(record.id) for record in active_vm_instances[:2]]
+        container_ids = [str(record.id) for record in active_container_instances[:2]]
+        detail_parts = []
+        if active_vm_instances:
+            suffix = ", ..." if len(active_vm_instances) > 2 else ""
+            detail_parts.append(f"active VM instances ({len(active_vm_instances)}): {', '.join(vm_ids)}{suffix}")
+        if active_container_instances:
+            suffix = ", ..." if len(active_container_instances) > 2 else ""
+            detail_parts.append(
+                f"active container instances ({len(active_container_instances)}): {', '.join(container_ids)}{suffix}"
+            )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"user has active labs; stop/delete them first ({'; '.join(detail_parts)})",
+        )
+    for record in vm_instances:
+        session.delete(record)
+    for record in container_instances:
+        session.delete(record)
     _record_admin_audit_event(
         session,
         actor=actor.username,
@@ -5455,6 +5584,8 @@ def get_upload_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
     if not _tenant_scoped_record(task, actor, include_global=False) or not _namespace_scoped_record(task, actor):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="upload task not found")
+    if str(getattr(task, "status", "") or "").strip().lower() == UPLOAD_STAGE_COPYING:
+        return _upload_task_out(task)
     try:
         task = _refresh_upload_task(task, session)
     except Exception as exc:
@@ -6074,6 +6205,7 @@ def list_images(
         for record in existing_records
         if _record_visible_for_actor(record, actor, requested_namespace=requested_namespace)
     ]
+    usage_by_image_id = _image_usage_namespaces_by_image_id(session, actor, {record.id for record in images})
     return [
         ImageMeta(
             id=record.id,
@@ -6090,12 +6222,64 @@ def list_images(
             installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
             update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
             update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
+            used_by_namespaces=usage_by_image_id.get(record.id, []),
             checksum=record.checksum,
             size_bytes=record.size_bytes,
             created_at=record.created_at,
         )
         for record in images
     ]
+
+
+def _image_usage_namespaces_by_image_id(
+    session: Session,
+    actor: User,
+    image_ids: set[str],
+) -> dict[str, list[str]]:
+    if not image_ids:
+        return {}
+    template_rows = session.exec(select(Template).where(Template.image_id.in_(sorted(image_ids)))).all()
+    usage_by_image_id: dict[str, set[str]] = defaultdict(set)
+    template_to_image_id: dict[str, str] = {}
+
+    for template in template_rows:
+        if not _template_visible_for_actor(template, actor):
+            continue
+        image_id = str(getattr(template, "image_id", "") or "").strip()
+        template_id = str(getattr(template, "id", "") or "").strip()
+        if not image_id or not template_id:
+            continue
+        template_to_image_id[template_id] = image_id
+        template_namespace = _record_namespace(template)
+        if template_namespace:
+            usage_by_image_id[image_id].add(template_namespace)
+        for namespace in _template_enabled_namespaces(template):
+            normalized = normalize_namespace(namespace)
+            if normalized:
+                usage_by_image_id[image_id].add(normalized)
+
+    if not template_to_image_id:
+        return {image_id: sorted(namespaces) for image_id, namespaces in usage_by_image_id.items()}
+
+    instance_rows = session.exec(
+        select(Instance).where(Instance.template_id.in_(sorted(template_to_image_id.keys())))
+    ).all()
+    for instance in instance_rows:
+        if not is_platform_admin(actor):
+            if not _tenant_scoped_record(instance, actor, include_global=False):
+                continue
+            if not _namespace_scoped_record(instance, actor):
+                continue
+        template_id = str(getattr(instance, "template_id", "") or "").strip()
+        image_id = template_to_image_id.get(template_id)
+        if not image_id:
+            continue
+        launch_namespace = normalize_namespace(getattr(instance, "launch_namespace", None))
+        instance_namespace = launch_namespace or _record_namespace(instance)
+        if instance_namespace:
+            usage_by_image_id[image_id].add(instance_namespace)
+
+    return {image_id: sorted(namespaces) for image_id, namespaces in usage_by_image_id.items()}
 
 
 def _image_filename_from_name(name: str, *, suffix: str = ".qcow2") -> str:
@@ -6231,18 +6415,256 @@ def create_image_from_iso(
     )
 
 
+def _map_copy_stage_progress(raw_percent: int, *, floor: int, cap: int) -> int:
+    bounded_raw = max(0, min(100, int(raw_percent)))
+    bounded_floor = max(0, min(100, int(floor)))
+    bounded_cap = max(bounded_floor, min(100, int(cap)))
+    span = bounded_cap - bounded_floor
+    return bounded_floor + int((span * bounded_raw) / 100)
+
+
+def _run_image_copy_task(
+    *,
+    task_id: str,
+    source_image_id: str,
+    actor_username: str,
+    target_tenant: str,
+    target_namespace: str,
+    target_name: str,
+    target_filename: str,
+    target_image_id: str,
+    target_shared_catalog: bool,
+    skip_validation: bool,
+) -> None:
+    copied_to_library = False
+    new_source_pvc = ""
+    current_progress = 0
+
+    def _set_progress(progress: int, detail: str) -> None:
+        nonlocal current_progress
+        next_progress = max(current_progress, min(99, int(progress)))
+        if next_progress == current_progress:
+            return
+        current_progress = next_progress
+        _update_upload_task(
+            task_id,
+            status=UPLOAD_STAGE_COPYING,
+            stage=UPLOAD_STAGE_COPYING,
+            progress_percent=next_progress,
+            detail=detail,
+            error_message=None,
+        )
+
+    def _copy_progress_callback(floor: int, cap: int, detail_template: str) -> Callable[[int], None]:
+        def _inner(raw_percent: int) -> None:
+            mapped = _map_copy_stage_progress(raw_percent, floor=floor, cap=cap)
+            _set_progress(mapped, detail_template.format(progress=mapped))
+
+        return _inner
+
+    try:
+        with session_scope() as session:
+            source = session.get(Image, source_image_id)
+            if not source:
+                raise RuntimeError("source image not found")
+            if _record_namespace(source) != target_namespace:
+                raise RuntimeError("source image namespace changed during copy")
+            if normalize_tenant(getattr(source, "tenant", None), default=GLOBAL_TENANT) != normalize_tenant(
+                target_tenant, default=GLOBAL_TENANT
+            ):
+                raise RuntimeError("source image tenant changed during copy")
+
+            source_filename = Path(str(getattr(source, "filename", "") or "").strip()).name
+            source_claim = str(getattr(source, "source_pvc", "") or "").strip()
+            source_claim_for_copy = ""
+            if source_claim and _exists_on_pvc(source_filename, claim_name=source_claim):
+                source_claim_for_copy = source_claim
+            elif _exists_on_pvc(source_filename):
+                source_claim_for_copy = settings.kube_image_pvc
+            if not source_claim_for_copy:
+                raise RuntimeError("source image file not found on storage")
+
+            image_size_bytes = int(getattr(source, "size_bytes", 0) or 0)
+            if image_size_bytes <= 0:
+                try:
+                    image_size_bytes = _pvc_file_size(source_filename, claim_name=source_claim_for_copy)
+                except Exception:
+                    image_size_bytes = 0
+            if image_size_bytes > 0:
+                _ensure_free_space(image_size_bytes, context=f"copying image {source_filename}")
+
+            conflict = session.exec(
+                select(Image)
+                .where(Image.filename == target_filename)
+                .where(Image.namespace == target_namespace)
+                .where(Image.id != source_image_id)
+            ).first()
+            if conflict:
+                raise RuntimeError("filename already exists")
+            if _exists_on_pvc(target_filename):
+                raise RuntimeError("filename already exists on storage")
+
+            target_cluster_id = str(getattr(source, "cluster_id", "") or local_cluster_id())
+            target_source_kind = str(getattr(source, "source_kind", "") or "uploaded")
+            installer_iso_id = str(getattr(source, "installer_iso_id", "") or "").strip() or None
+            installer_iso_filename = str(getattr(source, "installer_iso_filename", "") or "").strip()
+            installer_os_type = str(getattr(source, "installer_os_type", "") or "").strip() or None
+            installer_disk_size_gib = int(getattr(source, "installer_disk_size_gib", 0) or 0) or None
+            update_cpu_cores_default = int(getattr(source, "update_cpu_cores_default", 0) or 2)
+            update_ram_mb_default = int(getattr(source, "update_ram_mb_default", 0) or 4096)
+            copied_checksum = str(getattr(source, "checksum", "") or "")
+
+        _update_upload_task(
+            task_id,
+            status=UPLOAD_STAGE_COPYING,
+            stage=UPLOAD_STAGE_COPYING,
+            progress_percent=1,
+            detail="Starting image copy (1% complete)",
+            error_message=None,
+            size_bytes=max(0, int(image_size_bytes)),
+            filename=target_filename,
+        )
+        current_progress = 1
+
+        _copy_pvc_path_to_pvc(
+            source_claim=source_claim_for_copy,
+            source_relative_path=source_filename,
+            target_claim=settings.kube_image_pvc,
+            target_filename=target_filename,
+            source_size_bytes=image_size_bytes,
+            progress_callback=_copy_progress_callback(1, 49, "Copying image data ({progress}% complete)"),
+        )
+        copied_to_library = True
+
+        if not skip_validation:
+            _set_progress(50, "Validating copied image (50% complete)")
+            _validate_file_on_pvc(target_filename)
+
+        if image_size_bytes <= 0:
+            image_size_bytes = _pvc_file_size(target_filename)
+        new_source_pvc = _ensure_image_source_pvc_claim(target_image_id, max(1, image_size_bytes))
+        _set_progress(51, "Seeding clone source PVC (51% complete)")
+        _copy_pvc_path_to_pvc(
+            source_claim=settings.kube_image_pvc,
+            source_relative_path=target_filename,
+            target_claim=new_source_pvc,
+            target_filename=target_filename,
+            source_size_bytes=image_size_bytes,
+            progress_callback=_copy_progress_callback(51, 97, "Seeding clone source PVC ({progress}% complete)"),
+        )
+
+        if installer_iso_filename and "/" not in installer_iso_filename:
+            installer_source_claim = source_claim_for_copy
+            if not _exists_on_pvc(installer_iso_filename, claim_name=installer_source_claim):
+                installer_source_claim = settings.kube_image_pvc
+            if not _exists_on_pvc(installer_iso_filename, claim_name=installer_source_claim):
+                raise RuntimeError("installer ISO media is missing; clear mounted ISO or reattach before copying")
+            _set_progress(98, "Copying installer ISO media (98% complete)")
+            _copy_pvc_path_to_pvc(
+                source_claim=installer_source_claim,
+                source_relative_path=installer_iso_filename,
+                target_claim=new_source_pvc,
+                target_filename=Path(installer_iso_filename).name,
+            )
+            installer_iso_filename = Path(installer_iso_filename).name
+
+        _set_progress(99, "Finalizing copied image metadata (99% complete)")
+        with session_scope() as session:
+            copied = Image(
+                id=target_image_id,
+                name=target_name,
+                filename=target_filename,
+                tenant=target_tenant,
+                namespace=target_namespace,
+                shared_catalog=target_shared_catalog,
+                cluster_id=target_cluster_id,
+                source_kind=target_source_kind,
+                installer_iso_id=installer_iso_id,
+                installer_iso_filename=(installer_iso_filename or None),
+                installer_os_type=installer_os_type,
+                installer_disk_size_gib=installer_disk_size_gib,
+                update_cpu_cores_default=update_cpu_cores_default,
+                update_ram_mb_default=update_ram_mb_default,
+                source_pvc=new_source_pvc,
+                checksum=copied_checksum,
+                size_bytes=max(0, int(image_size_bytes)),
+                created_at=utc_now(),
+            )
+            session.add(copied)
+            _record_admin_audit_event(
+                session,
+                actor=actor_username,
+                tenant=target_tenant,
+                action="copy",
+                target_type="image",
+                target_id=copied.id,
+                detail=f"namespace={target_namespace} source_image_id={source_image_id} filename={copied.filename}",
+            )
+            session.commit()
+            session.refresh(copied)
+        _update_upload_task(
+            task_id,
+            status="completed",
+            stage=UPLOAD_STAGE_READY,
+            progress_percent=100,
+            detail=f"Created copy {target_name}",
+            error_message=None,
+            image_id=target_image_id,
+            filename=target_filename,
+            size_bytes=max(0, int(image_size_bytes)),
+            checksum=copied_checksum,
+            source_pvc=new_source_pvc,
+        )
+        return
+    except Exception as exc:
+        if new_source_pvc:
+            try:
+                kube._client().delete_namespaced_persistent_volume_claim(
+                    name=new_source_pvc,
+                    namespace=settings.kube_namespace,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to cleanup source PVC after image copy error image=%s pvc=%s",
+                    source_image_id,
+                    new_source_pvc,
+                    exc_info=True,
+                )
+        if copied_to_library:
+            try:
+                _with_pvc_helper(
+                    ["/bin/sh", "-c", f"rm -f /images/{shlex.quote(target_filename)}"],
+                    capture_output=False,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to cleanup copied image file after image copy error image=%s filename=%s",
+                    source_image_id,
+                    target_filename,
+                    exc_info=True,
+                )
+        _update_upload_task(
+            task_id,
+            status="failed",
+            stage=UPLOAD_STAGE_FAILED,
+            detail="Image copy failed",
+            error_message=str(exc),
+        )
+
+
 @router.post(
     "/images/{image_id}/copy",
-    response_model=ImageCreateResponse,
-    status_code=status.HTTP_201_CREATED,
+    response_model=ImageUploadTaskStatus,
+    status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(require_permission(Permission.IMAGES_WRITE))],
 )
 def copy_image(
     image_id: str,
     payload: ImageCopyRequest,
+    background_tasks: BackgroundTasks,
     session: Session = Depends(get_session),
     actor: User = Depends(require_user),
-) -> ImageCreateResponse:
+) -> ImageUploadTaskStatus:
     record = session.get(Image, image_id)
     if (
         not record
@@ -6266,6 +6688,14 @@ def copy_image(
     new_name = str(payload.name or "").strip()
     raw_filename = str(payload.filename or "").strip()
     new_filename = Path(raw_filename).name
+    requested_shared_catalog = (
+        bool(payload.shared_catalog) if payload.shared_catalog is not None else _record_shared_catalog(record)
+    )
+    if requested_shared_catalog and not is_platform_admin(actor):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only platform admins can publish shared catalogs",
+        )
     if not new_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="name is required")
     if not new_filename:
@@ -6303,128 +6733,51 @@ def copy_image(
     if image_size_bytes > 0:
         _ensure_free_space(image_size_bytes, context=f"copying image {source_filename}")
 
-    copied_to_library = False
-    new_source_pvc = ""
-    image_copy_id = str(uuid4())
-    installer_iso_filename = str(getattr(record, "installer_iso_filename", "") or "").strip()
-    try:
-        _copy_pvc_path_to_pvc(
-            source_claim=source_claim_for_copy,
-            source_relative_path=source_filename,
-            target_claim=settings.kube_image_pvc,
-            target_filename=new_filename,
-        )
-        copied_to_library = True
-        if not payload.skip_validation:
-            _validate_file_on_pvc(new_filename)
-        if image_size_bytes <= 0:
-            image_size_bytes = _pvc_file_size(new_filename)
-
-        new_source_pvc = _ensure_image_source_pvc_claim(image_copy_id, max(1, image_size_bytes))
-        _copy_pvc_path_to_pvc(
-            source_claim=settings.kube_image_pvc,
-            source_relative_path=new_filename,
-            target_claim=new_source_pvc,
-            target_filename=new_filename,
-        )
-
-        if installer_iso_filename and "/" not in installer_iso_filename:
-            installer_source_claim = source_claim_for_copy
-            if not _exists_on_pvc(installer_iso_filename, claim_name=installer_source_claim):
-                installer_source_claim = settings.kube_image_pvc
-            if not _exists_on_pvc(installer_iso_filename, claim_name=installer_source_claim):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="installer ISO media is missing; clear mounted ISO or reattach before copying",
-                )
-            _copy_pvc_path_to_pvc(
-                source_claim=installer_source_claim,
-                source_relative_path=installer_iso_filename,
-                target_claim=new_source_pvc,
-                target_filename=Path(installer_iso_filename).name,
-            )
-            installer_iso_filename = Path(installer_iso_filename).name
-    except Exception as exc:
-        if new_source_pvc:
-            try:
-                kube._client().delete_namespaced_persistent_volume_claim(
-                    name=new_source_pvc,
-                    namespace=settings.kube_namespace,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to cleanup source PVC after image copy error image=%s pvc=%s",
-                    image_id,
-                    new_source_pvc,
-                    exc_info=True,
-                )
-        if copied_to_library:
-            try:
-                _with_pvc_helper(["/bin/sh", "-c", f"rm -f /images/{shlex.quote(new_filename)}"], capture_output=False)
-            except Exception:
-                logger.warning(
-                    "Failed to cleanup copied image file after image copy error image=%s filename=%s",
-                    image_id,
-                    new_filename,
-                    exc_info=True,
-                )
-        if isinstance(exc, HTTPException):
-            raise
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"image copy failed: {exc}"
-        ) from exc
-
-    copied = Image(
-        id=image_copy_id,
-        name=new_name,
+    task = ImageUploadTask(
+        id=str(uuid4()),
+        original_filename=source_filename,
         filename=new_filename,
         tenant=managed_tenant,
         namespace=image_namespace,
-        shared_catalog=_record_shared_catalog(record),
-        cluster_id=str(getattr(record, "cluster_id", "") or local_cluster_id()),
-        source_kind=str(getattr(record, "source_kind", "") or "uploaded"),
-        installer_iso_id=(str(getattr(record, "installer_iso_id", "") or "").strip() or None),
-        installer_iso_filename=(installer_iso_filename or None),
-        installer_os_type=(str(getattr(record, "installer_os_type", "") or "").strip() or None),
-        installer_disk_size_gib=(int(getattr(record, "installer_disk_size_gib", 0) or 0) or None),
-        update_cpu_cores_default=int(getattr(record, "update_cpu_cores_default", 0) or 2),
-        update_ram_mb_default=int(getattr(record, "update_ram_mb_default", 0) or 4096),
-        source_pvc=new_source_pvc,
-        checksum=str(getattr(record, "checksum", "") or ""),
+        cluster_id=local_cluster_id(),
         size_bytes=max(0, int(image_size_bytes)),
+        status=UPLOAD_STAGE_COPYING,
+        stage=UPLOAD_STAGE_COPYING,
+        progress_percent=0,
+        detail="Queued image copy",
+        error_message=None,
+        retry_count=0,
+        max_retries=0,
+        image_id=str(uuid4()),
         created_at=utc_now(),
+        updated_at=utc_now(),
     )
-    session.add(copied)
+    session.add(task)
     _record_admin_audit_event(
         session,
         actor=actor.username,
         tenant=managed_tenant,
-        action="copy",
-        target_type="image",
-        target_id=copied.id,
-        detail=f"namespace={image_namespace} source_image_id={record.id} filename={copied.filename}",
+        action="create",
+        target_type="image_copy_task",
+        target_id=task.id,
+        detail=f"namespace={image_namespace} source_image_id={record.id} filename={task.filename}",
     )
     session.commit()
-    session.refresh(copied)
-    return ImageCreateResponse(
-        id=copied.id,
-        name=copied.name,
-        filename=copied.filename,
-        tenant=normalize_tenant(getattr(copied, "tenant", None), default=GLOBAL_TENANT),
-        namespace=_record_namespace(copied),
-        shared_catalog=_record_shared_catalog(copied),
-        cluster_id=str(getattr(copied, "cluster_id", "") or local_cluster_id()),
-        source_kind=str(getattr(copied, "source_kind", "") or "uploaded"),
-        installer_iso_id=(str(getattr(copied, "installer_iso_id", "") or "").strip() or None),
-        installer_iso_filename=(str(getattr(copied, "installer_iso_filename", "") or "").strip() or None),
-        installer_os_type=(str(getattr(copied, "installer_os_type", "") or "").strip() or None),
-        installer_disk_size_gib=(int(getattr(copied, "installer_disk_size_gib", 0) or 0) or None),
-        update_cpu_cores_default=int(getattr(copied, "update_cpu_cores_default", 0) or 2),
-        update_ram_mb_default=int(getattr(copied, "update_ram_mb_default", 0) or 4096),
-        checksum=copied.checksum,
-        size_bytes=copied.size_bytes,
-        created_at=copied.created_at,
+    session.refresh(task)
+    background_tasks.add_task(
+        _run_image_copy_task,
+        task_id=task.id,
+        source_image_id=record.id,
+        actor_username=actor.username,
+        target_tenant=managed_tenant,
+        target_namespace=image_namespace,
+        target_name=new_name,
+        target_filename=new_filename,
+        target_image_id=task.image_id or str(uuid4()),
+        target_shared_catalog=requested_shared_catalog,
+        skip_validation=bool(payload.skip_validation),
     )
+    return _upload_task_out(task)
 
 
 @router.post(

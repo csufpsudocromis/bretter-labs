@@ -304,6 +304,24 @@ const AdminUsers = () => {
     }
   };
 
+  const deleteUser = async () => {
+    const targetUsername = String(editingUser || "").trim();
+    if (!targetUsername) return;
+    if (!window.confirm(`Delete user "${targetUsername}"? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/admin/users/${encodeURIComponent(targetUsername)}`);
+      setMessage(`User "${targetUsername}" deleted`);
+      setEditingUser(null);
+      setEditUsername("");
+      setEditPassword("");
+      setEditRole("user");
+      setEditNamespaceScopes([]);
+      loadUsers();
+    } catch (err) {
+      setMessage(err.response?.data?.detail || "Failed to delete user");
+    }
+  };
+
   const togglePermission = (permissions, permission) => {
     if (permissions.includes(permission)) {
       return permissions.filter((entry) => entry !== permission);
@@ -663,6 +681,9 @@ const AdminUsers = () => {
                 <div className="actions">
                   <button type="button" className="ghost" onClick={() => setEditingUser(null)}>
                     Cancel
+                  </button>
+                  <button type="button" className="danger" onClick={deleteUser}>
+                    Delete User
                   </button>
                   <button type="button" onClick={saveUser} disabled={!editUsername}>
                     Save

@@ -525,6 +525,13 @@
             "default": "global",
             "title": "Tenant",
             "type": "string"
+          },
+          "used_by_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By Namespaces",
+            "type": "array"
           }
         },
         "required": [
@@ -1760,6 +1767,44 @@
         "title": "IdleTimeoutSettings",
         "type": "object"
       },
+      "ImageCopyRequest": {
+        "properties": {
+          "filename": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Filename",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "shared_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Catalog"
+          },
+          "skip_validation": {
+            "default": false,
+            "title": "Skip Validation",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "filename"
+        ],
+        "title": "ImageCopyRequest",
+        "type": "object"
+      },
       "ImageCreateFromIso": {
         "properties": {
           "default_cpu_cores": {
@@ -1924,6 +1969,13 @@
             "default": 4096,
             "title": "Update Ram Mb Default",
             "type": "integer"
+          },
+          "used_by_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By Namespaces",
+            "type": "array"
           }
         },
         "required": [
@@ -2139,6 +2191,13 @@
             "default": 4096,
             "title": "Update Ram Mb Default",
             "type": "integer"
+          },
+          "used_by_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Used By Namespaces",
+            "type": "array"
           }
         },
         "required": [
@@ -2231,6 +2290,25 @@
           }
         },
         "title": "ImageRename",
+        "type": "object"
+      },
+      "ImageSaveUpdateRequest": {
+        "properties": {
+          "instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instance Id"
+          }
+        },
+        "title": "ImageSaveUpdateRequest",
         "type": "object"
       },
       "ImageUploadTaskStatus": {
@@ -2370,6 +2448,11 @@
             "title": "Created At",
             "type": "string"
           },
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
           "filename": {
             "title": "Filename",
             "type": "string"
@@ -2415,6 +2498,18 @@
       },
       "IsoImageRename": {
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "name": {
             "anyOf": [
               {
@@ -4909,6 +5004,18 @@
             "title": "Can Access Admin",
             "type": "boolean"
           },
+          "default_namespace": {
+            "default": "",
+            "title": "Default Namespace",
+            "type": "string"
+          },
+          "enabled_namespaces": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Enabled Namespaces",
+            "type": "array"
+          },
           "force_password_change": {
             "title": "Force Password Change",
             "type": "boolean"
@@ -5272,7 +5379,7 @@
       "VMTemplateCreate": {
         "properties": {
           "auto_delete_minutes": {
-            "maximum": 30.0,
+            "maximum": 10080.0,
             "minimum": 1.0,
             "title": "Auto Delete Minutes",
             "type": "integer"
@@ -5328,7 +5435,7 @@
           },
           "idle_timeout_minutes": {
             "default": 30,
-            "maximum": 1440.0,
+            "maximum": 10080.0,
             "minimum": 1.0,
             "title": "Idle Timeout Minutes",
             "type": "integer"
@@ -5531,7 +5638,7 @@
           "auto_delete_minutes": {
             "anyOf": [
               {
-                "maximum": 30.0,
+                "maximum": 10080.0,
                 "minimum": 1.0,
                 "type": "integer"
               },
@@ -5618,7 +5725,7 @@
           "idle_timeout_minutes": {
             "anyOf": [
               {
-                "maximum": 1440.0,
+                "maximum": 10080.0,
                 "minimum": 1.0,
                 "type": "integer"
               },
@@ -7474,6 +7581,74 @@
         ]
       }
     },
+    "/admin/images/{image_id}/copy": {
+      "post": {
+        "operationId": "copy_image_admin_images__image_id__copy_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "title": "Image Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageCopyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageUploadTaskStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Copy Image",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/admin/images/{image_id}/launch-update": {
       "post": {
         "operationId": "launch_image_update_vm_admin_images__image_id__launch_update_post",
@@ -7537,6 +7712,81 @@
           }
         },
         "summary": "Launch Image Update Vm",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/images/{image_id}/save-update": {
+      "post": {
+        "operationId": "save_image_update_vm_admin_images__image_id__save_update_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "image_id",
+            "required": true,
+            "schema": {
+              "title": "Image Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ImageSaveUpdateRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminOperationActionResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Save Image Update Vm",
         "tags": [
           "admin"
         ]
@@ -7611,6 +7861,23 @@
                 }
               ],
               "title": "Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "description",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 1024,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
             }
           },
           {

@@ -42,6 +42,12 @@ def test_admin_record_visible_for_platform_admin_without_namespace_filter() -> N
     assert admin_routes._record_visible_for_actor(record, actor, requested_namespace=None)
 
 
+def test_admin_record_visible_for_platform_admin_with_namespace_filter() -> None:
+    actor = User(username="admin", password_hash="x", role="platform_admin", is_admin=True)
+    record = SimpleNamespace(namespace="test-namespace", shared_catalog=False)
+    assert admin_routes._record_visible_for_actor(record, actor, requested_namespace="different-namespace")
+
+
 def test_admin_containers_requested_namespace_hint_requires_explicit_namespace() -> None:
     request = _request_with_headers()
     assert admin_containers_routes._requested_namespace_hint(request) is None
@@ -51,6 +57,12 @@ def test_admin_containers_record_visibility_without_namespace_filter() -> None:
     actor = User(username="admin", password_hash="x", role="platform_admin", is_admin=True)
     record = SimpleNamespace(namespace="test-namespace", shared_catalog=False)
     assert admin_containers_routes._record_visible_for_actor(record, actor, requested_namespace=None)
+
+
+def test_admin_containers_record_visibility_with_namespace_filter_for_platform_admin() -> None:
+    actor = User(username="admin", password_hash="x", role="platform_admin", is_admin=True)
+    record = SimpleNamespace(namespace="test-namespace", shared_catalog=False)
+    assert admin_containers_routes._record_visible_for_actor(record, actor, requested_namespace="different-namespace")
 
 
 def test_template_namespace_catalog_skips_cluster_namespace_listing(login_admin, monkeypatch) -> None:

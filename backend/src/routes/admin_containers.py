@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections import defaultdict
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
@@ -149,7 +150,8 @@ def _record_visible_for_namespace(record: object, namespace: str | None) -> bool
 
 def _record_visible_for_actor(record: object, actor: User, *, requested_namespace: str | None = None) -> bool:
     if is_platform_admin(actor):
-        return _record_visible_for_namespace(record, requested_namespace)
+        # Platform admins always see full catalog regardless of namespace hint/header.
+        return True
     scope = _namespace_scope_for_actor(actor)
     record_namespace = _record_namespace(record)
     in_scope = scope is None or record_namespace in scope
@@ -373,7 +375,11 @@ def _run_image_prepull(image_ref: str) -> None:
         logger.warning("Container image pre-pull failed for %s", image_ref, exc_info=True)
 
 
-def _image_out(record: ContainerImageTable, signature_warning: str | None = None) -> ContainerImageMeta:
+def _image_out(
+    record: ContainerImageTable,
+    signature_warning: str | None = None,
+    used_by_namespaces: list[str] | None = None,
+) -> ContainerImageMeta:
     return ContainerImageMeta(
         id=record.id,
         name=record.name,
@@ -386,8 +392,66 @@ def _image_out(record: ContainerImageTable, signature_warning: str | None = None
         last_scan_at=getattr(record, "last_scan_at", None),
         last_scan_status=str(getattr(record, "last_scan_status", "never") or "never"),
         last_scan_summary=str(getattr(record, "last_scan_summary", "") or ""),
+        used_by_namespaces=sorted({str(item).strip() for item in (used_by_namespaces or []) if str(item).strip()}),
         created_at=record.created_at,
     )
+
+
+def _container_image_usage_namespaces_by_image_id(
+    session: Session,
+    actor: User,
+    image_ids: set[str],
+) -> dict[str, list[str]]:
+    if not image_ids:
+        return {}
+    template_rows = session.exec(
+        select(ContainerTemplateTable).where(ContainerTemplateTable.container_image_id.in_(sorted(image_ids)))
+    ).all()
+    usage_by_image_id: dict[str, set[str]] = defaultdict(set)
+    template_to_image_id: dict[str, str] = {}
+    instance_tenant_scope = _tenant_scope_for_actor(actor, include_global=False)
+
+    for template in template_rows:
+        if not _template_visible_for_actor(template, actor):
+            continue
+        image_id = str(getattr(template, "container_image_id", "") or "").strip()
+        template_id = str(getattr(template, "id", "") or "").strip()
+        if not image_id or not template_id:
+            continue
+        template_to_image_id[template_id] = image_id
+        template_namespace = _record_namespace(template)
+        if template_namespace:
+            usage_by_image_id[image_id].add(template_namespace)
+        for namespace in _template_enabled_namespaces(template):
+            normalized = normalize_namespace(namespace)
+            if normalized:
+                usage_by_image_id[image_id].add(normalized)
+
+    if not template_to_image_id:
+        return {image_id: sorted(namespaces) for image_id, namespaces in usage_by_image_id.items()}
+
+    instance_rows = session.exec(
+        select(ContainerInstanceTable).where(
+            ContainerInstanceTable.template_id.in_(sorted(template_to_image_id.keys()))
+        )
+    ).all()
+    for instance in instance_rows:
+        if not is_platform_admin(actor):
+            if instance_tenant_scope is not None:
+                instance_tenant = normalize_tenant(getattr(instance, "tenant", None), default="default")
+                if instance_tenant not in instance_tenant_scope:
+                    continue
+            if not _namespace_scoped_record(instance, actor):
+                continue
+        template_id = str(getattr(instance, "template_id", "") or "").strip()
+        image_id = template_to_image_id.get(template_id)
+        if not image_id:
+            continue
+        instance_namespace = _record_namespace(instance)
+        if instance_namespace:
+            usage_by_image_id[image_id].add(instance_namespace)
+
+    return {image_id: sorted(namespaces) for image_id, namespaces in usage_by_image_id.items()}
 
 
 def _parse_json_list(raw: str) -> list[str]:
@@ -724,7 +788,8 @@ def list_container_images(
     rows = session.exec(stmt).all()
     rows = [row for row in rows if _record_visible_for_actor(row, actor, requested_namespace=requested_namespace)]
     rows.sort(key=lambda item: item.created_at, reverse=True)
-    return [_image_out(row) for row in rows]
+    usage_by_image_id = _container_image_usage_namespaces_by_image_id(session, actor, {row.id for row in rows})
+    return [_image_out(row, used_by_namespaces=usage_by_image_id.get(row.id, [])) for row in rows]
 
 
 @router.patch(

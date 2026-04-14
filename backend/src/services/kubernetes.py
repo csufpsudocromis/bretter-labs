@@ -871,7 +871,33 @@ class KubernetesService:
                         "ports": [{"name": "http", "port": tcp_port, "targetPort": tcp_port, "protocol": "TCP"}],
                     }
                 }
-                core.patch_namespaced_service(name=service_name, namespace=ns, body=patch)
+                try:
+                    core.patch_namespaced_service(name=service_name, namespace=ns, body=patch)
+                except ApiException as patch_exc:
+                    # Some legacy/stale Services can contain invalid duplicate port names.
+                    # Kubernetes rejects strategic-merge patch updates in that state (422).
+                    # Self-heal by recreating the Service with the canonical single-port spec.
+                    if patch_exc.status == 422:
+                        logger.warning(
+                            "Container service %s patch rejected (422); recreating service to heal invalid spec: %s",
+                            service_name,
+                            patch_exc,
+                        )
+                        try:
+                            core.delete_namespaced_service(name=service_name, namespace=ns)
+                        except ApiException as delete_exc:
+                            if delete_exc.status != 404:
+                                logger.error(
+                                    "Failed deleting invalid container service %s during self-heal: %s",
+                                    service_name,
+                                    delete_exc,
+                                )
+                                raise
+                        svc = core.create_namespaced_service(namespace=ns, body=body)
+                        if normalized_service_type == "ClusterIP":
+                            return None
+                        return svc.spec.ports[0].node_port
+                    raise
                 existing = core.read_namespaced_service(name=service_name, namespace=ns)
             if normalized_service_type == "ClusterIP":
                 return None

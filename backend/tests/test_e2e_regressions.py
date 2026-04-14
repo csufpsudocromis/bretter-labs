@@ -1,4 +1,5 @@
 from datetime import timedelta
+import time
 from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
@@ -338,10 +339,14 @@ def test_login_and_me_filter_disabled_namespace_scopes(client: TestClient) -> No
     assert login.status_code == 200, login.text
     payload = login.json()["user"]
     assert payload["namespace_scopes"] == ["enabled-ns"]
+    assert payload["enabled_namespaces"] == ["enabled-ns"]
+    assert payload["default_namespace"] == "enabled-ns"
 
     me = client.get("/auth/me")
     assert me.status_code == 200, me.text
     assert me.json()["namespace_scopes"] == ["enabled-ns"]
+    assert me.json()["enabled_namespaces"] == ["enabled-ns"]
+    assert me.json()["default_namespace"] == "enabled-ns"
 
 
 def test_namespace_admin_login_rejects_empty_namespace_scopes(client: TestClient) -> None:
@@ -2022,24 +2027,35 @@ def test_admin_copy_image_creates_identical_copy(login_admin: TestClient, monkey
 
     copied = login_admin.post(
         "/admin/images/img-copy-source-1/copy",
-        json={"name": "Windows Base Copy", "filename": "windows-base-copy.qcow2"},
+        json={"name": "Windows Base Copy", "filename": "windows-base-copy.qcow2", "shared_catalog": True},
     )
-    assert copied.status_code == 201, copied.text
-    body = copied.json()
-    assert body["name"] == "Windows Base Copy"
-    assert body["filename"] == "windows-base-copy.qcow2"
-    assert body["source_kind"] == "scratch"
-    assert body["installer_iso_filename"] == "installer-win.iso"
-    assert body["update_cpu_cores_default"] == 4
-    assert body["update_ram_mb_default"] == 8192
+    assert copied.status_code == 202, copied.text
+    task = copied.json()
+    task_id = task["task_id"]
+    assert task["status"] == "copying"
+    assert task["filename"] == "windows-base-copy.qcow2"
+
+    completed_task = task
+    for _ in range(40):
+        polled = login_admin.get(f"/admin/images/upload-tasks/{task_id}")
+        assert polled.status_code == 200, polled.text
+        completed_task = polled.json()
+        if completed_task.get("status") == "completed":
+            break
+        time.sleep(0.05)
+    assert completed_task.get("status") == "completed"
+    assert completed_task.get("progress_percent") == 100
+    copied_image_id = completed_task.get("image_id")
+    assert copied_image_id
 
     with Session(engine) as session:
-        copied_record = session.get(Image, body["id"])
+        copied_record = session.get(Image, copied_image_id)
         assert copied_record is not None
         assert copied_record.name == "Windows Base Copy"
         assert copied_record.filename == "windows-base-copy.qcow2"
         assert copied_record.source_pvc == "img-src-copy-target-1"
         assert copied_record.source_kind == "scratch"
+        assert copied_record.shared_catalog is True
         assert copied_record.installer_iso_filename == "installer-win.iso"
         assert copied_record.update_cpu_cores_default == 4
         assert copied_record.update_ram_mb_default == 8192

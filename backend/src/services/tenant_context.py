@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 from fastapi import HTTPException, Request, status
@@ -11,6 +12,7 @@ from .team_quotas import normalize_namespace
 GLOBAL_TENANT = "global"
 _NAMESPACE_SCOPE_RE = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 _NAMESPACE_HEADER_KEYS = ("x-bretter-namespace", "x-blabs-namespace")
+logger = logging.getLogger(__name__)
 
 
 def normalize_tenant(value: str | None, *, default: str = GLOBAL_TENANT) -> str:
@@ -84,22 +86,33 @@ def default_namespace() -> str:
 
 
 def namespace_from_request(request: Request | None = None, *, fallback: str | None = None) -> str:
+    selected, _source = _namespace_from_request_with_source(request=request, fallback=fallback)
+    return selected
+
+
+def _namespace_from_request_with_source(
+    *, request: Request | None = None, fallback: str | None = None
+) -> tuple[str, str]:
     raw = ""
+    source = "none"
     if request is not None:
         for header in _NAMESPACE_HEADER_KEYS:
             header_value = str(request.headers.get(header) or "").strip()
             if header_value:
                 raw = header_value
+                source = f"header:{header}"
                 break
         if not raw:
             raw = str(request.query_params.get("namespace") or "").strip()
+            if raw:
+                source = "query:namespace"
     normalized = normalize_namespace(raw)
     if normalized:
-        return normalized
+        return normalized, source or "request"
     fallback_normalized = normalize_namespace(fallback)
     if fallback_normalized:
-        return fallback_normalized
-    return default_namespace()
+        return fallback_normalized, "fallback"
+    return default_namespace(), "default"
 
 
 def normalize_namespace_scopes(values: list[str] | None) -> list[str]:
@@ -171,8 +184,40 @@ def assert_actor_can_access_namespace(actor: User, namespace: str | None) -> str
     if not normalized:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="namespace is required")
     if not actor_can_access_namespace(actor, normalized):
+        actor_scope = actor_namespace_scopes(actor)
+        logger.warning(
+            "namespace_access_denied actor=%s role=%s requested_namespace=%s scope=%s",
+            str(getattr(actor, "username", "") or "<unknown>"),
+            role_for_user(actor),
+            normalized,
+            sorted(actor_scope) if actor_scope is not None else "all",
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"namespace access denied: {normalized}")
     return normalized
+
+
+def _default_namespace_for_actor(actor: User, *, fallback_namespace: str | None = None) -> str:
+    fallback_normalized = normalize_namespace(fallback_namespace)
+    actor_scope = actor_namespace_scopes(actor)
+    if actor_scope is None:
+        return (
+            fallback_normalized
+            or normalize_namespace(tenant_namespace_for_user(actor))
+            or normalize_namespace(default_namespace())
+            or "labs"
+        )
+
+    preferred_candidates = (
+        normalize_namespace(tenant_namespace_for_user(actor)),
+        fallback_normalized,
+        normalize_namespace(default_namespace()),
+    )
+    for candidate in preferred_candidates:
+        if candidate and candidate in actor_scope:
+            return candidate
+    if actor_scope:
+        return sorted(actor_scope)[0]
+    return fallback_normalized or normalize_namespace(default_namespace()) or "labs"
 
 
 def resolve_resource_namespace(
@@ -188,12 +233,29 @@ def resolve_resource_namespace(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="namespace admin account has no namespace scopes configured",
         )
-    default_ns = fallback_namespace or tenant_namespace_for_user(actor)
+    source = "requested_namespace"
     if requested_namespace is not None and str(requested_namespace).strip():
         chosen = normalize_namespace(requested_namespace)
+        source = "requested_namespace"
     else:
-        chosen = namespace_from_request(request, fallback=default_ns)
-    return assert_actor_can_access_namespace(actor, chosen)
+        explicit, explicit_source = _namespace_from_request_with_source(request=request, fallback=None)
+        if explicit and explicit_source.startswith(("header:", "query:")):
+            chosen = explicit
+            source = explicit_source
+        else:
+            chosen = _default_namespace_for_actor(actor, fallback_namespace=fallback_namespace)
+            source = "actor_default"
+    resolved = assert_actor_can_access_namespace(actor, chosen)
+    logger.debug(
+        "namespace_resolved actor=%s role=%s source=%s requested_namespace=%s fallback=%s resolved=%s",
+        str(getattr(actor, "username", "") or "<unknown>"),
+        role,
+        source,
+        str(requested_namespace or "").strip() or "-",
+        str(fallback_namespace or "").strip() or "-",
+        resolved,
+    )
+    return resolved
 
 
 def vm_launch_requires_privileged_runtime() -> bool:

@@ -334,6 +334,23 @@ export interface paths {
         patch: operations["rename_image_admin_images__image_id__patch"];
         trace?: never;
     };
+    "/admin/images/{image_id}/copy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy Image */
+        post: operations["copy_image_admin_images__image_id__copy_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/images/{image_id}/launch-update": {
         parameters: {
             query?: never;
@@ -345,6 +362,23 @@ export interface paths {
         put?: never;
         /** Launch Image Update Vm */
         post: operations["launch_image_update_vm_admin_images__image_id__launch_update_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/images/{image_id}/save-update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Save Image Update Vm */
+        post: operations["save_image_update_vm_admin_images__image_id__save_update_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1808,6 +1842,8 @@ export interface components {
              * @default global
              */
             tenant: string;
+            /** Used By Namespaces */
+            used_by_namespaces?: string[];
         };
         /** ContainerImageUpdate */
         ContainerImageUpdate: {
@@ -2284,6 +2320,20 @@ export interface components {
             /** Idle Timeout Minutes */
             idle_timeout_minutes: number;
         };
+        /** ImageCopyRequest */
+        ImageCopyRequest: {
+            /** Filename */
+            filename: string;
+            /** Name */
+            name: string;
+            /** Shared Catalog */
+            shared_catalog?: boolean | null;
+            /**
+             * Skip Validation
+             * @default false
+             */
+            skip_validation: boolean;
+        };
         /** ImageCreateFromIso */
         ImageCreateFromIso: {
             /**
@@ -2381,6 +2431,8 @@ export interface components {
              * @default 4096
              */
             update_ram_mb_default: number;
+            /** Used By Namespaces */
+            used_by_namespaces?: string[];
         };
         /** ImageImport */
         ImageImport: {
@@ -2470,6 +2522,8 @@ export interface components {
              * @default 4096
              */
             update_ram_mb_default: number;
+            /** Used By Namespaces */
+            used_by_namespaces?: string[];
         };
         /** ImageRename */
         ImageRename: {
@@ -2490,6 +2544,11 @@ export interface components {
             update_iso_image_id?: string | null;
             /** Update Ram Mb Default */
             update_ram_mb_default?: number | null;
+        };
+        /** ImageSaveUpdateRequest */
+        ImageSaveUpdateRequest: {
+            /** Instance Id */
+            instance_id?: string | null;
         };
         /** ImageUploadTaskStatus */
         ImageUploadTaskStatus: {
@@ -2558,6 +2617,11 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
             /** Filename */
             filename: string;
             /** Id */
@@ -2584,6 +2648,8 @@ export interface components {
         };
         /** IsoImageRename */
         IsoImageRename: {
+            /** Description */
+            description?: string | null;
             /** Name */
             name?: string | null;
             /** Shared Catalog */
@@ -3793,6 +3859,13 @@ export interface components {
              * @default false
              */
             can_access_admin: boolean;
+            /**
+             * Default Namespace
+             * @default
+             */
+            default_namespace: string;
+            /** Enabled Namespaces */
+            enabled_namespaces?: string[];
             /** Force Password Change */
             force_password_change: boolean;
             /** Is Admin */
@@ -4988,6 +5061,43 @@ export interface operations {
             };
         };
     };
+    copy_image_admin_images__image_id__copy_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageCopyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageUploadTaskStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     launch_image_update_vm_admin_images__image_id__launch_update_post: {
         parameters: {
             query?: never;
@@ -5012,6 +5122,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VMInstance"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_image_update_vm_admin_images__image_id__save_update_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                image_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ImageSaveUpdateRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOperationActionResult"];
                 };
             };
             /** @description Validation Error */
@@ -5060,6 +5207,7 @@ export interface operations {
         parameters: {
             query?: {
                 name?: string | null;
+                description?: string | null;
                 shared_catalog?: boolean;
             };
             header?: {

@@ -474,6 +474,64 @@ def _int_or_default(value: Any, default: int) -> int:
         return int(default)
 
 
+def _normalized_namespace_list(raw_values: Any) -> list[str]:
+    if not isinstance(raw_values, list):
+        return []
+    out: list[str] = []
+    for raw in raw_values:
+        namespace = str(raw or "").strip().lower()
+        if not namespace or namespace in out:
+            continue
+        out.append(namespace)
+    return out
+
+
+def _run_namespace_switch_probe(
+    *,
+    session: requests.Session,
+    api_base: str,
+    verify_tls: bool,
+    namespaces: list[str],
+) -> None:
+    if len(namespaces) < 2:
+        print("INFO: namespace switch probe skipped (synthetic user has fewer than 2 enabled namespaces).")
+        return
+
+    header_key = "X-Bretter-Namespace"
+    previous_header = session.headers.get(header_key)
+    try:
+        for namespace in namespaces[:2]:
+            session.headers[header_key] = namespace
+            vm_templates = _request(
+                session,
+                method="GET",
+                api_base=api_base,
+                path_or_url="/user/templates",
+                verify_tls=verify_tls,
+            )
+            if vm_templates.status_code != 200:
+                _fail(
+                    f"namespace switch probe failed for {namespace}: /user/templates returned {vm_templates.status_code}"
+                )
+            container_templates = _request(
+                session,
+                method="GET",
+                api_base=api_base,
+                path_or_url="/user/container-templates",
+                verify_tls=verify_tls,
+            )
+            if container_templates.status_code != 200:
+                _fail(
+                    "namespace switch probe failed for "
+                    f"{namespace}: /user/container-templates returned {container_templates.status_code}"
+                )
+    finally:
+        if previous_header is None:
+            session.headers.pop(header_key, None)
+        else:
+            session.headers[header_key] = previous_header
+
+
 def _select_container_template(
     templates: list[dict[str, Any]], *, preferred_id: str, preferred_name: str
 ) -> dict[str, Any]:
@@ -538,6 +596,7 @@ def main() -> int:
     container_launch_retry_backoff_seconds = max(
         1, int(os.environ.get("SYNTHETIC_CONTAINER_LAUNCH_RETRY_BACKOFF_SECONDS") or "20")
     )
+    run_namespace_switch_probe = _bool_env("SYNTHETIC_RUN_NAMESPACE_SWITCH_PROBE", True)
     image_upload_timeout_seconds = max(60, int(os.environ.get("SYNTHETIC_IMAGE_UPLOAD_TIMEOUT_SECONDS") or "1200"))
     post_vm_grace_seconds = max(0, int(os.environ.get("SYNTHETIC_POST_VM_GRACE_SECONDS") or "20"))
     single_lab_limit_message = "you already have a virtual lab running"
@@ -584,6 +643,21 @@ def main() -> int:
         )
         if login.status_code != 200:
             _fail(f"login failed ({login.status_code}): {login.text[:300]}")
+
+        me = _request(session, method="GET", api_base=api_base, path_or_url="/auth/me", verify_tls=verify_tls)
+        if me.status_code != 200:
+            _fail(f"/auth/me failed after login ({me.status_code}): {me.text[:300]}")
+        me_payload = me.json() or {}
+        enabled_namespaces = _normalized_namespace_list(
+            me_payload.get("enabled_namespaces") or me_payload.get("namespace_scopes") or []
+        )
+        if run_namespace_switch_probe:
+            _run_namespace_switch_probe(
+                session=session,
+                api_base=api_base,
+                verify_tls=verify_tls,
+                namespaces=enabled_namespaces,
+            )
 
         _cleanup_existing_user_labs(
             session=session,

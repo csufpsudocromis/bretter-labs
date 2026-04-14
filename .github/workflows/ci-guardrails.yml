@@ -118,7 +118,8 @@ jobs:
         run: |
           PYTHONPATH=backend .venv/bin/pytest -q \
             backend/tests/test_namespace_authz_matrix.py \
-            backend/tests/test_namespace_scoping.py
+            backend/tests/test_namespace_scoping.py \
+            backend/tests/test_namespace_contracts.py
 
       - name: Run pip-audit
         run: |
