@@ -451,7 +451,10 @@ def main() -> int:
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must pin BACKEND_IMAGE from backend_runtime digest output."
             )
-        if "aquasecurity/trivy-action" not in publish_workflow and "trivy image --scanners vuln" not in publish_workflow:
+        if (
+            "aquasecurity/trivy-action" not in publish_workflow
+            and "trivy image --scanners vuln" not in publish_workflow
+        ):
             errors.append(".github/workflows/publish-and-pin-images.yml must scan published images with Trivy.")
         if "cosign sign --yes" not in publish_workflow or "cosign verify" not in publish_workflow:
             errors.append(".github/workflows/publish-and-pin-images.yml must sign and verify published images.")
