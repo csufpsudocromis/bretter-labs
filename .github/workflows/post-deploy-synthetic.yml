@@ -54,15 +54,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate synthetic prerequisites
+        id: prereq
+        run: |
+          set -euo pipefail
+          missing=0
+          [ -n "${SYNTHETIC_API_BASE}" ] || { echo "::notice::SYNTHETIC_API_BASE is not configured."; missing=1; }
+          [ -n "${SYNTHETIC_USERNAME}" ] || { echo "::notice::SYNTHETIC_USERNAME is not configured."; missing=1; }
+          [ -n "${SYNTHETIC_PASSWORD}" ] || { echo "::notice::SYNTHETIC_PASSWORD is not configured."; missing=1; }
+          if [ "$missing" -ne 0 ]; then
+            echo "run_synthetic=0" >>"${GITHUB_OUTPUT}"
+            echo "::notice::Skipping post-deploy synthetic check because required secrets are not configured."
+            exit 0
+          fi
+          echo "run_synthetic=1" >>"${GITHUB_OUTPUT}"
+
       - name: Setup Python
+        if: steps.prereq.outputs.run_synthetic == '1'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Install requests
+        if: steps.prereq.outputs.run_synthetic == '1'
         run: python -m pip install --upgrade pip requests
 
       - name: Validate required secrets
+        if: steps.prereq.outputs.run_synthetic == '1'
         run: |
           set -euo pipefail
           [ -n "${SYNTHETIC_API_BASE}" ] || { echo "SYNTHETIC_API_BASE is required (input or secret)." >&2; exit 1; }
@@ -70,6 +88,7 @@ jobs:
           [ -n "${SYNTHETIC_PASSWORD}" ] || { echo "SYNTHETIC_PASSWORD secret is required." >&2; exit 1; }
 
       - name: Run post-deploy synthetic check
+        if: steps.prereq.outputs.run_synthetic == '1'
         run: |
           set -euo pipefail
           python scripts/post_deploy_synthetic_check.py | tee post-deploy-synthetic-report.txt

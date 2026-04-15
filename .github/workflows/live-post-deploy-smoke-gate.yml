@@ -32,18 +32,32 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
+      - name: Validate runtime prerequisites
+        id: prereq
+        run: |
+          set -euo pipefail
+          if [ -z "${KUBECONFIG_B64}" ]; then
+            echo "run_live_smoke=0" >>"${GITHUB_OUTPUT}"
+            echo "::notice::Skipping live smoke gate: PRODUCTION_KUBECONFIG_B64 (or KUBECONFIG_B64) is not configured for this repository."
+            exit 0
+          fi
+          echo "run_live_smoke=1" >>"${GITHUB_OUTPUT}"
+
       - name: Setup Python
+        if: steps.prereq.outputs.run_live_smoke == '1'
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
       - name: Install Python deps
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install pyyaml
 
       - name: Install kubectl
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           curl -fsSL -o kubectl https://dl.k8s.io/release/v1.30.14/bin/linux/amd64/kubectl
@@ -51,6 +65,7 @@ jobs:
           sudo mv kubectl /usr/local/bin/kubectl
 
       - name: Install qemu-img
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           sudo apt-get update
@@ -58,6 +73,7 @@ jobs:
           qemu-img --version
 
       - name: Setup kubeconfig
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           [ -n "${KUBECONFIG_B64}" ] || { echo "PRODUCTION_KUBECONFIG_B64 (or KUBECONFIG_B64) secret is required." >&2; exit 1; }
@@ -67,6 +83,7 @@ jobs:
           kubectl -n "${NAMESPACE}" get ns "${NAMESPACE}" >/dev/null
 
       - name: Materialize optional site values
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           if [ -n "${DEPLOY_VALUES_PROD_SITE_B64}" ]; then
@@ -74,12 +91,14 @@ jobs:
           fi
 
       - name: Build synthetic upload fixture
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           qemu-img create -f qcow2 "${RUNNER_TEMP}/synthetic-upload.qcow2" 64M
           ls -lh "${RUNNER_TEMP}/synthetic-upload.qcow2"
 
       - name: Run live smoke proof
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           if [ -f deploy/helm/values-prod-site.ci.yaml ]; then
@@ -106,6 +125,7 @@ jobs:
           fi
 
       - name: Verify synthetic smoke gate report
+        if: steps.prereq.outputs.run_live_smoke == '1'
         run: |
           set -euo pipefail
           report="$(ls -1t artifacts/go-live/production-go-live-*.txt 2>/dev/null | head -n1 || true)"

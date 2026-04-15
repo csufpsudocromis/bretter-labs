@@ -444,13 +444,14 @@ def main() -> int:
         if (
             '--backend-image "${{ needs.publish.outputs.backend_runtime_ref }}"' not in publish_workflow
             and '--backend-image "${{ steps.refs.outputs.backend_runtime_ref }}"' not in publish_workflow
+            and '--backend-image "${BACKEND_RUNTIME_REF}"' not in publish_workflow
             and '--backend-image "ghcr.io/${{ steps.meta.outputs.image_namespace }}/bretter-backend-runtime@'
             not in (publish_workflow)
         ):
             errors.append(
                 ".github/workflows/publish-and-pin-images.yml must pin BACKEND_IMAGE from backend_runtime digest output."
             )
-        if "aquasecurity/trivy-action" not in publish_workflow:
+        if "aquasecurity/trivy-action" not in publish_workflow and "trivy image --scanners vuln" not in publish_workflow:
             errors.append(".github/workflows/publish-and-pin-images.yml must scan published images with Trivy.")
         if "cosign sign --yes" not in publish_workflow or "cosign verify" not in publish_workflow:
             errors.append(".github/workflows/publish-and-pin-images.yml must sign and verify published images.")

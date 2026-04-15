@@ -100,7 +100,6 @@ ephemeral_synth_provisioned=0
 ephemeral_synth_username=""
 ephemeral_synth_password=""
 ephemeral_synth_namespace=""
-ephemeral_synth_scopes=""
 
 provision_ephemeral_synthetic_user() {
   local payload
@@ -259,21 +258,6 @@ PY
 import json
 import sys
 print(str((json.loads(sys.argv[1]) or {}).get("namespace") or ""), end="")
-PY
-)"
-  ephemeral_synth_scopes="$(python3 - "$payload" <<'PY'
-import json
-import sys
-payload = json.loads(sys.argv[1]) or {}
-scopes = payload.get("scopes") or []
-if not isinstance(scopes, list):
-    scopes = []
-normalized = []
-for item in scopes:
-    value = str(item or "").strip().lower()
-    if value and value not in normalized:
-        normalized.append(value)
-print(",".join(normalized), end="")
 PY
 )"
   if [ -z "$ephemeral_synth_username" ] || [ -z "$ephemeral_synth_password" ]; then

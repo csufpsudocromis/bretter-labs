@@ -142,14 +142,18 @@ fi
 
 synthetic_gate_exit=0
 if [ "$proof_exit" -eq 0 ]; then
+  synthetic_gate_tmp="$(mktemp)"
   if python3 "$ROOT_DIR/scripts/verify_synthetic_gate_report.py" \
     --report "$report_path" \
-    --require-image-upload-check >>"$report_path" 2>&1; then
+    --require-image-upload-check >"$synthetic_gate_tmp" 2>&1; then
+    cat "$synthetic_gate_tmp" >>"$report_path"
     log "PASS: synthetic post-deploy gate coverage verified."
   else
     synthetic_gate_exit=$?
+    cat "$synthetic_gate_tmp" >>"$report_path"
     log "FAIL: synthetic post-deploy gate coverage verification failed."
   fi
+  rm -f "$synthetic_gate_tmp"
 fi
 
 drift_exit=0
