@@ -6182,7 +6182,7 @@
   },
   "info": {
     "title": "Bretter Labs API",
-    "version": "0.3.1"
+    "version": "0.6.1"
   },
   "openapi": "3.1.0",
   "paths": {

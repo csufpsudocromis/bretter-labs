@@ -3746,6 +3746,11 @@ export interface components {
              */
             risk: string;
             /**
+             * Used Bytes
+             * @default 0
+             */
+            used_bytes: number;
+            /**
              * Utilization Pct
              * @default 0
              */
@@ -3808,6 +3813,16 @@ export interface components {
             storage_class: string;
             /** Used By */
             used_by?: string[];
+            /**
+             * Used Bytes
+             * @default 0
+             */
+            used_bytes: number;
+            /**
+             * Used Bytes Known
+             * @default false
+             */
+            used_bytes_known: boolean;
         };
         /** StorageResizeRequest */
         StorageResizeRequest: {
