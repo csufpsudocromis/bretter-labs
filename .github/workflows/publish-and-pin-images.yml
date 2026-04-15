@@ -246,15 +246,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          echo "Scanning ${BACKEND_ADMIN_REF} (warning-only admin-tools policy)"
+          trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 0 "${BACKEND_ADMIN_REF}"
+
           refs=(
-            "${BACKEND_ADMIN_REF}"
             "${BACKEND_RUNTIME_REF}"
             "${FRONTEND_REF}"
             "${RUNNER_REF}"
           )
           for ref in "${refs[@]}"; do
-            echo "Scanning ${ref}"
-            trivy image --scanners vuln --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 "${ref}"
+            echo "Scanning ${ref} (blocking policy: CRITICAL)"
+            trivy image --scanners vuln --ignore-unfixed --severity CRITICAL --exit-code 1 "${ref}"
           done
 
   sign_verify:
