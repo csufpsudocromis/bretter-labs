@@ -13,7 +13,7 @@ urllib3==2.6.3
 httpx==0.28.1
 prometheus-client==0.21.1
 ldap3==2.9.1
-cryptography==46.0.5
+cryptography==46.0.7
 typing_extensions==4.15.0
 kubernetes==35.0.0
 PyYAML==6.0.3

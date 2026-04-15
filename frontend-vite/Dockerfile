@@ -18,7 +18,8 @@ LABEL org.opencontainers.image.source="https://github.com/csufpsudocromis/brette
 WORKDIR /usr/share/nginx/html
 COPY --from=build /app/dist/ ./
 COPY frontend-vite/nginx-entrypoint.sh /usr/local/bin/nginx-entrypoint.sh
-RUN chmod +x /usr/local/bin/nginx-entrypoint.sh \
+RUN apk upgrade --no-cache \
+    && chmod +x /usr/local/bin/nginx-entrypoint.sh \
     && mkdir -p /var/cache/nginx /var/run /etc/nginx/conf.d \
     && chown -R 101:101 /usr/share/nginx/html /var/cache/nginx /var/run /etc/nginx/conf.d /usr/local/bin/nginx-entrypoint.sh
 
