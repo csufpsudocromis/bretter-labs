@@ -242,24 +242,27 @@ print(json.dumps(payload))
 PY
   )" || return 1
 
-  ephemeral_synth_username="$(python3 - "$payload" <<'PY'
+  ephemeral_synth_username="$(
+    python3 - "$payload" <<'PY'
 import json
 import sys
 print(str((json.loads(sys.argv[1]) or {}).get("username") or ""), end="")
 PY
-)"
-  ephemeral_synth_password="$(python3 - "$payload" <<'PY'
+  )"
+  ephemeral_synth_password="$(
+    python3 - "$payload" <<'PY'
 import json
 import sys
 print(str((json.loads(sys.argv[1]) or {}).get("password") or ""), end="")
 PY
-)"
-  ephemeral_synth_namespace="$(python3 - "$payload" <<'PY'
+  )"
+  ephemeral_synth_namespace="$(
+    python3 - "$payload" <<'PY'
 import json
 import sys
 print(str((json.loads(sys.argv[1]) or {}).get("namespace") or ""), end="")
 PY
-)"
+  )"
   if [ -z "$ephemeral_synth_username" ] || [ -z "$ephemeral_synth_password" ]; then
     return 1
   fi
