@@ -1,5 +1,5 @@
 # Frontend image for Bretter Labs (Vite build served by nginx)
-FROM node:20-slim AS build
+FROM node:20.19-slim AS build
 WORKDIR /app
 
 ARG VITE_API_BASE=https://127.0.0.1:30080
