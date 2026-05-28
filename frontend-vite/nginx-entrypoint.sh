@@ -6,13 +6,13 @@ CONF_PATH="/etc/nginx/conf.d/default.conf"
 if [ -f /tls/tls.crt ] && [ -f /tls/tls.key ]; then
   cat >"$CONF_PATH" <<'EOF'
 server {
-  listen 80;
+  listen 8080;
   server_name _;
   return 301 https://$host:30073$request_uri;
 }
 
 server {
-  listen 443 ssl;
+  listen 8443 ssl;
   server_name _;
   ssl_certificate /tls/tls.crt;
   ssl_certificate_key /tls/tls.key;
@@ -26,7 +26,7 @@ EOF
 else
   cat >"$CONF_PATH" <<'EOF'
 server {
-  listen 80;
+  listen 8443;
   server_name _;
   root /usr/share/nginx/html;
 
