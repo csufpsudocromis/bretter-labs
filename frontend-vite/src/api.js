@@ -1,9 +1,6 @@
 import axios from 'axios';
 
-const defaultApiBase =
-  typeof window !== 'undefined'
-    ? `${window.location.protocol}//${window.location.hostname}:30080`
-    : 'https://127.0.0.1:30080';
+const defaultApiBase = '/api';
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE || defaultApiBase,

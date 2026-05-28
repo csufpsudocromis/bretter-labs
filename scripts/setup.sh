@@ -1709,7 +1709,8 @@ ensure_ghcr_login() {
 }
 
 build_images() {
-  local vite_api_base="${VITE_API_BASE:-${PUBLIC_SCHEME}://${NODE_EXTERNAL_HOST}:30080}"
+  # Default to same-origin API proxy served by frontend nginx (`/api`).
+  local vite_api_base="${VITE_API_BASE:-/api}"
 
   log "Building backend image: $BACKEND_IMAGE"
   podman build -t "$BACKEND_IMAGE" -f "$ROOT_DIR/backend/Dockerfile" "$ROOT_DIR"

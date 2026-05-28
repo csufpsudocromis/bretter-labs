@@ -18,6 +18,16 @@ server {
   ssl_certificate_key /tls/tls.key;
   root /usr/share/nginx/html;
 
+  location /api/ {
+    proxy_pass https://bretter-backend:8000/;
+    proxy_ssl_verify off;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
+
   location / {
     try_files $uri /index.html;
   }
@@ -29,6 +39,16 @@ server {
   listen 8443;
   server_name _;
   root /usr/share/nginx/html;
+
+  location /api/ {
+    proxy_pass https://bretter-backend:8000/;
+    proxy_ssl_verify off;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+  }
 
   location / {
     try_files $uri /index.html;
